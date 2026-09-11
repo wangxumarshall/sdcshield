@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M28MQTSZE8CWW1J82RFKE13E",
+  "session_id": "77474d2f-d032-457e-a534-02a90e8bfd44",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-11T16:27:48.83905932Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/superpowers/plans/2026-09-11-move-movbe-and-rowmajor-to-arm64.md"
+  ],
+  "agent": "Claude Code",
+  "model": "glm-5.3",
+  "turn_id": "c9615809a73e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 216352,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13371072,
+    "output_tokens": 57540,
+    "api_call_count": 191
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-11T16:27:48.68507398Z",
+    "agent_lines": 121,
+    "agent_removed": 0,
+    "human_added": 1,
+    "human_modified": 7,
+    "human_removed": 0,
+    "total_committed": 129,
+    "total_lines_changed": 129,
+    "agent_percentage": 93.7984496124031,
+    "metric_version": 2
+  }
+}

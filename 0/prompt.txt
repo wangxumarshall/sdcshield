@@ -1,0 +1,9 @@
+理解 tests/cpu/misc 目录下的 用例是否都已集成，尤其  neon_rot_ldr_at_top_rowmajor.cpp用例，他们分别在哪个组里面
+
+---
+
+tests/cpu/misc 目录下的 movbe相关的所有用例迁移到 arm64目录中，neon_rot_ldr_at_top_rowmajor.cpp 也已迁移到 arm64中;构建测试验证
+
+---
+
+tests/cpu/misc 目录下的 movbe相关的所有用例迁移到 arm64目录中，neon_rot_ldr_at_top_rowmajor.cpp 也已迁移到 arm64中;构建测试验证

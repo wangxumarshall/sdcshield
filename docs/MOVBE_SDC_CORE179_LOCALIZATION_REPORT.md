@@ -219,7 +219,7 @@ has reproduced the defect across all runs.
 
 ## 9. Artifacts
 
-- Test sources: `tests/cpu/misc/movbe_dump*.cpp` (baseline + probes A–H).
+- Test sources: `tests/cpu/arm64/movbe_dump*.cpp` (baseline + probes A–H; moved from tests/cpu/misc).
 - Run logs: `probe_baseline*.log`, `probe_{a,b,c,d,e,f,g1,g2}.log`,
   `probe_h_512*.log` in the repo root.
 - Meson registration: `tests/cpu/meson.build` (lines for each probe).

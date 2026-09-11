@@ -239,7 +239,7 @@ This section characterizes each SDC-triggering workload by **load type** (what c
 
 ### 8.1 movbe / movbe_dump — byte-swap round-trip (integer store→reload)
 
-**Load type.** Integer byte-swap with a **same-buffer store→reload** pattern. Source `tests/cpu/misc/movbe.cpp` / `movbe_dump.cpp`. A 64 KB buffer of `uint32_t` (16384 words) is filled once at init with `random32()` and reused every iteration. The hot loop per element:
+**Load type.** Integer byte-swap with a **same-buffer store→reload** pattern. Source `tests/cpu/arm64/movbe.cpp` / `movbe_dump.cpp` (moved from tests/cpu/misc). A 64 KB buffer of `uint32_t` (16384 words) is filled once at init with `random32()` and reused every iteration. The hot loop per element:
 ```
 val = data->input[i];          // 1st read
 val = __builtin_bswap32(val);  // byte-swap (rev) — never feeds the compare

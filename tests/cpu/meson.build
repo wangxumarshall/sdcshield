@@ -222,32 +222,21 @@ tests_set_base.add(
     )
 )
 
-# Misc test suite (24 tests). Includes the core-179 SDC trigger probes
-# (movbe_dump_probe_a/b/c/d/e/f/g1/g2/h/x/xn, mrn_*) — the research testbed
-# for the real silent-data-corruption defect observed on Kunpeng 920 core 179.
-# The movbe_* probes use the portable __builtin_bswap32; the mrn_* files use
+# Misc test suite (11 tests). Includes core-179 SDC trigger probes (mrn_*)
+# — part of the research testbed for the real silent-data-corruption defect
+# observed on Kunpeng 920 core 179. The mrn_* files use
 # #if defined(__x86_64__) || defined(__i386__) ... #elif defined(__aarch64__)
 # dual-arch inline-asm (movq/str, ldr). movmskpspd and movq2dq use x86 SSE
 # intrinsics fully enclosed inside the x86-only #if branch, with an aarch64
 # NEON/inline-asm counterpart in #elif — so x86 is untouched and ARM64 has a
 # real implementation (no placeholder skip needed).
+# The movbe_* byte-swap series (movbe, movbe_dump, 11 movbe_dump_probe_*)
+# moved to the arm64 suite (tests/cpu/arm64): they are the core-179 research
+# probes and are classified ARM64-only like the rest of that testbed.
 tests_set_base.add(
     files(
         'misc/mite.cpp',
         'misc/movdq2q.cpp',
-        'misc/movbe.cpp',
-        'misc/movbe_dump.cpp',
-        'misc/movbe_dump_probe_a.cpp',
-        'misc/movbe_dump_probe_b.cpp',
-        'misc/movbe_dump_probe_c.cpp',
-        'misc/movbe_dump_probe_d.cpp',
-        'misc/movbe_dump_probe_e.cpp',
-        'misc/movbe_dump_probe_f.cpp',
-        'misc/movbe_dump_probe_g1.cpp',
-        'misc/movbe_dump_probe_g2.cpp',
-        'misc/movbe_dump_probe_h.cpp',
-        'misc/movbe_dump_probe_x.cpp',
-        'misc/movbe_dump_probe_xn.cpp',
         'misc/partial_store_forwarding.cpp',
         'misc/movmskpspd.cpp',
         'misc/movq2dq.cpp',

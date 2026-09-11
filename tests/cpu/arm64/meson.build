@@ -87,6 +87,26 @@ if host_machine.cpu_family() == 'aarch64'
         # ALU/L1D path or also fires on the SIMD datapath. Uses uint64x2_t
         # unconditionally, so it can only be built on aarch64.
         'neon_rot_2src.cpp',
+        # movbe byte-swap SDC series (moved from tests/cpu/misc): the core-179
+        # research testbed of the byte-swap round-trip trigger. movbe is the
+        # baseline (bswap + store + bswap-back + compare), movbe_dump adds the
+        # full dump on failure, and the 11 movbe_dump_probe_* variants remove
+        # or vary one ingredient at a time (no-store, reload position, ...)
+        # to localize the trigger. All portable __builtin_bswap32 (no arch
+        # guards), classified ARM64-only with the rest of the core-179 probes.
+        'movbe.cpp',
+        'movbe_dump.cpp',
+        'movbe_dump_probe_a.cpp',
+        'movbe_dump_probe_b.cpp',
+        'movbe_dump_probe_c.cpp',
+        'movbe_dump_probe_d.cpp',
+        'movbe_dump_probe_e.cpp',
+        'movbe_dump_probe_f.cpp',
+        'movbe_dump_probe_g1.cpp',
+        'movbe_dump_probe_g2.cpp',
+        'movbe_dump_probe_h.cpp',
+        'movbe_dump_probe_x.cpp',
+        'movbe_dump_probe_xn.cpp',
     )
 
     arm64_tests_lib = static_library(

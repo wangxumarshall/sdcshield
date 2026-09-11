@@ -53,7 +53,7 @@ note: used as rewritten candidate
 
 ### 3.1 movbe / movbe_dump —— 整数字节交换 + store→reload
 
-**负载类型**:整数字节交换,带**同缓冲区 store→reload** 模式。源码 `tests/cpu/misc/movbe.cpp` / `movbe_dump.cpp`。64 KB 的 `uint32_t` 缓冲(16384 字)在 init 时用 `random32()` 填充,每次迭代复用。每个元素的热循环:
+**负载类型**:整数字节交换,带**同缓冲区 store→reload** 模式。源码 `tests/cpu/arm64/movbe.cpp` / `movbe_dump.cpp`(自 tests/cpu/misc 迁入)。64 KB 的 `uint32_t` 缓冲(16384 字)在 init 时用 `random32()` 填充,每次迭代复用。每个元素的热循环:
 ```
 val = data->input[i];          // 第1次读
 val = __builtin_bswap32(val);  // 字节交换(rev)——不参与比较

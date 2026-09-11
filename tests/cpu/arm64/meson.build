@@ -107,6 +107,18 @@ if host_machine.cpu_family() == 'aarch64'
         'movbe_dump_probe_h.cpp',
         'movbe_dump_probe_x.cpp',
         'movbe_dump_probe_xn.cpp',
+        # Scan-order variant of neon_rot_ldr_at_top (core-179 attribution):
+        # even outer iterations sweep indices ascending, odd descending, so
+        # the touch pattern at the corruption-concentrated first indices
+        # (idx 0/1 of the 55-record dump campaign) differs from the parent's
+        # fixed order. Strong idx-0/1 signal here too -> the signature
+        # follows the buffer slots (address-local, e.g. same L1D set/way);
+        # signature moves to the sweep seam / disappears -> it follows the
+        # forward-progress position. Same 3rd-ldr-at-top + 2-src loads +
+        # rotating vector ALU {add,eor,and,orr} + back-to-back str/str
+        # skeleton otherwise. uint64x2_t / aarch64 inline asm only — built
+        # only on aarch64.
+        'neon_rot_ldr_at_top_rowmajor.cpp',
     )
 
     arm64_tests_lib = static_library(

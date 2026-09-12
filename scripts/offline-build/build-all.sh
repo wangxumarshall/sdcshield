@@ -56,7 +56,7 @@ while [ $# -gt 0 ]; do
         -*) echo "unknown: $1" >&2; exit 1 ;;
         *)  if [ "$SERIES_ARG" = "all" ] && [[ "$1" != all ]]; then SERIES_ARG="$1"
             elif [ "$SP_ARG" = "all" ] && [[ "$1" != all ]]; then SP_ARG="$1"
-            else shift; fi; shift ;;
+            fi; shift ;;
     esac
 done
 

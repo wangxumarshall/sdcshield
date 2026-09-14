@@ -249,6 +249,21 @@ tests_set_base.add(
     )
 )
 
+# ARM64-only NEON SDC probes of the core-179 attribution split. These use
+# aarch64 inline asm (ldr %q0) and <arm_neon.h> with no x86 counterpart, so
+# they are built and registered only on aarch64 (x86-64 untouched), like the
+# ist/ block above.
+# The arm-0102/ subdir holds trigger-format variants of existing test files
+# (kreg7/8, etc.) applying the verified core-179 trigger recipe.
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'arm-0102/arm0102_kreg_mask.cpp',
+            'misc/neon_rot_ldr_at_top.cpp',
+        )
+    )
+endif
+
 if framework_config.get('SANDSTONE_SSL_BUILD') == 1
     tests_set_base.add(
         when : crypto_dep,

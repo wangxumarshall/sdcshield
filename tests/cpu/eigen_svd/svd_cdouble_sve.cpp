@@ -37,7 +37,7 @@ using namespace Eigen;        /* renamed to EigenSVE via -DEigen=EigenSVE */
 typedef Matrix<std::complex<double>, Dynamic, Dynamic> Mat;
 typedef Eigen::BDCSVD<Mat> SVD;
 
-#define M_DIM 300               // matches eigen_svd_cdouble
+#define M_DIM 2100               // matches eigen_svd_cdouble
 
 using eigen_svd_cdouble_sve_test = EigenSVDTest<SVD, M_DIM>;
 

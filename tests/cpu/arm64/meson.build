@@ -140,7 +140,37 @@ if host_machine.cpu_family() == 'aarch64'
         ],
     )
 
+    # SVE full-vector-length gather/scatter SDC stress. Compiled in its own
+    # static library because <arm_sve.h> intrinsics require the +sve target,
+    # while the tests_arm64 baseline stays armv8.1-a+crc+crypto: enabling
+    # +sve for the whole library could let GCC auto-vectorize the NEON tests
+    # into SVE instructions, which would SIGILL on SVE-less CPUs such as
+    # this Kunpeng 920. The test probes HWCAP_SVE first thing in test_init
+    # and returns a clean EXIT_SKIP on SVE-less CPUs, so its SVE codegen
+    # only ever executes on SVE-capable hardware. Built only on aarch64.
+    arm64_sve_lib = static_library(
+        'tests_arm64_sve',
+        files(
+            'sve512_gather_scatter_arm.cpp',
+        ),
+        build_by_default: false,
+        include_directories: [
+            framework_incdir,
+        ],
+        dependencies: [
+            boost_dep,
+        ],
+        cpp_args: [
+            debug_c_flags,
+            default_cpp_warn,
+            default_cpp_flags,
+            march_generic_flags,
+            '-march=armv8.2-a+sve',
+        ],
+    )
+
     sandstone_tests += [
         arm64_tests_lib,
+        arm64_sve_lib,
     ]
 endif

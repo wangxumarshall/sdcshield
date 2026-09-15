@@ -193,6 +193,12 @@ if host_machine.cpu_family() == 'aarch64'
             # 300*300*512*VL f32 elements per stream (~2.7 GiB each at a
             # 512-bit VL).
             'sve512_f32_chain_svd.cpp',
+            # SVD-format variant of workload 4: gather/FMA/scatter
+            # round-trip over a 2-D 16x16 block-permuted index table
+            # (90000 f64 elements, ~2.9 MB working set across src/dst),
+            # byte-exact vs a scalar golden indexing through the SAME
+            # indirection.
+            'sve512_gather_scatter_svd.cpp',
         ),
         build_by_default: false,
         include_directories: [

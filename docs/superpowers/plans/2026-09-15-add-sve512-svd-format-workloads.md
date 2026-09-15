@@ -79,6 +79,28 @@
       `fmadd s0`、`cntw`、`ptrue p0.b`
 - [x] README 计数 277/286 + 专项表；commit + push
 
-### Task 4: sve512_gather_scatter_svd
-- [ ] 同上；预期 default 278 / beta 282 / skip 287；gather/scatter
-      证据（ld1d/st1d 间接索引）；README 计数 278/287
+### Task 4: sve512_gather_scatter_svd — 完成（2026-09-15 实测）
+- [x] 写入用户代码（原样）；meson 注册（带注释）
+- [x] ninja 325/325；单 TU 重编译 0 warning
+- [x] `--list-tests` 注册（第 278 个）；最终计数实测 default 278 /
+      beta 282 / skip 287
+- [x] `-e sve512_gather_scatter_svd -t 1000`：干净 skip
+      （CpuNotSupported / `test compiled with sve`），exit: pass，无 SIGILL
+- [x] 回归：`-e zstd19 -t 3000` exit: pass
+- [x] objdump 实测：`ld1d {z0.d}, p0/z, [x0, z1.d, lsl #3]`（gather）、
+      `st1d {z0.d}, p0, [x1, z1.d, lsl #3]`（scatter）、`cntd`、`ptrue`
+- [x] README 计数 278/287 + 专项表；commit + push
+
+## 完成汇总（4 commit 全部推送）
+
+| Task | 测试 | commit |
+|---|---|---|
+| 1 | sve512_f64_chain_svd | 66fa6a4（已随 PR #105 合并 main） |
+| 2 | sve512_f64_special_svd | 4187795 |
+| 3 | sve512_f32_chain_svd | 05dfebad |
+| 4 | sve512_gather_scatter_svd | （本提交） |
+
+SVD-format 家族 4 测试全部就位（连同 arm 家族 4 个，sve512 系共 8 个）。
+本机（无 SVE）验证到编译 + 代码生成 + 干净 skip 层面；SVE 硬件上的
+实际行为（含 gather_scatter_svd init 尾块越界的实际后果）需在 SVE
+机器上复验。

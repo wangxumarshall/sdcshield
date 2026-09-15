@@ -481,6 +481,32 @@ else
     message('OpenBLAS install/ not found under third-party/openblas — run its build.sh to enable the openblas_* tests.')
 endif
 
+# SLEEF vectorized transcendental functions (vendored third-party/sleef, built
+# by its build.sh). Polynomial FMA dependency chains over NEON wide vectors;
+# pure functions => deterministic golden values (computed once in init), so
+# the whole payload funnels into a byte-exact memcmp per iteration. Targets
+# the newest-instruction-generation risk area (PinDrop Obs12: instructions
+# fail most often in their first architecture generation) — the u10 advsimd
+# kernels are SLEEF's newest NEON codepaths. Same else-branch discipline as
+# the OpenBLAS block above: an empty list, never a disabler().
+sleef_install = meson.current_source_dir() / '../../third-party/sleef/install'
+if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
+        sleef_install / 'lib/libsleef.a', check: false).returncode() == 0
+    sleef_dep = declare_dependency(
+        include_directories: include_directories('../../third-party/sleef/install/include', is_system: true),
+        link_args: ['-L' + sleef_install / 'lib', '-l:libsleef.a'],
+    )
+    tests_set_base.add(
+        when : sleef_dep,
+        if_true : files(
+            'sleef/sleef_neon.cpp',
+        )
+    )
+else
+    sleef_dep = []
+    message('SLEEF install/ not found under third-party/sleef — run its build.sh to enable the sleef_neon test.')
+endif
+
 # Gather/scatter tests. These are software-simulated gather/scatter using
 # plain double/int arrays and std::mt19937 — no x86 intrinsics, no arm_neon.h.
 # The x86 AVX-style names (gatherscatterpd/ps) are inherited from the
@@ -674,6 +700,7 @@ tests_base_a = static_library(
         atomic_lib,
         isal_lib,
         openblas_dep,
+        sleef_dep,
     ],
     c_args : [
         tests_common_c_args,

@@ -637,12 +637,14 @@ tests_set_base.add(
     )
 )
 
-# isa-l (libisal) CRC tests. The host ships /usr/lib/libisal.a (static) and
+# isa-l (libisal) tests. The host ships /usr/lib/libisal.a (static) and
 # /usr/lib/libisal.so but no libisal.pc, so dependency('libisal') fails here;
 # use cpp.find_library('isal') instead (mirrors the reference tree). isal is a
-# portable C library with arch-optimised dispatch internally, so the 10 isal_*
+# portable C library with arch-optimised dispatch internally, so the isal_*
 # tests build on all arches; required:false keeps the build working on hosts
 # without libisal installed.
+#  - crc/isal_*.cpp (10): CRC functions.
+#  - isa-l/igzip.cpp: igzip deflate/inflate round-trip SDC stress.
 isal_lib = cpp.find_library('isal', required : false, static : true)
 tests_set_base.add(
     when : isal_lib,
@@ -657,6 +659,7 @@ tests_set_base.add(
         'crc/isal_crc64_iso_refl.cpp',
         'crc/isal_crc64_jones_norm.cpp',
         'crc/isal_crc64_jones_refl.cpp',
+        'isa-l/igzip.cpp',
     )
 )
 

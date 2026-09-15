@@ -181,6 +181,24 @@ if host_machine.cpu_family() == 'aarch64'
             # pressures L3/TLB — the first of eigen_svd_cdouble_sve's
             # SVD-only trigger paths (working set beyond L2).
             'sve512_f64_chain_svd.cpp',
+            # SVD-format variant of workload 2: the same SVD-scale block
+            # traversal over the IEEE-754 special-value table (64-step
+            # chain), compared per lane by category (fsu_byteexact_arm
+            # precedent). Allocation: 300*300*64*VL per stream (~360 MB
+            # each at a 512-bit VL).
+            'sve512_f64_special_svd.cpp',
+            # SVD-format variant of workload 3: the same SVD-scale block
+            # traversal at f32 width (svmla_f32_x, 16-lane f32 datapath),
+            # byte-exact vs a scalar fmaf() golden. Allocation:
+            # 300*300*512*VL f32 elements per stream (~2.7 GiB each at a
+            # 512-bit VL).
+            'sve512_f32_chain_svd.cpp',
+            # SVD-format variant of workload 4: gather/FMA/scatter
+            # round-trip over a 2-D 16x16 block-permuted index table
+            # (90000 f64 elements, ~2.9 MB working set across src/dst),
+            # byte-exact vs a scalar golden indexing through the SAME
+            # indirection.
+            'sve512_gather_scatter_svd.cpp',
         ),
         build_by_default: false,
         include_directories: [

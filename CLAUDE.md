@@ -26,14 +26,38 @@ ninja -C builddir
 ./builddir/sdcshield -s help                 # list RNG engines (Constant/LCG/AES)
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv  # crash backtrace dump
 
-# OpenSSL is vendored (third-party/openssl) and enabled by default since
-# 2026-09-15; run ./third-party/openssl/build.sh once before first build.
-# If the install dir is absent, meson falls back to system libcrypto (or
-# disables SSL tests with a message).
+# Vendored compute libraries (third-party/, see list below): on a fresh clone
+# run each build.sh once BEFORE first meson setup — openssl, openblas, sleef
+# (pocketfft needs no prebuild: its header+source are compiled directly).
+# Missing install/ dirs degrade gracefully: meson prints a message and the
+# corresponding tests are simply not built.
+./third-party/openssl/build.sh      # → install/lib/libcrypto.a (SSL tests default-on)
+./third-party/openblas/build.sh     # → install/lib/libopenblas.a (openblas_{d,s,z}gemm)
+./third-party/sleef/build.sh        # → install/lib/libsleef.a (sleef_neon + sleef_sve)
+# OpenSSL fallback: if the install dir is absent, meson falls back to system
+# libcrypto (or disables SSL tests with a message).
 # SSL tests (openssl_sha + ipsec suite) are on by default (ssl_link_type=dynamic):
 ./builddir/sdcshield --list-tests | grep -c ipsec     # 46 ipsec tests
 ./builddir/sdcshield -e openssl_sha -t 3000 -n 1      # linked statically — no libcrypto.so runtime dep
+# Vendored-library tests (PROD quality, 278 total tests at default quality):
+./builddir/sdcshield -e openblas_dgemm -t 5000 -n 1   # OpenBLAS NEON FMA GEMM
+./builddir/sdcshield -e sleef_neon -t 5000 -n 1       # SLEEF NEON transcendentals
+./builddir/sdcshield --quality=-1 -e sleef_sve -t 2000  # SVE variant: clean skip (CpuNotSupported) on non-SVE hosts
+./builddir/sdcshield -e pocketfft_fft -t 5000 -n 1   # pocketfft complex FFT
+./builddir/sdcshield -e isal_igzip -t 5000 -n 1      # isa-l deflate/inflate (system libisal, no vendored lib)
 ```
+
+## Vendored third-party libraries (`third-party/`)
+
+Each directory keeps the upstream tarball for provenance plus a `build.sh` that builds and installs a static archive into `install/` (gitignored; the meson build probes `install/` and degrades with a message if absent — never a hard error, never a disabler). Library selection rationale is documented in `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md` (31-paper SDC literature synthesis: vector-FMA GEMM > hash/crypto > compression > SVE transcendentals).
+
+- `eigen5/` — Eigen 5.0.0 (header-only, committed directly; system Eigen 3.3.x breaks on GCC 12+).
+- `openssl/` — OpenSSL 3.5.0, `build.sh` → static `libcrypto.a`; default-enables the SSL tests (`openssl_sha` + 46 `ipsec_*`) with no runtime .so dependency.
+- `openblas/` — OpenBLAS 0.3.29, `build.sh` → static `libopenblas.a` (TARGET=TSV110, single-threaded `USE_THREAD=0` + `USE_LOCKING=1` so per-core worker threads can call cblas concurrently without corrupting the packing-buffer pool); powers `openblas_{d,s,z}gemm`.
+- `sleef/` — SLEEF 3.9.0, `build.sh` → static `libsleef.a` (TLFLOAT=OFF); powers `sleef_neon` (runs on any NEON host) and `sleef_sve` (needs SVE hardware; clean-skips elsewhere).
+- `pocketfft/` — pocketfft C edition, header + `.c` committed directly (BSD-3, no build.sh — compiled straight into the test library); powers `pocketfft_fft`.
+- `meson/` — vendored meson 0.59.4 for the openEuler 20.03 container build path.
+- `rpms/` — three git submodules of prebuilt per-OS-version binaries (see README quick start).
 
 After changing meson sources/options: `meson setup --reconfigure builddir ...` then `ninja` (plain ninja won't pick up config changes).
 
@@ -63,7 +87,7 @@ The x86-64 implementation is the reference; ARM64 is a parallel port. Many piece
 `framework/interrupt_monitor.hpp` + `sysdeps/linux/interrupt_monitor.cpp`. `InterruptMonitorWorks` is `true` on linux x86-64+aarch64. x86 counts MCE/TRM lines from `/proc/interrupts`; aarch64 counts EDAC `ce_count`+`ue_count` (controller-wide, placed at index 0). `count_smi_events()` uses `read_msr` (x86-only MSR 0x34 — no ARM equivalent, returns nullopt). `mce_check` is a special always-inserted test.
 
 ### Tests directory layout
-`tests/common/` (arch-agnostic: mce_check, smi_count), `tests/cpu/` (eigen_*, zlib, zstd, ifs, ist, openssl), `tests/{gpu,idxd}/` (only built for `-Ddevice_type=gpu/idxd`), `tests/examples/` (never built — reference only). `tests/cpu/meson.build` uses meson **sourceset** mechanism: `tests_set_base` (all arches), `tests_set_hsw`/`tests_set_skx` (x86 AVX2/AVX512, compiled with `-DEigen=EigenAVX2`/`EigenAVX512` namespace rename so multiple SIMD backends link without symbol clash), `tests_set_sve` (aarch64 SVE, `-DEigen=EigenSVE`).
+`tests/common/` (arch-agnostic: mce_check, smi_count), `tests/cpu/` (eigen_*, zlib, zstd, ifs, ist, openssl, openblas_gemm, sleef, pocketfft, isa-l), `tests/{gpu,idxd}/` (only built for `-Ddevice_type=gpu/idxd`), `tests/examples/` (never built — reference only). `tests/cpu/meson.build` uses meson **sourceset** mechanism: `tests_set_base` (all arches), `tests_set_hsw`/`tests_set_skx` (x86 AVX2/AVX512, compiled with `-DEigen=EigenAVX2`/`EigenAVX512` namespace rename so multiple SIMD backends link without symbol clash), `tests_set_sve` (aarch64 SVE, `-DEigen=EigenSVE`).
 
 ### RNG
 `framework/random.cpp`. Engines: Constant, LCG, AES (the default auto-picks AES when `haveAes()`). AES engine uses `#pragma GCC target` per-arch: x86 `_mm_aesenc_si128`, aarch64 `vaesmcq_u8(vaeseq_u8(...))` via `+crypto`. RNG state is per-thread (`thread_rng` union, 64-byte aligned). The framework **overrides libc `rand`/`random`/`srand`** (they abort for the seed functions).

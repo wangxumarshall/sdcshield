@@ -36,13 +36,20 @@ cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 
 ```bash
 # openEuler 24.03（基准平台）依赖；Ubuntu/Fedora 见 docs/offline-build-dependencies.md
-sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel gtest-devel
+sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel libisa-l-devel gtest-devel
+# 首次构建前：依次构建 3 个 vendored 依赖库（幂等，install/ 已存在则秒过；
+# pocketfft 无需此步——头文件+源码直接编入测试库）
+./third-party/openssl/build.sh           # → install/lib/libcrypto.a（SSL 测试默认启用）
+./third-party/openblas/build.sh          # → install/lib/libopenblas.a（openblas_{d,s,z}gemm）
+./third-party/sleef/build.sh             # → install/lib/libsleef.a（sleef_neon / sleef_sve）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
-./builddir/sdcshield --list-tests        # 应列出 271 个 PROD 用例
+./builddir/sdcshield --list-tests        # 应列出 278 个 PROD 用例（实测于 2026-09-15）
 ```
 
 > ARM64 要求 Eigen 5.0.0+（系统 Eigen 3.3.x 在 GCC 12+ 下编译失败）。仓库自带 `third-party/eigen5/`，aarch64 构建路径在 `tests/cpu/meson.build` 中直接 `include_directories` 指向它，**无需系统安装 eigen3**；`PKG_CONFIG_PATH` 仅为兼容 x86 路径而保留，带上无害。
+>
+> 三个 `build.sh` 均为可选步骤：任一 `install/` 缺失时 meson 打印提示并跳过对应测试组（不阻断构建、不影响其余用例）。vendored 库的选型依据（向量 FMA GEMM > 哈希/加密 > 压缩 > SVE 超越函数）见 [docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md](docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md)（31 篇 SDC 文献综合）。
 
 
 
@@ -151,10 +158,33 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir --buildt
 ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 ```
 
+## Vendored 计算库（third-party/，SDC 负载扩展）
+
+自 2026-09-15 起，仓库 vendor 了四个高优化度计算库作为 SDC 压测负载——文献结论（见 `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`，31 篇论文综合）：高度优化的第三方库等价于人工写好的数据流型 FU 饱和序列，其中向量 FMA/GEMM 是第一大 SDC 源（SEVI：>92% SDC 事故由 FMA 指令贡献）。每个目录保留上游官方 tag tarball 以溯源，`build.sh` 幂等构建出静态归档到 `install/`（gitignore；meson 探测 `install/`，缺失时打提示跳过对应测试，不阻断构建）。
+
+| 目录 | 内容 | 产出 | 测试 |
+|---|---|---|---|
+| `third-party/openssl/` | OpenSSL 3.5.0 | 静态 `libcrypto.a` | `openssl_sha` + 46 个 `ipsec_*`（默认启用） |
+| `third-party/openblas/` | OpenBLAS 0.3.29（TSV110 内核，单线程 + USE_LOCKING=1） | 静态 `libopenblas.a` | `openblas_dgemm` / `openblas_sgemm` / `openblas_zgemm`（NEON FMA 微内核，每迭代 copy/compute/verify） |
+| `third-party/sleef/` | SLEEF 3.9.0（TLFLOAT=OFF） | 静态 `libsleef.a` | `sleef_neon`（NEON 多项式 FMA 链，sin/cos/exp/log double+float）；`sleef_sve`（SVE 变体，**需 SVE 硬件**——无 SVE 的机器如鲲鹏 920 干净 skip：`CpuNotSupported`） |
+| `third-party/pocketfft/` | pocketfft C 版（BSD-3，头文件+源码直接入库，无需 build.sh） | 编入测试库 | `pocketfft_fft`（位反转抽取重排 + 旋转因子 FMA 蝶形链） |
+
+OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁 192 线程×30s 零错配），锁只保护缓冲表元数据、不改计算结果。
+
+isa-l 的 `isal_igzip`（deflate/inflate 往返）用系统 `libisal`，不引入新 vendored 依赖。
+
+```bash
+# 首次构建顺序（pocketfft 无需预构建）：
+./third-party/openssl/build.sh && ./third-party/openblas/build.sh && ./third-party/sleef/build.sh
+PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release && ninja -C builddir
+# 全核 30s 压测终验（实测 8806/8806 迭代全 pass，2026-09-15，鲲鹏 920 128 核）：
+./builddir/sdcshield -e openblas_dgemm,openblas_sgemm,openblas_zgemm,sleef_neon,isal_igzip,pocketfft_fft,openssl_sha -t 30000
+```
+
 
 ## 测试用例与检测能力
 
-当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）共 **280 个用例**：PROD 271、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3，vendored 依赖齐备时）共 **287 个用例**：PROD 278、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
@@ -165,8 +195,11 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 | FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values` | FMA 模式与尾数精度穷举、特殊值逐字节 golden 比对 |
 | 算术 / 大整数 | `adcx`、`adox`、`adcxlong`、`adcx_arm`、`bigint_mulx_arm`、`gmp_big*` | 进位/溢出链、GMP 大整数乘加、高汉明距离操作数压满加法器 |
 | CRC / 校验 | `crc32`、`isal_crc{32,64}_*`、`zpclmul*` | `crc32` 指令、isa-l CRC32/CRC64 各标准、zlib PCLMUL 折叠 |
-| 压缩 | `zlib*`、`zstd*`、`zfuzz` | zlib/zstd 压缩-解压往返、各级别、fuzz |
+| 压缩 | `zlib*`、`zstd*`、`zfuzz`、`isal_igzip` | zlib/zstd 压缩-解压往返、各级别、fuzz、isa-l deflate/inflate 往返 |
 | 线性代数（Eigen） | `eigen_gemm_*`、`eigen_sparse`、`eigen_svd*`（含 `_cdouble_sve`） | GEMM、稀疏 Cholesky、SVD（BDCSVD/Jacobi）施压 FMA/向量 |
+| 线性代数（OpenBLAS） | `openblas_dgemm`、`openblas_sgemm`、`openblas_zgemm` | OpenBLAS NEON FMA 微内核 GEMM（double/float/complex-double），每迭代 copy/compute/verify（vendored，见上节） |
+| 超越函数（SLEEF） | `sleef_neon`、`sleef_sve` | sin/cos/exp/log 多项式 FMA 依赖链 × 宽向量，逐字节 golden 比对；`sleef_sve` 需 SVE 硬件（无则干净 skip）（vendored，见上节） |
+| FFT（pocketfft） | `pocketfft_fft` | 复数 FFT：位反转抽取重排（store→load scatter）+ 旋转因子 FMA 蝶形链（vendored，见上节） |
 | IPSec / 密码 | `ipsec_*`（46） | AES-CBC/CTR/GCM、HMAC-SHA1/2、XCBC/CMAC/3DES-DOCSIS 于 NEON |
 | OpenSSL SHA | `openssl_sha` | SHA-256/384/512 vs golden（默认构建，优先 vendored OpenSSL） |
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
@@ -181,8 +214,8 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 4 |
-| 2 | PROD（默认）| `quality >= 2` | 264 |
-| | **合计** | | **273** |
+| 2 | PROD（默认）| `quality >= 2` | 278 |
+| | **合计** | | **287** |
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm_crypto`、`ist_sbaf`、`neon_add`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
@@ -200,7 +233,6 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 
 ## 运行测试
 
->>>>>>> main
 ```console
 ./builddir/sdcshield --list-tests                        # 列 PROD 用例（默认）
 ./builddir/sdcshield -e zstd19 -t 5000                   # 单测试，5 秒，全核
@@ -228,4 +260,5 @@ ARM64 能力：CPU 特性检测（FP/NEON/CRC32/Crypto/SVE/SVE2）、拓扑检�
 
 - [编写测试指南](docs/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
 - [离线构建依赖与排坑](docs/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
+- [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2019–2026）系统性总结，负载设计与 vendored 依赖库选型依据
 - [贡献指南](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md)

@@ -502,6 +502,16 @@ if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
             'sleef/sleef_neon.cpp',
         )
     )
+    # SVE variant goes into the dedicated tests_sve static library (compiled
+    # with -march=armv8.2-a+sve -msve-vector-bits=128), NOT the NEON baseline:
+    # SVE object code in tests_base would SIGILL on non-SVE silicon. Runtime
+    # HWCAP_SVE gate in sleef_sve.cpp skips cleanly there.
+    tests_set_sve.add(
+        when : sleef_dep,
+        if_true : files(
+            'sleef/sleef_sve.cpp',
+        )
+    )
 else
     sleef_dep = []
     message('SLEEF install/ not found under third-party/sleef — run its build.sh to enable the sleef_neon test.')
@@ -845,6 +855,7 @@ if host_machine.cpu_family() == 'aarch64'
             dependencies: [
                 tests_config_sve.dependencies(),
                 boost_dep,
+                sleef_dep,
             ],
             build_by_default: false,
             include_directories: [

@@ -466,6 +466,7 @@ if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
         when : openblas_dep,
         if_true : files(
             'openblas_gemm/dgemm.cpp',
+            'openblas_gemm/sgemm.cpp',
         )
     )
 else

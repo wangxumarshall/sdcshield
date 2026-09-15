@@ -517,6 +517,41 @@ else
     message('SLEEF install/ not found under third-party/sleef — run its build.sh to enable the sleef_neon test.')
 endif
 
+# pocketfft (vendored third-party/pocketfft, BSD-3, single header + single
+# .c, no prebuilt step). The FFT payload stresses the CORE179-discriminating
+# access structure (bit-reversal-style decimation reordering = store->load
+# scatter across the working set) plus twiddle-FMA butterfly chains. The .c
+# is compiled straight into tests_base_a; the plan API is re-entrant (all
+# per-call scratch is malloc'd inside the call, the plan's twiddle tables
+# are read-only after make), so one plan is shared across the worker
+# threads. The pocketfft.h/pocketfft.c/LICENSE.md triple is committed
+# explicitly (git add -f) while .gitignore keeps the rest of the tarball
+# extraction out; the tarball stays for provenance.
+pocketfft_dir = meson.current_source_dir() / '../../third-party/pocketfft/pocketfft-master'
+if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
+        pocketfft_dir / 'pocketfft.h', check: false).returncode() == 0
+    pocketfft_files = files(pocketfft_dir / 'pocketfft.c')
+    # include_directories() must use a source-tree-relative path (meson
+    # rejects absolute paths into the source tree — same lesson as the
+    # OpenBLAS block); only the file/probe paths use the joined absolute.
+    pocketfft_dep = declare_dependency(
+        include_directories: include_directories('../../third-party/pocketfft/pocketfft-master', is_system: true),
+    )
+    tests_set_base.add(
+        when : pocketfft_dep,
+        if_true : [
+            files('pocketfft/fft.cpp'),
+            pocketfft_files,
+        ]
+    )
+else
+    # Not a disabler(): same discipline as the OpenBLAS/SLEEF blocks above —
+    # an empty list contributes nothing, a disabler would silently suppress
+    # the whole sdcshield binary through the dependency chain.
+    pocketfft_dep = []
+    message('pocketfft.h not found under third-party/pocketfft — extract pocketfft-master.tar.gz to enable the pocketfft_fft test.')
+endif
+
 # Gather/scatter tests. These are software-simulated gather/scatter using
 # plain double/int arrays and std::mt19937 — no x86 intrinsics, no arm_neon.h.
 # The x86 AVX-style names (gatherscatterpd/ps) are inherited from the
@@ -714,6 +749,7 @@ tests_base_a = static_library(
         isal_lib,
         openblas_dep,
         sleef_dep,
+        pocketfft_dep,
     ],
     c_args : [
         tests_common_c_args,

@@ -116,7 +116,6 @@ static int openblas_zgemm_run(struct test *test, int cpu) {
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
         if (__builtin_expect(!a_copy || !b_copy || !c, 0)) {
-            free(a_copy); free(b_copy); free(c);
             a_copy = (double *)malloc(bytes);
             b_copy = (double *)malloc(bytes);
             c      = (double *)calloc(1, bytes);

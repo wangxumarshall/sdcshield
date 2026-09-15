@@ -96,7 +96,6 @@ static int isal_igzip_run(struct test *test, int cpu)
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
         if (__builtin_expect(!comp || !decomp, 0)) {
-            free(comp); free(decomp);
             comp    = (uint8_t *)malloc(OUT_SIZE);
             decomp  = (uint8_t *)malloc(IN_SIZE);
             if (!comp || !decomp)

@@ -15,7 +15,7 @@
 # blas_memory_alloc/free calls hand the same scratch slot to two threads
 # and corrupt each other's packing buffers (empirically: 8 threads x 10s
 # -> 62 byte mismatches; with USE_LOCKING=1: 128 cores (this machine, all cores)
-# x 30s -> 0 (see allcore.yaml).
+# x 30s -> 0 (see docs/cases/allcore-2026-09-15/).
 # The locks guard only the buffer-table metadata, not the kernels, so
 # results stay byte-identical to the unlocked build — the single-threaded
 # semantics that matter for SDC detection (no library-internal threading,

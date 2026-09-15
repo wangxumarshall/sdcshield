@@ -469,7 +469,14 @@ if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
         )
     )
 else
-    openblas_dep = disabler()
+    # Not a disabler(): a disabler propagates through tests_base_a ->
+    # sandstone_tests -> the root executable and silently suppresses the
+    # sdcshield binary entirely (meson setup still exits 0). An empty list
+    # just contributes nothing to the dependencies (same pattern as
+    # boost_dep in the root meson.build); the openblas_gemm sources only
+    # enter the sourceset in the if-branch above.
+    openblas_dep = []
+    message('OpenBLAS install/ not found under third-party/openblas — run its build.sh to enable the openblas_* tests.')
 endif
 
 # Gather/scatter tests. These are software-simulated gather/scatter using

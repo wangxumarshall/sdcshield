@@ -26,10 +26,13 @@ ninja -C builddir
 ./builddir/sdcshield -s help                 # list RNG engines (Constant/LCG/AES)
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv  # crash backtrace dump
 
-# OpenSSL SHA test is opt-in (default ssl_link_type=none → not built):
-PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir \
-    --buildtype=release -Dssl_link_type=dynamic
-ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
+# OpenSSL is vendored (third-party/openssl) and enabled by default since
+# 2026-09-15; run ./third-party/openssl/build.sh once before first build.
+# If the install dir is absent, meson falls back to system libcrypto (or
+# disables SSL tests with a message).
+# SSL tests (openssl_sha + ipsec suite) are on by default (ssl_link_type=dynamic):
+./builddir/sdcshield --list-tests | grep -c ipsec     # 46 ipsec tests
+./builddir/sdcshield -e openssl_sha -t 3000 -n 1      # linked statically — no libcrypto.so runtime dep
 ```
 
 After changing meson sources/options: `meson setup --reconfigure builddir ...` then `ninja` (plain ninja won't pick up config changes).

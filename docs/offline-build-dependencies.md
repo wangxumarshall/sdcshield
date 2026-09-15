@@ -14,7 +14,7 @@
 |---|---|---|
 | A. 构建工具链 | gcc / g++ / meson / ninja / perl / python3 / pkg-config / binutils | **必须** |
 | B. 编译期库（头文件 + 静态/动态库） | boost（仅头文件）、eigen5（**仓库自带**，无需系统装）、zlib、libzstd、libisal(isa-l) | **必须**（eigen5 除外，因其自带） |
-| C. 可选功能库 | openssl（libcrypto，仅 `-Dssl_link_type≠none` 时）、gtest（仅单元测试 `unittests` 目标，默认不构建） | 可选 |
+| C. 可选功能库 | openssl（**源码自带**，third-party/openssl，build.sh 一次构建）、gtest（仅单元测试 `unittests` 目标，默认不构建） | 可选 |
 | D. 运行期 / 链接选项相关 | libatomic（aarch64 128 位原子运行时）、glibc 静态库（仅全静态链接 `-static` 时） | 视构建模式 |
 
 关键事实（来自源码与实测）：
@@ -25,7 +25,7 @@
 4. **libisal(isa-l) 是必须的**（默认构建下 `cpp.find_library('isal', required:false, static:true)`，但 10 个 `isal_*` CRC 测试需要它）。openEuler 提供两个等价包：`libisa-l-devel`（EPOL 仓，2.30.0）与 `libisal-devel`（everything 仓，2.29.0）。两者都装 `/usr/include/isa-l/*.h` + `libisal.a/.so`。**任选其一**，推荐 `libisa-l-devel`（版本更新，且 EPOL 是 openEuler 主推应用仓）。当前这台机器上的 isal 是**源码编译安装**的（RPM 数据库不认领 `/usr/lib/libisal.a`），所以最小化环境应改用官方 RPM。
 5. **libatomic**：aarch64 上 `std::atomic<__int128>`（128 位 CAS）会 lower 成对 `__atomic_*_16` 运行时符号的调用，需要 `libatomic`。meson 以 `required:false` 查找，但实际 `spinlock_stress_cmpxchg16b` 等测试会用到。`libatomic` 包默认随 gcc 装上。
 6. **gtest**：仅 `unittests` 目标（`build_by_default:false`）需要，默认 `ninja` 不构建它。若不跑单元测试，**可省** `gtest-devel`。
-7. **openssl**：默认 `-Dssl_link_type=none`，不构建 `openssl_sha` 测试，不需要 `openssl-devel`。需要 SHA 测试时加 `-Dssl_link_type=dynamic`。
+7. **openssl**：**源码自带**（`third-party/openssl/openssl-3.5.0.tar.gz`，`./third-party/openssl/build.sh` 一次构建出 `install/lib/libcrypto.a` + `install/include/openssl/`）。自 2026-09-15 起 `ssl_link_type` 默认 `dynamic`，`openssl_sha` + ipsec 全系列测试默认构建并链接 vendored 静态归档（二进制自包含，无 libcrypto.so 运行时依赖，但 ipsec/openssl 头文件与符号来自 vendored 3.5.0）。`install/` 缺失时 meson 回退系统 `libcrypto`（此时才需要 `openssl-devel`），再找不到则禁用 SSL 测试并打印提示。
 8. **git**：仅 `framework/scripts/make-gitid.pl` 生成 `gitid.h` 时调用 `git describe`；无 git 仓库时脚本会优雅退化（写入占位版本号），不阻断构建。但为得到正确版本号，建议装 `git`。
 9. **gcc 版本**：`cpp_std=gnu++23`。实测 **gcc 12.3.1**（openEuler 24.03 SP3 自带）即可编译通过，无需 gcc 13+。
 10. **meson 版本**：要求 `>=1.3`。openEuler 官方 `meson-1.3.1` 满足。（注：当前开发机 `meson --version` 显示 1.11.2 来自用户 `pip` 安装 `~/.local`，**不是**系统包；离线最小化环境应使用系统 RPM 的 1.3.1，已足够。）
@@ -56,7 +56,9 @@ git                         # 2.43.0  — 生成 gitid.h 版本号（无则退�
 ### 2.2 可选包
 
 ```text
-openssl-devel               # 3.0.12  — 仅 -Dssl_link_type=dynamic/static 时
+openssl-devel               # 3.0.12  — 系统包仅作回退：vendored OpenSSL 默认启用
+                                      #   （third-party/openssl，build.sh 一次构建；
+                                      #    install/ 缺失时 meson 回退系统 libcrypto）
 gtest-devel                 # 1.14.0  — 仅构建 unittests 目标时
 glibc-static                # 全静态链接(-static)时需要 libc.a（默认动态链接不需要）
 ```
@@ -121,12 +123,17 @@ ninja -C builddir
 ./builddir/sdcshield -e zstd19 -t 2000 -n 1 # 应 exit: pass
 ```
 
-### 3.4（可选）启用 OpenSSL SHA 测试
+### 3.4 OpenSSL SSL 测试（默认启用，vendored）
 
 ```bash
-meson setup --reconfigure builddir --buildtype=release -Dssl_link_type=dynamic
+# 一次构建 vendored OpenSSL（若 install/ 已存在则直接跳过）：
+./third-party/openssl/build.sh
+
+# 默认构建即包含 SSL 测试（ssl_link_type 默认 dynamic，优先 vendored 静态归档）：
+meson setup builddir --buildtype=release
 ninja -C builddir
-./builddir/sdcshield --list-tests | grep openssl_sha
+./builddir/sdcshield --list-tests | grep openssl_sha    # 1 行
+./builddir/sdcshield --list-tests | grep -c ipsec       # 46 行
 ```
 
 ---
@@ -143,7 +150,8 @@ ninja -C builddir
 | `cc.find_library('atomic')` | （无 .pc） | `libatomic` | `/usr/lib64/libatomic.so.1`（静态 `libatomic.a` 随 `libatomic` 装） |
 | `cc.find_library('dl')` | — | glibc 自带 | `/usr/lib64/libdl.so` |
 | `dependency('threads')` | — | glibc 自带 | libpthread |
-| `dependency('libcrypto')`（可选） | `libcrypto` | `openssl-devel` | `/usr/include/openssl/sha.h`, `/usr/lib64/libcrypto.{a,so}` |
+| vendored libcrypto（默认优先） | `test -f third-party/openssl/install/lib/libcrypto.a` | **仓库自带** `third-party/openssl/`（build.sh） | `install/lib/libcrypto.a`, `install/include/openssl/sha.h` |
+| `dependency('libcrypto')`（仅回退，install/ 缺失时） | `libcrypto` | `openssl-devel` | `/usr/include/openssl/sha.h`, `/usr/lib64/libcrypto.{a,so}` |
 | `dependency('gtest_main')`（可选） | `gtest_main` | `gtest-devel` | `/usr/lib64/libgtest*.a`, `.pc` |
 | `find_program('perl')` | — | `perl` | `/usr/bin/perl` |
 | `find_program('python3')` | — | `python3` | `/usr/bin/python3` |

@@ -161,6 +161,12 @@ if host_machine.cpu_family() == 'aarch64'
             # overflow to Inf/NaN), byte-exact vs a scalar fma() golden
             # recomputed with the identical operation order.
             'sve512_f64_chain_arm.cpp',
+            # workload 2: same serial FMLA chain over the IEEE-754 special
+            # table (NaN/sNaN/Inf/+-0/+-1), compared by category per
+            # fsu_byteexact_arm precedent — a category change is always a
+            # failure; NaN payloads are not byte-compared because IEEE 754
+            # does not require deterministic NaN payload propagation.
+            'sve512_f64_special_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

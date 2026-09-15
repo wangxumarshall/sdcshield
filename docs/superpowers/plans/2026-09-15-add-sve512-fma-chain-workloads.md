@@ -61,11 +61,16 @@ sandstone_run.cpp:1558，fork 前生效）+ zstd19 回归 + 反汇编 SVE 代码
       编码）、`fmadd d0`（标量 golden）、`cntd`、`ptrue p0.b`
 - [x] README：ARM64 SDC 专项行补测试 + 计数 272/281；commit + push
 
-### Task 2: sve512_f64_special_arm
-- [ ] 写入用户代码（原样）到 `tests/cpu/arm64/sve512_f64_special_arm.cpp`
-- [ ] meson 注册；reconfigure + ninja 零新告警；计数实测（预期 273）
-- [ ] `-e sve512_f64_special_arm -t 1000`：干净 skip；zstd19 回归 pass
-- [ ] objdump SVE 代码生成证据；README 计数 273/282；commit + push
+### Task 2: sve512_f64_special_arm — 完成（2026-09-15 实测）
+- [x] 写入用户代码（原样）到 `tests/cpu/arm64/sve512_f64_special_arm.cpp`
+- [x] meson 注册；ninja 320/320；单 TU 重编译 0 warning
+- [x] `--list-tests` 注册（第 273 个）；计数实测 default 273
+- [x] `-e sve512_f64_special_arm -t 1000`：result skip / CpuNotSupported /
+      `test compiled with sve`，总体 exit: pass，无 SIGILL
+- [x] 回归：`-e zstd19 -t 3000` exit: pass
+- [x] objdump 实测：`fmla z0.d, p0/m, z1.d, z2.d`、`fmadd d0`、`cntd`、
+      `ptrue p0.b`
+- [x] README 计数 273/282 + 专项表；commit + push
 
 ### Task 3: sve512_f32_chain_arm
 - [ ] 写入用户代码（原样）到 `tests/cpu/arm64/sve512_f32_chain_arm.cpp`

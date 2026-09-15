@@ -27,7 +27,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define ELEMS 1024   /* elements per family: 512 float64x2 + 512 float32x4 lanes (mixed widths) */
+#define ELEMS 1024   /* elements per family: 512 float64x2 vectors (double half) + 256 float32x4 vectors (float half) */
 
 namespace {
 struct sleef_test_data {
@@ -64,17 +64,19 @@ static double uniform01(void)
 
 /* Domain-boundary analysis for the mappings below (the naive u*span+lo
  * write-up can round to the boundary itself):
- *  - trig : u*2-1 lies in [-1, 1-2^-53]; times pi the magnitude stays
- *           <= pi*(1-2^-53)*(1+2eps) < pi*(1-2^-52) — strictly inside
- *           [-pi, pi] after the two roundings. sin/cos of that is also
- *           guaranteed finite and well inside [-1, 1].
- *  - exp  : same construction over [-20, 20-2^-49]; exp of that is in
+ *  - trig : u in [0,1) tops out at 1-2^-53, so u*2-1 (exact in binary)
+ *           lies in [-1, 1-2^-52]; times pi the magnitude stays
+ *           <= pi*(1-2^-52)*(1+2eps) — strictly inside [-pi, pi] after the
+ *           two roundings. sin/cos of that is also guaranteed finite and
+ *           well inside [-1, 1].
+ *  - exp  : same construction over [-20, 20-2^-48]; exp of that is in
  *           [~2e-9, ~4.85e8], forty orders from overflow and far above
  *           subnormal double/float (float min normal ~1.2e-38).
  *  - log  : u in [0,1) plus 1e-300 keeps the argument strictly positive
  *           (u==0 gives 1e-300, a normal double; the float variant uses
  *           1e-30 so the offset survives the float narrowing), scaled by
- *           1e10: log arguments span [~1e-300, 1e10), all finite, all
+ *           1e10: log arguments span [1e-290, 1e10) for the double variant
+ *           ([~1e-20, ~1e10) once narrowed to float), all finite, all
  *           inside SLEEF's u10 accuracy domain (positive reals).
  * Every golden value is additionally checked for finiteness in init: a
  * NaN/Inf would make the byte-exact comparison meaningless (NaN != NaN). */
@@ -118,8 +120,13 @@ static int sleef_neon_init(struct test *test)
         d->xd_log[i] = (u + 1.0e-300) * 1.0e10;                /* positive */
     }
 
-    /* float inputs, per domain (the [0,1) double narrows to a float that
-     * stays in [0,1]: every float below 1 rounds to itself or down) */
+    /* float inputs, per domain. CAUTION: the [0,1) double does NOT stay
+     * below 1 after narrowing — doubles in (1-2^-25, 1) round UP to exactly
+     * 1.0f — so xf_trig/xf_exp can reach exactly +-pi_f / +-20_f (the domain
+     * edge). Harmless: the u10 kernels carry their accuracy guarantee over
+     * the whole input domain, determinism never depends on accuracy (the
+     * golden values come from the very same kernel), and the init finiteness
+     * tripwire below backstops the rest. */
     for (int i = 0; i < ELEMS; ++i) {
         float u = (float)uniform01();
         d->xf_trig[i] = (u * 2.0f - 1.0f) * 3.14159265f;       /* [-pi, pi] */

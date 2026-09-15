@@ -447,7 +447,8 @@ tests_set_base.add(
 # cblas_dgemm concurrently: without it the internal packing-buffer pool
 # (blas_memory_alloc) is a process-wide unlocked table and concurrent calls
 # corrupt each other (empirically confirmed: 8 threads x 10s -> 62 byte
-# mismatches; with USE_LOCKING=1: 192 threads x 30s -> 0). The locks guard
+# mismatches; with USE_LOCKING=1: 128 cores (this machine, all cores) x 30s -> 0
+# (see allcore.yaml). The locks guard
 # only the buffer-table metadata, not the kernel, so results stay
 # byte-identical to the unlocked build.
 # include_directories() must use a source-tree-relative path (meson rejects

@@ -1,9 +1,9 @@
 # SDC（静默数据损坏）前沿研究系统性总结
 
 > 整理日期：2026-09-15
-> 文献基础：本目录 `ref/` 下 31 篇论文（2019–2026，含 SOSP/HPCA/ISCA/MICRO/ASPLOS/DATE/DSN/ITC/TC 等），全部逐篇精读
+> 文献基础：本目录 `ref/` 下 31 篇论文（2003–2026，含 SOSP/HPCA/ISCA/MICRO/ASPLOS/DATE/DSN/ITC/TC 等），全部逐篇精读
 > 目的：为 SDCShield（ARM64 服务器 CPU SDC 压测工具）的**负载设计与依赖库选择**建立文献依据
-> 交叉验证：与本仓库 `docs/CORE179_SDC_REPORT_CN.md`（192 核鲲鹏 920 实测缺陷，36 样本/562 bit）互证
+> 交叉验证：与本仓库 `docs/cases/CORE179_SDC_REPORT_CN.md`（鲲鹏 920 实测缺陷，36 样本/562 bit）互证
 
 ---
 

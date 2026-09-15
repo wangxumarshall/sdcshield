@@ -169,7 +169,7 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 | `third-party/sleef/` | SLEEF 3.9.0（TLFLOAT=OFF） | 静态 `libsleef.a` | `sleef_neon`（NEON 多项式 FMA 链，sin/cos/exp/log double+float）；`sleef_sve`（SVE 变体，**需 SVE 硬件**——无 SVE 的机器如鲲鹏 920 干净 skip：`CpuNotSupported`） |
 | `third-party/pocketfft/` | pocketfft C 版（BSD-3，头文件+源码直接入库，无需 build.sh） | 编入测试库 | `pocketfft_fft`（位反转抽取重排 + 旋转因子 FMA 蝶形链） |
 
-OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁 192 线程×30s 零错配），锁只保护缓冲表元数据、不改计算结果。
+OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁后 128 核（本机全核）30s 压力零错配，见 allcore.yaml），锁只保护缓冲表元数据、不改计算结果。
 
 isa-l 的 `isal_igzip`（deflate/inflate 往返）用系统 `libisal`，不引入新 vendored 依赖。
 
@@ -260,5 +260,5 @@ ARM64 能力：CPU 特性检测（FP/NEON/CRC32/Crypto/SVE/SVE2）、拓扑检�
 
 - [编写测试指南](docs/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
 - [离线构建依赖与排坑](docs/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
-- [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2019–2026）系统性总结，负载设计与 vendored 依赖库选型依据
+- [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据
 - [贡献指南](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md)

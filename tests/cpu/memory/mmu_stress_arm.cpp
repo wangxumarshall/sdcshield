@@ -64,7 +64,7 @@
 // aarch64 DTLB (typically 48-64 entries for 4K pages), so the old value never
 // thrashed. 4096 pages (16 MB) is ~64x a typical DTLB, so every stride pass
 // evicts resident entries and replays the page-table walker. Per-thread private
-// region; 16 MB * 192 threads = 3 GB, well within this 791 GB host's headroom.
+// region; 16 MB * 128 threads = 2 GB, well within this host's headroom.
 // Must be >= 2 for cross-page access.
 static constexpr size_t NUM_PAGES = 4096;
 

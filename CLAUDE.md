@@ -42,7 +42,7 @@ ninja -C builddir
 # Vendored-library tests (PROD quality, 278 total tests at default quality):
 ./builddir/sdcshield -e openblas_dgemm -t 5000 -n 1   # OpenBLAS NEON FMA GEMM
 ./builddir/sdcshield -e sleef_neon -t 5000 -n 1       # SLEEF NEON transcendentals
-./builddir/sdcshield --quality=-1 -e sleef_sve -t 2000  # SVE variant: clean skip (CpuNotSupported) on non-SVE hosts
+./builddir/sdcshield -e sleef_sve -t 2000  # SVE variant: clean skip (CpuNotSupported) on non-SVE hosts
 ./builddir/sdcshield -e pocketfft_fft -t 5000 -n 1   # pocketfft complex FFT
 ./builddir/sdcshield -e isal_igzip -t 5000 -n 1      # isa-l deflate/inflate (system libisal, no vendored lib)
 ```

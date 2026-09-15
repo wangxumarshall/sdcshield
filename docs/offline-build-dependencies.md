@@ -2,7 +2,7 @@
 
 > 目标：在一个**最小安全安装**的 openEuler 24.03 SP3 aarch64 上，从零编译构建本仓库（默认 CPU device、ARM64 路径），并支持在**无网络环境**下快速复刻。
 >
-> 以下结论全部基于对 `meson.build` / `meson_options.txt` / 各子目录 `meson.build` 的逐文件分析，并在一台干净 openEuler 24.03 SP3 (Kunpeng 920, aarch64) 上以一次真实 `meson setup --reconfigure` + `ninja` + 功能验证（199 个测试、`zstd19` 单线程 `exit: pass`）背书。
+> 以下结论全部基于对 `meson.build` / `meson_options.txt` / 各子目录 `meson.build` 的逐文件分析，并在一台干净 openEuler 24.03 SP3 (Kunpeng 920, aarch64) 上以一次真实 `meson setup --reconfigure` + `ninja` + 功能验证（271 个测试，实测于 2026-09-15，`zstd19` 单线程 `exit: pass`）背书。
 
 ---
 
@@ -119,7 +119,7 @@ meson setup builddir --buildtype=release
 ninja -C builddir
 
 # 验证
-./builddir/sdcshield --list-tests          # 应列出 ~199 个测试
+./builddir/sdcshield --list-tests          # 应列出 271 个测试（实测于 2026-09-15）
 ./builddir/sdcshield -e zstd19 -t 2000 -n 1 # 应 exit: pass
 ```
 

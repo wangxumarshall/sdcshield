@@ -130,20 +130,24 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 
 
 
-## 可选：启用 OpenSSL SHA（`openssl_sha`）
+## OpenSSL SHA（`openssl_sha`，默认构建）
 
-`openssl_sha` 经 OpenSSL 计算 SHA-256/384/512 与 golden 比对。默认不构建，由 `ssl_link_type`（默认 `none`）控制。
+`openssl_sha` 经 OpenSSL 计算 SHA-256/384/512 与 golden 比对。默认 `ssl_link_type=dynamic`，优先使用 vendored OpenSSL（`third-party/openssl/`，需先执行 `./third-party/openssl/build.sh` 构建），若 `install/` 缺失则回退系统 `libcrypto`，两者都不可用时 meson 打印提示并跳过 SSL 测试。
 
 | `ssl_link_type` | 行为 |
 |---|---|
-| `none`（默认）| 不用 OpenSSL；无 `openssl_sha` |
-| `dynamic` | 构建期链接 `libcrypto` |
+| `dynamic`（默认）| 优先 vendored OpenSSL，回退系统 `libcrypto`，构建期动态链接 |
 | `static` | 同上，链接静态 `libcrypto` |
 | `loaded` | 运行期 `dlopen()` 加载 `libcrypto` |
+| `none` | 禁用 OpenSSL；无 `openssl_sha` |
 
 ```bash
+# 若 third-party/openssl/install/ 已存在则无需手动构建 vendored OpenSSL，
+# 否则需先执行：
+./third-party/openssl/build.sh
+# 仅当回退系统库且未装 openssl-devel 时才需要：
 sudo dnf install -y openssl-devel
-PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir --buildtype=release -Dssl_link_type=dynamic
+PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir --buildtype=release
 ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 ```
 
@@ -164,7 +168,7 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 | 压缩 | `zlib*`、`zstd*`、`zfuzz` | zlib/zstd 压缩-解压往返、各级别、fuzz |
 | 线性代数（Eigen） | `eigen_gemm_*`、`eigen_sparse`、`eigen_svd*`（含 `_cdouble_sve`） | GEMM、稀疏 Cholesky、SVD（BDCSVD/Jacobi）施压 FMA/向量 |
 | IPSec / 密码 | `ipsec_*`（46） | AES-CBC/CTR/GCM、HMAC-SHA1/2、XCBC/CMAC/3DES-DOCSIS 于 NEON |
-| OpenSSL SHA | `openssl_sha` | SHA-256/384/512 vs golden（需 `ssl_link_type≠none`） |
+| OpenSSL SHA | `openssl_sha` | SHA-256/384/512 vs golden（默认构建，优先 vendored OpenSSL） |
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
 | ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路 |

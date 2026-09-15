@@ -181,6 +181,12 @@ if host_machine.cpu_family() == 'aarch64'
             # pressures L3/TLB — the first of eigen_svd_cdouble_sve's
             # SVD-only trigger paths (working set beyond L2).
             'sve512_f64_chain_svd.cpp',
+            # SVD-format variant of workload 2: the same SVD-scale block
+            # traversal over the IEEE-754 special-value table (64-step
+            # chain), compared per lane by category (fsu_byteexact_arm
+            # precedent). Allocation: 300*300*64*VL per stream (~360 MB
+            # each at a 512-bit VL).
+            'sve512_f64_special_svd.cpp',
         ),
         build_by_default: false,
         include_directories: [

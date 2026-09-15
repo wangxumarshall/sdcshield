@@ -57,8 +57,16 @@
       `ptrue p0.b`
 - [x] README：专项表补该测试 + 计数 275/284；commit + push
 
-### Task 2: sve512_f64_special_svd
-- [ ] 同上；预期 default 276；README 计数 276/285
+### Task 2: sve512_f64_special_svd — 完成（2026-09-15 实测）
+- [x] 写入用户代码（原样）；meson 注册（带注释）
+- [x] ninja 323/323；单 TU 重编译 0 warning
+- [x] `--list-tests` 注册（第 276 个）；计数实测 default 276
+- [x] `-e sve512_f64_special_svd -t 1000`：干净 skip（CpuNotSupported /
+      `test compiled with sve`），exit: pass，无 SIGILL
+- [x] 回归：`-e zstd19 -t 3000` exit: pass
+- [x] objdump 实测：`fmla z0.d, p0/m, z1.d, z2.d`、`fmadd d0`、`cntd`、
+      `ptrue p0.b`
+- [x] README 计数 276/285 + 专项表；commit + push
 
 ### Task 3: sve512_f32_chain_svd
 - [ ] 同上；预期 default 277；f32 通路证据（fmla z0.s / cntw）；

@@ -174,8 +174,8 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 4 |
-| 2 | PROD（默认）| `quality >= 2` | 264 |
-| | **合计** | | **273** |
+| 2 | PROD（默认）| `quality >= 2` | 271 |
+| | **合计** | | **280** |
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm_crypto`、`ist_sbaf`、`neon_add`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
@@ -193,7 +193,6 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 
 ## 运行测试
 
->>>>>>> main
 ```console
 ./builddir/sdcshield --list-tests                        # 列 PROD 用例（默认）
 ./builddir/sdcshield -e zstd19 -t 5000                   # 单测试，5 秒，全核

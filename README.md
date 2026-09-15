@@ -90,9 +90,12 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 # 产出现场 tarball（~6MB，含自动检测 OS 的 run.sh）
 ./scripts/offline-build/package-release.sh 24.03 SP3
 # 目标机：解压后 ./run.sh -e zstd19 -t 2000 -n 1   # run.sh 自动精确匹配 OS 版本，不匹配则硬停指路
+#          ./run.sh full -t 120s                    # 全核满载 eigen 运算（两段式，详见下注）
 ```
 
 > `run.sh` 部署逻辑：检测本机 OS → 精确匹配 `built-index.tsv`（不跨版本回退）→ 校验 `binary-sha256` → `exec run-sdcshield.sh`（设 `LD_LIBRARY_PATH` 指向随包 `libs/`）。
+>
+> `run-sdcshield.sh full`（首参数 `full`）：两段式全核 eigen 满载——第一段 11 个稳定 eigen 测试不带 `-n`（默认使用系统全部 CPU）；第二段 4 个数值敏感测试（`eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve`）以 `-n 1` 补跑，规避大规模多线程下的 ULP 级偶发假 FAIL（平台已知特性）。默认每测试 60s（可 `-t` 覆盖）；透传的 `-n` 只作用于第一段；`eigen_svd_cdouble_sve` 在无 SVE 的机器上自动 skip。
 
 #### 一键式全流程：`release-all.sh`（agent/CI 首选入口）
 

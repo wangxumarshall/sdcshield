@@ -187,6 +187,12 @@ if host_machine.cpu_family() == 'aarch64'
             # precedent). Allocation: 300*300*64*VL per stream (~360 MB
             # each at a 512-bit VL).
             'sve512_f64_special_svd.cpp',
+            # SVD-format variant of workload 3: the same SVD-scale block
+            # traversal at f32 width (svmla_f32_x, 16-lane f32 datapath),
+            # byte-exact vs a scalar fmaf() golden. Allocation:
+            # 300*300*512*VL f32 elements per stream (~2.7 GiB each at a
+            # 512-bit VL).
+            'sve512_f32_chain_svd.cpp',
         ),
         build_by_default: false,
         include_directories: [

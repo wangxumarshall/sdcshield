@@ -68,9 +68,16 @@
       `ptrue p0.b`
 - [x] README 计数 276/285 + 专项表；commit + push
 
-### Task 3: sve512_f32_chain_svd
-- [ ] 同上；预期 default 277；f32 通路证据（fmla z0.s / cntw）；
-      README 计数 277/286
+### Task 3: sve512_f32_chain_svd — 完成（2026-09-15 实测）
+- [x] 写入用户代码（原样）；meson 注册（带注释）
+- [x] ninja 324/324；单 TU 重编译 0 warning
+- [x] `--list-tests` 注册（第 277 个）；计数实测 default 277
+- [x] `-e sve512_f32_chain_svd -t 1000`：干净 skip（CpuNotSupported /
+      `test compiled with sve`），exit: pass，无 SIGILL
+- [x] 回归：`-e zstd19 -t 3000` exit: pass
+- [x] objdump 实测（f32 通路）：`fmla z0.s, p0/m, z1.s, z2.s`、
+      `fmadd s0`、`cntw`、`ptrue p0.b`
+- [x] README 计数 277/286 + 专项表；commit + push
 
 ### Task 4: sve512_gather_scatter_svd
 - [ ] 同上；预期 default 278 / beta 282 / skip 287；gather/scatter

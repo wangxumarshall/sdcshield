@@ -59,18 +59,26 @@ struct SveF64SpecialSvdData {
 
 #ifdef __aarch64__
 
+// Block-major stream layout: [block_row][block_col][step][lane], one
+// SPECIAL_CHAIN_STEPS x VL contiguous slab per block origin (19x19 blocks).
+static inline size_t block_slab_base(size_t row, size_t col, size_t lanes)
+{
+    const size_t n_blocks_c = (SVD_COLS + SVD_BLOCK_COLS - 1) / SVD_BLOCK_COLS;
+    return ((row / SVD_BLOCK_ROWS) * n_blocks_c + (col / SVD_BLOCK_COLS)) *
+           (SPECIAL_CHAIN_STEPS * lanes);
+}
+
 static void f64_special_golden(const SveF64SpecialSvdData *d, uint64_t *out,
                                size_t row, size_t col)
 {
     const size_t lanes = d->vl_d;
-    const size_t stride = SVD_COLS * lanes;
     for (size_t lane = 0; lane < lanes; ++lane) {
         uint64_t accw = d->seeds_f64[lane];
         double acc;
         memcpy(&acc, &accw, 8);
         for (size_t i = 0; i < SPECIAL_CHAIN_STEPS; ++i) {
             double m, a;
-            const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+            const size_t base = block_slab_base(row, col, lanes) + i * lanes;
             memcpy(&m, &d->sm_f64[base + lane], 8);
             memcpy(&a, &d->sa_f64[base + lane], 8);
             acc = std::fma(m, a, acc);
@@ -85,11 +93,10 @@ static void f64_special_chain_hw(const SveF64SpecialSvdData *d, uint64_t *out,
 {
     const size_t lanes = d->vl_d;
     const svbool_t pg = svptrue_b64();
-    const size_t stride = SVD_COLS * lanes;
     svfloat64_t acc = svld1_f64(pg,
         reinterpret_cast<const double *>(d->seeds_f64.data()));
     for (size_t i = 0; i < SPECIAL_CHAIN_STEPS; ++i) {
-        const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+        const size_t base = block_slab_base(row, col, lanes) + i * lanes;
         svfloat64_t m = svld1_f64(pg,
             reinterpret_cast<const double *>(&d->sm_f64[base]));
         svfloat64_t a = svld1_f64(pg,
@@ -133,7 +140,13 @@ static int sve512_f64_special_svd_init(struct test *test)
             data->seeds_f64[lane] = 0x3FF0000000000000ULL |
                 (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
         }
-        const size_t total = SVD_ROWS * SVD_COLS * SPECIAL_CHAIN_STEPS * data->vl_d;
+        // Block-major streams: 361 blocks x SPECIAL_CHAIN_STEPS x VL
+        // (~1.44 MB per stream at a 512-bit VL — the intended SVD-scale
+        // footprint; the old [row][col][step][lane] layout multiplied out
+        // to ~368 MB per stream).
+        const size_t n_blocks_r = (SVD_ROWS + SVD_BLOCK_ROWS - 1) / SVD_BLOCK_ROWS;
+        const size_t n_blocks_c = (SVD_COLS + SVD_BLOCK_COLS - 1) / SVD_BLOCK_COLS;
+        const size_t total = n_blocks_r * n_blocks_c * SPECIAL_CHAIN_STEPS * data->vl_d;
         data->sm_f64.resize(total);
         data->sa_f64.resize(total);
         for (size_t i = 0; i < total; ++i) {

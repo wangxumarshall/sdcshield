@@ -5,11 +5,24 @@
  *
  * @test @b sve512_gather_scatter_svd
  * @parblock
- * SVD-format gather/scatter round-trip with SVD-scale working set (1.44 MB)
- * and 2-D block index pattern matching Eigen BDCSVD's block-of-matrix access.
+ * SVD-format gather/scatter round-trip with SVD-scale working set and 2-D
+ * block index pattern matching Eigen BDCSVD's block-of-matrix access.
  *
- * Differs from sve512_gather_scatter_arm: working set 1.44 MB vs 4 KB, 2-D
- * block index table (row-major + column offsets) vs 1-D linear permutation.
+ * Differs from sve512_gather_scatter_arm: working set ~2.9 MB (90000 f64
+ * elements across src/dst/golden) vs 4 KB, 2-D block index table vs 1-D
+ * linear permutation.
+ *
+ * Fixes over the initial integration (which crashed on the SVE target):
+ *   - tail-block permutation now clamps k to the actual in-bounds block
+ *     extents (300 is not a multiple of 16; the old code indexed up to
+ *     row/col 303, out of bounds of the 90000-element vectors);
+ *   - the golden is precomputed once in test_init (read-only in run);
+ *   - the scatter destination is a per-CPU-thread local buffer (the old
+ *     shared dst + per-thread std::fill(0) was a data race under
+ *     multi-threading);
+ *   - the hot loop uses an svwhilelt predicate: 90000 is not guaranteed
+ *     divisible by every runtime VL, so a full ptrue could over-read the
+ *     final partial vector.
  * @endparblock
  */
 
@@ -45,7 +58,7 @@ struct SveGatherScatterSvdData {
     std::vector<uint64_t> seeds_f64;
     std::vector<uint64_t> gather_src;
     std::vector<uint64_t> gather_idx;
-    std::vector<uint64_t> scatter_dst;
+    // Precomputed once in init; read-only in run (shared across threads).
     std::vector<uint64_t> scatter_golden;
 };
 
@@ -61,19 +74,19 @@ static void gather_scatter_golden(SveGatherScatterSvdData *d)
     }
 }
 
-static void gather_scatter_hw(SveGatherScatterSvdData *d)
+static void gather_scatter_hw(SveGatherScatterSvdData *d, uint64_t *dst)
 {
     const size_t n = d->gather_idx.size();
     const size_t lanes = d->vl_d;
-    const svbool_t pg = svptrue_b64();
     const svfloat64_t one_half = svdup_f64(1.5);
     for (size_t off = 0; off < n; off += lanes) {
+        const svbool_t pg = svwhilelt_b64((uint64_t)off, (uint64_t)n);
         svuint64_t vidx = svld1_u64(pg, &d->gather_idx[off]);
         svfloat64_t v = svld1_gather_u64index_f64(
             pg, reinterpret_cast<const double *>(d->gather_src.data()), vidx);
         v = svmla_f64_x(pg, one_half, v, v);
         svst1_scatter_u64index_f64(
-            pg, reinterpret_cast<double *>(d->scatter_dst.data()), vidx, v);
+            pg, reinterpret_cast<double *>(dst), vidx, v);
     }
 }
 
@@ -107,27 +120,34 @@ static int sve512_gather_scatter_svd_init(struct test *test)
         const size_t gn = SVD_ROWS * SVD_COLS;
         data->gather_src.resize(gn);
         data->gather_idx.resize(gn);
-        data->scatter_dst.assign(gn, 0);
-        data->scatter_golden.resize(gn);
+        data->scatter_golden.assign(gn, 0);
 
         for (size_t i = 0; i < gn; ++i) {
             data->gather_src[i] = data->seeds_f64[i % data->vl_d];
             data->gather_idx[i] = i;
         }
 
-        // SVD-format block permutation: shuffle within each 16x16 block,
-        // preserving the 2-D locality of BDCSVD's block traversal.
+        // SVD-format block permutation: shuffle within each block, keeping
+        // the 2-D locality of BDCSVD's block traversal. 300 is NOT a
+        // multiple of 16, so the tail blocks (br/bc = 288) are 12x12 /
+        // 16x12 / 12x16 — clamp k to the actual in-bounds extents or the
+        // flat indices run off the end of the 90000-element vectors.
         for (size_t br = 0; br < SVD_ROWS; br += SVD_BLOCK_ROWS) {
             for (size_t bc = 0; bc < SVD_COLS; bc += SVD_BLOCK_COLS) {
-                for (size_t k = 0; k < SVD_BLOCK_ROWS * SVD_BLOCK_COLS; ++k) {
-                    size_t i = k;
+                const size_t rows_in =
+                    (SVD_ROWS - br < SVD_BLOCK_ROWS) ? (SVD_ROWS - br)
+                                                     : SVD_BLOCK_ROWS;
+                const size_t cols_in =
+                    (SVD_COLS - bc < SVD_BLOCK_COLS) ? (SVD_COLS - bc)
+                                                     : SVD_BLOCK_COLS;
+                for (size_t k = 0; k < rows_in * cols_in; ++k) {
                     size_t j = (size_t)(splitmix64(0xBEEF0000ULL +
                                                    (br * SVD_COLS + bc) * 256 +
                                                    k) % (k + 1));
-                    size_t row_i = br + i / SVD_BLOCK_COLS;
-                    size_t col_i = bc + i % SVD_BLOCK_COLS;
-                    size_t row_j = br + j / SVD_BLOCK_COLS;
-                    size_t col_j = bc + j % SVD_BLOCK_COLS;
+                    size_t row_i = br + k / cols_in;
+                    size_t col_i = bc + k % cols_in;
+                    size_t row_j = br + j / cols_in;
+                    size_t col_j = bc + j % cols_in;
                     uint64_t t = data->gather_idx[row_i * SVD_COLS + col_i];
                     data->gather_idx[row_i * SVD_COLS + col_i] =
                         data->gather_idx[row_j * SVD_COLS + col_j];
@@ -135,6 +155,9 @@ static int sve512_gather_scatter_svd_init(struct test *test)
                 }
             }
         }
+
+        // Golden precomputed once (read-only afterwards, thread-safe).
+        gather_scatter_golden(data.get());
 
         test->data = data.release();
         return EXIT_SUCCESS;
@@ -149,19 +172,22 @@ static int sve512_gather_scatter_svd_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *d = static_cast<SveGatherScatterSvdData *>(test->data);
+
+    // Per-CPU-thread local destination: the index table is a full
+    // permutation, so every element is overwritten each pass — no memset
+    // needed, and no cross-thread sharing.
+    std::vector<uint64_t> dst(d->scatter_golden.size());
+
     do {
         bool all_passed = true;
-        gather_scatter_hw(d);
-        gather_scatter_golden(d);
-        for (size_t i = 0; i < d->scatter_dst.size(); ++i) {
-            if (d->scatter_dst[i] != d->scatter_golden[i]) {
+        gather_scatter_hw(d, dst.data());
+        for (size_t i = 0; i < dst.size(); ++i) {
+            if (dst[i] != d->scatter_golden[i]) {
                 report_f64_lane_mismatch("sve512_gather_scatter_svd", i,
-                                         d->scatter_golden[i],
-                                         d->scatter_dst[i]);
+                                         d->scatter_golden[i], dst[i]);
                 all_passed = false;
             }
         }
-        std::fill(d->scatter_dst.begin(), d->scatter_dst.end(), 0);
         if (!all_passed) {
             report_fail_msg("sve512_gather_scatter_svd: SDC detected");
             return EXIT_FAILURE;

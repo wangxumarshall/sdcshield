@@ -60,18 +60,26 @@ struct SveF32ChainSvdData {
 
 #ifdef __aarch64__
 
+// Block-major stream layout: [block_row][block_col][step][lane], one
+// CHAIN_STEPS x VL contiguous slab per block origin (19x19 blocks).
+static inline size_t block_slab_base(size_t row, size_t col, size_t lanes)
+{
+    const size_t n_blocks_c = (SVD_COLS + SVD_BLOCK_COLS - 1) / SVD_BLOCK_COLS;
+    return ((row / SVD_BLOCK_ROWS) * n_blocks_c + (col / SVD_BLOCK_COLS)) *
+           (CHAIN_STEPS * lanes);
+}
+
 static void f32_chain_golden(const SveF32ChainSvdData *d, uint32_t *out,
                              size_t row, size_t col)
 {
     const size_t lanes = d->vl_w;
-    const size_t stride = SVD_COLS * lanes;
     for (size_t lane = 0; lane < lanes; ++lane) {
         uint32_t accw = d->seeds_f32[lane];
         float acc;
         memcpy(&acc, &accw, 4);
         for (size_t i = 0; i < CHAIN_STEPS; ++i) {
             float m, a;
-            const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+            const size_t base = block_slab_base(row, col, lanes) + i * lanes;
             memcpy(&m, &d->m_f32[base + lane], 4);
             memcpy(&a, &d->a_f32[base + lane], 4);
             acc = std::fma(m, a, acc);
@@ -86,11 +94,10 @@ static void f32_chain_hw(const SveF32ChainSvdData *d, uint32_t *out,
 {
     const size_t lanes = d->vl_w;
     const svbool_t pg = svptrue_b32();
-    const size_t stride = SVD_COLS * lanes;
     svfloat32_t acc = svld1_f32(pg,
         reinterpret_cast<const float *>(d->seeds_f32.data()));
     for (size_t i = 0; i < CHAIN_STEPS; ++i) {
-        const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+        const size_t base = block_slab_base(row, col, lanes) + i * lanes;
         svfloat32_t m = svld1_f32(pg,
             reinterpret_cast<const float *>(&d->m_f32[base]));
         svfloat32_t a = svld1_f32(pg,
@@ -124,7 +131,13 @@ static int sve512_f32_chain_svd_init(struct test *test)
             data->seeds_f32[lane] = 0x3F800000U |
                 ((uint32_t)splitmix64(0xC0FFEE00ULL + lane) & 0x007FFFFFU);
         }
-        const size_t total = SVD_ROWS * SVD_COLS * CHAIN_STEPS * data->vl_w;
+        // Block-major streams: 361 blocks x CHAIN_STEPS x VL f32 elements
+        // (~11.8 MB per stream at a 512-bit VL, 23.7 MB across m and a —
+        // 46x L2, matching the SVD working-set goal without the old
+        // layout's 2.7 GiB-per-stream blowup).
+        const size_t n_blocks_r = (SVD_ROWS + SVD_BLOCK_ROWS - 1) / SVD_BLOCK_ROWS;
+        const size_t n_blocks_c = (SVD_COLS + SVD_BLOCK_COLS - 1) / SVD_BLOCK_COLS;
+        const size_t total = n_blocks_r * n_blocks_c * CHAIN_STEPS * data->vl_w;
         data->m_f32.resize(total);
         data->a_f32.resize(total);
         for (size_t i = 0; i < total; ++i) {

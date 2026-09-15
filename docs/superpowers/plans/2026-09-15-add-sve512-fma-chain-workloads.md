@@ -72,8 +72,27 @@ sandstone_run.cpp:1558，fork 前生效）+ zstd19 回归 + 反汇编 SVE 代码
       `ptrue p0.b`
 - [x] README 计数 273/282 + 专项表；commit + push
 
-### Task 3: sve512_f32_chain_arm
-- [ ] 写入用户代码（原样）到 `tests/cpu/arm64/sve512_f32_chain_arm.cpp`
-- [ ] meson 注册；reconfigure + ninja 零新告警；计数实测（预期 274）
-- [ ] `-e sve512_f32_chain_arm -t 1000`：干净 skip；zstd19 回归 pass
-- [ ] objdump f32 通路证据（`fmad z*.s`）；README 计数 274/283；commit + push
+### Task 3: sve512_f32_chain_arm — 完成（2026-09-15 实测）
+- [x] 写入用户代码（原样）到 `tests/cpu/arm64/sve512_f32_chain_arm.cpp`
+- [x] meson 注册；ninja 321/321；单 TU 重编译 0 warning
+- [x] `--list-tests` 注册（第 274 个）；计数实测 default 274 / beta 278 /
+      skip 283
+- [x] `-e sve512_f32_chain_arm -t 1000`：result skip / CpuNotSupported /
+      `test compiled with sve`，总体 exit: pass，无 SIGILL
+- [x] 回归：`-e zstd19 -t 3000` exit: pass
+- [x] objdump 实测（f32 通路）：`fmla z0.s, p0/m, z1.s, z2.s`、`cntw`
+      （svcntw）、`ptrue p0.b`
+- [x] README 计数 274/283 + 专项表；commit + push
+
+## 完成汇总（4 commit 全部推送）
+
+| Task | 测试 | commit |
+|---|---|---|
+| 0 | README 冲突标记 + 过期计数修复 | 7179185 |
+| 1 | sve512_f64_chain_arm | f94fd72 |
+| 2 | sve512_f64_special_arm | 8669cd3 |
+| 3 | sve512_f32_chain_arm | （本提交） |
+
+至此 sve512_fma 家族 workload 1/2/3/4 全部就位（4 = gather_scatter，
+a198ac8 已合并 main）。本机（Kunpeng 920 无 SVE）验证到编译 + 代码生成 +
+框架级干净 skip 层面；SVE 硬件上的实际 pass 需在 SVE 机器上复验。

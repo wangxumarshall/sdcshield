@@ -167,6 +167,11 @@ if host_machine.cpu_family() == 'aarch64'
             # failure; NaN payloads are not byte-compared because IEEE 754
             # does not require deterministic NaN payload propagation.
             'sve512_f64_special_arm.cpp',
+            # workload 3: the same serial FMLA chain structure at f32 width
+            # (svmla_f32_x), exercising the 16-lane f32 FMA/predicate
+            # datapath at full 512-bit width, byte-exact vs a scalar
+            # fmaf() golden recomputed with the identical operation order.
+            'sve512_f32_chain_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

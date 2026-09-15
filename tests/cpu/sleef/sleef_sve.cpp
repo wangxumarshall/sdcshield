@@ -168,7 +168,6 @@ static int sleef_sve_run(struct test *test, int cpu)
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch output buffer */
         if (__builtin_expect(!od, 0)) {
-            free(od);
             od = (double *)calloc(1, ELEMS * sizeof(double));
             if (!od)
                 report_fail_msg("OOM allocating thread scratch (%zu bytes)",

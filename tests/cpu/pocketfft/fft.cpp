@@ -126,7 +126,6 @@ static int pocketfft_fft_run(struct test *test, int cpu)
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffer */
         if (__builtin_expect(!work, 0)) {
-            free(work);
             work = (double *)calloc(2 * FFT_N, sizeof(double));
             if (!work)
                 report_fail_msg("OOM allocating thread scratch (%zu bytes)",

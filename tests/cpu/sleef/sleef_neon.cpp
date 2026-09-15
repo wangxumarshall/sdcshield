@@ -190,7 +190,6 @@ static int sleef_neon_run(struct test *test, int cpu)
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch output buffers */
         if (__builtin_expect(!od || !of, 0)) {
-            free(od); free(of);
             od = (double *)calloc(1, ELEMS * sizeof(double));
             of = (float  *)calloc(1, ELEMS * sizeof(float));
             if (!od || !of)

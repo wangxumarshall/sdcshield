@@ -439,6 +439,38 @@ tests_set_base.add(
     )
 )
 
+# OpenBLAS GEMM tests (vendored under third-party/openblas, built by its
+# build.sh). Hand-written NEON fmla micro-kernels: the highest-density
+# vector-FMA payload available, targeting the literature-confirmed #1 SDC
+# source. The library is single-threaded (USE_THREAD=0) but must be built
+# with USE_LOCKING=1 so the framework's one-worker-per-core threads can call
+# cblas_dgemm concurrently: without it the internal packing-buffer pool
+# (blas_memory_alloc) is a process-wide unlocked table and concurrent calls
+# corrupt each other (empirically confirmed: 8 threads x 10s -> 62 byte
+# mismatches; with USE_LOCKING=1: 192 threads x 30s -> 0). The locks guard
+# only the buffer-table metadata, not the kernel, so results stay
+# byte-identical to the unlocked build.
+# include_directories() must use a source-tree-relative path (meson rejects
+# absolute paths into the source tree), so the include dir is given relative
+# to this tests/cpu/ subdir while the archive probe and link args use the
+# joined absolute path (same pattern as the vendored OpenSSL block in
+# framework/meson.build).
+openblas_install = meson.current_source_dir() / '../../third-party/openblas/install'
+if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
+        openblas_install / 'lib/libopenblas.a', check: false).returncode() == 0
+    openblas_dep = declare_dependency(
+        include_directories: include_directories('../../third-party/openblas/install/include', is_system: true),
+        link_args: ['-L' + openblas_install / 'lib', '-l:libopenblas.a'],
+    )
+    tests_set_base.add(
+        when : openblas_dep,
+        if_true : files(
+            'openblas_gemm/dgemm.cpp',
+        )
+    )
+else
+    openblas_dep = disabler()
+endif
 
 # Gather/scatter tests. These are software-simulated gather/scatter using
 # plain double/int arrays and std::mt19937 — no x86 intrinsics, no arm_neon.h.
@@ -632,6 +664,7 @@ tests_base_a = static_library(
         boost_dep,
         atomic_lib,
         isal_lib,
+        openblas_dep,
     ],
     c_args : [
         tests_common_c_args,

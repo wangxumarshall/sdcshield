@@ -172,6 +172,15 @@ if host_machine.cpu_family() == 'aarch64'
             # datapath at full 512-bit width, byte-exact vs a scalar
             # fmaf() golden recomputed with the identical operation order.
             'sve512_f32_chain_arm.cpp',
+            # SVD-format variant of workload 1: same serial svmla_f64_x
+            # chain, but the operand streams are walked through a 16x16
+            # nested block traversal (BDCSVD-style block-of-matrix access)
+            # over an SVD-scale allocation (300*300*512*VL elements per
+            # stream, ~2.7 GiB each at a 512-bit VL). The per-iteration
+            # touched set (~24 MB, 5.76 MB step stride) overflows L2 and
+            # pressures L3/TLB — the first of eigen_svd_cdouble_sve's
+            # SVD-only trigger paths (working set beyond L2).
+            'sve512_f64_chain_svd.cpp',
         ),
         build_by_default: false,
         include_directories: [

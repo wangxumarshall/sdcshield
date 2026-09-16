@@ -15,11 +15,12 @@
  * from init (copy->compute->verify, the most frequent CORE179 trigger
  * structure). A third scheduling sample beside Eigen/ACL GEMM.
  * The matrix dimension is runtime-configurable via the test knob
- * "-O mdim=N" (16..1024, default 256), sweeping the working set
- * across L1D (64KB) / L2 (512KB) / LLC / DRAM on TSV110 — the
- * CORE179 probes showed the store->reload cache-domain pattern is a
- * triggering discriminator, so each size class exercises different
- * forwarding paths.
+ * "-O openblas_dgemm.mdim=N" (16..1024, default 256; the test-id
+ * prefix is required — a bare "mdim=N" is silently ignored), sweeping
+ * the working set across L1D (64KB) / L2 (512KB) / LLC / DRAM on
+ * TSV110 — the CORE179 probes showed the store->reload cache-domain
+ * pattern is a triggering discriminator, so each size class exercises
+ * different forwarding paths.
  * @endparblock
  */
 
@@ -32,7 +33,7 @@
 
 namespace {
 struct gemm_test_data {
-    int mdim;             /* matrix dimension, from the -O mdim=N knob */
+    int mdim;             /* matrix dimension, from the -O openblas_dgemm.mdim=N knob */
     double *a;
     double *b;
     double *golden;      /* C = A*B computed once in init; read-only after */
@@ -67,12 +68,12 @@ static double random_bounded(void) {
 static int openblas_dgemm_init(struct test *test) {
     auto d = new(gemm_test_data);
     test->data = d;
-    int mdim = (int)get_testspecific_knob_value_int(test, "mdim", 256);
-    if (mdim < 16 || mdim > 1024) {
-        report_fail_msg("mdim knob out of range: %d (valid 16..1024, default 256)", mdim);
+    int64_t knob = get_testspecific_knob_value_int(test, "mdim", 256);
+    if (knob < 16 || knob > 1024) {
+        report_fail_msg("mdim knob out of range: %ld (valid 16..1024, default 256)", (long)knob);
     }
-    d->mdim = mdim;
-    size_t n2 = (size_t)mdim * (size_t)mdim;
+    d->mdim = (int)knob;
+    size_t n2 = (size_t)d->mdim * (size_t)d->mdim;
     d->a      = (double *)malloc(n2 * sizeof(double));
     d->b      = (double *)malloc(n2 * sizeof(double));
     d->golden = (double *)malloc(n2 * sizeof(double));
@@ -95,9 +96,9 @@ static int openblas_dgemm_init(struct test *test) {
         d->b[i] = random_bounded();
     }
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                mdim, mdim, mdim,
-                1.0, d->a, mdim, d->b, mdim,
-                0.0, d->golden, mdim);
+                d->mdim, d->mdim, d->mdim,
+                1.0, d->a, d->mdim, d->b, d->mdim,
+                0.0, d->golden, d->mdim);
     /* reject a NaN/Inf-polluted golden at the source: if the random operands
      * produced a non-finite product the byte-exact comparison below would be
      * meaningless (NaN != NaN), so fail loudly instead of silently passing */

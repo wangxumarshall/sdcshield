@@ -18,11 +18,12 @@
  * different corner bits of the multiply-add datapath (SEVI: single-lane
  * failures dominate). A scheduling sample beside dgemm/Eigen/ACL GEMM.
  * The matrix dimension is runtime-configurable via the test knob
- * "-O mdim=N" (16..1024, default 256), sweeping the working set
- * across L1D (mdim=64: 16KB) / L2 (256: 256KB) / LLC (512: 1MB) /
- * DRAM (1024: 4MB) — the CORE179 probes showed the store->reload
- * cache-domain pattern is a triggering discriminator, so each size
- * class exercises different forwarding paths.
+ * "-O openblas_sgemm.mdim=N" (16..1024, default 256; the test-id
+ * prefix is required — a bare "mdim=N" is silently ignored), sweeping
+ * the working set across L1D (mdim=64: 16KB) / L2 (256: 256KB) /
+ * LLC (512: 1MB) / DRAM (1024: 4MB) — the CORE179 probes showed the
+ * store->reload cache-domain pattern is a triggering discriminator,
+ * so each size class exercises different forwarding paths.
  * @endparblock
  */
 
@@ -35,7 +36,7 @@
 
 namespace {
 struct sgemm_test_data {
-    int mdim;             /* matrix dimension, from the -O mdim=N knob */
+    int mdim;             /* matrix dimension, from the -O openblas_sgemm.mdim=N knob */
     float *a;
     float *b;
     float *golden;      /* C = A*B computed once in init; read-only after */

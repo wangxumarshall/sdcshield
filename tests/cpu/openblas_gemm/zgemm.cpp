@@ -18,12 +18,13 @@
  * confirmed-triggering eigen path; this widens complex-path coverage with a
  * different scheduling sample).
  * The matrix dimension is runtime-configurable via the test knob
- * "-O mdim=N" (16..1024, default 256), sweeping the working set
- * across L1D (mdim=64: 64KB) / L2 (256: 1MB) / LLC (512: 4MB) /
- * DRAM (1024: 16MB) per complex-double matrix — the CORE179 probes
- * showed the store->reload cache-domain pattern is a triggering
- * discriminator, so each size class exercises different forwarding
- * paths.
+ * "-O openblas_zgemm.mdim=N" (16..1024, default 256; the test-id
+ * prefix is required — a bare "mdim=N" is silently ignored), sweeping
+ * the working set across L1D (mdim=64: 64KB) / L2 (256: 1MB) /
+ * LLC (512: 4MB) / DRAM (1024: 16MB) per complex-double matrix — the
+ * CORE179 probes showed the store->reload cache-domain pattern is a
+ * triggering discriminator, so each size class exercises different
+ * forwarding paths.
  * @endparblock
  */
 
@@ -36,8 +37,8 @@
 
 namespace {
 struct zgemm_test_data {
-    int mdim;            /* matrix dimension, from the -O mdim=N knob */
-    double *a;           /* interleaved (re, im) pairs: 2*n2 doubles */
+    int mdim;            /* matrix dimension, from the -O openblas_zgemm.mdim=N knob */
+    double *a;           /* interleaved (re, im) pairs: n2 doubles, n2 = 2*mdim*mdim */
     double *b;
     double *golden;      /* C = A*B computed once in init; read-only after */
 };
@@ -110,7 +111,8 @@ static int openblas_zgemm_init(struct test *test) {
     /* reject a NaN/Inf-polluted golden at the source: if the random operands
      * produced a non-finite product the byte-exact comparison below would be
      * meaningless (NaN != NaN), so fail loudly instead of silently passing.
-     * The layout is 2*n2 doubles (both components of every element). */
+     * The buffer is n2 doubles and n2 already includes the x2 for the
+     * interleaved (re, im) components of every element. */
     for (size_t i = 0; i < n2; ++i) {
         double g = d->golden[i];
         if (g != g || g > 1.0e300 || g < -1.0e300) {

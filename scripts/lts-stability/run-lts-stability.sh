@@ -45,6 +45,64 @@ T_BASE="${T_BASE:-1000}"
 T_SHORT="${T_SHORT:-500}"
 export T_BASE T_SHORT
 
+# ── 并行安全:per-series 源码副本 ──
+# 多系列并行时,若三个容器同时以 :Z 挂载同一 $SRC_ROOT,podman 并发 relabel
+# 会让正在 cp -a /src 的容器读到临时不可读的文件(Permission denied 竞态,
+# 2026-09-16 三系列并行实测:15/15 构建失败,残缺源码导致 meson 缺文件/
+# openssl 头丢失)。解法:每系列一份硬链接源码副本,cp -al(0 数据拷贝),
+# 各自挂 /src,互不 relabel。副本排除 .git/dist/build-out/builddir*(构建
+# 不需要,且避免 GB 级无谓复制);third-party/rpms 也排除(RPM 树另行挂载,
+# container-build.sh 的 RPMDIR 仍取真实仓路径)。
+# SDCSRC_COPY=0 可禁用(单系列运行时无需副本)。
+SDCSRC_COPY="${SDCSRC_COPY:-1}"
+SDCSRC_BASE="${SDCSRC_BASE:-/tmp/lts-stability-src}"
+
+make_series_src_copy() {
+    local series="$1"
+    local dst="$SDCSRC_BASE/$series"
+    if [ "${SDCSRC_COPY}" != "1" ]; then
+        export SDCSRC_ROOT="$SRC_ROOT"
+        return 0
+    fi
+    # 已存在且与当前源码同 HEAD(以 meson.build+framework/tests 哈希近似)则复用
+    local sig sigfile
+    sig=$(find "$SRC_ROOT/framework" "$SRC_ROOT/tests" "$SRC_ROOT/meson.build" \
+               "$SRC_ROOT/meson_options.txt" "$SRC_ROOT/scripts" "$SRC_ROOT/bats" \
+               -type f -newer "$dst/.done" 2>/dev/null | head -1)
+    if [ -f "$dst/.done" ] && [ -z "$sig" ] \
+            && [ -d "$dst/third-party/openssl/install/lib" ] \
+            && [ -d "$dst/third-party/openblas/install/lib" ] \
+            && [ -d "$dst/third-party/sleef/install/lib" ]; then
+        export SDCSRC_ROOT="$dst"
+        return 0
+    fi
+    echo "==> 准备 per-series 源码副本: $dst (cp -al 硬链接,排除 rpms/.git/dist/build-out)"
+    rm -rf "$dst"
+    mkdir -p "$dst"
+    local item
+    for item in framework tests bats scripts meson.build meson_options.txt third-party; do
+        [ -e "$SRC_ROOT/$item" ] || continue
+        case "$item" in
+            third-party)
+                # 复制 third-party 但排除 rpms(3.9GB RPM 树另行挂载)
+                mkdir -p "$dst/third-party"
+                local sub
+                for sub in "$SRC_ROOT"/third-party/*; do
+                    [ "$(basename "$sub")" = "rpms" ] && continue
+                    cp -al "$sub" "$dst/third-party/" 2>/dev/null \
+                        || cp -a "$sub" "$dst/third-party/" 2>/dev/null || true
+                done
+                ;;
+            *)
+                cp -al "$SRC_ROOT/$item" "$dst/" 2>/dev/null \
+                    || cp -a "$SRC_ROOT/$item" "$dst/" 2>/dev/null || true
+                ;;
+        esac
+    done
+    touch "$dst/.done"
+    export SDCSRC_ROOT="$dst"
+}
+
 source "$SCRIPT_DIR/option-matrix.sh"
 
 run_one_sp() {
@@ -69,9 +127,10 @@ run_one_sp() {
 
     # 2) 原生构建(全功能:SSL 静态链接)。稳定性验证语义下不复用旧产物:
     #    要验证的正是"当前 HEAD 在该 OS 的原生工具链下从头构建+全矩阵"。
+    #    SDCSRC_ROOT(per-series 源码副本)由 main 的 make_series_src_copy 设置。
     if [ "${SKIP_BUILD:-0}" != "1" ] || [ ! -x "$bin_host" ]; then
-        echo "==> [build] $tag (ssl_link_type=static)"
-        if ! "$OFFLINE_DIR/container-build.sh" "$series" "$sp" -Dssl_link_type=static \
+        echo "==> [build] $tag (ssl_link_type=static, src=${SDCSRC_ROOT})"
+        if ! SDCSRC_ROOT="$SDCSRC_ROOT" "$OFFLINE_DIR/container-build.sh" "$series" "$sp" -Dssl_link_type=static \
                 > "$out_host/build.log" 2>&1; then
             echo "RESULT: FAIL $tag (build) — 见 $out_host/build.log"
             tail -20 "$out_host/build.log" | sed 's/^/    | /'
@@ -109,19 +168,24 @@ run_one_sp() {
         mounts+=(-v "$libs_dir:/opt/built-libs:ro,Z"); ld_path="/opt/built-libs"
     fi
 
-    # 构建产物核验:全功能二进制必须 ≥280 测试(ipsec46+openssl_sha 等编入标志)
-    local ntests
+    # 构建产物核验:SSL 生效的硬标志 = ipsec≥46 + openssl_sha≥1(vendored
+    # OpenSSL 3.5.0 静态链接编入)。总测试数只设宽松下限 270:isal 11 个测试
+    # 仅 24.03-SP3 镜像可构建(其余镜像无 libisal,RPM 树也无该包 — 镜像差异
+    # 非缺陷);22.03/20.03 还可能因 ACL disabled 少 2 个。
+    local list_out ntests n_ipsec n_ossl
     if [ -n "$ld_path" ]; then
-        ntests=$(timeout 120 podman run --rm --user=0 "${mounts[@]}" \
-            -e LD_LIBRARY_PATH="$ld_path" "$img" /bin/sdcshield --list-tests 2>/dev/null | wc -l)
+        list_out=$(timeout 120 podman run --rm --user=0 "${mounts[@]}" \
+            -e LD_LIBRARY_PATH="$ld_path" "$img" /bin/sdcshield --list-tests 2>/dev/null)
     else
-        ntests=$(timeout 120 podman run --rm --user=0 "${mounts[@]}" \
-            "$img" /bin/sdcshield --list-tests 2>/dev/null | wc -l)
+        list_out=$(timeout 120 podman run --rm --user=0 "${mounts[@]}" \
+            "$img" /bin/sdcshield --list-tests 2>/dev/null)
     fi
-    ntests=${ntests:-0}
-    echo "    list-tests: $ntests"
-    if [ "$ntests" -lt 280 ]; then
-        echo "RESULT: FAIL $tag (too-few-tests $ntests < 280 — SSL/vendored 未生效?)"
+    ntests=$(echo "$list_out" | grep -c . )
+    n_ipsec=$(echo "$list_out" | grep -c '^ipsec_')
+    n_ossl=$(echo "$list_out" | grep -c '^openssl_sha$')
+    echo "    list-tests: $ntests (ipsec=$n_ipsec openssl_sha=$n_ossl)"
+    if [ "$ntests" -lt 270 ] || [ "$n_ipsec" -lt 46 ] || [ "$n_ossl" -lt 1 ]; then
+        echo "RESULT: FAIL $tag (list-tests=$ntests ipsec=$n_ipsec openssl_sha=$n_ossl — SSL/vendored 未生效?)"
         return 1
     fi
 
@@ -221,6 +285,7 @@ run_one_sp() {
 
 # ── main ──
 overall=0
+make_series_src_copy "$SERIES"
 if [ "$SP" = "all" ]; then
     for sp in LTS SP1 SP2 SP3 SP4; do
         run_one_sp "$SERIES" "$sp" || overall=1

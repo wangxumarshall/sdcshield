@@ -1,0 +1,560 @@
+[suke@cn23154 sdcshield]$ ./scripts/build-oneclick.sh ./ ./builddir-xupeng
+===== SDCShield one-click build =====
+src:   /home/share/suke/sdcshield
+build: /home/share/suke/sdcshield/builddir-xupeng
+--- [1/6] probe meson / ninja / compilers ---
+ninja: /work_ssd/software/soft/tool/anaconda3/2023.3/bin/ninja
+meson: python3 /home/share/suke/sdcshield/third-party/meson/meson-0.59.4/meson.py
+C++:   /work_ssd/software/compiler-kupl/bin/clang++ (Huawei BiSheng Compiler clang version 19.1.7 (32f4a0810521))
+C:     cc
+--- [2/6] probe deps (eigen5 / boost / gmp) ---
+boost: /home/share/suke//boost-root/usr/include
+sdc-deps: /home/share/suke//sdc-deps/usr (isa-l / gtest from source)
+PKG_CONFIG_PATH: /home/share/suke/sdcshield/third-party/eigen5:/home/share/suke//boost-root/usr/lib64/pkgconfig:/home/share/suke//sdc-deps/usr/lib/pkgconfig:/home/share/suke//sdc-deps/usr/lib64/pkgconfig
+--- [3/6] detect stdlib (polyfill decision) ---
+stdlib lacks <barrier>: polyfill + gnu++20 + ACL disabled
+--- [4/6] meson setup ---
+The Meson build system
+Version: 0.59.4
+Source dir: /home/share/suke/sdcshield
+Build dir: /home/share/suke/sdcshield/builddir-xupeng
+Build type: native build
+Project name: SDCShield
+Project version: undefined
+C compiler for the host machine: cc (gcc 10.3.1 "cc (GCC) 10.3.1")
+C linker for the host machine: cc ld.bfd 2.37
+C++ compiler for the host machine: /work_ssd/software/compiler-kupl/bin/clang++ (clang 19.1.7 "Huawei BiSheng Compiler clang version 19.1.7 (32f4a0810521)")
+C++ linker for the host machine: /work_ssd/software/compiler-kupl/bin/clang++ ld.bfd 2.37
+Host machine cpu family: aarch64
+Host machine cpu: aarch64
+Program bash found: YES (/usr/bin/bash)
+Program perl found: YES (/usr/bin/perl)
+Program python3 found: YES (/work_ssd/software/soft/tool/anaconda3/2023.3/bin/python3)
+Program sh found: YES (/usr/bin/sh)
+meson.build:30: WARNING: We recommend building SDCShield with the GNU Compiler Collection (gcc). Your build may fail or your executable may not behave as expected.
+Configuring sandstone_short_ids.h with command
+Compiler for C supports arguments -fstack-clash-protection: YES
+Compiler for C supports arguments -fstack-protector-strong: YES
+Compiler for C supports arguments -fcf-protection=full: NO
+Compiler for C supports arguments -mcet-switch: NO
+Checking if "-Wl,-z,relro" links: YES
+Checking if "-Wl,-z,noexecstack" links: YES
+Compiler for C supports arguments -Werror=discarded-qualifiers: YES
+Found pkg-config: /usr/bin/pkg-config (1.8.0)
+Run-time dependency Boost found: YES 1.78.0 (/home/share/suke/boost-root/usr)
+Check usable header "boost/algorithm/string.hpp" : YES
+Check usable header "boost/type_traits/is_complex.hpp" : YES
+Run-time dependency threads found: YES
+Library dl found: YES
+Run-time dependency gtest_main found: YES 1.18.0
+Library atomic found: YES
+Configuring cpu_features.h with command
+Configuring gitid.h with command
+Checking for type "_Float16" : YES
+Checking for type "_Float16" : YES
+Checking for function "process_vm_readv" : YES
+Configuring sandstone_config.h using configuration
+Run-time dependency libzstd found: YES 1.5.0
+Run-time dependency zlib found: YES 1.2.11
+Library isal found: YES
+Library atomic found: YES
+Run-time dependency gmp found: YES 6.2.1
+Library arm_compute found: NO
+Build targets in project: 15
+
+SDCShield undefined
+
+  Configuration
+    Logging format          : yaml
+    Using -march            :
+    Static libstdc++        : NO
+    Executable name         : sdcshield
+    Fallback executable name:
+    Device type:            : cpu
+
+Option cpp_std is: gnu++20 [default: gnu++23]
+Found ninja-1.10.2 at /work_ssd/software/soft/tool/anaconda3/2023.3/bin/ninja
+--- [5/6] ninja build ---
+ninja: -j64 (ulimit -n 1000000)
+ninja: Entering directory `/home/share/suke/sdcshield/builddir-xupeng'
+[1/281] Generating sandstone_test_lists.h with a custom command
+[2/281] Compiling C object tests/cpu/libtests_base.a.p/ifs_sandstone_ifs.c.o
+[3/281] Compiling C object tests/cpu/libtests_base.a.p/ifs_ifs.c.o
+[4/281] Compiling C++ object framework/device/cpu/arm64/libframework_arm64.a.p/kunpeng920_ecc.cpp.o
+[5/281] Compiling C++ object tests/cpu/libtests_base.a.p/cache_cache_stress_aggressor.cpp.o
+[6/281] Compiling C++ object framework/device/cpu/arm64/libframework_arm64.a.p/arm64_sdc_detect.cpp.o
+[7/281] Compiling C++ object tests/cpu/libtests_base.a.p/cache_cachebounce.cpp.o
+[8/281] Compiling C object framework/libframework.a.p/generated_vectors.c.o
+[9/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy1.cpp.o
+[10/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_mmu_stress_arm.cpp.o
+[11/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_symm_int.cpp.o
+[12/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_mfence_pure.cpp.o
+[13/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_mem_disambiguation.cpp.o
+[14/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_modified_sort.cpp.o
+[15/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy0.cpp.o
+[16/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx2_symm_int.cpp.o
+../tests/cpu/mesh/mesh_upi_avx2_symm_int.cpp:130:23: warning: unused variable 'loaded0' [-Wunused-variable]
+  130 |             int32x4_t loaded0 = vld1q_s32(td->data + offset);
+      |                       ^~~~~~~
+../tests/cpu/mesh/mesh_upi_avx2_symm_int.cpp:131:23: warning: unused variable 'loaded1' [-Wunused-variable]
+  131 |             int32x4_t loaded1 = vld1q_s32(td->data + offset + VECTOR_SIZE);
+      |                       ^~~~~~~
+2 warnings generated.
+[17/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_read_only_int.cpp.o
+[18/281] Compiling C++ object framework/libframework_main.a.p/device_cpu_premain.cpp.o
+[19/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx2_asymm_distrib_int.cpp.o
+[20/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_symm_int.cpp.o
+../tests/cpu/mesh/mesh_upi_sse_symm_int.cpp:129:24: warning: unused variable 'cmp' [-Wunused-variable]
+  129 |             uint32x4_t cmp = vceqq_s32(v, loaded);
+      |                        ^~~
+1 warning generated.
+[21/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_vmovnt1.cpp.o
+[22/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_vmovnt3.cpp.o
+[23/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy_shuffle.cpp.o
+[24/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_asymm_distrib_write_int.cpp.o
+[25/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_asymm_distrib_write_int.cpp.o
+../tests/cpu/mesh/mesh_upi_avx512_asymm_distrib_write_int.cpp:86:22: warning: variable 'block_ok' set but not used [-Wunused-but-set-variable]
+   86 |                 bool block_ok = true;
+      |                      ^
+1 warning generated.
+[26/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_mfence.cpp.o
+[27/281] Compiling C object framework/libframework.a.p/static_vectors.c.o
+[28/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_vmovnt3_vex.cpp.o
+[29/281] Compiling C++ object tests/common/libtests_common.a.p/smi_count_smi_count.cpp.o
+[30/281] Compiling C++ object framework/libframework.a.p/device_cpu_cpu_device.cpp.o
+[31/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_write_only_int.cpp.o
+[32/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx2_write_only_int.cpp.o
+[33/281] Compiling C object framework/libframework.a.p/sysdeps_unix_splitlock_detect.c.o
+[34/281] Compiling C++ object tests/cpu/libtests_base.a.p/load_port_load_port.cpp.o
+[35/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx2_read_only_int.cpp.o
+[36/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy_variations_dyn.cpp.o
+[37/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_read_L3_int.cpp.o
+[38/281] Compiling C object framework/libframework.a.p/sysdeps_unix_tmpfile.c.o
+[39/281] Compiling C object framework/libframework.a.p/sysdeps_generic_kvm.c.o
+[40/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_asymm_write_int.cpp.o
+../tests/cpu/mesh/mesh_upi_avx512_asymm_write_int.cpp:86:22: warning: variable 'block_ok' set but not used [-Wunused-but-set-variable]
+   86 |                 bool block_ok = true;
+      |                      ^
+1 warning generated.
+[41/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_lock_instr.cpp.o
+[42/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy_l1d_size.cpp.o
+[43/281] Compiling C object framework/libframework.a.p/forkfd_forkfd.c.o
+[44/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy_l2_cache_size.cpp.o
+[45/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_vmovnt2.cpp.o
+[46/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy_l3_cache_size.cpp.o
+[47/281] Compiling C object tests/cpu/libtests_base.a.p/ist_ist.c.o
+[48/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_asymm_write_only_int.cpp.o
+../tests/cpu/mesh/mesh_upi_avx512_asymm_write_only_int.cpp:90:22: warning: variable 'block_ok' set but not used [-Wunused-but-set-variable]
+   90 |                 bool block_ok = true;
+      |                      ^
+1 warning generated.
+[49/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_lockgen.cpp.o
+[50/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_asymm_write_int.cpp.o
+[51/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_c.cpp.o
+[52/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx2_asymm_distrib_write_int.cpp.o
+[53/281] Compiling C++ object framework/libframework_main.a.p/sysdeps_linux_malloc.cpp.o
+[54/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_asymm_read_only_int.cpp.o
+[55/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_sym.cpp.o
+[56/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx2_asymm_int.cpp.o
+../tests/cpu/mesh/mesh_upi_avx2_asymm_int.cpp:132:28: warning: unused variable 'cmp0' [-Wunused-variable]
+  132 |                 uint32x4_t cmp0 = vceqq_s32(v0, loaded0);
+      |                            ^~~~
+../tests/cpu/mesh/mesh_upi_avx2_asymm_int.cpp:133:28: warning: unused variable 'cmp1' [-Wunused-variable]
+  133 |                 uint32x4_t cmp1 = vceqq_s32(v1, loaded1);
+      |                            ^~~~
+2 warnings generated.
+[57/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx2_asymm_write_int.cpp.o
+[58/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_asymm_distrib_int.cpp.o
+[59/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_asymm_distrib_int.cpp.o
+[60/281] Compiling C++ object tests/common/libtests_common.a.p/mce_check_mce_check.cpp.o
+[61/281] Linking static target tests/common/libtests_common.a
+[62/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_asymm_read_L3_int.cpp.o
+[63/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_vmovnt1_vex.cpp.o
+[64/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx_sym.cpp.o
+[65/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx2_read_L3_int.cpp.o
+[66/281] Compiling C++ object framework/libframework.a.p/meson-generated_.._sandstone_test_lists.cpp.o
+[67/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_sse_asymm_int.cpp.o
+[68/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_lockless_cmpxchg.cpp.o
+[69/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_sym.cpp.o
+../tests/cpu/mesh/mesh_upi_avx512_sym.cpp:80:20: warning: variable 'local_sum' set but not used [-Wunused-but-set-variable]
+   80 |             double local_sum = 0.0;
+      |                    ^
+../tests/cpu/mesh/mesh_upi_avx512_sym.cpp:93:18: warning: variable 'block_ok' set but not used [-Wunused-but-set-variable]
+   93 |             bool block_ok = true;
+      |                  ^
+2 warnings generated.
+[70/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy_shuffle_v2.cpp.o
+[71/281] Compiling C++ object tests/cpu/libtests_base.a.p/mesh_mesh_upi_avx512_asymm_int.cpp.o
+../tests/cpu/mesh/mesh_upi_avx512_asymm_int.cpp:94:22: warning: variable 'block_ok' set but not used [-Wunused-but-set-variable]
+   94 |                 bool block_ok = true;
+      |                      ^
+1 warning generated.
+[72/281] Compiling C++ object framework/libframework.a.p/sandstone_context_dump.cpp.o
+[73/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_vmovnt2_vex.cpp.o
+[74/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy_sem.cpp.o
+[75/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_locks_ccb.cpp.o
+[76/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_lockless_cmpxchg8b.cpp.o
+[77/281] Compiling C++ object framework/libframework.a.p/sandstone_data.cpp.o
+[78/281] Compiling C++ object framework/libframework.a.p/device_cpu_slicing.cpp.o
+[79/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_e.cpp.o
+[80/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_lockless_cmpxchg16b.cpp.o
+[81/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg2.cpp.o
+[82/281] Compiling C++ object framework/libframework.a.p/device_cpu_logging_cpu.cpp.o
+[83/281] Compiling C++ object framework/libframework.a.p/Floats.cpp.o
+[84/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_swizzle.cpp.o
+../tests/cpu/vector/swizzle.cpp:11:25: warning: unused variable 'NUM_ELEMENTS' [-Wunused-const-variable]
+   11 | static constexpr size_t NUM_ELEMENTS = 8;
+      |                         ^~~~~~~~~~~~
+1 warning generated.
+[85/281] Compiling C++ object tests/cpu/libtests_base.a.p/memory_memcpy_rewr.cpp.o
+[86/281] Compiling C++ object framework/libframework.a.p/sysdeps_unix_virt.cpp.o
+[87/281] Compiling C++ object framework/libframework.a.p/sandstone_utils.cpp.o
+[88/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_d.cpp.o
+[89/281] Compiling C++ object framework/libframework.a.p/sysdeps_unix_signals.cpp.o
+[90/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_a.cpp.o
+[91/281] Compiling C++ object tests/cpu/arm64/libtests_arm64_sve512.a.p/sve512_f64_chain_svd.cpp.o
+[92/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe.cpp.o
+../tests/cpu/misc/movbe.cpp:55:73: warning: format specifies type 'unsigned int' but the argument has type 'size_t' (aka 'unsigned long') [-Wformat]
+   55 |                 report_fail_msg("MovBE: Round-trip failed at index %u", i);
+      |                                                                    ~~   ^
+      |                                                                    %zu
+../framework/sandstone.h:455:70: note: expanded from macro 'report_fail_msg'
+  455 | #define report_fail_msg(...)    _report_fail_msg(__FILE__, __LINE__, __VA_ARGS__)
+      |                                                                      ^~~~~~~~~~~
+1 warning generated.
+[93/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_b.cpp.o
+[94/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg3.cpp.o
+[95/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_locks_xch_only.cpp.o
+[96/281] Compiling C++ object framework/libframework.a.p/sysdeps_unix_resource.cpp.o
+[97/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg9.cpp.o
+[98/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg1.cpp.o
+[99/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_locks_ccb_xch_only.cpp.o
+[100/281] Compiling C++ object framework/libframework.a.p/random.cpp.o
+../framework/random.cpp:824:34: warning: unknown warning group '-Wattribute-alias', ignored [-Wunknown-warning-option]
+  824 | #  pragma GCC diagnostic ignored "-Wattribute-alias"    // mismatched return type
+      |                                  ^
+1 warning generated.
+[101/281] Compiling C++ object framework/libframework.a.p/sysdeps_linux_cpu_affinity.cpp.o
+../framework/sysdeps/linux/cpu_affinity.cpp:60:18: warning: variable length arrays in C++ are a Clang extension [-Wvla-cxx-extension]
+   60 |     Word cpu_set[size];         // -Wvla
+      |                  ^~~~
+../framework/sysdeps/linux/cpu_affinity.cpp:60:18: note: read of non-const variable 'size' is not allowed in a constant expression
+../framework/sysdeps/linux/cpu_affinity.cpp:58:12: note: declared here
+   58 |     size_t size = size_t(n) / ProcessorsPerWord + 1;
+      |            ^
+../framework/sysdeps/linux/cpu_affinity.cpp:84:18: warning: variable length arrays in C++ are a Clang extension [-Wvla-cxx-extension]
+   84 |     Word cpu_set[size];         // -Wvla
+      |                  ^~~~
+../framework/sysdeps/linux/cpu_affinity.cpp:84:18: note: read of non-const variable 'size' is not allowed in a constant expression
+../framework/sysdeps/linux/cpu_affinity.cpp:82:12: note: declared here
+   82 |     size_t size = size_t(n) / ProcessorsPerWord + 1;
+      |            ^
+2 warnings generated.
+[102/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movdq2q.cpp.o
+[103/281] Compiling C++ object framework/libframework.a.p/sandstone_test_groups.cpp.o
+[104/281] Compiling C++ object framework/libframework.a.p/sandstone_thread.cpp.o
+[105/281] Compiling C++ object tests/cpu/libtests_base.a.p/atomic_atomic_seq_cst.cpp.o
+[106/281] Compiling C++ object tests/cpu/libtests_base.a.p/lock_locks.cpp.o
+[107/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_insert_extract.cpp.o
+[108/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_g1.cpp.o
+[109/281] Compiling C++ object framework/libframework.a.p/sandstone_ulog.cpp.o
+[110/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg5.cpp.o
+[111/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg8.cpp.o
+[112/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg6.cpp.o
+[113/281] Compiling C++ object framework/libframework.a.p/sandstone_chrono.cpp.o
+[114/281] Compiling C object tests/cpu/libtests_base.a.p/zlib_fuzz.c.o
+[115/281] Compiling C object tests/cpu/libtests_base.a.p/zstd_test.c.o
+[116/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg7.cpp.o
+[117/281] Compiling C object tests/cpu/libtests_base.a.p/zlib_test.c.o
+[118/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump.cpp.o
+[119/281] Compiling C++ object framework/libframework.a.p/sysdeps_unix_stacksize.cpp.o
+../framework/sysdeps/unix/stacksize.cpp:5:9: warning: '_XOPEN_SOURCE' macro redefined [-Wmacro-redefined]
+    5 | #define _XOPEN_SOURCE 1
+      |         ^
+/usr/include/features.h:214:10: note: previous definition is here
+  214 | # define _XOPEN_SOURCE  700
+      |          ^
+1 warning generated.
+[120/281] Compiling C++ object framework/libframework.a.p/sysdeps_unix_child_debug.cpp.o
+../framework/sysdeps/unix/child_debug.cpp:1205:36: warning: variable length arrays in C++ are a Clang extension [-Wvla-cxx-extension]
+ 1205 |     alignas(16) uint8_t xsave_area[xsave_size];     // Variable Length Array, a.k.a. alloca
+      |                                    ^~~~~~~~~~
+../framework/sysdeps/unix/child_debug.cpp:1205:36: note: read of non-const variable 'xsave_size' is not allowed in a constant expression
+../framework/sysdeps/unix/child_debug.cpp:171:12: note: declared here
+  171 | static int xsave_size = 0;
+      |            ^
+1 warning generated.
+[121/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_g2.cpp.o
+[122/281] Compiling C++ object tests/cpu/libtests_base.a.p/atomic_atomic_simd_128.cpp.o
+[123/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_f.cpp.o
+[124/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_mite.cpp.o
+[125/281] Compiling C++ object framework/libframework.a.p/device_cpu_topology.cpp.o
+[126/281] Compiling C++ object framework/libframework.a.p/sysdeps_linux_memfpt.cpp.o
+[127/281] Compiling C++ object framework/libframework.a.p/sysdeps_linux_physicaladdress.cpp.o
+[128/281] Compiling C++ object framework/libframework.a.p/sandstone_run.cpp.o
+../framework/sandstone_run.cpp:666:38: warning: unknown attribute 'noclone' ignored [-Wunknown-attributes]
+  666 | static void __attribute__((noinline, noclone)) test_start()
+      |                                      ^~~~~~~
+../framework/sandstone_run.cpp:672:38: warning: unknown attribute 'noclone' ignored [-Wunknown-attributes]
+  672 | static void __attribute__((noinline, noclone, sysv_abi)) test_end(ThreadState state)
+      |                                      ^~~~~~~
+../framework/sandstone_run.cpp:802:22: warning: unknown attribute 'noclone' ignored [-Wunknown-attributes]
+  802 | __attribute__((weak, noclone, noinline)) int print_application_footer(int exit_code, PerThreadFailures per_thread_failures)
+      |                      ^~~~~~~
+../framework/sandstone_run.cpp:809:29: warning: variable length arrays in C++ are a Clang extension [-Wvla-cxx-extension]
+  809 |     SandstoneTestThread thr[sApp->thread_count];    // NOLINT: -Wvla
+      |                             ^~~~~~~~~~~~~~~~~~
+../framework/sandstone_p.h:440:17: note: expanded from macro 'sApp'
+  440 | #define sApp    _sApp()
+      |                 ^
+../framework/sandstone_run.cpp:809:29: note: non-constexpr function '_sApp' cannot be used in a constant expression
+../framework/sandstone_p.h:440:17: note: expanded from macro 'sApp'
+  440 | #define sApp    _sApp()
+      |                 ^
+../framework/sandstone_p.h:434:30: note: declared here
+  434 | inline SandstoneApplication *_sApp() noexcept
+      |                              ^
+4 warnings generated.
+[129/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movmskpspd.cpp.o
+[130/281] Compiling C++ object tests/cpu/libtests_base.a.p/vector_kreg4.cpp.o
+[131/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_xn.cpp.o
+[132/281] Compiling C++ object framework/libframework.a.p/sysdeps_linux_interrupt_monitor.cpp.o
+[133/281] Compiling C++ object framework/libframework.a.p/logging.cpp.o
+[134/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_x.cpp.o
+[135/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movbe_dump_probe_h.cpp.o
+[136/281] Compiling C++ object framework/libframework.a.p/sandstone_opts.cpp.o
+[137/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_mrn_reloaded.cpp.o
+[138/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_mrn_pairs.cpp.o
+[139/281] Compiling C++ object framework/libframework.a.p/selftest.cpp.o
+[140/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_mrn_rmw.cpp.o
+[141/281] Compiling C++ object tests/cpu/arm64/libtests_arm64_sve512.a.p/sve512_gather_scatter_svd.cpp.o
+[142/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_partial_store_forwarding.cpp.o
+[143/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_mrn_flags.cpp.o
+[144/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_mrn_nuke.cpp.o
+[145/281] Compiling C++ object tests/cpu/libtests_base.a.p/atomic_atomic_simd_512.cpp.o
+[146/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_mrn_rmw_dump.cpp.o
+[147/281] Compiling C++ object tests/cpu/libtests_base.a.p/misc_movq2dq.cpp.o
+[148/281] Compiling C++ object tests/cpu/libtests_base.a.p/atomic_atomic_simd_256.cpp.o
+[149/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gatherscatter_f32.cpp.o
+[150/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gatherscatterps.cpp.o
+[151/281] Compiling C++ object framework/libframework.a.p/sandstone_tests.cpp.o
+In file included from ../framework/sandstone_tests.cpp:14:
+../framework/sandstone_tests.h:136:18: warning: private field 'flags' is not used [-Wunused-private-field]
+  136 |     unsigned int flags;
+      |                  ^
+1 warning generated.
+[152/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fmatail_nested_avx2.cpp.o
+[153/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_cross_socket.cpp.o
+[154/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gather_f32.cpp.o
+[155/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fmatail_avx2.cpp.o
+[156/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_bank.cpp.o
+[157/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gatherscatter_f64.cpp.o
+[158/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_mini.cpp.o
+[159/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gather_f64.cpp.o
+[160/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fma_patterns_avx512_ps.cpp.o
+[161/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fma_tail_avx2.cpp.o
+[162/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gather_i32.cpp.o
+[163/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_randomsweep.cpp.o
+[164/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gatherscatterpd.cpp.o
+[165/281] Compiling C++ object framework/libframework.a.p/test_knobs.cpp.o
+[166/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gatherscatter_i32.cpp.o
+[167/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fmatail_nested_avx512.cpp.o
+[168/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_rmw_xchg_pause.cpp.o
+[169/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fma_tail_avx512.cpp.o
+[170/281] Compiling C++ object tests/cpu/libtests_base.a.p/jit_move_elimination_8_jit.cpp.o
+[171/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_double_dynamic_square.cpp.o
+[172/281] Compiling C++ object framework/libframework.a.p/sandstone.cpp.o
+../framework/sandstone.cpp:416:22: warning: unknown attribute 'noclone' ignored [-Wunknown-attributes]
+  416 | __attribute__((weak, noclone, noinline)) void print_application_banner()
+      |                      ^~~~~~~
+../framework/sandstone.cpp:420:22: warning: unknown attribute 'noclone' ignored [-Wunknown-attributes]
+  420 | __attribute__((weak, noclone, noinline)) void device_specific_init()
+      |                      ^~~~~~~
+2 warnings generated.
+[173/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fmatail_double_nested_avx2.cpp.o
+[174/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gatherscatter_i64.cpp.o
+[175/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_crosses_cacheline.cpp.o
+[176/281] Linking static target framework/libframework.a
+[177/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_stress_cmpxchg.cpp.o
+[178/281] Compiling C++ object tests/cpu/libtests_base.a.p/jit_move_elimination_jit.cpp.o
+[179/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_array.cpp.o
+[180/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_rmw_cmpxchg_pause.cpp.o
+[181/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_cdouble_dynamic_square.cpp.o
+[182/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_rmw_xchg.cpp.o
+[183/281] Compiling C++ object tests/cpu/libtests_base.a.p/gather_gather_i64.cpp.o
+[184/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_stress_bts.cpp.o
+[185/281] Linking static target tests/cpu/arithmetic_arm/libtests_arithmetic_arm_acl.a
+[186/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fma_patterns_avx512_pd.cpp.o
+[187/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_zpclmul_rep.cpp.o
+[188/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_stress.cpp.o
+[189/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_rmw_cmpxchg.cpp.o
+[190/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_zpclmul.cpp.o
+[191/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fmatail_avx512.cpp.o
+[192/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fma.cpp.o
+[193/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_same_core.cpp.o
+[194/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_stress_cmpxchg_even_odd.cpp.o
+[195/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_float_dynamic_square.cpp.o
+[196/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_stress_cmpxchg16b.cpp.o
+[197/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fpu_special_values.cpp.o
+[198/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_unaligned.cpp.o
+[199/281] Compiling C++ object tests/cpu/libtests_base.a.p/spinlock_spinlock_with_hle.cpp.o
+[200/281] Compiling C++ object tests/cpu/libtests_base.a.p/jit_zero_control_vec_vex_jit.cpp.o
+../tests/cpu/jit/zero_control_vec_vex_jit.cpp:18:14: warning: unused function 'alloc_jit' [-Wunused-function]
+   18 | static void *alloc_jit(size_t size) {
+      |              ^~~~~~~~~
+../tests/cpu/jit/zero_control_vec_vex_jit.cpp:23:13: warning: unused function 'make_executable' [-Wunused-function]
+   23 | static void make_executable(void *mem, size_t size) {
+      |             ^~~~~~~~~~~~~~~
+../tests/cpu/jit/zero_control_vec_vex_jit.cpp:27:13: warning: unused function 'flush_icache' [-Wunused-function]
+   27 | static void flush_icache(void *mem, size_t size) {
+      |             ^~~~~~~~~~~~
+../tests/cpu/jit/zero_control_vec_vex_jit.cpp:33:13: warning: unused function 'free_jit' [-Wunused-function]
+   33 | static void free_jit(void *mem, size_t size) {
+      |             ^~~~~~~~
+4 warnings generated.
+[201/281] Compiling C++ object tests/cpu/libtests_base.a.p/jit_zero_control_vec_sse_jit.cpp.o
+../tests/cpu/jit/zero_control_vec_sse_jit.cpp:21:14: warning: unused function 'alloc_jit' [-Wunused-function]
+   21 | static void *alloc_jit(size_t size) {
+      |              ^~~~~~~~~
+../tests/cpu/jit/zero_control_vec_sse_jit.cpp:26:13: warning: unused function 'make_executable' [-Wunused-function]
+   26 | static void make_executable(void *mem, size_t size) {
+      |             ^~~~~~~~~~~~~~~
+../tests/cpu/jit/zero_control_vec_sse_jit.cpp:30:13: warning: unused function 'flush_icache' [-Wunused-function]
+   30 | static void flush_icache(void *mem, size_t size) {
+      |             ^~~~~~~~~~~~
+../tests/cpu/jit/zero_control_vec_sse_jit.cpp:36:13: warning: unused function 'free_jit' [-Wunused-function]
+   36 | static void free_jit(void *mem, size_t size) {
+      |             ^~~~~~~~
+4 warnings generated.
+[202/281] Compiling C++ object tests/cpu/libtests_base.a.p/fma_fmatail_double_nested_avx512.cpp.o
+[203/281] Compiling C++ object tests/cpu/libtests_base.a.p/jit_part_store_fwd_jit.cpp.o
+[204/281] Compiling C++ object tests/cpu/libtests_base.a.p/jit_move_elimination_vec_evex_jit.cpp.o
+../tests/cpu/jit/move_elimination_vec_evex_jit.cpp:193:18: warning: unused variable 'vec_regs' [-Wunused-const-variable]
+  193 | static const int vec_regs[] = {0, 1, 2, 3, 4, 5, 6, 7};
+      |                  ^~~~~~~~
+1 warning generated.
+[205/281] Compiling C++ object tests/cpu/libtests_base.a.p/jit_zero_control_vec_evex_jit.cpp.o
+../tests/cpu/jit/zero_control_vec_evex_jit.cpp:18:14: warning: unused function 'alloc_jit' [-Wunused-function]
+   18 | static void *alloc_jit(size_t size) {
+      |              ^~~~~~~~~
+../tests/cpu/jit/zero_control_vec_evex_jit.cpp:23:13: warning: unused function 'make_executable' [-Wunused-function]
+   23 | static void make_executable(void *mem, size_t size) {
+      |             ^~~~~~~~~~~~~~~
+../tests/cpu/jit/zero_control_vec_evex_jit.cpp:27:13: warning: unused function 'flush_icache' [-Wunused-function]
+   27 | static void flush_icache(void *mem, size_t size) {
+      |             ^~~~~~~~~~~~
+../tests/cpu/jit/zero_control_vec_evex_jit.cpp:33:13: warning: unused function 'free_jit' [-Wunused-function]
+   33 | static void free_jit(void *mem, size_t size) {
+      |             ^~~~~~~~
+4 warnings generated.
+[206/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmx_vmexit_pause.cpp.o
+[207/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_cdouble_dynamic_square_dump.cpp.o
+[208/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc64_jones_norm.cpp.o
+[209/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmx_vmexit_cpuid.cpp.o
+[210/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc64_iso_refl.cpp.o
+[211/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/gmp_bignum.cpp.o
+[212/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc_t10dif.cpp.o
+[213/281] Compiling C++ object tests/cpu/libtests_base.a.p/arithmetic_adcx.cpp.o
+[214/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc64_ecma182_norm.cpp.o
+[215/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc_ieee.cpp.o
+[216/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmxmsr.cpp.o
+[217/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmx_vmexit_invd.cpp.o
+[218/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmx_vmexit_from_cr8.cpp.o
+[219/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmx_vmexit_to_cr8.cpp.o
+[220/281] Compiling C++ object tests/cpu/libtests_base.a.p/arithmetic_adcxlong.cpp.o
+[221/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmx_vmexit_vmcall.cpp.o
+[222/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmx_io_exit.cpp.o
+[223/281] Compiling C++ object tests/cpu/libtests_crc.a.p/crc_crc32_fixed.cpp.o
+[224/281] Compiling C++ object tests/cpu/libtests_base.a.p/arithmetic_adcx_adox_interleaved.cpp.o
+[225/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/gmp_bigadd.cpp.o
+[226/281] Compiling C++ object tests/cpu/libtests_base.a.p/arithmetic_adox.cpp.o
+[227/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/bigint_mulx_arm.cpp.o
+../tests/cpu/arithmetic_arm/bigint_mulx_arm.cpp:28:22: warning: unused variable 'BITS' [-Wunused-const-variable]
+   28 | static constexpr int BITS = 512;
+      |                      ^~~~
+1 warning generated.
+[228/281] Compiling C++ object tests/cpu/libtests_base.a.p/virtualization_vmx_vmexit_to_dr7.cpp.o
+[229/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc64_iso_norm.cpp.o
+[230/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/adcx_adox_interleaved_arm.cpp.o
+[231/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/ifu_branch_target_arm.cpp.o
+[232/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc_iscsi.cpp.o
+[233/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc64_ecma182_refl.cpp.o
+[234/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc32_gzip.cpp.o
+[235/281] Compiling C++ object tests/cpu/libtests_base.a.p/crc_isal_crc64_jones_refl.cpp.o
+[236/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_crt.a.p/crt_builtins.cpp.o
+[237/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/adcxlong_arm.cpp.o
+[238/281] Linking static target tests/cpu/arithmetic_arm/libtests_arithmetic_arm_crt.a
+[239/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_sparse_eigen_sparse.cpp.o
+[240/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/operand_space_arm.cpp.o
+[241/281] Compiling C++ object tests/cpu/libtests_crc.a.p/crc_crc32.cpp.o
+[242/281] Compiling C++ object tests/cpu/libtests_crc.a.p/crc_crc32_fixed_shuffled.cpp.o
+[243/281] Linking static target tests/cpu/libtests_crc.a
+[244/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/l2c_cross_cache_line_arm.cpp.o
+../tests/cpu/arm64/l2c_cross_cache_line_arm.cpp:68:25: warning: unused variable 'NUM_PROBE_LINES' [-Wunused-const-variable]
+   68 | static constexpr size_t NUM_PROBE_LINES = 256;
+      |                         ^~~~~~~~~~~~~~~
+1 warning generated.
+[245/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/power_virus_dit.cpp.o
+[246/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/sdc_test.cpp.o
+[247/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/adox_arm.cpp.o
+[248/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/ooo_dep_chain_arm.cpp.o
+[249/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/neon_test.cpp.o
+[250/281] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/adcx_arm.cpp.o
+[251/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/agu_stress_2src.cpp.o
+[252/281] Linking static target tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a
+[253/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/lsu_store_forward_arm.cpp.o
+[254/281] Compiling C++ object tests/cpu/arm64/libtests_arm64_sve512.a.p/sve512_f64_special_svd.cpp.o
+[255/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/mmu_split_tlb_arm.cpp.o
+[256/281] Compiling C++ object tests/cpu/arm64/libtests_arm64_sve512.a.p/sve512_fma_arm.cpp.o
+../tests/cpu/arm64/sve512_fma_arm.cpp:233:20: warning: unused function 'f32_lane_ok' [-Wunused-function]
+  233 | static inline bool f32_lane_ok(uint32_t golden, uint32_t actual)
+      |                    ^~~~~~~~~~~
+1 warning generated.
+[257/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/sme_fmopa_arm.cpp.o
+[258/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/crypto_test.cpp.o
+[259/281] Compiling C++ object tests/cpu/arm64/libtests_arm64_sve512.a.p/sve512_stencil_axis_arm.cpp.o
+../tests/cpu/arm64/sve512_stencil_axis_arm.cpp:93:18: warning: variable 'temp' set but not used [-Wunused-but-set-variable]
+   93 |     svfloat64_t  temp = res0;
+      |                  ^
+1 warning generated.
+[260/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/iex_operand_combo_arm.cpp.o
+[261/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/fsu_byteexact_arm.cpp.o
+../tests/cpu/arm64/fsu_byteexact_arm.cpp:185:32: warning: implicit conversion from 'float' to 'uint32_t' (aka 'unsigned int') changes value from 0.5 to 0 [-Wliteral-conversion]
+  185 |             float c = float_of(0.5f);
+      |                       ~~~~~~~~ ^~~~
+1 warning generated.
+[262/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_double_dynamic_square_dump.cpp.o
+[263/281] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/neon_rot_2src.cpp.o
+[264/281] Compiling C++ object tests/cpu/arm64/libtests_arm64_sve512.a.p/sve512_f32_chain_svd.cpp.o
+[265/281] Linking static target tests/cpu/arm64/libtests_arm64_sve512.a
+[266/281] Linking static target tests/cpu/arm64/libtests_arm64.a
+[267/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_float_dynamic_square_dump.cpp.o
+[268/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_double14.cpp.o
+[269/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_cdouble.cpp.o
+[270/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_fvectors.cpp.o
+[271/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd.cpp.o
+[272/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_double.cpp.o
+[273/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_double.cpp.o
+[274/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd.cpp.o
+[275/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_fvectors.cpp.o
+[276/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_cdouble.cpp.o
+[277/281] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_cdouble_noavx512.cpp.o
+[278/281] Compiling C++ object tests/cpu/libtests_sve.a.p/eigen_svd_svd_cdouble_sve.cpp.o
+[279/281] Linking static target tests/cpu/libtests_base.a
+[280/281] Linking static target tests/cpu/libtests_sve.a
+[281/281] Linking target sdcshield
+build OK: /home/share/suke/sdcshield/builddir-xupeng/sdcshield (197664392 bytes)
+--- [6/6] smoke verification ---
+sdcshield-15e6f9dc8eb3c18ceafc932e9d88ffd8c492fa87
+test count: 227
+--- smoke: zstd19 single-thread 3s ---
+command-line: 'sdcshield -e zstd19 -t 3000 -n 1 -o /dev/null'
+version: sdcshield-15e6f9dc8eb3c18ceafc932e9d88ffd8c492fa87
+exit: pass
+zstd19: PASS
+
+===== one-click build complete =====
+binary: /home/share/suke/sdcshield/builddir-xupeng/sdcshield
+try:    /home/share/suke/sdcshield/builddir-xupeng/sdcshield -e eigen_svd_cdouble_sve -t 5000 -n 1
+[suke@cn23154 sdcshield]$ ./builddir-oneclick/sdcshield --list-tests | grep stencil
+[suke@cn23154 sdcshield]$你看看我编译上了吗？

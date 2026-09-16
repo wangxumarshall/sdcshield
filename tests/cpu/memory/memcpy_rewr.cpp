@@ -24,7 +24,12 @@
  *  - Strategy selection is handled by the reusable strategy_config
  *    framework (SANDSTONE_STRATEGY_INDEX cycles strategies round-robin
  *    across repeated invocations; SANDSTONE_STRATEGY_CONF overrides the
- *    config path).
+ *    config path). When no config file is present (default path missing
+ *    or SANDSTONE_STRATEGY_CONF dangling), the test degrades to the
+ *    original tool's default mode instead of skipping: first-N-producers
+ *    roles (N = threads/12) and a MemAvailable-adaptive block_size
+ *    clamped to [64 KiB, c_size] — see default_block_size() in the
+ *    implementation.
  *
  *  ARM64-only: the arch-timer inline asm (mrs cntvct_el0 / cntfrq_el0) has
  *  no x86 equivalent and the x86-64 paths must stay untouched, so this

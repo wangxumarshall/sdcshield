@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M2N9AQCS6XAP7MBPE3EHYGRA",
+  "strategy": "manual-commit",
+  "branch": "feat/vendor-isa-l",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/cpu/meson.build"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18203,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3529600,
+    "output_tokens": 5834,
+    "api_call_count": 45
+  }
+}

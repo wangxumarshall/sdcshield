@@ -1,0 +1,120 @@
+// example.cpp
+#include <arm_sve.h>
+#include <chrono>
+#include <cstddef>
+#include <cstdio>
+#include <vector>
+
+using std::size_t;
+using std::ptrdiff_t;
+
+constexpr size_t RADIUS = 6;
+constexpr size_t B_TILE = 16;
+
+size_t j;
+
+inline void axis_generic_16x2(
+    const double* s_base, const size_t coord,
+    const size_t extent, const size_t stride,
+    const svbool_t ptrue, const double* coeff,
+    svfloat64_t& res0, svfloat64_t& res1)
+{
+    svfloat64_t  temp = res0;
+        temp = res0;
+        temp = res0;
+        temp = res0;
+#pragma clang loop unroll(full)
+    for (size_t r = 1; r <= RADIUS; ++r) {
+        const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * B_TILE;
+    //svfloat64_t  temp = res0;
+        temp = res0;
+        temp = res0;
+        temp = res0;
+        const svfloat64_t c = svdup_f64(coeff[r]);
+
+    //svfloat64_t  temp = res0;
+        temp = res0;
+        temp = res0;
+        temp = res0;
+        if (coord >= r) {
+            const double* n = s_base - off;
+            res0 = svmla_x(ptrue, res0, svld1(ptrue, n), c);
+            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + 8), c);
+        }
+        if (coord + r < extent) {
+            const double* n = s_base + off;
+            res0 = svmla_x(ptrue, res0, svld1(ptrue, n), c);
+            res1 = svmla_x(ptrue, res1, svld1(ptrue, n + 8), c);
+        }
+    }
+}
+
+int main()
+{
+    if (svcntd() != 8) {
+        std::fprintf(stderr,
+                     "Requires 512-bit SVE; current double lanes = %zu\n",
+                     static_cast<size_t>(svcntd()));
+        return 1;
+    }
+
+    constexpr size_t coord = 10;
+    constexpr size_t extent = 56;
+    constexpr size_t stride = 64;
+    constexpr size_t iterations = 100'000'000;
+
+    // 布局：[extent][stride][B_TILE]
+    std::vector<double> src(extent * stride * B_TILE);
+
+    // 每个 tile 都是 {1, 2, ..., 16}，便于逐通道校验。
+    for (size_t i = 0; i < src.size(); ++i)
+        src[i] = static_cast<double>(i % B_TILE + 1);
+
+    double coeff[RADIUS + 1] = {};
+    for (size_t r = 1; r <= RADIUS; ++r)
+        coeff[r] = 0.125;  // 二进制可精确表示
+
+    // 指向 coord=10 这一层的第一个 tile，保证负偏移合法。
+    const double* s_base = src.data() + coord * stride * B_TILE;
+    const svbool_t ptrue = svptrue_b64();
+
+    svfloat64_t res0 = svdup_f64(0.0);
+    svfloat64_t res1 = svdup_f64(0.0);
+
+    const auto begin = std::chrono::steady_clock::now();
+
+    for (j = 0; j < iterations; ++j) {
+    if ((reinterpret_cast<std::uintptr_t>(&res0)) & 0xFFFF000000000000ull) {
+        std::printf("iteration=%zu, &res0=%p\n",
+                    j, static_cast<void*>(&res0));
+    }
+        axis_generic_16x2(
+            s_base, coord, extent, stride, ptrue, coeff, res0, res1);
+    }
+
+    double result[B_TILE];
+    svst1(ptrue, result, res0);
+    svst1(ptrue, result + 8, res1);
+
+    const auto end = std::chrono::steady_clock::now();
+    const double ns =
+        std::chrono::duration<double, std::nano>(end - begin).count();
+
+    // coord=10、RADIUS=4：每个 r 的正负两个方向都有效。
+    // 单次调用通道 j 的增量 = 2 * 4 * 0.125 * (j+1) = j+1。
+    bool ok = true;
+    for (size_t j = 0; j < B_TILE; ++j) {
+        const double expected =
+            static_cast<double>(iterations) * (j + 1);
+        if (result[j] != expected)
+            ok = false;
+        std::printf("result[%2zu] = %.0f, expected = %.0f\n",
+                    j, result[j], expected);
+    }
+
+    std::printf("check: %s\n", ok ? "PASS" : "FAIL");
+    std::printf("total: %.3f ms, average: %.3f ns/call\n",
+                ns / 1e6, ns / iterations);
+    return ok ? 0 : 1;
+}
+你的意思是这个代码有bug在正常cpu上就会出现sdc？

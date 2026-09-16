@@ -270,6 +270,10 @@ if framework_config.get('SANDSTONE_SSL_BUILD') == 1
         if_true: files(
             # Tests that depends on openssl
             'openssl/openssl_sha.cpp',
+            # SHA-3/SHAKE (Keccak) bit-diffusion SDC stress — same golden
+            # copy/compute/verify pattern as openssl_sha, orthogonal
+            # AND-XOR-rotate datapath vs SHA-2's additive chains.
+            'openssl/openssl_sha3.cpp',
             # Intel IPSEC suite. On x86-64 the _sse/_avx/_avx512/_x86_64
             # variants gate on x86 arch constants via IPSEC_X86_GATE(); on
             # AArch64 the gate is dropped (the variants are all portable

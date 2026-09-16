@@ -1,0 +1,1 @@
+你找一下测试用例list里面是否有sve512_gather_scatter_arm。--list | grep sve512

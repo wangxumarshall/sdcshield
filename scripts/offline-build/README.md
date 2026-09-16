@@ -29,7 +29,7 @@ cd sdcshield
 | `container-build.sh` | 单 SP 源码构建(镜像已烘焙则跳过装包)。22.03/20.03 注入 polyfill + 版本宏 |
 | `build-all.sh` | 15 矩阵编排器(5 效率杠杆:deps 烘焙/哈希 skip/--since/-P 并行/smoke|full) |
 | `release-all.sh` | **一键式全流程**:base 镜像拉取(docker hub→podman 桥接)→ 烘焙 → 构建 → full 验证 → 提交推送(3 submodule + 主仓)。幂等,验证不过不推送 |
-| `package-built-artifacts.sh` | 产物进 RPM submodule 的 `built/`(二进制+libs+run+BUILD-HASH+MANIFEST+VERSION) |
+| `package-built-artifacts.sh` | 产物进 RPM submodule 的 `built/`(二进制+libs+run+BUILD-HASH+MANIFEST+VERSION;`run-sdcshield.sh` 支持 `full` 全核 eigen 满载选项) |
 | `verify-built-pristine.sh` | 决定性闸门:纯净容器(只挂 built/)跑——"下载即跑" |
 | `package-release.sh` | 产出现场 tarball(~6MB,含 run.sh 自动检测 OS + 精确匹配) |
 | `run.sh` | (随 tarball)目标机入口:检测 OS → 精确匹配 built-index → 校验 sha256 → exec |
@@ -80,7 +80,7 @@ SP4   ...LTS_SP4                 ...LTS_SP4                 ...LTS_SP4
 ```
 openEuler-24.03LTS_SP3/
 ├── rpms/        # 该 SP 全部依赖 *.rpm(324~437 个,从 repo.openeuler.org 下载)
-└── built/       # 构建产物: sdcshield + libs/ + run-sdcshield.sh + BUILD-HASH + MANIFEST.tsv + VERSION
+└── built/       # 构建产物: sdcshield + libs/ + run-sdcshield.sh(含 full 全核 eigen 满载选项) + BUILD-HASH + MANIFEST.tsv + VERSION
 ```
 
 所有脚本(下载/镜像烘焙/构建/打包/验证)统一从 `<SP 目录>/rpms/` 取 RPM;容器内挂载点仍为 `/rpms`。

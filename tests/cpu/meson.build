@@ -439,6 +439,119 @@ tests_set_base.add(
     )
 )
 
+# OpenBLAS GEMM tests (vendored under third-party/openblas, built by its
+# build.sh). Hand-written NEON fmla micro-kernels: the highest-density
+# vector-FMA payload available, targeting the literature-confirmed #1 SDC
+# source. The library is single-threaded (USE_THREAD=0) but must be built
+# with USE_LOCKING=1 so the framework's one-worker-per-core threads can call
+# cblas_dgemm concurrently: without it the internal packing-buffer pool
+# (blas_memory_alloc) is a process-wide unlocked table and concurrent calls
+# corrupt each other (empirically confirmed: 8 threads x 10s -> 62 byte
+# mismatches; with USE_LOCKING=1: 128 cores (this machine, all cores) x 30s -> 0
+# (see allcore.yaml). The locks guard
+# only the buffer-table metadata, not the kernel, so results stay
+# byte-identical to the unlocked build.
+# include_directories() must use a source-tree-relative path (meson rejects
+# absolute paths into the source tree), so the include dir is given relative
+# to this tests/cpu/ subdir while the archive probe and link args use the
+# joined absolute path (same pattern as the vendored OpenSSL block in
+# framework/meson.build).
+openblas_install = meson.current_source_dir() / '../../third-party/openblas/install'
+if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
+        openblas_install / 'lib/libopenblas.a', check: false).returncode() == 0
+    openblas_dep = declare_dependency(
+        include_directories: include_directories('../../third-party/openblas/install/include', is_system: true),
+        link_args: ['-L' + openblas_install / 'lib', '-l:libopenblas.a'],
+    )
+    tests_set_base.add(
+        when : openblas_dep,
+        if_true : files(
+            'openblas_gemm/dgemm.cpp',
+            'openblas_gemm/sgemm.cpp',
+            'openblas_gemm/zgemm.cpp',
+        )
+    )
+else
+    # Not a disabler(): a disabler propagates through tests_base_a ->
+    # sandstone_tests -> the root executable and silently suppresses the
+    # sdcshield binary entirely (meson setup still exits 0). An empty list
+    # just contributes nothing to the dependencies (same pattern as
+    # boost_dep in the root meson.build); the openblas_gemm sources only
+    # enter the sourceset in the if-branch above.
+    openblas_dep = []
+    message('OpenBLAS install/ not found under third-party/openblas — run its build.sh to enable the openblas_* tests.')
+endif
+
+# SLEEF vectorized transcendental functions (vendored third-party/sleef, built
+# by its build.sh). Polynomial FMA dependency chains over NEON wide vectors;
+# pure functions => deterministic golden values (computed once in init), so
+# the whole payload funnels into a byte-exact memcmp per iteration. Targets
+# the newest-instruction-generation risk area (PinDrop Obs12: instructions
+# fail most often in their first architecture generation) — the u10 advsimd
+# kernels are SLEEF's newest NEON codepaths. Same else-branch discipline as
+# the OpenBLAS block above: an empty list, never a disabler().
+sleef_install = meson.current_source_dir() / '../../third-party/sleef/install'
+if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
+        sleef_install / 'lib/libsleef.a', check: false).returncode() == 0
+    sleef_dep = declare_dependency(
+        include_directories: include_directories('../../third-party/sleef/install/include', is_system: true),
+        link_args: ['-L' + sleef_install / 'lib', '-l:libsleef.a'],
+    )
+    tests_set_base.add(
+        when : sleef_dep,
+        if_true : files(
+            'sleef/sleef_neon.cpp',
+        )
+    )
+    # SVE variant goes into the dedicated tests_sve static library (compiled
+    # with -march=armv8.2-a+sve -msve-vector-bits=128), NOT the NEON baseline:
+    # SVE object code in tests_base would SIGILL on non-SVE silicon. Runtime
+    # HWCAP_SVE gate in sleef_sve.cpp skips cleanly there.
+    tests_set_sve.add(
+        when : sleef_dep,
+        if_true : files(
+            'sleef/sleef_sve.cpp',
+        )
+    )
+else
+    sleef_dep = []
+    message('SLEEF install/ not found under third-party/sleef — run its build.sh to enable the sleef_neon test.')
+endif
+
+# pocketfft (vendored third-party/pocketfft, BSD-3, single header + single
+# .c, no prebuilt step). The FFT payload stresses the CORE179-discriminating
+# access structure (bit-reversal-style decimation reordering = store->load
+# scatter across the working set) plus twiddle-FMA butterfly chains. The .c
+# is compiled straight into tests_base_a; the plan API is re-entrant (all
+# per-call scratch is malloc'd inside the call, the plan's twiddle tables
+# are read-only after make), so one plan is shared across the worker
+# threads. The pocketfft.h/pocketfft.c/LICENSE.md triple is committed
+# explicitly (git add -f) while .gitignore keeps the rest of the tarball
+# extraction out; the tarball stays for provenance.
+pocketfft_dir = meson.current_source_dir() / '../../third-party/pocketfft/pocketfft-master'
+if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
+        pocketfft_dir / 'pocketfft.h', check: false).returncode() == 0
+    pocketfft_files = files(pocketfft_dir / 'pocketfft.c')
+    # include_directories() must use a source-tree-relative path (meson
+    # rejects absolute paths into the source tree — same lesson as the
+    # OpenBLAS block); only the file/probe paths use the joined absolute.
+    pocketfft_dep = declare_dependency(
+        include_directories: include_directories('../../third-party/pocketfft/pocketfft-master', is_system: true),
+    )
+    tests_set_base.add(
+        when : pocketfft_dep,
+        if_true : [
+            files('pocketfft/fft.cpp'),
+            pocketfft_files,
+        ]
+    )
+else
+    # Not a disabler(): same discipline as the OpenBLAS/SLEEF blocks above —
+    # an empty list contributes nothing, a disabler would silently suppress
+    # the whole sdcshield binary through the dependency chain.
+    pocketfft_dep = []
+    message('pocketfft.h not found under third-party/pocketfft — extract pocketfft-master.tar.gz to enable the pocketfft_fft test.')
+endif
 
 # Gather/scatter tests. These are software-simulated gather/scatter using
 # plain double/int arrays and std::mt19937 — no x86 intrinsics, no arm_neon.h.
@@ -560,12 +673,14 @@ tests_set_base.add(
     )
 )
 
-# isa-l (libisal) CRC tests. The host ships /usr/lib/libisal.a (static) and
+# isa-l (libisal) tests. The host ships /usr/lib/libisal.a (static) and
 # /usr/lib/libisal.so but no libisal.pc, so dependency('libisal') fails here;
 # use cpp.find_library('isal') instead (mirrors the reference tree). isal is a
-# portable C library with arch-optimised dispatch internally, so the 10 isal_*
+# portable C library with arch-optimised dispatch internally, so the isal_*
 # tests build on all arches; required:false keeps the build working on hosts
 # without libisal installed.
+#  - crc/isal_*.cpp (10): CRC functions.
+#  - isa-l/igzip.cpp: igzip deflate/inflate round-trip SDC stress.
 isal_lib = cpp.find_library('isal', required : false, static : true)
 tests_set_base.add(
     when : isal_lib,
@@ -580,6 +695,7 @@ tests_set_base.add(
         'crc/isal_crc64_iso_refl.cpp',
         'crc/isal_crc64_jones_norm.cpp',
         'crc/isal_crc64_jones_refl.cpp',
+        'isa-l/igzip.cpp',
     )
 )
 
@@ -632,6 +748,9 @@ tests_base_a = static_library(
         boost_dep,
         atomic_lib,
         isal_lib,
+        openblas_dep,
+        sleef_dep,
+        pocketfft_dep,
     ],
     c_args : [
         tests_common_c_args,
@@ -776,6 +895,7 @@ if host_machine.cpu_family() == 'aarch64'
             dependencies: [
                 tests_config_sve.dependencies(),
                 boost_dep,
+                sleef_dep,
             ],
             build_by_default: false,
             include_directories: [

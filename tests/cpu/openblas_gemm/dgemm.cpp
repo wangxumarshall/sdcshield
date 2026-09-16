@@ -14,6 +14,13 @@
  * inputs, computes C = A*B, and byte-compares against the golden product
  * from init (copy->compute->verify, the most frequent CORE179 trigger
  * structure). A third scheduling sample beside Eigen/ACL GEMM.
+ * The matrix dimension is runtime-configurable via the test knob
+ * "-O openblas_dgemm.mdim=N" (16..1024, default 256; the test-id
+ * prefix is required — a bare "mdim=N" is silently ignored), sweeping
+ * the working set across L1D (64KB) / L2 (512KB) / LLC / DRAM on
+ * TSV110 — the CORE179 probes showed the store->reload cache-domain
+ * pattern is a triggering discriminator, so each size class exercises
+ * different forwarding paths.
  * @endparblock
  */
 
@@ -24,10 +31,9 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define M_DIM 256
-
 namespace {
 struct gemm_test_data {
+    int mdim;             /* matrix dimension, from the -O openblas_dgemm.mdim=N knob */
     double *a;
     double *b;
     double *golden;      /* C = A*B computed once in init; read-only after */
@@ -62,7 +68,12 @@ static double random_bounded(void) {
 static int openblas_dgemm_init(struct test *test) {
     auto d = new(gemm_test_data);
     test->data = d;
-    size_t n2 = M_DIM * M_DIM;
+    int64_t knob = get_testspecific_knob_value_int(test, "mdim", 256);
+    if (knob < 16 || knob > 1024) {
+        report_fail_msg("mdim knob out of range: %ld (valid 16..1024, default 256)", (long)knob);
+    }
+    d->mdim = (int)knob;
+    size_t n2 = (size_t)d->mdim * (size_t)d->mdim;
     d->a      = (double *)malloc(n2 * sizeof(double));
     d->b      = (double *)malloc(n2 * sizeof(double));
     d->golden = (double *)malloc(n2 * sizeof(double));
@@ -76,17 +87,18 @@ static int openblas_dgemm_init(struct test *test) {
      * remainder collapses toward subnormals). Instead the random bits are
      * folded into a bounded magnitude: the top 52 bits become the mantissa
      * fraction of a value in [~1e-6, ~2e-3] with a random sign. The full
-     * 52-bit mantissa stays random (the SDC payload), while the K=256 dot
-     * products are bounded by K * (2e-3)^2 ~ 1e-3 — forty orders of
-     * magnitude from overflow and far from subnormal rounding. */
+     * 52-bit mantissa stays random (the SDC payload), while the K=mdim
+     * dot products are bounded by K * (2e-3)^2 <= ~4e-3 (K <= 1024) —
+     * forty orders of magnitude from overflow and far from subnormal
+     * rounding. */
     for (size_t i = 0; i < n2; ++i) {
         d->a[i] = random_bounded();
         d->b[i] = random_bounded();
     }
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                M_DIM, M_DIM, M_DIM,
-                1.0, d->a, M_DIM, d->b, M_DIM,
-                0.0, d->golden, M_DIM);
+                d->mdim, d->mdim, d->mdim,
+                1.0, d->a, d->mdim, d->b, d->mdim,
+                0.0, d->golden, d->mdim);
     /* reject a NaN/Inf-polluted golden at the source: if the random operands
      * produced a non-finite product the byte-exact comparison below would be
      * meaningless (NaN != NaN), so fail loudly instead of silently passing */
@@ -102,7 +114,7 @@ static int openblas_dgemm_init(struct test *test) {
 
 static int openblas_dgemm_run(struct test *test, int cpu) {
     auto d = CAST(test->data);
-    size_t bytes = M_DIM * M_DIM * sizeof(double);
+    size_t bytes = (size_t)d->mdim * d->mdim * sizeof(double);
     long iter = 0;
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
@@ -119,9 +131,9 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
         memcpy(b_copy, d->b, bytes);
 
         cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                    M_DIM, M_DIM, M_DIM,
-                    1.0, a_copy, M_DIM, b_copy, M_DIM,
-                    0.0, c, M_DIM);
+                    d->mdim, d->mdim, d->mdim,
+                    1.0, a_copy, d->mdim, b_copy, d->mdim,
+                    0.0, c, d->mdim);
 
         ++iter;
         /* verify-out: byte-exact golden compare of inputs and product */
@@ -131,7 +143,7 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
         if (memcmp(b_copy, d->b, bytes) != 0) {
             report_fail_msg("input B corrupted after GEMM (iteration %ld)", iter);
         }
-        memcmp_or_fail(c, d->golden, M_DIM * M_DIM);
+        memcmp_or_fail(c, d->golden, (size_t)d->mdim * d->mdim);
     }
     return EXIT_SUCCESS;
 }

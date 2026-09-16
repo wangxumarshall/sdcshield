@@ -1,0 +1,24 @@
+它的时间本来就和你不一样。[suke@cn23154 sdcshield]$ ls -la builddir-oneclick/sdcshield tests/cpu/arm64/sve512_stencil_axis_arm.cpp
+-rwxr-xr-x 1 suke eapp 197440520 Sep 15 18:30 builddir-oneclick/sdcshield
+-rw-r--r-- 1 suke eapp      8694 Sep 16 12:00 tests/cpu/arm64/sve512_stencil_axis_arm.cpp
+                                                                                                                            [suke@cn23154 sdcshield]$ sed -n '130,148p' tests/cpu/arm64/meson.build
+    # vector length (512-bit on HiSilicon 0xd22). Needs its own
+    # static_library block: -march=armv8.2-a+sve is required for the SVE
+    # intrinsics, which the armv8.1-a+crc+crypto baseline above lacks.
+    # Runtime-guarded: test_init probes HWCAP_SVE and returns a clean
+    # EXIT_SKIP on SVE-less CPUs, so the binary stays run-anywhere.
+    arm64_sve_cpp_flags = [
+        '-march=armv8.2-a+sve',
+    ]
+
+    arm64_sve_tests = files(
+        'sve512_fma_arm.cpp',
+        #'sve512_gather_scatter_arm.cpp',
+        'sve512_stencil_axis_arm.cpp',
+        'sve512_gather_scatter_svd.cpp',
+        'sve512_f64_chain_svd.cpp',
+        'sve512_f64_special_svd.cpp',
+        'sve512_f32_chain_svd.cpp',
+    )
+
+[suke@cn23154 sdcshield]$

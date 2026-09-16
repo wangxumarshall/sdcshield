@@ -246,7 +246,7 @@ MOUNTS=(-v "$SRC_ROOT:/src:ro,Z" -v "$RPMDIR_HOST:/rpms:ro,Z" -v "$OUTDIR_HOST:/
 # 源码包入仓 third-party/meson/meson-0.59.4(11M, 纯源码, 可复现)。
 [ "$SERIES" = "20.03" ] && [ -d "$SRC_ROOT/third-party/meson/meson-0.59.4" ] && \
     MOUNTS+=(-v "$SRC_ROOT/third-party/meson/meson-0.59.4:/meson-src:ro")
-[ -d "$ACL_HDR" ] && MOUNTS+=(-v "$ACL_HDR:$ACL_HDR:ro")
+[ -d "$ACL_HDR" ] && MOUNTS+=(-v "$ACL_HDR:$ACL_HDR:ro,Z")
 [ -d "$ACL_LIB" ] && MOUNTS+=(-v "$ACL_LIB/libarm_compute.so:$ACL_LIB/libarm_compute.so:ro" -v "$ACL_LIB/libarm_compute_graph.so:$ACL_LIB/libarm_compute_graph.so:ro")
 [ -d "$CLANG_RT" ] && MOUNTS+=(-v "$CLANG_RT:$CLANG_RT:ro")
 

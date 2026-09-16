@@ -1,0 +1,20 @@
+uke@cn23154 0903-NUMA3-report-materials_xjz]$ cat > run_1h.sh <<'EOF'
+> #!/bin/bash
+>   # 全核(0-607)并发跑 ./testwang,每核一个实例,持续 1 小时
+  >   cd "$(dirname "$0")"
+>   mkdir -p logs
+ >   end=$((SECONDS + 3600))
+ >   round=0
+ >   while [ $SECONDS -lt $end ]; do
+ >       round=$((round + 1))
+ >       echo "[round $round] $(date +%T)"
+ >       for c in $(seq 0 607); do
+ >           taskset -c "$c" ./testwang >> "logs/tw_$c.log" 2>&1 &
+ >       done
+ >       wait
+ >   done
+ >   echo "finished: $round rounds"
+ >   EOF
+> ^C
+[suke@cn23154 0903-NUMA3-report-materials_xjz]$ chmod +x run_1h.sh
+chmod: cannot access 'run_1h.sh': No such file or directory这是怎么回事？

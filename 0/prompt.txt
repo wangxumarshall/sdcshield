@@ -1,0 +1,1 @@
+编译构建 openeuler22.03lts镜像对应的sdcshield二进制

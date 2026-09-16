@@ -1,0 +1,1 @@
+你查一下这个二进制文件里面是否有sve512_gather_scatter_arm

@@ -1,0 +1,22 @@
+zhe[suke@cn23154 0903-NUMA3-report-materials_xjz]$ [suke@cn23154 0903-NUMA3-report-materials_xjz]$  nohup ./run_1h.sh > logs/master.log 2>&1 &
+[2] 2204164
+[2]+  Exit 127                [suke@cn23154 0903-NUMA3-report-materials_xjz]$ nohup ./run_1h.sh > logs/master.log 2>&1
+[suke@cn23154 0903-NUMA3-report-materials_xjz]$ [1] 2194901
+bash: [1]: command not found
+<ort-materials_xjz]$ [suke@cn23154 0903-NUMA3-report-materials_xjz]$  nohup ./run_1h.sh > logs/master.log 2>&1 &report-materials_xjz]$[suke@cn23154 09
+[2] 2206105
+aterials_xjz]$ [1] 2194901
+bash: [1]: command not found
+23154 0903-NUMA3-report-materials_xjz]$[suke@cn23154 0903-NUMA3-report-materials_xjz]$ [suke@cn23154 0903-NUMA3-report-materials_xjz]$bash: suke@cn23154 0903-NUMA3-report-materials_xjz: syntax error: invalid arithmetic operator (error token is "@cn23154 0903-NUMA3-report-materials_xjz")
+[2]+  Exit 1                  [suke@cn23154 0903-NUMA3-report-materials_xjz]$[suke@cn23154 0903-NUMA3-report-materials_xjz]$ [suke@cn23154 0903-NUMA3-report-materials_xjz]$ nohup ./run_1h.sh > logs/master.log 2>&1
+[suke@cn23154 0903-NUMA3-report-materials_xjz]$ [2] 2204164
+bash: [2]: command not found
+[suke@cn23154 0903-NUMA3-report-materials_xjz]$ [2]+  Exit 127                [suke@cn23154 0903-NUMA3-report-materials_xjz]$ nohup ./run_1h.sh > logs/master.log 2>&1
+[suke@cn23154 0903-NUMA3-report-materials_xjz]$ [suke@cn23154 0903-NUMA3-report-materials_xjz]$ [1] 2194901
+bash: [suke@cn23154: command not found
+[suke@cn23154 0903-NUMA3-report-materials_xjz]$ bash: [1]: command not found
+bash: bash:: command not found
+<-materials_xjz]$[suke@cn23154 0903-NUMA3-report-materials_xjz]$ [suke@cn23154 0903-NUMA3-report-materials_xjz]$ls logs/ | head -5; ls logs/ | wc -l
+bash: suke@cn23154 0903-NUMA3-report-materials_xjz: syntax error: invalid arithmetic operator (error token is "@cn23154 0903-NUMA3-report-materials_xjz")
+614
+[suke@cn23154 0903-NUMA3-report-materials_xjz]$这是吗？

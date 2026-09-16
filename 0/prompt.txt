@@ -1,0 +1,150 @@
+你看看这是上传了什么？Task 1 验证全部通过。进入文档更新：先实测各质量级用例数（README 计数以实测为准）：
+
+● Bash(echo "default(PROD): $(./builddir/sdcshield --list-tests | wc -l)"; echo "beta: $(./builddir/sdcshield --beta --list-tests 2>/dev/null | wc -l)"; echo "skip-lev…)
+  ⎿  default(PROD): 271
+     beta: 275
+     skip-level: 280
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(README.md)
+  ⎿  Added 1 line, removed 1 line
+      147  
+      148  ## 测试用例与检测能力
+      149  
+      150 -当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）共 **273 个用例**：PROD 264、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_
+          -*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。                                                      
+      150 +当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）共 **280 个用例**：PROD 271、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_
+          +*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。                                                      
+      151  
+      152  | 检测域 | 代表用例 | 检测能力 |
+      153  |---|---|---|
+
+● Update(README.md)
+  ⎿  Added 1 line, removed 1 line
+      164  | OpenSSL SHA | `openssl_sha` | SHA-256/384/512 vs golden（需 `ssl_link_type≠none`） |
+      165  | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
+      166  | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
+      167 -| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm` | di/dt 
+          -电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器 |                                                                                            
+      167 +| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512
+          +_gather_scatter_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路 |               
+      168  | ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） 
+           | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别（uint64x2 旋转 ALU + 向量 store/reload/store）、ldr_at_top
+           扫描顺序变体（升/降序交替，区分槽位局部 vs 前进位置特征）、core-179 字节交换往返触发探针组 |
+      169  | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
+      170  
+
+● Update(docs/superpowers/plans/2026-09-14-add-sve512-gather-scatter-arm.md)
+  ⎿  Added 24 lines, removed 1 line
+      50  4. 回归：`./builddir/sdcshield -e zstd19 -t 3000` — `exit: pass`
+      51  5. x86-64 非回归：全部变更在 aarch64 guard 内（meson 检查确认）
+      52  
+      53 -- [ ] Task 1 完成                                                                                                                                         
+      53 +## 验证结果（2026-09-14 实测，基座 origin/main 38eb721）                                                                                                  
+      54 +                                                                                                                                                          
+      55 +基座说明：开始集成时本地 main 落后 origin/main 12 个提交（上游 movbe 系列 + rowmajor                                                                      
+      56 +移入恰好改了同一个 tests/cpu/arm64/meson.build），已将 feat/sve512-gather-scatter-arm                                                                     
+      57 +重置到 origin/main 后重放 SVE 库块，使验证状态 == 合并后状态。                                                                                            
+      58 +                                                                                                                                                          
+      59 +1. `ninja -C builddir`（reconfigure 后全量）— 318/318 成功，0 error；单独 touch 重编                                                                      
+      60 +   `sve512_gather_scatter_arm.cpp` — 0 warning                                                                                                            
+      61 +2. `--list-tests | grep sve512_gather_scatter_arm` — 已注册（第 271 个）；                                                                                
+      62 +   计数实测：PROD 271、+BETA 275、+SKIP 280                                                                                                               
+      63 +3. `-e sve512_gather_scatter_arm -t 1000` — `result: skip`，category                                                                                      
+      64 +   `CpuNotSupported`（本机 Kunpeng 920 无 SVE；框架层 `test compiled with sve`                                                                            
+      65 +   守卫在 fork 前生效，sandstone_run.cpp:1558；测试内 HWCAP_SVE 探测为第二层守卫，                                                                        
+      66 +   与 eigen_svd_cdouble_sve 行为一致）。总体 `exit: pass`，无 SIGILL —— 无 SVE                                                                            
+      67 +   机器上无 SVE 指令泄漏                                                                                                                                  
+      68 +4. 回归：`-e zstd19 -t 3000` — `exit: pass`                                                                                                               
+      69 +5. x86-64 非回归：全部变更在 `host_machine.cpu_family() == 'aarch64'` meson guard                                                                         
+      70 +   内（diff 仅 meson guard 块内新增），x86-64 构建路径不进入该子目录                                                                                      
+      71 +6. SVE 代码生成证据（无 qemu，编译产物反汇编实测）：`ptrue p0.b`、                                                                                        
+      72 +   `ld1d {z0.d}, p0/z, [x0, z1.d, lsl #3]`（gather）、`fmad z0.d, p0/m, z0.d, z2.d`                                                                       
+      73 +   （svmla_f64_x 的 SVE 编码）、`st1d {z0.d}, p0, [x1, z1.d, lsl #3]`（scatter）、                                                                        
+      74 +   `cntd`（svcntd）、标量 golden `fmadd` —— gather/FMA/scatter 数据通路全部真实生成                                                                       
+      75 +                                                                                                                                                          
+      76 +- [x] Task 1 完成                                                                                                                                         
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+      74 +   `cntd`（svcntd）、标量 golden `fmadd` —— gather/FMA/scatter 数据通路全部真实生成                                                                                                
+      75 +                                                                                                                                                                                   
+      76 +- [x] Task 1 完成                                                                                                                                                                  
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Update(README.md)
+  ⎿  Added 1 line, removed 1 line
+      39  sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel gtest-devel
+      40  PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
+      41  ninja -C builddir
+      42 -./builddir/sdcshield --list-tests        # 应列出 264 个 PROD 用例                                                                                                                 
+      42 +./builddir/sdcshield --list-tests        # 应列出 271 个 PROD 用例                                                                                                                 
+      43  ```
+      44  
+      45  > ARM64 要求 Eigen 5.0.0+（系统 Eigen 3.3.x 在 GCC 12+ 下编译失败）。仓库自带 `third-party/eigen5/`，aarch64 构建路径在 `tests/cpu/meson.build` 中直接 `include_directories` 指向它
+
+● 文档就绪。提交（仅本单元的 4 个文件，不含子模块指针漂移和其他未跟踪文件）：
+
+● Bash(git add tests/cpu/arm64/sve512_gather_scatter_arm.cpp tests/cpu/arm64/meson.build README.md docs/superpowers/plans/2026-09-14-add-sve512-gather-scatter-arm.md &…)
+  ⎿  M  README.md
+     A  docs/superpowers/plans/2026-09-14-add-sve512-gather-scatter-arm.md
+     M  tests/cpu/arm64/meson.build
+     … +13 lines (ctrl+o to expand)
+
+● Bash(git commit -m "$(cat <<'EOF'
+      tests/arm64: add sve512_gather_scatter_arm — SVE gather/scatter SDC stress…)
+  ⎿  [feat/sve512-gather-scatter-arm a198ac8] tests/arm64: add sve512_gather_scatter_arm — SVE gather/scatter SDC stress
+      4 files changed, 318 insertions(+), 3 deletions(-)
+      create mode 100644 docs/superpowers/plans/2026-09-14-add-sve512-gather-scatter-arm.md
+     … +10 lines (ctrl+o to expand)
+      tests/arm64: add sve512_gather_scatter_arm — SVE gather/scatter SDC stress…)
+  ⎿  [feat/sve512-gather-scatter-arm a198ac8] tests/arm64: add sve512_gather_scatter_arm — SVE gather/scatter SDC stress
+      4 files changed, 318 insertions(+), 3 deletions(-)
+      create mode 100644 docs/superpowers/plans/2026-09-14-add-sve512-gather-scatter-arm.md
+     … +10 lines (ctrl+o to expand)
+
+  Thought for 7s (ctrl+o to expand)
+
+● 提交完成（a198ac8，基座 origin/main）。推送到远程：
+
+● Bash(git push -u origin feat/sve512-gather-scatter-arm 2>&1; echo "---push-exit=$?---")
+  ⎿  remote:
+     remote: Create a pull request for 'feat/sve512-gather-scatter-arm' on GitHub by visiting:
+     remote:      https://github.com/wangxumarshall/sdcshield/pull/new/feat/sve512-gather-scatter-arm
+     … +5 lines (ctrl+o to expand)
+
+● 完成。sve512_gather_scatter_arm 已构建、验证并推送到远程。
+
+  结果汇总
+
+  推送：feat/sve512-gather-scatter-arm → origin（新分支，单 commit a198ac8，4 文件 +318/-3，未动 main）
+  PR 入口：https://github.com/wangxumarshall/sdcshield/pull/new/feat/sve512-gather-scatter-arm
+
+  基座处理：开始时本地 main 落后 origin/main 12 个提交，且上游恰好改了同一个 tests/cpu/arm64/meson.build（movbe 系列移入）。已将分支重置到 origin/main（38eb721）后重放 SVE 库块 ——
+  验证状态即合并后状态。
+
+  验证（全部真实命令实测）：
+
+  ┌──────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │      项      │                                                                               实测输出                                                                               │
+  ├──────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 构建         │ ninja 318/318 成功；单 TU 重编译 0 warning                                                                                                                           │
+  ├──────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 注册         │ --list-tests 第 271 个：sve512_gather_scatter_arm；计数 PROD 271 / +BETA 275 / +SKIP 280                                                                             │
+  ├──────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 本机运行     │ -e sve512_gather_scatter_arm -t 1000 → result: skip，CpuNotSupported，无 SIGILL（本机 Kunpeng 920 无 SVE，与 eigen_svd_cdouble_sve 框架级 skip 行为一致，守卫在      │
+  │              │ sandstone_run.cpp:1558 fork 前生效）                                                                                                                                 │
+  ├──────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ 回归         │ zstd19 -t 3000 → exit: pass                                                                                                                                          │
+  ├──────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ SVE 代码生成 │ 反汇编实测：ld1d {z0.d}, p0/z, [x0, z1.d, lsl #3]（gather）、fmad z0.d, p0/m（svmla）、st1d {z0.d}, p0, [x1, z1.d, lsl #3]（scatter）、cntd、ptrue p0.b 全部生成     │
+  ├──────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ x86-64       │ 全部变更在 cpu_family() == 'aarch64' meson guard 内                                                                                                                  │
+  │ 非回归       │                                                                                                                                                                      │
+  └──────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  说明两点：
+  1. 本机无 SVE 也无 qemu，SVE 数据通路的“真实运行”只能验证到代码生成 + 干净 skip 层面（计划中约定的验收标准）；在 SVE 硬件上的实际 pass 需后续在 SVE 机器上复验。
+  2. 工作树中遗留的子模块指针漂移（third-party/rpms）和 findings.md/progress.md 等未跟踪文件不属于本单元，未纳入提交。
+  ⎿  Stop says: [planning-with-files] Task in progress (1/5 phases complete). Update progress.md before stopping.

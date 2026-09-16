@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M2N8AS4VW8750FH7BJS7BPSH",
+  "strategy": "manual-commit",
+  "branch": "feat/vendor-isa-l",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "third-party/isa-l/.gitignore",
+    "third-party/isa-l/build.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2643,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 484224,
+    "output_tokens": 1463,
+    "api_call_count": 7
+  }
+}

@@ -1,0 +1,231 @@
+这八个测试用例把程序跑崩溃了，这是两份报告。cn23154 NUMA3/core139 SDC 故障微架构诊断报告
+日期: 2026-09-15
+节点: cn23154, 2 socket x 304 核 (608 核), CPU implementer 0x48 (HiSilicon, MIDR 0xd22 TaiShan 系), 2.0 GHz, Kylin V10, kernel 5.10.0-285, 无 SMT, SVE/SVE2, NUMA3 = node3 (cpus 114-151)
+诊断对象: test.cpp / testwang 在 cpu139 的 "运行结果错误" (用户判为 139 核 SDC), 及同目录 4 份 MPI 崩溃日志
+材料目录: /home/share/suke/0903-NUMA3-report-materials_xjz
+0. 结论摘要
+testwang 在 139 上的 "FAIL" 不是 SDC, 是期望值公式过时的软件误报。 代码实际语义 (RADIUS=6) 的精确结果恰为 1.5 * iterations * (j+1), 与观测 bit-exact 相等 (j=15: 1.5e8 x 16 = 2400000000, 与日志一致)。5 次重跑 + 跨核 (137/140/303) 结果完全相同 — 确定性排除随机损坏。
+真实故障在同一批材料的 4 次 MPI SEGV 中。 位级剖析得到统一签名: 故障地址低 48 位完好 (全部精确落在合法映射区 0x0000_4001_xxxx_xxxx, 与 1250 万样本 x8 指针 trace 的域吻合), 仅 bit>=48 破坏 (2 例单 bit: bit52/bit50; 2 例多位散布) → 非规范虚拟地址 → translation fault → SEGV。
+故障 100% 锚定 NUMA3 (cpus 114-151)。 3 种绑核布局 (ppr / rotate+1 / rotate+2), 崩溃 rank 索引漂移 (3→2→1) 但物理 CPU 组不变 (JOB MAP 实测全部绑 114-149); 两个独立代码库 (jzp 副本与 jiachaopeng 原库) 的二进制都只在绑 NUMA3 的 rank 上崩。4/4 崩溃 vs 其余 60 个 rank 实例 0 崩溃。
+微架构定位: 虚拟地址通路 (指针寄存器读出 → 旁路前递 → AGU → LSU → MMU 请求) 的罕见瞬态损坏, 且具指令组合特异性: 触发组合 = SVE ld1rd (复制装载) / stnt1d (非临时存储) + 每迭代从栈上重装载 base 指针 + 谓词重装载。同节点 HPL 满载 ~70 h (94 cycles) 与 sdcshield eigen 68.65 h 均零异常 — 通用负载打不出该路径。
+SDC 语义闭环: 高位 (>=48) 破坏才崩 (可见的 4 例是抽样); 同一机制破坏低位时落入同数组/同页 → 静默错读错写 = 真 SDC (未直接观测, 机理必然存在)。本故障可见形态是 SEGV、静默形态是 SDC, 二者同源。
+定位粒度诚实声明: 4 次崩溃的绑核均为 36-cpu 粒度 (114-149) 且 OMP 线程组内可迁移, 现有数据无法区分 "139 单核" 与 "NUMA3 簇内共享因素"。139 是组内首要嫌疑 (用户先验), "仅 139" 未获直接证据 (HPL 已被 rank_wrap 修复排除在 139 之外运行, 其 70 h 无事不能为 139 洗白)。
+芯片设计改进建议见 §6; 后续验证路径见 §7。
+1. testwang "FAIL" 判定: 软件误报, 非 SDC
+1.1 数学闭环
+参数: RADIUS=6, B_TILE=16, coord=10, extent=56, stride=64, iterations=1e8, coeff[r]=0.125, src[i]=i%16+1, s_base = src + 106416 (偏移 10240, 10240%16==0)。
+
+对每个 r∈[1,6]: coord>=r 恒真 (10>=6), coord+r<extent 恒真 (16<56) → 两个方向分支全部执行。
+off = rstrideB_TILE = 1024r 个元素; 10240±1024r 均为 16 的倍数 → 所有加载地址 lane j 对应元素 (10240±1024r+j)%16+1 = j+1。
+
+每次调用每 lane 累加 = 2 方向 x 6 半径 x (j+1) x 0.125 = 1.5x(j+1);
+1e8 次迭代 → result[j] = 1.5e8 x (j+1)。j=15 → 2.4e9 = 2400000000, 与日志 bit-exact 相等。0.125 为 2 的幂, 全程无舍入 — 结果是代码语义的精确值。
+
+1.2 佐证与确定性
+生产源头 src/include/stencil_kernel.h:15 与 src/include/poisson_solver.h:23 均 radius = 6 → test.cpp 的 RADIUS=6 正确, 源注释 "RADIUS=4: 2x4x0.125=1.0" 是 RADIUS=4 时代遗留, 期望公式 iterations*(j+1) 随之过时。
+确定性: logs/sdc_probe_20260915T112157.log 3 次重跑 + 此前 2 次, 共 5 次 bit-identical; cpus 137/140 (NUMA3 其他核) 与 303 (另一 socket) 结果完全一致。
+SDC 行为学判据 (随机 / 不可重复 / 单 lane 突发偏差) 全部违反: 系统性、可重复、全 lane 一致 1.5 倍。
+结论: "139 上结果错误" 应重新表述为 "139 上运行了一个自检公式过时的基准"。testwang 本身仍是合格的指令组合复现器 (其热循环含 ld1rd), 只是判据失效 (修复见 §7.1)。
+
+2. 真实故障: 4 次 SEGV 的位级剖析
+崩溃日志    二进制    崩溃 rank    绑核 (JOB MAP 实测)    si_addr    高 16 位 XOR    破坏位    故障指令 (符号化)
+run.log    jzp 副本    3    114-149 (ppr)    0x104001d323a3c8    0x0010    bit 52 (单)    ld1rd {z0.d},p0/z,[x8] @+0x250280, laplacian_opt.cpp:60
+ppr.shift0    jzp 副本    3    114-149    0xe80400118a1c940    0x0E80    55,57,58,59    stnt1d {z0.d},p0,[x9] @+0x24e3b0, laplacian_opt.cpp:134
+rotate.shift1    jiachaopeng 原库    2    114-149    0x25a64001aa91f3c0    0x25A6    49,50,53,55,56,58,61    +0xa19e4 (二进制无读权限, 未验证)
+rotate.shift2    jiachaopeng 原库    1    114-149    0x44001a0d27770    0x0004    bit 50 (单)    +0xa1a64 (同上)
+(XOR 基准: 合法映射区 0x0000_4001_xxxx_xxxx; 低 48 位保留原值假设下, 高 16 位与合法值 0x0000 的异或。)
+
+2.1 四个共同不变量 (4/4)
+低 48 位完好: 全部是合法堆地址 (0x4001xxxxxxxx, 与 rank3-x8.log / rank3-x8_.log 合计 12,523,200 个 pc 采样中的 coeff 指针域 0x4001xxxxxxxx 一致)。
+破坏仅在 bit 48-63: 恰为 ARMv8 48-bit VA 规范地址边界之上 → 非规范地址 → translation fault。
+故障指令均为 SVE 访存 (已验证 2 例: 复制装载 ld1rd、非临时存储 stnt1d — 读、写两条路径都中招, 共同点是地址通路)。
+崩溃 rank 恒绑 114-149: ppr 布局崩 rank3, rotate+1 崩 rank2, rotate+2 崩 rank1 — rank 索引随布局漂移, 物理 CPU 组不变。这是排除软件路径、钉死硬件域的关键实验设计成果。
+2.2 位模式解读
+单 bit 翻转 (bit52、bit50, 不同位) 与多位散布 (0x0E80、0x25A6, 无公共位) 并存 → 掉单一 stuck-at; 与瞬态失效 (setup/hold 违例 → 亚稳态, 或粒子翻转) 特征一致。
+4/4 全落在 bit 48-63 这 "高 16 位切片" 内, 而 bit 32-47 破坏同样会导致 SEGV 却 0/4 出现 — 若损坏均匀随机, 此分布概率约 2^-4, 提示高位切片/通路特异性 (但需计入选样偏差, 见 §4.3)。
+2.3 剔除 "Failing at address" 二次值
+每份日志第二处理块 (Signal code: (-6) = SI_TKILL) 的 "Failing at address: 0x6ed200228c24 / 0x32c2b2 / 0x23131 / 0x3bfd7" 是 tgkill 转发信号的 si_addr 垃圾字段 (SI_TKILL 不填 si_addr), 与硬件故障地址无关, 已从证据链剔除。权威地址是第一行内核 si_addr (address not mapped to object at ...)。
+
+3. 排除链
+假设    掃除证据
+特定软件 bug (单二进制)    两个独立代码库 (jzp 副本 / jiachaopeng XLSDFT-zy) 同签名崩溃; 同二进制其余 60 个 rank 实例零崩溃
+rank 相关 (数据/代码路径差异)    rotate 布局下崩溃 rank 索引 3→2→1 漂移, 恒跟随物理 CPU 组 114-149
+与位置无关的均匀随机 SEU    4/4 全部 NUMA3 绑定 rank (随机命中同一 1/16 布局的联合概率 ~1e-5 量级); HPL 94 cycles x ~45 min 全核满载 (含 NUMA3 其余核) 零崩溃
+NUMA3 内存/DDR 数据损坏    (a) 损坏在 VA (TLB 翻译前), VA 不出核、不经过内存; (b) 指针重装载值在 1250 万次故障 pc 采样中零异常; (c) sdcshield eigen 68.65 h / 939,481 测试零 miscompare; (d) 损坏位恰为 >=48 切片, 随机内存损坏无此结构
+139 核持久性损坏 (FP 数据通路/寄存器堆/标量 LSU)    sve_corecheck 10566 轮 SVE FP 全对; test_w8 2e9 次读回零错; stack_store_load_large 300 轮 64 MiB 零错; sdc_addr_probe 5.3e8 lane-load + 5.07e8 lane-store (stnt1d) + 全阵列扫描零错 — 全部 PASS (统计功效讨论见 §4.4)
+编译器/内核地址生成 bug    同一编译器产物在其余 60 rank 零异常; 4/4 锚定硬件域与软件布局正交
+4. 微架构定位
+4.1 损坏点: TLB 之前的虚拟地址通路
+si_addr = MMU 翻译失败时看到的 VA → 坏 bit 已存在于发往 MMU 的地址请求中。候选路径 (均在核内):
+
+TEXT
+复制
+指针寄存器 (x8/x9) 寄存器堆读出
+  → 旁路/前递网络 (本例关键: ldr x8,[sp,#192] 重装载指针 → 紧邻 SVE 访存作 base 的 load-to-use 前递)
+  → AGU 64-bit 加法 (base + offset)
+  → LSU 请求 → MMU/TLB (此处翻译失败, 故障暴露)
+排除 TLB CAM / 页表损坏: PTE 坏 → 错误 PA, 不会改变 si_addr (si_addr 来自请求 VA)。排除内存侧: VA 不经过内存。故障面收窄为: RF 读出 → 旁路 → AGU → LSU→MMU 请求, 这一段核内虚拟地址通路。
+
+4.2 指令组合特异性 (触发窗口窄)
+触发混合 (SCF/laplacian 核): ld1rd 复制装载、stnt1d 非临时存储、谓词重装载 (ldr p0,[x8])、每迭代从栈上重装载 base 指针 (ldr x8,[sp,#192] → 紧邻访存)。
+反证 (同节点零异常): HPL/DGEMM ~70 h 满载 (94 cycles, 权重含 NUMA3 除 139 外的核)、eigen 68.65 h、139 单核 4 项探针 80 s — 全部干净。
+DGEMM 不用 ld1rd/stnt1d, base 指针驻寄存器不经栈重装载 → 不激活 "load-to-use 前递指针进 SVE 寻址" 路径。
+结论: 故障路径 = SVE 访存 x 栈重装载指针 base x (复制装载/非临时存储变体)。这是低占有率微架构路径 — 常规负载、通用压力测试 (乃至 DFT 扫描) 均难覆盖。
+4.3 SDC 形态学: 可见与不可见的两半
+同一损坏机制, 按落点三种命运:
+
+损坏位    后果    可观测性
+bit >= 48    非规范 VA → translation fault → SEGV    可见 (本次 4 例)
+bit 32-47    落出映射区 → 通常 SEGV    可见 (本组 0/4, 见 §2.2)
+bit 0-31    同数组/同页内错元素 → 错误数据参与计算    静默 = SDC (未被观测, 机理必然)
+注意选样偏差: 低位破坏不崩 → 永远不会被崩溃日志捕获。4 次 SEGV 只是该故障的高位抽样; "只见高位破坏" 部分是幸存者偏差, 但 bit32-47 的 0/4 仍具结构提示性。
+
+正确命名: 虚拟地址通路瞬态损坏故障 — 可见形态 SEGV / 静默形态 SDC, 二者同源。
+
+4.4 为什么 139 单核探针没有复现 (统计功效)
+崩溃节律: rotate.shift1 (15:16:51 启动) 在 rotate.shift2 (15:35:56 启动) 之前即崩 → 顺序执行假设下单次 SCF 满载触发 <= ~19 min。
+80 s 探针即使绑对故障核、即使指令组合命中, 期望事件数 ~= 80/1140 ~= 0.07 → P(观测到 >=1) ~= 7%。探针干净与 "139 有 ~1 次/20 min 量级故障" 在统计上不矛盾。
+且 sdc_addr_probe 未复刻触发组合 (无 ld1rd、无栈重装载 base) — 双重不足, 干净结果是预期内的, 不构成对 139 的排除证据。
+dattach 会话 ~2 min 期限, 会话结束即杀后代 → 本诊断会话无法跑小时级复现, 移交 §7.3。
+4.5 单核 vs 簇: 定位粒度的边界
+4 次崩溃绑核均为 36-cpu (114-149) 粒度, OMP_PROC_BIND=close 下 36 线程覆盖 36 核, 实际执行故障指令的物理核不可追溯。
+不能排除的两种模型: (a) 组内单核故障 (含 139); (b) 簇级共享因素 (L3 域供电/时钟边际 — §4.1 已排除簇共享逻辑结构直接损坏 VA 的可能, 但供电/时序类簇级因素仍在)。
+HPL 94 cycles 无事: rank_wrap 修复后 xhpl 被排除在 139 之外 (cpu139 上 xhpl 计数恒 0), 故不能为 139 洗白; 同时 HPL 指令组合不触发 → 也不能为 NUMA3 其余核定罪。
+裁定: 故障域 = NUMA3 (cpus 114-151) x SCF 指令组合。139 为组内首要嫌疑 (用户先验: 该组内被单独点名过的核), 但 "仅 139" 需 §7.2 逐核隔离实验才能钉死。
+5. 故障模型 (对全部观测的最优解释)
+载压依赖的地址通路瞬态失效: 在 36 线程 SVE 饱和 (簇级压降/时钟偏移窗口) + 特定指令组合 (栈重装载指针 → load-to-use 前递 → SVE ld1rd/stnt1d 寻址) 下, 64-bit 地址数据通路的高 16 位切片存在边际时序路径; 偶发违例使 bit 63:48 锁存垃圾 (亚稳态散布模式, 与 0x0E80/0x25A6 的无规多位图案吻合) 而低位保持正确; 高位垃圾 → 非规范地址 → SEGV (可见), 低位垃圾 → 错元素 (静默 SDC)。
+
+该模型解释: 高位切片特异性、单/多位混合图案、100% NUMA3 锚定、指令组合特异性、HPL/eigen/探针零复现、x8 trace 指令边界采样干净 (瞬态在管线下, ptrace 采不到)。
+
+竞争模型: (i) 粒子翻转 SEU — 无法解释 4/4 锚定 NUMA3 与指令特异性; (ii) DDR/ECC — §3 已排除; (iii) 软件 — 双代码库 + rank 漂移已排除。残差最小的是上述模型。
+
+6. CPU 芯片设计改进建议 (按优先级)
+D1. 地址通路端到端奇偶保护 (核心建议)
+现状: 数据通路有 ECC、取指有奇偶, 但 RF 读出→旁路→AGU→LSU→TLB 的虚拟地址通路全程无保护 — 正是本案例的故障面。
+
+AGU 64-bit 加法器输出附奇偶位 (加法器奇偶可预测, 一级 XOR 树, 面积/时序开销极小);
+旁路网络 (尤其 load-to-use 前递) 随数据传 parity, 消费端校验;
+LSU→MMU 请求总线加 sideband parity, TLB 入口校验后再翻译;
+校验失败触发 pipeline replay (重放该指令) 而非放行 → 把 SDC 变为可恢复事件、把 SEGV 变为可计数 RAS 事件。
+D2. 地址通路错误升格为一等 RAS 事件 + 可观测性
+现状: bit>=48 损坏表现为 translation fault, 与 "页不存在" 不可区分; 本节点 EDAC/dmesg 对硬件错误零可见。
+
+定义 address-path parity error 内部错误中断 + per-core/per-cluster 计数器 (正确/单 bit/多 bit 分桶);
+固件/ACPI 暴露给 OS。本案例若有此机制, 4 次 SEGV 直接读作 cluster-3 address parity err x4, 诊断从数天缩到分钟;
+记录坏 bit 位置分布 — 本例 "高 16 位切片特异性" 就是现成的物理设计线索。
+D3. 非规范地址错误的区分上报
+MMU 将 "请求地址非规范/奇偶错" 与 "翻译失败 (页不存在)" 分开编码进 ESR/信号 — OS 与诊断工具可自动分类, 不再一律 SIGSEGV 掩盖根因。
+
+D4. SVE 低占有率访存路径的 DFT / 时序签核覆盖
+触发组合 (ld1rd 复制装载、stnt1d 非临时存储、谓词重装载、栈重装载指针作 SVE base) 均为低占有率路径。本案例证明存在覆盖真空: HPL 70 h 无异常 vs SCF <=20 min 100% 崩溃。
+
+SVE 全访存指令 x 全寻址模式 x 前递源组合的结构性时序路径审计;
+制造测试加入 "指针重装载 → 紧邻 SVE 访存" 定向序列 (含电压/频率 Shmoo);
+现场诊断固件内置地址通路压力微码, 运维可一键调用。
+D5. 簇级故障隔离 RAS 特性
+故障域 = 36 核簇 (L3 域)。建议: 簇内地址通路错误计数超阈值 → 固件标记 cluster degraded → OS 调度器绕开。本案例即可摘除 NUMA3 保住 572 核产能, 而非整节点不可用/不可信。
+
+D6. 关键指针的软硬协同防护 (近期可落地)
+
+仿 ARM MTE/CHERI 思路: 指针带 tag/校验副本, 使用前验证高位。软件侧先行: 关键循环 base 指针双副本 + 比对 (编译器 pass 或库实现, 数行代码);
+AGU 双份冗余计算 + 比对 (64-bit 加法器复制, 面积约数百门/核) — 与 D1 互补, 防共模。
+D7. 电压/时序边际自适应
+若 §7.4 证实载压依赖: 簇级关键路径延迟传感器 + SVE LS 管线饱和场景下的轻微压降补偿 (微降频 1-2%)。
+
+7. 后续验证路径 (移交建议)
+修复 test.cpp 判据 (一行): expected = 1.5 * iterations * (j+1) 并更新注释 — 使其成为合格复现器 (改动前保留原文件作证据)。
+逐核隔离: 同一 MPI 作业依次单绑 cpus 114-151 每核 (或 36 个单核作业对照) — 钉死 "簇 vs 单核"; 若单核复现且为 139, 用户先验得证。
+定向微基准长时复现: 复刻触发组合的微循环 (ldr x8,[sp,#imm] → ld1rd/stnt1d [x8,x9,lsl #3] + 谓词重装载), 36 线程, 绑 114-149, 原生作业提交 (绕开 dattach ~2 min 会话期限), 目标 >= 数小时; 预期 <=20 min 量级复现。
+RAS 通路: 申请 dmesg/EDAC 权限或读 IPMI SEL — 若存在 D2 类机制可直接读硬件计数。
+电压/频率边缘对照: 同负载降频 5%/10% — 复现率下降则证实 §5 时序边际模型。
+原厂渠道: 将位级签名 (高 16 位切片、单/多位混合、指令组合特异性、簇锚定) 提交 TaiShan 原厂做物理设计比对。
+附录 A: 证据清单
+文件    内容
+run.log    原始崩溃 (ppr, rank3): si_addr 0x104001d323a3c8, pc +0x250280 = ld1rd, laplacian_opt.cpp:60
+logs/log.debug.cn23154.ppr.shift0    ppr 布局崩溃: si_addr 0xe80400118a1c940, pc +0x24e3b0 = stnt1d, laplacian_opt.cpp:134; JOB MAP rank3→cores 114-149
+logs/log.debug.cn23154.rotate.shift1    rotate+1 崩溃: si_addr 0x25a64001aa91f3c0; JOB MAP rank2→cores 114-149; jiachaopeng 二进制
+logs/log.debug.cn23154.rotate.shift2    rotate+2 崩溃: si_addr 0x44001a0d27770; JOB MAP rank1→cores 114-149; jiachaopeng 二进制
+logs/log.debug.cn23154.rotate.shift0    0 字节 (未运行成功, 无效)
+rank3-x8.log / rank3-x8_.log    故障 pc 处 x8 寄存器 trace, 合计 12,523,200 样本, 18 个唯一值全合法, 零异常
+src/a.out 符号化    addr2line: +0x250280→laplacian_opt.cpp:60; +0x24e3b0→:134; +0x24e360→:129; +0x24e5d8→:99
+logs/sdc_probe_20260915T112157.log    testwang 5 次运行确定性记录
+src/include/stencil_kernel.h:15    radius = 6 (生产佐证)
+sdc_addr_probe.c (本报告新增探针)    SVE 地址通路 load + stnt1d store 完整性, cpu139 上 80 s CLEAN (VL=8, 5.3e8 lane-load + 5.07e8 lane-store + 全阵列扫描)
+sve_corecheck / test_w8 / stack_store_load_large    139 FP 数据通路 / RF+回读 / 栈完整性探针, 全 PASS
+/home/share/suke/crash-extract-20260911/ANALYSIS.md    佐证: 本节点 sdcshield 68.65 h / 939,481 测试零 SDC (排除内存侧常发损坏)
+cn23154 NUMA3 SEGV/SDC 指令级微架构诊断报告 (v2)
+日期: 2026-09-15 (v1: SDC_DIAGNOSIS.md, 本篇为指令级深化版)
+节点: cn23154, 2 socket x 304 核 (608 核), HiSilicon MIDR 0x480fd220 (0xd22, r0p0), Kylin V10, kernel 5.10.0-285
+工具链事实: 故障二进制 = BiSheng Enterprise 5.2.0 clang 19.1.7 -O0 构建; 节点 gdb 11.1 可用; RAS 扩展在 (ARM64_RAS_EXTN=y) 但事件零上报
+证据: 4 次 MPI SEGV (run.log / ppr.shift0 / rotate.shift1 / rotate.shift2), 全部绑核 cpus 114-149 (JOB MAP 实测)
+0. 结论摘要
+根因裁定: 核内虚拟地址生成通路 (RF 读出 -> load-to-use 旁路前递 -> AGU -> SVE LSU 地址入端) 的载压相关瞬态时序失效, 损坏位集中在 VA[55:48], 跨核簇 (114-151) 锚定, 不依赖特定指令流。
+
+v2 新增的指令级证据链 (相对 v1):
+
+def-chain 同构性 (决定性): 4/4 故障窗口的 base 指针 def-chain 完全同构 — 都是 "刚从栈槽 ldr 装载 -> 2-3 条指令内进 SVE 访存 base" (run.log: ldr x8,[sp,#56] -> add -> ld1rd [x8]; ppr.shift0: ldr p0,[x8] + ldr x9,[sp,#192] -> stnt1d [x9])。-O0 全栈中介构建使每次访存都穿过 load-to-use 前递窗口。
+TBI 语义实测: TCR_EL1.TBI0=1 — 顶字节 VA[63:56] 损坏被硬件静默忽略 (实测 topbyte=01/56/ab/ff 均正常读写), VA[55:48] 才触发 SEGV。两位多 bit 损坏事件横跨两带 (ppr.shift0 含 57-59, rotate.shift1 含 56/58/61) → 底层事件是多位的, SEGV 只是其受检带切片。
+核态事实: 故障簇 114-151 恰为内核 cluster_cpus_list (一个 cluster = 整个 NUMA3 域 = L3 域) — 簇锚定与微架构供应域 (cluster 级共享供电/时钟网格) 对齐; 无独立 L3 sysfs 条目 (缓存层级呈 L1d 32K/I 32K/L2 768K + cluster 级共享层级)。
+探针统计上界: 复刻窗口的 A/B/C/S 判别探针在故障簇 100 s (4.2e10 窗口/变体) 与对照簇同级别均零事件 → 事件率 < 1e-10/窗口; 与 SCF 满载 ~19 min 复现节律不矛盾 (100 s 只覆盖 ~9% 事件窗)。
+testwang 对照: 同 -O0 构建但单线程且用 ld1d (非 ld1rd), 1e8 次迭代零异常 — 故障需要 MPI x 36 OMP 线程簇饱和上下文, 单核单线程打不出。
+寄存器现场不可得: systemd-coredump 目录空, journal 无权限, 无应用 core — 但 12.5M 样本 x8 ptrace trace 全干净 → 架构寄存器值正确, 损坏在非架构在途段 (旁路网络/LSU 内部), 不在寄存器堆或栈内存。
+RAS 静默佐证: CONFIG_ARM64_RAS/ACPES/GHES/SEA 全开而事件零上报 — 与 "地址通路无检测器" 的微架构结论互相印证 (数据通路有 ECC、取指有奇偶、地址通路裸奔)。
+SDC 关联: VA[47:0] 损坏 = 同页错元素 = 静默 SDC。同机制低位打点不可观测 — 4 SEGV 是高位抽样, SDC 部分无日志、无迹可查, 只能靠机理推断其存在。
+
+1. 指令级证据: def-chain 同构性
+1.1 run.log 故障窗口 (pc +0x250280, ld1rd, laplacian_opt.cpp:60)
+TEXT
+复制
+250270: ldr  x8, [sp, #56]      <- coeff 指针从栈槽现装载   [L1]
+250274: ldr  x9, [sp, #32]      <- r 从栈槽现装载          [L2]
+250278: add  x8, x8, x9, lsl #3 <- AGU: x8 = coeff + r*8
+25027c: ptrue p0.d              <- 谓词寄存器重建
+250280: ld1rd {z0.d}, p0/z, [x8]   <- 故障点: SVE 复制装载, base=前递值
+1.2 ppr.shift0 故障窗口 (pc +0x24e3b0, stnt1d, laplacian_opt.cpp:134)
+TEXT
+复制
+24e39c: ldr  x8, [sp, #152]     <- 谓词源指针现装载
+24e3a0: ldr  p0, [x8]           <- 谓词从内存现装载
+24e3a4: ldr  x8, [sp, #192]     <- dest 指针 (d_base) 现装载  [L3]
+24e3a8: ptrue p1.d
+24e3ac: ld1d  {z0.d}, p1/z, [x29, #-4, mul vl]  <- 从 SVE 栈帧读结果
+24e3b0: stnt1d {z0.d}, p0, [x9] <- 故障点: SVE 非临时存储, base=前递值
+(rotate.shift1/2 的 jiachaopeng 二进制无读权限, def-chain 未验证 — 诚实标注。)
+
+1.3 同构性判读
+两个已符号化窗口的共同微架构特征:
+
+特征    run.log (ld1rd)    ppr.shift0 (stnt1d)
+base 指针来源    刚装载 (ldr x8,[sp,#56])    刚装载 (ldr x9,[sp,#192])
+装载到消费距离    2 条指令    2 条指令
+谓词    ptrue 现重建    ldr p0,[x8] 现装载
+访存类型    SVE 读 (复制装载)    SVE 写 (非临时)
+寄存器消费形式    base+缩放偏移 (AGU)    纯 base (无偏移)
+判读: 载读到 base 计算再到 SVE 访存 base 输入的 2-3 指令链, 两种不同指令 (读/写) 都在同一窗口内中招 — 损坏位置在两者共用的段: 载入数据的旁路前递网络与 SVE LSU 的地址入端, 而非某指令专属的数据通路 (fmla 数据通路在两个窗口都不参与, 已天然排除)。
+
+1.4 为什么 -O0 构建放大暴露率
+-O0 全栈中介 (每次访存 base 都经栈槽往返) 使热循环内每条访存指令的地址都来自 "1-3 条指令前的载入" → 几乎 100% 命中 load-to-use 前递路径。优化代码 (HPL/DGEMM, base 指针寄存器驻留) 不走这条路径 → HPL 70 h 满载零异常。这不是 "软件写法不好", 是微架构弱路径被特定代码形态系统性激活。
+
+2. TBI 位带实测与位模式整合
+实测 (tbi_test.c, 节点运行):
+
+探测    结果
+topbyte=01/56/ab/ff (VA[63:56])    rc=0 全部正常读写 — TBI ON
+bit52 / bit49 (VA[55:48])    rc=11 SIGSEGV — 受检带
+页内偏移 (+8)    rc=0 — 无损坏对照
+位带划分 (ARMv8, 48-bit VA, TBI0=1):
+
+位带    硬件行为    损坏后果    可观测性
+VA[63:56] 顶字节    TBI 静默忽略    无害 (地址仍正确)    无声
+VA[55:48]    规范性检查 → SEGV    崩溃    可见 (4 例)
+VA[47:0]    页内偏移    同页/同数组错元素    静默 SDC
+整合 4 例位模式 (XOR vs 合法区 0x0000_4001_xxxx_xxxx):
+
+崩溃    损坏位    TBI 带 (63-56)    受检带 (55-48)    SDC 带 (47-0)
+run.log    {52}    0    1    0
+rotate.shift2    {50}    0    1    0
+SEGV-可见加权        0    2/2    0/2
+ppr.shift0    {55,57,58,59}    3 (57-59)    1 (55)    0
+rotate.shift1    {49,50,53,55,56,58,61}    3 (56,58,61)    4 (49,50,53,55)    0
+全事件加权        6    6    0
+。你思考一下推理。

@@ -1,0 +1,1 @@
+当前 builddir/sdcshield 为什么有250MB这么大，是带debug和符号吗？

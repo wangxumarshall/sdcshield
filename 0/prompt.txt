@@ -1,0 +1,53 @@
+[suke@cn23154 sdcshield]$ ./builddir-oneclick/sdcshield --list-tests | grep stencil
+[suke@cn23154 sdcshield]$ ls -la tests/cpu/arm64/sve512_stencil_axis_arm.cpp
+-rw-r--r-- 1 suke eapp 8694 Sep 16 11:39 tests/cpu/arm64/sve512_stencil_axis_arm.cpp
+[suke@cn23154 sdcshield]$ grep -n stencil tests/cpu/arm64/meson.build
+142:        'sve512_stencil_axis_arm.cpp',
+[suke@cn23154 sdcshield]$ sha256sum tests/cpu/arm64/sve512_stencil_axis_arm.cpp
+6e71868863b7a526d160bde52dfbe52d76f38c2e9c3cca0ecebea7b41a6079c3  tests/cpu/arm64/sve512_stencil_axis_arm.cpp
+[suke@cn23154 sdcshield]$，这是前几行/**
+ * @copyright
+ * Copyright 2026.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * @test @b sve512_stencil_axis_arm
+ * @parblock
+ * SCF/stencil axis-kernel SDC trigger replicator — verbatim port of the
+ * standalone example.cpp reproducer for the cn23154 NUMA3 virtual-address
+ * path fault. Hot-loop structure preserved exactly, including the
+ * svdup_f64(coeff[r]) coefficient loads (ld1rd replicate-load codegen
+ * under clang — one of the fault-window instructions), the dual-vector
+ * svmla_x chain, the temp/res0 spacing assignments, the full unroll
+ * pragma, the memory-resident file-scope loop counter and the
+ * per-iteration VA[63:48] canary on the accumulator's stack slot.
+ *
+ * Math (per the field diagnosis, production stencil_kernel.h radius=6):
+ * with src[i] = i%16+1 and coeff[r] = 0.125, every lane accumulates exact
+ * integers — per call per lane j the increment is
+ *   2 directions x 6 radii x (j+1) x 0.125 = 1.5 x (j+1),
+ * so the exact expected result is 1.5 * iterations * (j+1). The original
+ * standalone carried the stale RADIUS=4 expectation iterations*(j+1);
+ * the diagnosis (5 bit-identical reruns, identical results on healthy
+ * cores) proved that was a software false positive, fixed here per the
+ * report's follow-up item 7.1.
+ *
+ * Framework adaptations (each forced by the harness, structure-neutral):
+ *   - main() -> test_init/test_run/test_cleanup; src and s_base are set
+ *     up once in init and shared read-only across CPU threads;
+ *   - the file-scope loop counter j is thread_local: sdcshield runs one
+ *     test_run per CPU concurrently and a plain global would be a
+ *     cross-thread data race (false FAILs); TLS keeps it memory-resident
+ *     exactly as the original intended;
+ *   - coeff stays a stack-local table in test_run (the ld1rd source);
+ *   - the canary's printf -> log_warning;
+ *   - #pragma clang loop unroll(full) guarded by __clang__ (GCC -Wall
+ *     warns on the unknown pragma; clang builds — the field toolchain —
+ *     see it unchanged);
+ *   - per-lane results are logged only on mismatch; chrono timing
+ *     dropped (the framework times tests itself).
+ *
+ * Requires 512-bit SVE (svcntd() == 8); other SVE vector lengths return
+ * a clean EXIT_SKIP, non-SVE CPUs are skipped by the framework's
+ * compiler-feature gate. Built only on aarch64.
+ * @endparblock
+ */，

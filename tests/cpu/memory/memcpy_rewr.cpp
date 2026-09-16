@@ -46,6 +46,8 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/types.h>
+#include <unistd.h>   /* access() for conf-existence probe */
+#include <cerrno>     /* ENOENT/ENOTDIR discrimination     */
 
 #include "list.h"
 #include "strategy_config.h"
@@ -554,6 +556,57 @@ static role role_for_cpu(memcpy_rewr_state *st, int cpu)
     return (cpu % 2 == 0) ? ROLE_PRODUCER : ROLE_CONSUMER;
 }
 
+/* ---- default-mode parameters (no conf file: original-tool semantics) ----
+ * Read MemAvailable from /proc/meminfo, in KiB; -1 if unreadable.
+ * Each meminfo line is "Key:  value kB" — consume the whole line so the
+ * trailing unit token cannot desynchronise the fscanf scan.
+ */
+static long read_mem_available_kib(void)
+{
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f)
+        return -1;
+    long val = -1;
+    char key[64];
+    while (fscanf(f, "%63s %ld", key, &val) == 2) {
+        if (strcmp(key, "MemAvailable:") == 0)
+            break;
+        val = -1;
+        int c;
+        while ((c = fgetc(f)) != EOF && c != '\n')
+            ;
+    }
+    fclose(f);
+    return val;
+}
+
+/*
+ * Default-mode block_size: scale the per-transfer payload to the largest
+ * value the machine safely affords. Budget = half of MemAvailable spread
+ * over all worker threads, each touching six block_size fronts (consumer:
+ * m_tester b1..b5; producer: m_tmp — 6 is a conservative upper bound since
+ * a thread only ever touches its own role's buffers). Clamped to
+ * [64 KiB (reference-table floor), c_size (struct field width — also the
+ * original tool's g_size>c_size overflow boundary)]. Returns bytes.
+ */
+static int default_block_size(int threads)
+{
+    const long lo = 64L * 1024;
+    const long hi = (long)c_size;          /* 2 MiB */
+    long mem_kib = read_mem_available_kib();
+    if (mem_kib <= 0 || threads < 1)
+        return (int)lo;                    /* unreadable/minimal: floor */
+    long bytes = mem_kib * 1024L;          /* available bytes   */
+    bytes /= 2;                            /* budget: half      */
+    bytes /= threads;                      /* per worker thread */
+    bytes /= 6;                            /* touched fronts    */
+    if (bytes < lo)
+        return (int)lo;
+    if (bytes > hi)
+        return (int)hi;
+    return (int)bytes;
+}
+
 /* ---- SDCShield test entry points ---- */
 
 static int memcpy_rewr_init(struct test *test)
@@ -597,23 +650,55 @@ static int memcpy_rewr_init(struct test *test)
     }
 #endif
 
-    /* Load the strategy set into the test-owned storage (st->strategy_set)
-     * so the selected Strategy* stays valid for the whole test lifetime -
-     * NOT a pointer into a stack-local that would dangle after init. */
-    if (!strategy_config_load(st->strategy_set, default_conf)) {
-        log_skip(TestResourceIssueSkipCategory,
-                 "memcpy_rewr: strategy config error: %s", st->strategy_set.error.c_str());
-        delete st;
-        return EXIT_SKIP;
-    }
+    /* Resolve the effective conf path exactly as strategy_config_load
+     * would (env override wins, even if empty), so the existence probe
+     * below cannot disagree with the loader. */
+    std::string conf_path = default_conf;
+    if (const char *ov = std::getenv("SANDSTONE_STRATEGY_CONF"))
+        conf_path = ov;
 
+    const Strategy *s = nullptr;
     size_t idx = 0;
-    const Strategy *s = strategy_config_pick(st->strategy_set, "SANDSTONE_STRATEGY_INDEX", &idx);
-    if (!s) {
-        log_skip(TestResourceIssueSkipCategory,
-                 "memcpy_rewr: no strategies available");
-        delete st;
-        return EXIT_SKIP;
+    const int probe_errno = (access(conf_path.c_str(), R_OK) != 0) ? errno : 0;
+    const bool conf_absent = (probe_errno == ENOENT || probe_errno == ENOTDIR);
+    if (!conf_absent) {
+        /* A config is present (or present-but-unreadable): load it; open
+         * and parse failures still skip loudly, exactly as before. */
+        if (!strategy_config_load(st->strategy_set, conf_path)) {
+            log_skip(TestResourceIssueSkipCategory,
+                     "memcpy_rewr: strategy config error: %s",
+                     st->strategy_set.error.c_str());
+            delete st;
+            return EXIT_SKIP;
+        }
+        s = strategy_config_pick(st->strategy_set, "SANDSTONE_STRATEGY_INDEX", &idx);
+        if (!s) {
+            log_skip(TestResourceIssueSkipCategory,
+                     "memcpy_rewr: no strategies available");
+            delete st;
+            return EXIT_SKIP;
+        }
+    } else {
+        /* No config file anywhere: degrade to the original standalone
+         * tool's semantics instead of skipping. Roles split
+         * first-N-producers (N = threads/12 — a 48-core box gets the
+         * reference 4:44 split) via the existing role_rule code path;
+         * block_size scales with MemAvailable (see default_block_size).
+         * SANDSTONE_STRATEGY_INDEX has nothing to index here and is
+         * ignored. */
+        st->strategy_set.strategies.push_back(Strategy{});
+        Strategy &d = st->strategy_set.strategies.back();
+        d.name = "default_original";
+        d.params["role_rule"] = "first_n_producers";
+        d.params["producer_count"] =
+            std::to_string(std::max(1, thread_count() / 12));
+        d.params["block_size"] =
+            std::to_string(default_block_size(thread_count()));
+        s = &d;
+        idx = 0;
+        log_info("memcpy_rewr: no strategy config at %s (errno %d); "
+                 "using original-tool default mode",
+                 conf_path.c_str(), probe_errno);
     }
 
     st->strategy = s;
@@ -653,9 +738,10 @@ static int memcpy_rewr_init(struct test *test)
     test->data = st;
 
     log_info("memcpy_rewr: strategy[%zu]=%s block_size=%d threads=%d "
-             "numa_nodes=%zu arch_timer_freq=%lu",
+             "producer_count=%d numa_nodes=%zu arch_timer_freq=%lu",
              idx, s->name.c_str(), st->g_size, thread_count(),
-             st->numa_ids_sorted.size(), user_archtimer_get_cntfrq());
+             st->producer_count, st->numa_ids_sorted.size(),
+             user_archtimer_get_cntfrq());
     return EXIT_SUCCESS;
 }
 

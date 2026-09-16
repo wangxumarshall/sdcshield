@@ -27,15 +27,18 @@ ninja -C builddir
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv  # crash backtrace dump
 
 # Vendored compute libraries (third-party/, see list below): on a fresh clone
-# run each build.sh once BEFORE first meson setup — openssl, openblas, sleef
-# (pocketfft needs no prebuild: its header+source are compiled directly).
+# run each build.sh once BEFORE first meson setup — openssl, openblas, sleef,
+# isa-l (pocketfft needs no prebuild: its header+source are compiled directly).
 # Missing install/ dirs degrade gracefully: meson prints a message and the
-# corresponding tests are simply not built.
+# corresponding tests are simply not built (isa-l falls back to system libisal).
 ./third-party/openssl/build.sh      # → install/lib/libcrypto.a (SSL tests default-on)
 ./third-party/openblas/build.sh     # → install/lib/libopenblas.a (openblas_{d,s,z}gemm)
 ./third-party/sleef/build.sh        # → install/lib/libsleef.a (sleef_neon + sleef_sve)
+./third-party/isa-l/build.sh        # → install/lib/libisal.a (isal_igzip + isal_crc*)
 # OpenSSL fallback: if the install dir is absent, meson falls back to system
 # libcrypto (or disables SSL tests with a message).
+# isa-l fallback: same two-tier gate — vendored install/ first, system libisal
+# second, message + no isal_* tests if neither.
 # SSL tests (openssl_sha + ipsec suite) are on by default (ssl_link_type=dynamic):
 ./builddir/sdcshield --list-tests | grep -c ipsec     # 46 ipsec tests
 ./builddir/sdcshield -e openssl_sha -t 3000 -n 1      # linked statically — no libcrypto.so runtime dep
@@ -44,7 +47,7 @@ ninja -C builddir
 ./builddir/sdcshield -e sleef_neon -t 5000 -n 1       # SLEEF NEON transcendentals
 ./builddir/sdcshield -e sleef_sve -t 2000  # SVE variant: clean skip (CpuNotSupported) on non-SVE hosts
 ./builddir/sdcshield -e pocketfft_fft -t 5000 -n 1   # pocketfft complex FFT
-./builddir/sdcshield -e isal_igzip -t 5000 -n 1      # isa-l deflate/inflate (system libisal, no vendored lib)
+./builddir/sdcshield -e isal_igzip -t 5000 -n 1      # isa-l deflate/inflate (vendored third-party/isa-l, static)
 ```
 
 ## Vendored third-party libraries (`third-party/`)
@@ -55,6 +58,7 @@ Each directory keeps the upstream tarball for provenance plus a `build.sh` that 
 - `openssl/` — OpenSSL 3.5.0, `build.sh` → static `libcrypto.a`; default-enables the SSL tests (`openssl_sha` + 46 `ipsec_*`) with no runtime .so dependency.
 - `openblas/` — OpenBLAS 0.3.29, `build.sh` → static `libopenblas.a` (TARGET=TSV110, single-threaded `USE_THREAD=0` + `USE_LOCKING=1` so per-core worker threads can call cblas concurrently without corrupting the packing-buffer pool); powers `openblas_{d,s,z}gemm`.
 - `sleef/` — SLEEF 3.9.0, `build.sh` → static `libsleef.a` (TLFLOAT=OFF); powers `sleef_neon` (runs on any NEON host) and `sleef_sve` (needs SVE hardware; clean-skips elsewhere).
+- `isa-l/` — Intel isa-l 2.32.1, `build.sh` → static `libisal.a` (Makefile.unx path — no autoconf/nasm on aarch64; the .so and igzip CLI that `make install` also produces are deleted, only the archive + headers are kept); powers `isal_igzip` + the 10 `isal_crc*` tests. Meson prefers this install/ (openssl-style two-tier gate) and falls back to system libisal.
 - `pocketfft/` — pocketfft C edition, header + `.c` committed directly (BSD-3, no build.sh — compiled straight into the test library); powers `pocketfft_fft`.
 - `meson/` — vendored meson 0.59.4 for the openEuler 20.03 container build path.
 - `rpms/` — three git submodules of prebuilt per-OS-version binaries (see README quick start).

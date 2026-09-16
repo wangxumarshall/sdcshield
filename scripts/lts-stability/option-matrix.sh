@@ -125,8 +125,11 @@ run_x24_oncrash_sigsegv() { "$BIN" --on-crash=context -e selftest_sigsegv -vv -t
 run_m25_total_time_mode() { "$BIN" --ignore-timeout -T 10s --strict-runtime --max-test-count 20 -n 8 -o "$OUT/m25.yaml"; }
 
 run_m26_verbose_vv() {
+    # 注:sleef_neon 仅在有 cmake 的构建环境编入(24.03 host/容器);22.03/20.03
+    # 离线容器优雅缺席 → 不能硬引用(会 "Cannot find matching tests" exit 64)。
+    # pocketfft_fft 头直接编译,15 镜像全在。
     local rc=0 t
-    for t in zstd19 crc32 fma openssl_sha sleef_neon; do
+    for t in zstd19 crc32 fma openssl_sha pocketfft_fft; do
         "$BIN" -e "$t" --ignore-timeout -t "$T_SHORT" -n 2 -vv -o "$OUT/m26_${t}.yaml" || rc=$?
     done
     return $rc

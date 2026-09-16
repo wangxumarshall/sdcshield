@@ -1,0 +1,47 @@
+你要在这个机器上运行测试用例，而不是现在的这台机器[251/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o
+FAILED: tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o
+/work_ssd/software/compiler-kupl/bin/clang++ -Itests/cpu/arm64/libtests_arm64.a.p -Itests/cpu/arm64 -I../tests/cpu/arm64 -I. -I.. -Iframework -I../framework -Iframework/sysdeps/linux -I../framework/sysdeps/linux -Iframework/device/cpu -I../framework/device/cpu -I../framework/device/cpu/sysdeps/linux -I/home/share/suke/boost-root/usr/include -fcolor-diagnostics -DNDEBUG -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -std=gnu++20 -O3 -fstack-clash-protection -fstack-protector-strong -DOPENEULER_22_03 -include /home/share/suke/sdcshield/framework/compat/cpp23_polyfill.h -include unistd.h -isystem /home/share/suke/sdcshield/framework/compat -fPIC -DBOOST_ALL_NO_LIB -O3 -g -D_FORTIFY_SOURCE=2 -Wall -Wextra -Wformat -Wformat-security -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-non-virtual-dtor -DSANDSTONE -fno-associative-math -fvisibility-inlines-hidden -march=armv8.1-a+crc+crypto -MD -MQ tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o -MF tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o.d -o tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o -c ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:81:23: error: SVE vector type 'const svfloat64_t' (aka 'const __SVFloat64_t') cannot be used in a target without sve
+   81 |     const svfloat64_t one_half = svdup_f64(1.5);
+      |                       ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:81:34: error: SVE vector type 'svfloat64_t' (aka '__SVFloat64_t') cannot be used in a target without sve
+   81 |     const svfloat64_t one_half = svdup_f64(1.5);
+      |                                  ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:83:24: error: SVE vector type 'const svbool_t' (aka 'const __SVBool_t') cannot be used in a target without sve
+   83 |         const svbool_t pg = svwhilelt_b64((uint64_t)off, (uint64_t)n);
+      |                        ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:83:29: error: SVE vector type 'svbool_t' (aka '__SVBool_t') cannot be used in a target without sve
+   83 |         const svbool_t pg = svwhilelt_b64((uint64_t)off, (uint64_t)n);
+      |                             ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:84:20: error: SVE vector type 'svuint64_t' (aka '__SVUint64_t') cannot be used in a target without sve
+   84 |         svuint64_t vidx = svld1_u64(pg, &d->gather_idx[off]);
+      |                    ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:85:21: error: SVE vector type 'svfloat64_t' (aka '__SVFloat64_t') cannot be used in a target without sve
+   85 |         svfloat64_t v = svld1_gather_u64index_f64(
+      |                     ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:87:9: error: SVE vector type 'svfloat64_t' (aka '__SVFloat64_t') cannot be used in a target without sve
+   87 |         v = svmla_f64_x(pg, one_half, v, v);
+      |         ^
+7 errors generated.
+[252/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/ooo_dep_chain_arm.cpp.o
+[253/278] Compiling C++ object tests/cpu/libtests_crc.a.p/crc_crc32_fixed.cpp.o
+[254/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/neon_test.cpp.o
+[255/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/sme_fmopa_arm.cpp.o
+[256/278] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/adox_arm.cpp.o
+[257/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/neon_rot_2src.cpp.o
+[258/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/crypto_test.cpp.o
+[259/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_sparse_eigen_sparse.cpp.o
+[260/278] Compiling C++ object tests/cpu/arm64/libtests_arm64_sve512.a.p/sve512_gather_scatter_arm.cpp.o
+[261/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_float_dynamic_square_dump.cpp.o
+[262/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_fvectors.cpp.o
+[263/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_double.cpp.o
+[264/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_cdouble.cpp.o
+[265/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd.cpp.o
+[266/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_fvectors.cpp.o
+[267/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_double.cpp.o
+[268/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd.cpp.o
+[269/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_cdouble.cpp.o
+[270/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_cdouble_noavx512.cpp.o
+[271/278] Compiling C++ object tests/cpu/libtests_sve.a.p/eigen_svd_svd_cdouble_sve.cpp.o
+ninja: build stopped: subcommand failed.
+[suke@cn23154 sdcshield]$我们使用cat > 的方法正确输入了程序。但是还是出现了以上fail

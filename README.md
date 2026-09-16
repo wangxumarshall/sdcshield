@@ -182,25 +182,46 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release &&
 ./builddir/sdcshield -e openblas_dgemm,openblas_sgemm,openblas_zgemm,sleef_neon,isal_igzip,pocketfft_fft,openssl_sha -t 30000
 ```
 
-**GEMM 矩阵尺寸扫谱（test knob）**：三个 `openblas_*gemm` 测试的矩阵尺寸默认 256，可经 test knob 扫谱（`-O <testid>.mdim=N`，N∈[16,1024]，越界 fail-loudly）。**必须带测试 ID 前缀**——框架的 TestKeyWrapper 以 `<testid>.<key>` 查找（`framework/test_knobs.cpp`），裸 `mdim=N` 会被静默忽略、回退默认 256。四档谱系（每测试的工作集足迹）：
+**GEMM 矩阵尺寸扫谱（test knob）**：三个 `openblas_*gemm` 测试的矩阵尺寸**默认 256**（512KB/矩阵，L2 域；不传 knob 时行为与历史版本完全一致），可经 test knob 扫谱：`-O <testid>.mdim=N`，N∈[16,4096]，越界 fail-loudly 报错并提示合法域。**必须带测试 ID 前缀**——框架的 TestKeyWrapper 以 `<testid>.<key>` 查找（`framework/test_knobs.cpp`），裸 `mdim=N` 会被静默忽略、回退默认 256（用 `-v` 可在日志中核对每个 knob 的实际生效值）。
 
-| 档位 | dgemm (double) | sgemm (float) | zgemm (complex double) |
-|---|---|---|---|
-| `mdim=64` | 32KB（L1D 域） | 16KB | 64KB |
-| `mdim=256`（默认） | 512KB（L2 域） | 256KB | 1MB |
-| `mdim=512` | 2MB（LLC 域） | 1MB | 4MB |
-| `mdim=1024` | 8MB（DRAM 域） | 4MB | 16MB |
+**每测试每档工作集足迹（每线程 scratch = 3 矩阵；矩阵字节数 = mdim² × 元素宽度）**：
 
-CORE179 探针证明 store→reload 的 cache-domain 是触发判别条件，扫谱让每级缓存的转发路径都被压到。推荐战役（`-O` 可重复传，每测试一个）：
+| 档位 | dgemm (double) | sgemm (float) | zgemm (complex double) | cache 域 |
+|---|---|---|---|---|
+| `mdim=64` | 32KB/矩阵 | 16KB | 64KB | L1D |
+| `mdim=256`（默认） | 512KB | 256KB | 1MB | L2 |
+| `mdim=512` | 2MB | 1MB | 4MB | LLC |
+| `mdim=1024` | 8MB | 4MB | 16MB | DRAM |
+| `mdim=2048` | 32MB | 16MB | 64MB | DRAM/远端 NUMA |
+| `mdim=4096` | 128MB | 64MB | 256MB | 大页/NUMA 交错 |
+
+**全核内存预算表（scratch 合计 = 3 矩阵 × 核数；选档前先对照主机内存）**：
+
+| 核数 | dgemm@1024 | dgemm@4096 | sgemm@4096 | zgemm@4096 |
+|---|---|---|---|---|
+| 128 核 | ~3GB | ~49GB | ~25GB | ~98GB |
+| 512 核 | ~13GB | ~197GB | ~98GB | ~393GB |
+| 2048 核 | ~50GB | ~786GB | ~393GB | ~1.6TB |
+
+（zgemm 内存紧张时推荐档 **512**；1024 档 128 核实测 ~7.7GB。内存不足时 OOM 走 `report_fail_msg` fail-loudly，不是静默或崩溃。）
+
+**推荐战役模式**：
 
 ```bash
+# 模式 A：谱系扫档（cache 域逐层压测；openblas 单独跑避免混跑 cache 污染）
 for m in 64 256 512 1024; do
-  ./builddir/sdcshield -O openblas_dgemm.mdim=$m -O openblas_sgemm.mdim=$m -O openblas_zgemm.mdim=$m \
-    -e openblas_dgemm,openblas_sgemm,openblas_zgemm -t 30000
+  ./builddir/sdcshield -O openblas_dgemm.mdim=$m -O openblas_sgemm.mdim=$m \
+    -O openblas_zgemm.mdim=$m -e openblas_dgemm,openblas_sgemm,openblas_zgemm -t 15m
 done
+
+# 模式 B：混合套件（多样性 = 检出率；默认 256 档，与全部其他测试同跑）
+./builddir/sdcshield -e openblas_dgemm,openblas_sgemm,openblas_zgemm,zstd19,sleef_neon,isal_igzip,pocketfft_fft,openssl_sha -t 30m
+
+# 模式 C：大矩阵深压（大内存主机；4096 档单迭代分钟级，需长窗口，必要时 -n 限并发控内存）
+./builddir/sdcshield -O openblas_dgemm.mdim=4096 -e openblas_dgemm -t 2h        # 或 -n 64 限制并发
 ```
 
-zgemm 推荐档为 **512**（内存紧张主机的保守上限；1024 档全核实测峰值 ~7.7GB，29GB 主机可承受）。mdim>256 档在固定时间窗内迭代数显著减少（计算量按 mdim³ 增长），是计算密度换覆盖广度的交换。
+模式选择依据：CORE179 探针证明 store→reload 的 cache-domain 与跨线模式是触发判别条件（模式 A 逐层覆盖）；文献共识"负载多样性即检出率"（模式 B，详见 `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`）；大矩阵档把分块 GEMM 的 packing/回写路径推进 DRAM 与 NUMA 远端域（模式 C）。mdim>256 档在固定时间窗内迭代数按 mdim³ 骤减，是计算密度换覆盖广度的交换——统计采样请加长 `-t`。
 
 ## 测试用例与检测能力
 
@@ -217,7 +238,7 @@ zgemm 推荐档为 **512**（内存紧张主机的保守上限；1024 档全核�
 | CRC / 校验 | `crc32`、`isal_crc{32,64}_*`、`zpclmul*` | `crc32` 指令、isa-l CRC32/CRC64 各标准、zlib PCLMUL 折叠 |
 | 压缩 | `zlib*`、`zstd*`、`zfuzz`、`isal_igzip` | zlib/zstd 压缩-解压往返、各级别、fuzz、isa-l deflate/inflate 往返 |
 | 线性代数（Eigen） | `eigen_gemm_*`、`eigen_sparse`、`eigen_svd*`（含 `_cdouble_sve`） | GEMM、稀疏 Cholesky、SVD（BDCSVD/Jacobi）施压 FMA/向量 |
-| 线性代数（OpenBLAS） | `openblas_dgemm`、`openblas_sgemm`、`openblas_zgemm` | OpenBLAS NEON FMA 微内核 GEMM（double/float/complex-double），每迭代 copy/compute/verify；矩阵尺寸 `-O <testid>.mdim=N`（16..1024，默认 256）可扫 L1D→L2→LLC→DRAM 工作集（vendored，见上节） |
+| 线性代数（OpenBLAS） | `openblas_dgemm`、`openblas_sgemm`、`openblas_zgemm` | OpenBLAS NEON FMA 微内核 GEMM（double/float/complex-double），每迭代 copy/compute/verify；矩阵尺寸 `-O <testid>.mdim=N`（16..4096，默认 256）可扫 L1D→L2→LLC→DRAM→NUMA 工作集（vendored，见上节） |
 | 超越函数（SLEEF） | `sleef_neon`、`sleef_sve` | sin/cos/exp/log 多项式 FMA 依赖链 × 宽向量，逐字节 golden 比对；`sleef_sve` 需 SVE 硬件（无则干净 skip）（vendored，见上节） |
 | FFT（pocketfft） | `pocketfft_fft` | 复数 FFT：位反转抽取重排（store→load scatter）+ 旋转因子 FMA 蝶形链（vendored，见上节） |
 | IPSec / 密码 | `ipsec_*`（46） | AES-CBC/CTR/GCM、HMAC-SHA1/2、XCBC/CMAC/3DES-DOCSIS 于 NEON |

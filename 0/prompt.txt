@@ -1,0 +1,1 @@
+你用这个./builddir-oneclick/sdcshield -e "sve*" -t 900s 这个格式写，而且只绑定139号核心

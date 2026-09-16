@@ -199,6 +199,16 @@ if host_machine.cpu_family() == 'aarch64'
             # byte-exact vs a scalar golden indexing through the SAME
             # indirection.
             'sve512_gather_scatter_svd.cpp',
+            # SCF/stencil axis-kernel SDC trigger replicator — verbatim
+            # port of the cn23154 NUMA3 field reproducer (example.cpp):
+            # svdup_f64(coeff[r]) coefficient loads (ld1rd replicate-load
+            # codegen under clang), dual-vector svmla_x chain, full unroll,
+            # memory-resident loop counter, per-iteration VA[63:48] canary.
+            # One deliberate semantic fix vs the standalone, per the field
+            # diagnosis (5 bit-identical reruns): the expected value is
+            # 1.5*iterations*(j+1) (RADIUS=6), the stale RADIUS=4 formula
+            # iterations*(j+1) was a software false positive.
+            'sve512_stencil_axis_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

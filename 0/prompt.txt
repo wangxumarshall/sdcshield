@@ -1,0 +1,1 @@
+提交 scripts/sdc_check.sh、scripts/run/

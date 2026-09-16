@@ -686,8 +686,8 @@ static int memcpy_rewr_init(struct test *test)
     } else {
         /* No config file anywhere: degrade to the original standalone
          * tool's semantics instead of skipping. Roles split
-         * first-N-producers (N = threads/12 — a 48-core box gets the
-         * reference 4:44 split) via the existing role_rule code path;
+         * first-N-producers (N = max(1, threads/12) — a 48-core box gets
+         * the reference 4:44 split) via the existing role_rule code path;
          * block_size scales with MemAvailable (see default_block_size).
          * SANDSTONE_STRATEGY_INDEX has nothing to index here and is
          * ignored. */

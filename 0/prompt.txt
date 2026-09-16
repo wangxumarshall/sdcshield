@@ -1,0 +1,67 @@
+===== SDCShield one-click build =====
+src:   /home/share/suke/sdcshield
+build: /home/share/suke/sdcshield/builddir-xupeng
+--- [1/6] probe meson / ninja / compilers ---
+ninja: /work_ssd/software/soft/tool/anaconda3/2023.3/bin/ninja
+meson: python3 /home/share/suke/sdcshield/third-party/meson/meson-0.59.4/meson.py
+C++:   /work_ssd/software/compiler-kupl/bin/clang++ (Huawei BiSheng Compiler clang version 19.1.7 (32f4a0810521))
+C:     cc
+--- [2/6] probe deps (eigen5 / boost / gmp) ---
+boost: /home/share/suke//boost-root/usr/include
+sdc-deps: /home/share/suke//sdc-deps/usr (isa-l / gtest from source)
+PKG_CONFIG_PATH: /home/share/suke/sdcshield/third-party/eigen5:/home/share/suke//boost-root/usr/lib64/pkgconfig:/home/share/suke//sdc-deps/usr/lib/pkgconfig:/home/share/suke//sdc-deps/usr/lib64/pkgconfig
+--- [3/6] detect stdlib (polyfill decision) ---
+stdlib lacks <barrier>: polyfill + gnu++20 + ACL disabled
+--- [4/6] meson setup ---
+The Meson build system
+Version: 0.59.4
+Source dir: /home/share/suke/sdcshield
+Build dir: /home/share/suke/sdcshield/builddir-xupeng
+Build type: native build
+Project name: SDCShield
+Project version: undefined
+C compiler for the host machine: cc (gcc 10.3.1 "cc (GCC) 10.3.1")
+C linker for the host machine: cc ld.bfd 2.37
+C++ compiler for the host machine: /work_ssd/software/compiler-kupl/bin/clang++ (clang 19.1.7 "Huawei BiSheng Compiler clang version 19.1.7 (32f4a0810521)")
+C++ linker for the host machine: /work_ssd/software/compiler-kupl/bin/clang++ ld.bfd 2.37
+Host machine cpu family: aarch64
+Host machine cpu: aarch64
+Program bash found: YES (/usr/bin/bash)
+Program perl found: YES (/usr/bin/perl)
+Program python3 found: YES (/work_ssd/software/soft/tool/anaconda3/2023.3/bin/python3)
+Program sh found: YES (/usr/bin/sh)
+meson.build:30: WARNING: We recommend building SDCShield with the GNU Compiler Collection (gcc). Your build may fail or your executable may not behave as expected.
+Configuring sandstone_short_ids.h with command
+Compiler for C supports arguments -fstack-clash-protection: YES 
+Compiler for C supports arguments -fstack-protector-strong: YES 
+Compiler for C supports arguments -fcf-protection=full: NO 
+Compiler for C supports arguments -mcet-switch: NO 
+Checking if "-Wl,-z,relro" links: YES 
+Checking if "-Wl,-z,noexecstack" links: YES 
+Compiler for C supports arguments -Werror=discarded-qualifiers: YES 
+Found pkg-config: /usr/bin/pkg-config (1.8.0)
+Run-time dependency Boost found: YES 1.78.0 (/home/share/suke/boost-root/usr)
+Check usable header "boost/algorithm/string.hpp" : YES 
+Check usable header "boost/type_traits/is_complex.hpp" : YES 
+Run-time dependency threads found: YES
+Library dl found: YES
+Run-time dependency gtest_main found: YES 1.18.0
+Library atomic found: YES
+Configuring cpu_features.h with command
+Configuring gitid.h with command
+Checking for type "_Float16" : YES 
+Checking for type "_Float16" : YES 
+Checking for function "process_vm_readv" : YES 
+Configuring sandstone_config.h using configuration
+Run-time dependency libzstd found: YES 1.5.0
+Run-time dependency zlib found: YES 1.2.11
+Library isal found: YES
+Library atomic found: YES
+Run-time dependency gmp found: YES 6.2.1
+Library arm_compute found: NO
+
+tests/cpu/arm64/meson.build:18:4: ERROR: File sve512_gather_scatter_svd,cpp does not exist.
+
+A full log can be found at /home/share/suke/sdcshield/builddir-xupeng/meson-logs/meson-log.txt
+[suke@cn23154 sdcshield]$ 
+我这是编译失败了？

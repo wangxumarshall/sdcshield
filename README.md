@@ -251,6 +251,34 @@ zgemm 推荐档为 **512**（内存紧张主机的保守上限；1024 档全核�
 
 > `mce_check` 是真实 EDAC 后端测试（统计 `/proc/interrupts` 的 EDAC `ce/ue_count`），实测 `exit: pass`，非 placeholder。
 
+### `memcpy_rewr`：MPSC memcpy 一致性压测（使用选项与推荐参数）
+
+GlusterFS IOT 调度器衍生的多生产者/单消费者队列 memcpy 一致性压测（ARM64 专属）：producer 经 4 优先级链表队列投递，consumer 对线程私有 `mem_info_s` 的 b1..b5 做五路 memcpy 并逐字节比对——拷贝不崩溃但不一致即为 SDC。角色分配与拷贝长度由策略配置驱动，无 conf 文件时自动退化成原版独立工具的默认模式（不 skip）。
+
+**conf 模式**（`tests/cpu/memory/memcpy_rewr_strategies.conf`，仓库默认提供）——`SANDSTONE_STRATEGY_INDEX` 轮转选策略，`SANDSTONE_STRATEGY_CONF` 覆盖路径：
+
+```bash
+for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_rewr -t 5000; done
+```
+
+| INDEX | 策略 | 拓扑意图 | 推荐场景 |
+|---|---|---|---|
+| 0 | `numa_cross_node`（`numa_split`） | 跨 NUMA 节点 barrage，所有数据移动穿跨 die 一致性 Fabric | 多路/多 NUMA 机器的互联压力 |
+| 1 | `same_die_l3_brawl`（`die_even_odd`） | 同 die/cluster 内 even/odd 核对打，一致性流量锁死在单 L3 slice + ring bus | 单 die 内 L3/环网压力 |
+| 2 | `few_producer_many_consumer_storm`（`first_n_producers`，`producer_count=4`） | 少写多读，诱发目录控制器 Invalidate 广播风暴 | snoop/目录控制器压力 |
+
+**默认模式**（conf 缺席，如 `SANDSTONE_STRATEGY_CONF=/nonexistent`，或部署机无源码树）——参数按机器自适应（全核并行，`test_schedule_fullsystem`）：
+
+- `block_size = clamp(MemAvailable×50% ÷ 线程数 ÷ 6, 64 KiB, 2 MiB)`（6 = 每线程实际触碰的 buffer 前沿数保守上界；2 MiB = `mem_info_s` 字段宽，即原版 `g_size` 溢出边界的安全上限）
+- `producer_count = max(1, CPU核数/12)`（48 核 → 4:44，对齐原版参考参数 p 0..3 / c 0..47）
+- 忽略 `SANDSTONE_STRATEGY_INDEX`；conf 存在但损坏/不可读仍然 loud skip（不静默吞错）
+
+**参考实测**（Kunpeng 920，128 核，MemAvailable ≈ 22.5 GB；`-vv` 日志）：
+
+- 默认模式全核：`strategy[0]=default_original block_size=2097152 threads=128 producer_count=10`（自适应封顶 2 MiB），峰值 RSS ≈ 1.52 GiB，无 OOM
+- conf 三策略全核（`-t 3000`）：`block_size=65536 threads=128 producer_count=4`，三档均 `result: pass`
+- 单跑推荐：`-t 5000` 全核（约 5 s/策略）；策略覆盖推荐 `for i in 0 1 2` 轮转各一轮
+
 ## 运行测试
 
 ```console

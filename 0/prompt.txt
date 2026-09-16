@@ -1,0 +1,126 @@
+[248/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o
+FAILED: tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o 
+/work_ssd/software/compiler-kupl/bin/clang++ -Itests/cpu/arm64/libtests_arm64.a.p -Itests/cpu/arm64 -I../tests/cpu/arm64 -I. -I.. -Iframework -I../framework -Iframework/sysdeps/linux -I../framework/sysdeps/linux -Iframework/device/cpu -I../framework/device/cpu -I../framework/device/cpu/sysdeps/linux -I/home/share/suke/boost-root/usr/include -fcolor-diagnostics -DNDEBUG -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wnon-virtual-dtor -std=gnu++20 -O3 -fstack-clash-protection -fstack-protector-strong -DOPENEULER_22_03 -include /home/share/suke/sdcshield/framework/compat/cpp23_polyfill.h -include unistd.h -isystem /home/share/suke/sdcshield/framework/compat -fPIC -DBOOST_ALL_NO_LIB -O3 -g -D_FORTIFY_SOURCE=2 -Wall -Wextra -Wformat -Wformat-security -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-non-virtual-dtor -DSANDSTONE -fno-associative-math -fvisibility-inlines-hidden -march=armv8.1-a+crc+crypto -MD -MQ tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o -MF tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o.d -o tests/cpu/arm64/libtests_arm64.a.p/sve512_gather_scatter_svd.cpp.o -c ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:2:1: error: unknown type name 'pyright'
+    2 | pyright
+      | ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:3:13: error: expected ';' after top level declarator
+    3 |  * Copyright 2026.
+      |             ^
+      |             ;
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:9:53: warning: missing terminating ' character [-Winvalid-pp-token]
+    9 |  *       * block index pattern matching Eigen BDCSVD's block-of-matrix access.
+      |                                                     ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:19:32: error: expected unqualified-id
+   19 |                               *                 *   - the golden is precomputed once in test_init (read-only in run);
+      |                                                     ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:20:33: error: expected unqualified-id
+   20 |                               *                  *   - the scatter destination is a per-CPU-thread local buffer (the old
+      |                                                      ^
+../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:23:36: error: expected unqualified-id
+   23 |                               *                     *   - the hot loop uses an svwhilelt predicate: 90000 is not guaranteed
+      |                                                         ^
+In file included from ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:32:
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:77:11: error: no member named 'memchr' in the global namespace; did you mean 'wmemchr'?
+   77 |   using ::memchr;
+      |         ~~^
+/usr/include/wchar.h:254:17: note: 'wmemchr' declared here
+  254 | extern wchar_t *wmemchr (const wchar_t *__s, wchar_t __c, size_t __n)
+      |                 ^
+In file included from ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:32:
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:78:11: error: no member named 'memcmp' in the global namespace; did you mean 'wmemcmp'?
+   78 |   using ::memcmp;
+      |         ~~^
+/usr/include/wchar.h:259:12: note: 'wmemcmp' declared here
+  259 | extern int wmemcmp (const wchar_t *__s1, const wchar_t *__s2, size_t __n)
+      |            ^
+In file included from ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:32:
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:79:11: error: no member named 'memcpy' in the global namespace; did you mean 'wmemcpy'?
+   79 |   using ::memcpy;
+      |         ~~^
+/usr/include/bits/wchar2.h:39:8: note: 'wmemcpy' declared here
+   39 | __NTH (wmemcpy (wchar_t *__restrict __s1, const wchar_t *__restrict __s2,
+      |        ^
+In file included from ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:32:
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:80:11: error: no member named 'memmove' in the global namespace; did you mean 'wmemmove'?
+   80 |   using ::memmove;
+      |         ~~^
+/usr/include/bits/wchar2.h:68:8: note: 'wmemmove' declared here
+   68 | __NTH (wmemmove (wchar_t *__s1, const wchar_t *__s2, size_t __n))
+      |        ^
+In file included from ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:32:
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:81:11: error: no member named 'memset' in the global namespace; did you mean 'wmemset'?
+   81 |   using ::memset;
+      |         ~~^
+/usr/include/bits/wchar2.h:131:8: note: 'wmemset' declared here
+  131 | __NTH (wmemset (wchar_t *__s, wchar_t __c, size_t __n))
+      |        ^
+In file included from ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:32:
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:82:11: error: no member named 'strcat' in the global namespace
+   82 |   using ::strcat;
+      |         ~~^
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:83:11: error: no member named 'strcmp' in the global namespace
+   83 |   using ::strcmp;
+      |         ~~^
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:84:11: error: no member named 'strcoll' in the global namespace; did you mean 'strtoll'?
+   84 |   using ::strcoll;
+      |         ~~^
+/usr/include/stdlib.h:200:22: note: 'strtoll' declared here
+  200 | extern long long int strtoll (const char *__restrict __nptr,
+      |                      ^
+In file included from ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:32:
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:85:11: error: no member named 'strcpy' in the global namespace
+   85 |   using ::strcpy;
+      |         ~~^
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:86:11: error: no member named 'strcspn' in the global namespace
+   86 |   using ::strcspn;
+      |         ~~^
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:87:11: error: no member named 'strerror' in the global namespace
+   87 |   using ::strerror;
+      |         ~~^
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:88:11: error: no member named 'strlen' in the global namespace; did you mean 'mbrlen'?
+   88 |   using ::strlen;
+      |         ~~^
+/usr/include/wchar.h:330:8: note: 'mbrlen' declared here
+  330 | __NTH (mbrlen (const char *__restrict __s, size_t __n,
+      |        ^
+In file included from ../tests/cpu/arm64/sve512_gather_scatter_svd.cpp:32:
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:89:11: error: no member named 'strncat' in the global namespace
+   89 |   using ::strncat;
+      |         ~~^
+/usr/lib/gcc/aarch64-linux-gnu/10.3.1/../../../../include/c++/10.3.1/cstring:90:11: error: no member named 'strncmp' in the global namespace
+   90 |   using ::strncmp;
+      |         ~~^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+1 warning and 20 errors generated.
+[249/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_sparse_eigen_sparse.cpp.o
+[250/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/lsu_store_forward_arm.cpp.o
+[251/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/agu_stress_2src.cpp.o
+[252/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/ooo_dep_chain_arm.cpp.o
+[253/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/neon_test.cpp.o
+[254/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/fsu_byteexact_arm.cpp.o
+../tests/cpu/arm64/fsu_byteexact_arm.cpp:185:32: warning: implicit conversion from 'float' to 'uint32_t' (aka 'unsigned int') changes value from 0.5 to 0 [-Wliteral-conversion]
+  185 |             float c = float_of(0.5f);
+      |                       ~~~~~~~~ ^~~~
+1 warning generated.
+[255/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/neon_rot_2src.cpp.o
+[256/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/power_virus_dit.cpp.o
+[257/278] Compiling C++ object tests/cpu/arm64/libtests_arm64_sve512.a.p/sve512_gather_scatter_arm.cpp.o
+[258/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/sme_fmopa_arm.cpp.o
+[259/278] Compiling C++ object tests/cpu/arithmetic_arm/libtests_arithmetic_arm_gmp.a.p/adox_arm.cpp.o
+[260/278] Compiling C++ object tests/cpu/arm64/libtests_arm64.a.p/crypto_test.cpp.o
+[261/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_double_dynamic_square.cpp.o
+[262/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_gemm_gemm_double_dynamic_square_dump.cpp.o
+[263/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_double.cpp.o
+[264/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_cdouble.cpp.o
+[265/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd.cpp.o
+[266/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_jacobi_svd_fvectors.cpp.o
+[267/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd.cpp.o
+[268/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_double.cpp.o
+[269/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_fvectors.cpp.o
+[270/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_cdouble_noavx512.cpp.o
+[271/278] Compiling C++ object tests/cpu/libtests_base.a.p/eigen_svd_svd_cdouble.cpp.o
+[272/278] Compiling C++ object tests/cpu/libtests_sve.a.p/eigen_svd_svd_cdouble_sve.cpp.o
+ninja: build stopped: subcommand failed.
+[suke@cn23154 sdcshield]$ 
+第一个测试用例出错了。给我改

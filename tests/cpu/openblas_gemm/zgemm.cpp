@@ -18,13 +18,13 @@
  * confirmed-triggering eigen path; this widens complex-path coverage with a
  * different scheduling sample).
  * The matrix dimension is runtime-configurable via the test knob
- * "-O openblas_zgemm.mdim=N" (16..1024, default 256; the test-id
+ * "-O openblas_zgemm.mdim=N" (16..4096, default 256; the test-id
  * prefix is required — a bare "mdim=N" is silently ignored), sweeping
  * the working set across L1D (mdim=64: 64KB) / L2 (256: 1MB) /
- * LLC (512: 4MB) / DRAM (1024: 16MB) per complex-double matrix — the
- * CORE179 probes showed the store->reload cache-domain pattern is a
- * triggering discriminator, so each size class exercises different
- * forwarding paths.
+ * LLC (512: 4MB) / DRAM (1024: 16MB, 2048: 64MB, 4096: 256MB) per
+ * complex-double matrix — the CORE179 probes showed the store->reload
+ * cache-domain pattern is a triggering discriminator, so each size
+ * class exercises different forwarding paths.
  * @endparblock
  */
 
@@ -82,8 +82,8 @@ static int openblas_zgemm_init(struct test *test) {
     auto d = new(zgemm_test_data);
     test->data = d;
     int64_t knob = get_testspecific_knob_value_int(test, "mdim", 256);
-    if (knob < 16 || knob > 1024) {
-        report_fail_msg("mdim knob out of range: %ld (valid 16..1024, default 256)", (long)knob);
+    if (knob < 16 || knob > 4096) {
+        report_fail_msg("mdim knob out of range: %ld (valid 16..4096, default 256)", (long)knob);
     }
     d->mdim = (int)knob;
     size_t n2 = 2 * (size_t)d->mdim * (size_t)d->mdim;   /* interleaved (re, im) double pairs */
@@ -96,10 +96,10 @@ static int openblas_zgemm_init(struct test *test) {
     /* high-entropy random operands (framework RNG; libc rand is trapped).
      * Bounded magnitude as in openblas_dgemm: real and imaginary parts are
      * filled independently from random_bounded, so the K=mdim complex dot
-     * products are bounded by K * (2e-3)^2 <= ~4e-3 per component (K <= 1024)
-     * — forty orders of magnitude from overflow and far from subnormal
-     * rounding, while the full 52-bit mantissas stay random (the SDC
-     * payload). */
+     * products are bounded by K * (2e-3)^2 <= ~1.7e-2 per component
+     * (K <= 4096) — forty orders of magnitude from overflow and far from
+     * subnormal rounding, while the full 52-bit mantissas stay random (the
+     * SDC payload). */
     for (size_t i = 0; i < n2; ++i) {
         d->a[i] = random_bounded();
         d->b[i] = random_bounded();

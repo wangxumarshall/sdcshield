@@ -18,12 +18,13 @@
  * different corner bits of the multiply-add datapath (SEVI: single-lane
  * failures dominate). A scheduling sample beside dgemm/Eigen/ACL GEMM.
  * The matrix dimension is runtime-configurable via the test knob
- * "-O openblas_sgemm.mdim=N" (16..1024, default 256; the test-id
+ * "-O openblas_sgemm.mdim=N" (16..4096, default 256; the test-id
  * prefix is required — a bare "mdim=N" is silently ignored), sweeping
  * the working set across L1D (mdim=64: 16KB) / L2 (256: 256KB) /
- * LLC (512: 1MB) / DRAM (1024: 4MB) — the CORE179 probes showed the
- * store->reload cache-domain pattern is a triggering discriminator,
- * so each size class exercises different forwarding paths.
+ * LLC (512: 1MB) / DRAM (1024: 4MB, 2048: 16MB, 4096: 64MB) — the
+ * CORE179 probes showed the store->reload cache-domain pattern is a
+ * triggering discriminator, so each size class exercises different
+ * forwarding paths.
  * @endparblock
  */
 
@@ -77,8 +78,8 @@ static int openblas_sgemm_init(struct test *test) {
     auto d = new(sgemm_test_data);
     test->data = d;
     int64_t knob = get_testspecific_knob_value_int(test, "mdim", 256);
-    if (knob < 16 || knob > 1024) {
-        report_fail_msg("mdim knob out of range: %ld (valid 16..1024, default 256)", (long)knob);
+    if (knob < 16 || knob > 4096) {
+        report_fail_msg("mdim knob out of range: %ld (valid 16..4096, default 256)", (long)knob);
     }
     d->mdim = (int)knob;
     size_t n2 = (size_t)d->mdim * (size_t)d->mdim;
@@ -90,9 +91,9 @@ static int openblas_sgemm_init(struct test *test) {
     }
     /* high-entropy random operands (framework RNG; libc rand is trapped).
      * Bounded magnitude as in openblas_dgemm: the K=mdim dot products are
-     * bounded by K * (2e-3)^2 <= ~4e-3 — nowhere near float overflow and far
-     * from subnormal rounding, while the random mantissa bits remain the
-     * SDC payload. */
+     * bounded by K * (2e-3)^2 <= ~1.7e-2 (K <= 4096) — nowhere near float
+     * overflow and far from subnormal rounding, while the random mantissa
+     * bits remain the SDC payload. */
     for (size_t i = 0; i < n2; ++i) {
         d->a[i] = random_bounded();
         d->b[i] = random_bounded();

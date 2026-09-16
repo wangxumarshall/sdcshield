@@ -15,12 +15,13 @@
  * from init (copy->compute->verify, the most frequent CORE179 trigger
  * structure). A third scheduling sample beside Eigen/ACL GEMM.
  * The matrix dimension is runtime-configurable via the test knob
- * "-O openblas_dgemm.mdim=N" (16..1024, default 256; the test-id
+ * "-O openblas_dgemm.mdim=N" (16..4096, default 256; the test-id
  * prefix is required — a bare "mdim=N" is silently ignored), sweeping
- * the working set across L1D (64KB) / L2 (512KB) / LLC / DRAM on
- * TSV110 — the CORE179 probes showed the store->reload cache-domain
- * pattern is a triggering discriminator, so each size class exercises
- * different forwarding paths.
+ * the working set across L1D (64KB) / L2 (512KB) / LLC / DRAM /
+ * remote-NUMA on TSV110 (64: 32KB ... 1024: 8MB, 2048: 32MB, 4096:
+ * 128MB per matrix) — the CORE179 probes showed the store->reload
+ * cache-domain pattern is a triggering discriminator, so each size
+ * class exercises different forwarding paths.
  * @endparblock
  */
 
@@ -69,8 +70,8 @@ static int openblas_dgemm_init(struct test *test) {
     auto d = new(gemm_test_data);
     test->data = d;
     int64_t knob = get_testspecific_knob_value_int(test, "mdim", 256);
-    if (knob < 16 || knob > 1024) {
-        report_fail_msg("mdim knob out of range: %ld (valid 16..1024, default 256)", (long)knob);
+    if (knob < 16 || knob > 4096) {
+        report_fail_msg("mdim knob out of range: %ld (valid 16..4096, default 256)", (long)knob);
     }
     d->mdim = (int)knob;
     size_t n2 = (size_t)d->mdim * (size_t)d->mdim;
@@ -88,7 +89,7 @@ static int openblas_dgemm_init(struct test *test) {
      * folded into a bounded magnitude: the top 52 bits become the mantissa
      * fraction of a value in [~1e-6, ~2e-3] with a random sign. The full
      * 52-bit mantissa stays random (the SDC payload), while the K=mdim
-     * dot products are bounded by K * (2e-3)^2 <= ~4e-3 (K <= 1024) —
+     * dot products are bounded by K * (2e-3)^2 <= ~1.7e-2 (K <= 4096) —
      * forty orders of magnitude from overflow and far from subnormal
      * rounding. */
     for (size_t i = 0; i < n2; ++i) {

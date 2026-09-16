@@ -1,0 +1,2 @@
+[suke@cn23154 sdcshield]$ ./builddir-oneclick/sdcshield -e sve512_stencil_axis_arm -t 1800s --cpuset=139
+./builddir-oneclick/sdcshield: Cannot find matching tests for 'sve512_stencil_axis_arm'怎么没找到？

@@ -1,0 +1,794 @@
+tests/cpu/arm64/sve512_f64_chain_svd.cpp这个测试用例的代码如下：/**
+ * @copyright
+ * Copyright 2026.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * @test @b sve512_f64_chain_svd
+ * @parblock
+ * SVD-format f64 FMLA dependency chain SDC stress — the SVE-512 datapath
+ * with an SVD-scale working set.
+ *
+ * Differs from sve512_f64_chain_arm:
+ *   - working set 1.44 MB (300x300 complex<double>-equivalent) vs 64 KB,
+ *     so it overflows L2 (512 KB) and forces continuous L1D<->L2<->L3
+ *     traffic, mirroring eigen_svd_cdouble_sve's memory footprint;
+ *   - nested block traversal (BLOCK_ROWS x BLOCK_COLS) matching Eigen
+ *     BDCSVD's block-of-matrix access pattern instead of a flat stream.
+ *
+ * Still a serial svmla_f64_x chain (512 steps), byte-exact compared to a
+ * scalar std::fma reference. Compiled WITHOUT -msve-vector-bits so it uses
+ * the CPU runtime vector length (512-bit on HiSilicon 0xd22). Non-SVE CPUs
+ * return a clean EXIT_SKIP.
+ * @endparblock
+ */
+
+#include <sandstone.h>
+#include <cstdint>
+#include <cinttypes>
+#include <cstring>
+#include <cmath>
+#include <memory>
+#include <vector>
+
+#ifdef __aarch64__
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#include <arm_sve.h>
+#endif
+
+static constexpr size_t CHAIN_STEPS = 512;
+
+// SVD-scale working set: 300x300 doubles = 720 KB. With two operand
+// streams (m and a) this is 1.44 MB total — matches eigen_svd_cdouble_sve's
+// complex<double> 300x300 footprint (1.44 MB) that overflows L2.
+static constexpr size_t SVD_ROWS = 300;
+static constexpr size_t SVD_COLS = 300;
+static constexpr size_t SVD_BLOCK_ROWS = 16;   // outer block size
+static constexpr size_t SVD_BLOCK_COLS = 16;   // inner block size
+
+static const uint64_t F64_FINITE[] = {
+    0x3FF5555555555555ULL, 0xBFFAAAAAAAAAAAAAULL, 0x3FD5555555555555ULL,
+    0xBFFAAAAAAAAAAAAAULL, 0x0015555555555555ULL, 0x801AAAAAAAAAAAAAULL,
+    0x3FF0000000000000ULL, 0xBFF0000000000000ULL, 0x0005555555555555ULL,
+    0x800AAAAAAAAAAAAAULL, 0x3FF999999999999AULL, 0xBFF6666666666667ULL,
+    0x3FE5555555555555ULL, 0xBFE6666666666667ULL, 0x3FF3333333333333ULL,
+    0xBFFCCCCCCCCCCCCDULL,
+};
+static constexpr size_t F64_FINITE_SIZE =
+    sizeof(F64_FINITE) / sizeof(F64_FINITE[0]);
+
+static inline uint64_t splitmix64(uint64_t x)
+{
+    uint64_t z = (x + 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+struct SveF64ChainSvdData {
+    size_t vl_d;
+
+    // Per-lane seeds.
+    std::vector<uint64_t> seeds_f64;
+
+    // SVD-scale operand streams, layout: m[block_row][block_col][step][lane]
+    // Total elements: SVD_ROWS * SVD_COLS for each of m and a.
+    std::vector<uint64_t> m_f64;
+    std::vector<uint64_t> a_f64;
+};
+
+#ifdef __aarch64__
+
+static void f64_chain_golden(const SveF64ChainSvdData *d, uint64_t *out,
+                             size_t row, size_t col)
+{
+    const size_t lanes = d->vl_d;
+    const size_t stride = SVD_COLS * lanes;
+    for (size_t lane = 0; lane < lanes; ++lane) {
+        uint64_t accw = d->seeds_f64[lane];
+        double acc;
+        memcpy(&acc, &accw, 8);
+        for (size_t i = 0; i < CHAIN_STEPS; ++i) {
+            double m, a;
+            const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+            memcpy(&m, &d->m_f64[base + lane], 8);
+            memcpy(&a, &d->a_f64[base + lane], 8);
+            acc = std::fma(m, a, acc);
+        }
+        memcpy(&accw, &acc, 8);
+        out[lane] = accw;
+    }
+}
+
+static void f64_chain_hw(const SveF64ChainSvdData *d, uint64_t *out,
+                         size_t row, size_t col)
+{
+    const size_t lanes = d->vl_d;
+    const svbool_t pg = svptrue_b64();
+    const size_t stride = SVD_COLS * lanes;
+    svfloat64_t acc = svld1_f64(pg,
+        reinterpret_cast<const double *>(d->seeds_f64.data()));
+    for (size_t i = 0; i < CHAIN_STEPS; ++i) {
+        const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+        svfloat64_t m = svld1_f64(pg,
+            reinterpret_cast<const double *>(&d->m_f64[base]));
+        svfloat64_t a = svld1_f64(pg,
+            reinterpret_cast<const double *>(&d->a_f64[base]));
+        acc = svmla_f64_x(pg, acc, m, a);
+    }
+    svst1_f64(pg, reinterpret_cast<double *>(out), acc);
+}
+
+static void report_f64_lane_mismatch(const char *tag, size_t lane,
+                                     uint64_t golden, uint64_t actual)
+{
+    log_warning("%s: lane %zu golden=0x%016" PRIx64 " "
+                "actual=0x%016" PRIx64 " xor=0x%016" PRIx64,
+                tag, lane, golden, actual, golden ^ actual);
+}
+
+static int sve512_f64_chain_svd_init(struct test *test)
+{
+    unsigned long hwcap = getauxval(AT_HWCAP);
+    if ((hwcap & HWCAP_SVE) == 0) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "ARM64 SVE not available; sve512_f64_chain_svd requires SVE");
+        return EXIT_SKIP;
+    }
+
+    try {
+        auto data = std::make_unique<SveF64ChainSvdData>();
+        data->vl_d = svcntd();
+
+        data->seeds_f64.resize(data->vl_d);
+        for (size_t lane = 0; lane < data->vl_d; ++lane) {
+            data->seeds_f64[lane] = 0x3FF0000000000000ULL |
+                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+        }
+
+        // SVD-scale operand streams: SVD_ROWS * SVD_COLS * CHAIN_STEPS * vl_d.
+        const size_t total = SVD_ROWS * SVD_COLS * CHAIN_STEPS * data->vl_d;
+        data->m_f64.resize(total);
+        data->a_f64.resize(total);
+        for (size_t i = 0; i < total; ++i) {
+            data->m_f64[i] = F64_FINITE[(i * 7 + 1) % F64_FINITE_SIZE];
+            data->a_f64[i] = F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE];
+        }
+
+        test->data = data.release();
+        return EXIT_SUCCESS;
+    } catch (const std::exception &e) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "sve512_f64_chain_svd init: %s", e.what());
+        return EXIT_SKIP;
+    }
+}
+
+static int sve512_f64_chain_svd_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    auto *d = static_cast<SveF64ChainSvdData *>(test->data);
+    std::vector<uint64_t> gold64(d->vl_d);
+    std::vector<uint64_t> hw(d->vl_d);
+
+    do {
+        bool all_passed = true;
+
+        // SVD-format nested block traversal.
+        for (size_t br = 0; br < SVD_ROWS; br += SVD_BLOCK_ROWS) {
+            for (size_t bc = 0; bc < SVD_COLS; bc += SVD_BLOCK_COLS) {
+                f64_chain_golden(d, gold64.data(), br, bc);
+                f64_chain_hw(d, hw.data(), br, bc);
+                for (size_t lane = 0; lane < d->vl_d; ++lane) {
+                    if (hw[lane] != gold64[lane]) {
+                        report_f64_lane_mismatch(
+                            "sve512_f64_chain_svd", lane,
+                            gold64[lane], hw[lane]);
+                        all_passed = false;
+                    }
+                }
+            }
+        }
+
+        if (!all_passed) {
+            report_fail_msg(
+                "sve512_f64_chain_svd: SVE-512 f64 chain SDC detected");
+            return EXIT_FAILURE;
+        }
+    } while (test_time_condition(test));
+
+    return EXIT_SUCCESS;
+}
+
+static int sve512_f64_chain_svd_cleanup(struct test *test)
+{
+    delete static_cast<SveF64ChainSvdData *>(test->data);
+    return EXIT_SUCCESS;
+}
+
+#endif // __aarch64__
+
+DECLARE_TEST(sve512_f64_chain_svd,
+             "SVD-format SVE-512 f64 FMLA chain: 1.44 MB working set + "
+             "nested block traversal, byte-exact vs scalar fma()")
+    .groups = DECLARE_TEST_GROUPS(&group_math),
+    .test_init = sve512_f64_chain_svd_init,
+    .test_run = sve512_f64_chain_svd_run,
+    .test_cleanup = sve512_f64_chain_svd_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST；tests/cpu/arm64/sve512_f64_special_svd.cpp这个测试用例的代码如下：/**
+ * @copyright
+ * Copyright 2026.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * @test @b sve512_f64_special_svd
+ * @parblock
+ * SVD-format f64 special-value chain — same SVD-scale working set (1.44 MB)
+ * and nested block traversal as sve512_f64_chain_svd, but over the IEEE-754
+ * special-value table (NaN/sNaN/±Inf/±0/±1), compared by category.
+ *
+ * Differs from sve512_f64_special_arm: working set 1.44 MB vs 8 KB, nested
+ * block traversal vs flat stream.
+ * @endparblock
+ */
+
+#include <sandstone.h>
+#include <cstdint>
+#include <cinttypes>
+#include <cstring>
+#include <cmath>
+#include <memory>
+#include <vector>
+
+#ifdef __aarch64__
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#include <arm_sve.h>
+#endif
+
+static constexpr size_t SPECIAL_CHAIN_STEPS = 64;
+static constexpr size_t SVD_ROWS = 300;
+static constexpr size_t SVD_COLS = 300;
+static constexpr size_t SVD_BLOCK_ROWS = 16;
+static constexpr size_t SVD_BLOCK_COLS = 16;
+
+static const uint64_t F64_SPECIAL[] = {
+    0x0000000000000000ULL, 0x8000000000000000ULL, 0x7FF8000000000000ULL,
+    0x7FF0000000000001ULL, 0x7FF0000000000000ULL, 0xFFF0000000000000ULL,
+    0x3FF0000000000000ULL, 0xBFF0000000000000ULL,
+};
+static constexpr size_t F64_SPECIAL_SIZE =
+    sizeof(F64_SPECIAL) / sizeof(F64_SPECIAL[0]);
+
+static inline uint64_t splitmix64(uint64_t x)
+{
+    uint64_t z = (x + 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+struct SveF64SpecialSvdData {
+    size_t vl_d;
+    std::vector<uint64_t> seeds_f64;
+    std::vector<uint64_t> sm_f64;
+    std::vector<uint64_t> sa_f64;
+};
+
+#ifdef __aarch64__
+
+static void f64_special_golden(const SveF64SpecialSvdData *d, uint64_t *out,
+                               size_t row, size_t col)
+{
+    const size_t lanes = d->vl_d;
+    const size_t stride = SVD_COLS * lanes;
+    for (size_t lane = 0; lane < lanes; ++lane) {
+        uint64_t accw = d->seeds_f64[lane];
+        double acc;
+        memcpy(&acc, &accw, 8);
+        for (size_t i = 0; i < SPECIAL_CHAIN_STEPS; ++i) {
+            double m, a;
+            const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+            memcpy(&m, &d->sm_f64[base + lane], 8);
+            memcpy(&a, &d->sa_f64[base + lane], 8);
+            acc = std::fma(m, a, acc);
+        }
+        memcpy(&accw, &acc, 8);
+        out[lane] = accw;
+    }
+}
+
+static void f64_special_chain_hw(const SveF64SpecialSvdData *d, uint64_t *out,
+                                 size_t row, size_t col)
+{
+    const size_t lanes = d->vl_d;
+    const svbool_t pg = svptrue_b64();
+    const size_t stride = SVD_COLS * lanes;
+    svfloat64_t acc = svld1_f64(pg,
+        reinterpret_cast<const double *>(d->seeds_f64.data()));
+    for (size_t i = 0; i < SPECIAL_CHAIN_STEPS; ++i) {
+        const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+        svfloat64_t m = svld1_f64(pg,
+            reinterpret_cast<const double *>(&d->sm_f64[base]));
+        svfloat64_t a = svld1_f64(pg,
+            reinterpret_cast<const double *>(&d->sa_f64[base]));
+        acc = svmla_f64_x(pg, acc, m, a);
+    }
+    svst1_f64(pg, reinterpret_cast<double *>(out), acc);
+}
+
+static inline bool f64_lane_ok(uint64_t golden, uint64_t actual)
+{
+    double g, a;
+    memcpy(&g, &golden, 8); memcpy(&a, &actual, 8);
+    if (std::isnan(g)) return std::isnan(a);
+    if (std::isinf(g)) return std::isinf(a) && ((g > 0) == (a > 0));
+    if (std::isnan(a) || std::isinf(a)) return false;
+    return golden == actual;
+}
+
+static void report_f64_lane_mismatch(const char *tag, size_t lane,
+                                     uint64_t golden, uint64_t actual)
+{
+    log_warning("%s: lane %zu golden=0x%016" PRIx64 " "
+                "actual=0x%016" PRIx64 " xor=0x%016" PRIx64,
+                tag, lane, golden, actual, golden ^ actual);
+}
+
+static int sve512_f64_special_svd_init(struct test *test)
+{
+    unsigned long hwcap = getauxval(AT_HWCAP);
+    if ((hwcap & HWCAP_SVE) == 0) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "ARM64 SVE not available; sve512_f64_special_svd requires SVE");
+        return EXIT_SKIP;
+    }
+    try {
+        auto data = std::make_unique<SveF64SpecialSvdData>();
+        data->vl_d = svcntd();
+        data->seeds_f64.resize(data->vl_d);
+        for (size_t lane = 0; lane < data->vl_d; ++lane) {
+            data->seeds_f64[lane] = 0x3FF0000000000000ULL |
+                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+        }
+        const size_t total = SVD_ROWS * SVD_COLS * SPECIAL_CHAIN_STEPS * data->vl_d;
+        data->sm_f64.resize(total);
+        data->sa_f64.resize(total);
+        for (size_t i = 0; i < total; ++i) {
+            data->sm_f64[i] = F64_SPECIAL[(i * 3 + 1) % F64_SPECIAL_SIZE];
+            data->sa_f64[i] = F64_SPECIAL[(i * 5 + 2) % F64_SPECIAL_SIZE];
+        }
+        test->data = data.release();
+        return EXIT_SUCCESS;
+    } catch (const std::exception &e) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "sve512_f64_special_svd init: %s", e.what());
+        return EXIT_SKIP;
+    }
+}
+
+static int sve512_f64_special_svd_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    auto *d = static_cast<SveF64SpecialSvdData *>(test->data);
+    std::vector<uint64_t> golds64(d->vl_d);
+    std::vector<uint64_t> hw(d->vl_d);
+
+    do {
+        bool all_passed = true;
+        for (size_t br = 0; br < SVD_ROWS; br += SVD_BLOCK_ROWS) {
+            for (size_t bc = 0; bc < SVD_COLS; bc += SVD_BLOCK_COLS) {
+                f64_special_golden(d, golds64.data(), br, bc);
+                f64_special_chain_hw(d, hw.data(), br, bc);
+                for (size_t lane = 0; lane < d->vl_d; ++lane) {
+                    if (!f64_lane_ok(golds64[lane], hw[lane])) {
+                        report_f64_lane_mismatch(
+                            "sve512_f64_special_svd", lane,
+                            golds64[lane], hw[lane]);
+                        all_passed = false;
+                    }
+                }
+            }
+        }
+        if (!all_passed) {
+            report_fail_msg("sve512_f64_special_svd: SDC detected");
+            return EXIT_FAILURE;
+        }
+    } while (test_time_condition(test));
+    return EXIT_SUCCESS;
+}
+
+static int sve512_f64_special_svd_cleanup(struct test *test)
+{
+    delete static_cast<SveF64SpecialSvdData *>(test->data);
+    return EXIT_SUCCESS;
+}
+
+#endif // __aarch64__
+
+DECLARE_TEST(sve512_f64_special_svd,
+             "SVD-format SVE-512 f64 special-value chain: 1.44 MB working set "
+             "+ nested block traversal, category compare")
+    .groups = DECLARE_TEST_GROUPS(&group_math),
+    .test_init = sve512_f64_special_svd_init,
+    .test_run = sve512_f64_special_svd_run,
+    .test_cleanup = sve512_f64_special_svd_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST；tests/cpu/arm64/sve512_f32_chain_svd.cpp这个测试用例的代码如下：/**
+ * @copyright
+ * Copyright 2026.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * @test @b sve512_f32_chain_svd
+ * @parblock
+ * SVD-format f32 FMLA chain with SVD-scale working set (1.44 MB) and nested
+ * block traversal, matching the memory footprint of eigen_svd_cdouble_sve
+ * but at f32 width (16 lanes per vector).
+ *
+ * Differs from sve512_f32_chain_arm: working set 1.44 MB vs 64 KB, nested
+ * block traversal vs flat stream.
+ * @endparblock
+ */
+
+#include <sandstone.h>
+#include <cstdint>
+#include <cinttypes>
+#include <cstring>
+#include <cmath>
+#include <memory>
+#include <vector>
+
+#ifdef __aarch64__
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#include <arm_sve.h>
+#endif
+
+static constexpr size_t CHAIN_STEPS = 512;
+static constexpr size_t SVD_ROWS = 300;
+static constexpr size_t SVD_COLS = 300;
+static constexpr size_t SVD_BLOCK_ROWS = 16;
+static constexpr size_t SVD_BLOCK_COLS = 16;
+
+static const uint32_t F32_FINITE[] = {
+    0x3FAAAAABU, 0xBFAAAAABU, 0x3EAAAAABU, 0xBF2AAAABU,
+    0x3F800000U, 0xBF800000U, 0x00555555U, 0x80AAAAAAU,
+    0x3FCCCCCDU, 0xBFCCCCCDU, 0x3F333333U, 0xBF333333U,
+    0x3E555555U, 0xBE555555U, 0x3F666666U, 0xBF666666U,
+};
+static constexpr size_t F32_FINITE_SIZE =
+    sizeof(F32_FINITE) / sizeof(F32_FINITE[0]);
+
+static inline uint64_t splitmix64(uint64_t x)
+{
+    uint64_t z = (x + 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+struct SveF32ChainSvdData {
+    size_t vl_w;
+    std::vector<uint32_t> seeds_f32;
+    std::vector<uint32_t> m_f32;
+    std::vector<uint32_t> a_f32;
+};
+
+#ifdef __aarch64__
+
+static void f32_chain_golden(const SveF32ChainSvdData *d, uint32_t *out,
+                             size_t row, size_t col)
+{
+    const size_t lanes = d->vl_w;
+    const size_t stride = SVD_COLS * lanes;
+    for (size_t lane = 0; lane < lanes; ++lane) {
+        uint32_t accw = d->seeds_f32[lane];
+        float acc;
+        memcpy(&acc, &accw, 4);
+        for (size_t i = 0; i < CHAIN_STEPS; ++i) {
+            float m, a;
+            const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+            memcpy(&m, &d->m_f32[base + lane], 4);
+            memcpy(&a, &d->a_f32[base + lane], 4);
+            acc = std::fma(m, a, acc);
+        }
+        memcpy(&accw, &acc, 4);
+        out[lane] = accw;
+    }
+}
+
+static void f32_chain_hw(const SveF32ChainSvdData *d, uint32_t *out,
+                         size_t row, size_t col)
+{
+    const size_t lanes = d->vl_w;
+    const svbool_t pg = svptrue_b32();
+    const size_t stride = SVD_COLS * lanes;
+    svfloat32_t acc = svld1_f32(pg,
+        reinterpret_cast<const float *>(d->seeds_f32.data()));
+    for (size_t i = 0; i < CHAIN_STEPS; ++i) {
+        const size_t base = (row * stride + col * lanes) + i * (SVD_ROWS * stride);
+        svfloat32_t m = svld1_f32(pg,
+            reinterpret_cast<const float *>(&d->m_f32[base]));
+        svfloat32_t a = svld1_f32(pg,
+            reinterpret_cast<const float *>(&d->a_f32[base]));
+        acc = svmla_f32_x(pg, acc, m, a);
+    }
+    svst1_f32(pg, reinterpret_cast<float *>(out), acc);
+}
+
+static void report_f32_lane_mismatch(const char *tag, size_t lane,
+                                     uint32_t golden, uint32_t actual)
+{
+    log_warning("%s: lane %zu golden=0x%08" PRIx32 " "
+                "actual=0x%08" PRIx32 " xor=0x%08" PRIx32,
+                tag, lane, golden, actual, golden ^ actual);
+}
+
+static int sve512_f32_chain_svd_init(struct test *test)
+{
+    unsigned long hwcap = getauxval(AT_HWCAP);
+    if ((hwcap & HWCAP_SVE) == 0) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "ARM64 SVE not available; sve512_f32_chain_svd requires SVE");
+        return EXIT_SKIP;
+    }
+    try {
+        auto data = std::make_unique<SveF32ChainSvdData>();
+        data->vl_w = svcntw();
+        data->seeds_f32.resize(data->vl_w);
+        for (size_t lane = 0; lane < data->vl_w; ++lane) {
+            data->seeds_f32[lane] = 0x3F800000U |
+                ((uint32_t)splitmix64(0xC0FFEE00ULL + lane) & 0x007FFFFFU);
+        }
+        const size_t total = SVD_ROWS * SVD_COLS * CHAIN_STEPS * data->vl_w;
+        data->m_f32.resize(total);
+        data->a_f32.resize(total);
+        for (size_t i = 0; i < total; ++i) {
+            data->m_f32[i] = F32_FINITE[(i * 7 + 1) % F32_FINITE_SIZE];
+            data->a_f32[i] = F32_FINITE[(i * 5 + 3) % F32_FINITE_SIZE];
+        }
+        test->data = data.release();
+        return EXIT_SUCCESS;
+    } catch (const std::exception &e) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "sve512_f32_chain_svd init: %s", e.what());
+        return EXIT_SKIP;
+    }
+}
+
+static int sve512_f32_chain_svd_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    auto *d = static_cast<SveF32ChainSvdData *>(test->data);
+    std::vector<uint32_t> gold32(d->vl_w);
+    std::vector<uint32_t> hw(d->vl_w);
+
+    do {
+        bool all_passed = true;
+        for (size_t br = 0; br < SVD_ROWS; br += SVD_BLOCK_ROWS) {
+            for (size_t bc = 0; bc < SVD_COLS; bc += SVD_BLOCK_COLS) {
+                f32_chain_golden(d, gold32.data(), br, bc);
+                f32_chain_hw(d, hw.data(), br, bc);
+                for (size_t lane = 0; lane < d->vl_w; ++lane) {
+                    if (hw[lane] != gold32[lane]) {
+                        report_f32_lane_mismatch(
+                            "sve512_f32_chain_svd", lane,
+                            gold32[lane], hw[lane]);
+                        all_passed = false;
+                    }
+                }
+            }
+        }
+        if (!all_passed) {
+            report_fail_msg("sve512_f32_chain_svd: SDC detected");
+            return EXIT_FAILURE;
+        }
+    } while (test_time_condition(test));
+    return EXIT_SUCCESS;
+}
+
+static int sve512_f32_chain_svd_cleanup(struct test *test)
+{
+    delete static_cast<SveF32ChainSvdData *>(test->data);
+    return EXIT_SUCCESS;
+}
+
+#endif // __aarch64__
+
+DECLARE_TEST(sve512_f32_chain_svd,
+             "SVD-format SVE-512 f32 FMLA chain: 1.44 MB working set + "
+             "nested block traversal, byte-exact vs scalar fmaf()")
+    .groups = DECLARE_TEST_GROUPS(&group_math),
+    .test_init = sve512_f32_chain_svd_init,
+    .test_run = sve512_f32_chain_svd_run,
+    .test_cleanup = sve512_f32_chain_svd_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST；tests/cpu/arm64/sve512_gather_scatter_svd.cpp这个测试用例的代码如下：/**
+ * @copyright
+ * Copyright 2026.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * @test @b sve512_gather_scatter_svd
+ * @parblock
+ * SVD-format gather/scatter round-trip with SVD-scale working set (1.44 MB)
+ * and 2-D block index pattern matching Eigen BDCSVD's block-of-matrix access.
+ *
+ * Differs from sve512_gather_scatter_arm: working set 1.44 MB vs 4 KB, 2-D
+ * block index table (row-major + column offsets) vs 1-D linear permutation.
+ * @endparblock
+ */
+
+#include <sandstone.h>
+#include <cstdint>
+#include <cinttypes>
+#include <cstring>
+#include <cmath>
+#include <memory>
+#include <vector>
+
+#ifdef __aarch64__
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#include <arm_sve.h>
+#endif
+
+static constexpr size_t SVD_ROWS = 300;
+static constexpr size_t SVD_COLS = 300;
+static constexpr size_t SVD_BLOCK_ROWS = 16;
+static constexpr size_t SVD_BLOCK_COLS = 16;
+
+static inline uint64_t splitmix64(uint64_t x)
+{
+    uint64_t z = (x + 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+struct SveGatherScatterSvdData {
+    size_t vl_d;
+    std::vector<uint64_t> seeds_f64;
+    std::vector<uint64_t> gather_src;
+    std::vector<uint64_t> gather_idx;
+    std::vector<uint64_t> scatter_dst;
+    std::vector<uint64_t> scatter_golden;
+};
+
+#ifdef __aarch64__
+
+static void gather_scatter_golden(SveGatherScatterSvdData *d)
+{
+    for (size_t i = 0; i < d->gather_idx.size(); ++i) {
+        double v;
+        memcpy(&v, &d->gather_src[d->gather_idx[i]], 8);
+        v = std::fma(v, v, 1.5);
+        memcpy(&d->scatter_golden[d->gather_idx[i]], &v, 8);
+    }
+}
+
+static void gather_scatter_hw(SveGatherScatterSvdData *d)
+{
+    const size_t n = d->gather_idx.size();
+    const size_t lanes = d->vl_d;
+    const svbool_t pg = svptrue_b64();
+    const svfloat64_t one_half = svdup_f64(1.5);
+    for (size_t off = 0; off < n; off += lanes) {
+        svuint64_t vidx = svld1_u64(pg, &d->gather_idx[off]);
+        svfloat64_t v = svld1_gather_u64index_f64(
+            pg, reinterpret_cast<const double *>(d->gather_src.data()), vidx);
+        v = svmla_f64_x(pg, one_half, v, v);
+        svst1_scatter_u64index_f64(
+            pg, reinterpret_cast<double *>(d->scatter_dst.data()), vidx, v);
+    }
+}
+
+static void report_f64_lane_mismatch(const char *tag, size_t lane,
+                                     uint64_t golden, uint64_t actual)
+{
+    log_warning("%s: lane %zu golden=0x%016" PRIx64 " "
+                "actual=0x%016" PRIx64 " xor=0x%016" PRIx64,
+                tag, lane, golden, actual, golden ^ actual);
+}
+
+static int sve512_gather_scatter_svd_init(struct test *test)
+{
+    unsigned long hwcap = getauxval(AT_HWCAP);
+    if ((hwcap & HWCAP_SVE) == 0) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "ARM64 SVE not available; sve512_gather_scatter_svd requires SVE");
+        return EXIT_SKIP;
+    }
+    try {
+        auto data = std::make_unique<SveGatherScatterSvdData>();
+        data->vl_d = svcntd();
+
+        data->seeds_f64.resize(data->vl_d);
+        for (size_t lane = 0; lane < data->vl_d; ++lane) {
+            data->seeds_f64[lane] = 0x3FF0000000000000ULL |
+                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+        }
+
+        // SVD-scale gather/scatter workspace: 300x300 doubles = 720 KB.
+        const size_t gn = SVD_ROWS * SVD_COLS;
+        data->gather_src.resize(gn);
+        data->gather_idx.resize(gn);
+        data->scatter_dst.assign(gn, 0);
+        data->scatter_golden.resize(gn);
+
+        for (size_t i = 0; i < gn; ++i) {
+            data->gather_src[i] = data->seeds_f64[i % data->vl_d];
+            data->gather_idx[i] = i;
+        }
+
+        // SVD-format block permutation: shuffle within each 16x16 block,
+        // preserving the 2-D locality of BDCSVD's block traversal.
+        for (size_t br = 0; br < SVD_ROWS; br += SVD_BLOCK_ROWS) {
+            for (size_t bc = 0; bc < SVD_COLS; bc += SVD_BLOCK_COLS) {
+                for (size_t k = 0; k < SVD_BLOCK_ROWS * SVD_BLOCK_COLS; ++k) {
+                    size_t i = k;
+                    size_t j = (size_t)(splitmix64(0xBEEF0000ULL +
+                                                   (br * SVD_COLS + bc) * 256 +
+                                                   k) % (k + 1));
+                    size_t row_i = br + i / SVD_BLOCK_COLS;
+                    size_t col_i = bc + i % SVD_BLOCK_COLS;
+                    size_t row_j = br + j / SVD_BLOCK_COLS;
+                    size_t col_j = bc + j % SVD_BLOCK_COLS;
+                    uint64_t t = data->gather_idx[row_i * SVD_COLS + col_i];
+                    data->gather_idx[row_i * SVD_COLS + col_i] =
+                        data->gather_idx[row_j * SVD_COLS + col_j];
+                    data->gather_idx[row_j * SVD_COLS + col_j] = t;
+                }
+            }
+        }
+
+        test->data = data.release();
+        return EXIT_SUCCESS;
+    } catch (const std::exception &e) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "sve512_gather_scatter_svd init: %s", e.what());
+        return EXIT_SKIP;
+    }
+}
+
+static int sve512_gather_scatter_svd_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    auto *d = static_cast<SveGatherScatterSvdData *>(test->data);
+    do {
+        bool all_passed = true;
+        gather_scatter_hw(d);
+        gather_scatter_golden(d);
+        for (size_t i = 0; i < d->scatter_dst.size(); ++i) {
+            if (d->scatter_dst[i] != d->scatter_golden[i]) {
+                report_f64_lane_mismatch("sve512_gather_scatter_svd", i,
+                                         d->scatter_golden[i],
+                                         d->scatter_dst[i]);
+                all_passed = false;
+            }
+        }
+        std::fill(d->scatter_dst.begin(), d->scatter_dst.end(), 0);
+        if (!all_passed) {
+            report_fail_msg("sve512_gather_scatter_svd: SDC detected");
+            return EXIT_FAILURE;
+        }
+    } while (test_time_condition(test));
+    return EXIT_SUCCESS;
+}
+
+static int sve512_gather_scatter_svd_cleanup(struct test *test)
+{
+    delete static_cast<SveGatherScatterSvdData *>(test->data);
+    return EXIT_SUCCESS;
+}
+
+#endif // __aarch64__
+
+DECLARE_TEST(sve512_gather_scatter_svd,
+             "SVD-format SVE-512 gather/scatter round-trip: 1.44 MB working "
+             "set + 2-D block index permutation, byte-exact vs scalar golden")
+    .groups = DECLARE_TEST_GROUPS(&group_math),
+    .test_init = sve512_gather_scatter_svd_init,
+    .test_run = sve512_gather_scatter_svd_run,
+    .test_cleanup = sve512_gather_scatter_svd_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST；你添加，编译一下。

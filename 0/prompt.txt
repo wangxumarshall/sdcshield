@@ -1,0 +1,1 @@
+<bash-stdout>/home/sdc/wangxu/sdcshield</bash-stdout><bash-stderr></bash-stderr>

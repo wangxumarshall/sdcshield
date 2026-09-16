@@ -23,6 +23,17 @@
  * Covers the newest-instruction-generation risk area (PinDrop Obs12:
  * instructions fail most in their first arch gen) — the advsimd u10
  * codepaths are SLEEF's newest NEON implementations.
+ *
+ * The per-family element count is a runtime footprint knob:
+ * "-O sleef_neon.nelems=N" (128..262144 in multiples of 4, default 1024;
+ * the test-id prefix is required — a bare "nelems=N" is silently
+ * ignored). It sweeps the replay working set across the cache hierarchy
+ * (default 1024: a double segment's input+golden+scratch = 24KB stays
+ * L1D-resident; 16384: ~384KB -> L2; 262144: 2MB per double buffer ->
+ * LLC/DRAM; see the ELEMS_DEFAULT comment for the numbers), because
+ * different cache structures hold different ACE residency. Omitting the
+ * knob reproduces the historical compile-time ELEMS=1024 behavior
+ * exactly: same RNG consumption order, byte-identical inputs/goldens.
  * @endparblock
  */
 
@@ -34,10 +45,35 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define ELEMS 1024   /* elements per family: 512 float64x2 vectors (double half) + 256 float32x4 vectors (float half) */
+/* Elements per family — a RUNTIME knob, not a compile-time constant:
+ * "-O sleef_neon.nelems=N". The default reproduces the historical
+ * ELEMS=1024 exactly (identical RNG consumption order, byte-identical
+ * inputs/goldens). Footprint tiers on Kunpeng 920 (TSV110 core):
+ *   1024   — a double replay segment touches input+golden+scratch
+ *            3 x 8KB = 24KB, resident in L1D (64KB)
+ *   16384  — 3 x 128KB = 384KB per double segment -> L2 (512KB)
+ *   262144 — 2MB per double buffer (1MB float) x several buffers
+ *            -> LLC / DRAM
+ * (different cache structures hold different ACE residency; the
+ * openblas mdim knob is the same lesson's GEMM version). ELEMS_MIN and
+ * every accepted value must be a multiple of 4: the float halves advance
+ * in float32x4_t stride-4 steps (double stride 2 divides 4), and a
+ * non-multiple would make the last vector iteration overrun its buffer
+ * (validated loudly in init). Per-thread scratch ceiling at ELEMS_MAX:
+ * od (2MB double) + of (1MB float) = 3MB per worker, inputs/goldens are
+ * shared, 192-core worst case ~ 192 x 3MB = 576MB scratch — acceptable. */
+#define ELEMS_DEFAULT 1024  /* elements per family: 512 float64x2 vectors (double half) + 256 float32x4 vectors (float half) */
+#define ELEMS_MIN 128       /* multiple of 4 — float32x4_t stride (see above) */
+#define ELEMS_MAX 262144    /* per-thread scratch ceiling ~3MB/worker (see above) */
 
 namespace {
 struct sleef_test_data {
+    /* elements per family, from the -O sleef_neon.nelems=N knob
+     * (ELEMS_MIN..ELEMS_MAX, default ELEMS_DEFAULT): every loop bound and
+     * buffer size below derives from it, so the whole working set (inputs
+     * + goldens + per-thread scratch) scales with the knob — see the
+     * ELEMS_DEFAULT comment above for the L1/L2/LLC/DRAM tier rationale */
+    int nelems;
     /* per-domain inputs (each family keeps its own array so the run loop
      * can replay exactly the inputs the golden values were computed from) */
     double *xd_trig, *xd_exp, *xd_log;
@@ -150,53 +186,67 @@ static int sleef_neon_init(struct test *test)
 {
     auto d = new(sleef_test_data);
     test->data = d;
-    d->xd_trig = (double *)malloc(ELEMS * sizeof(double));
-    d->xd_exp  = (double *)malloc(ELEMS * sizeof(double));
-    d->xd_log  = (double *)malloc(ELEMS * sizeof(double));
-    d->xf_trig = (float  *)malloc(ELEMS * sizeof(float));
-    d->xf_exp  = (float  *)malloc(ELEMS * sizeof(float));
-    d->xf_log  = (float  *)malloc(ELEMS * sizeof(float));
-    d->gd_sin = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_cos = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_exp = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_log = (double *)malloc(ELEMS * sizeof(double));
-    d->gf_sin = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_cos = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_exp = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_log = (float  *)malloc(ELEMS * sizeof(float));
+    /* footprint knob, mdim precedent: read once, fail loudly on bad
+     * values — a silent clamp would run a different campaign than the
+     * operator asked for, and a non-multiple-of-4 would overrun the
+     * float32x4 stride-4 vector loops (last iteration past the buffer) */
+    int64_t knob = get_testspecific_knob_value_int(test, "nelems", ELEMS_DEFAULT);
+    if (knob < ELEMS_MIN || knob > ELEMS_MAX) {
+        report_fail_msg("nelems knob out of range: %ld (valid %d..%d, default %d)",
+                        (long)knob, ELEMS_MIN, ELEMS_MAX, ELEMS_DEFAULT);
+    }
+    if (knob % 4 != 0) {
+        report_fail_msg("nelems knob must be a multiple of 4 (float32x4_t stride): %ld",
+                        (long)knob);
+    }
+    d->nelems = (int)knob;
+    d->xd_trig = (double *)malloc(d->nelems * sizeof(double));
+    d->xd_exp  = (double *)malloc(d->nelems * sizeof(double));
+    d->xd_log  = (double *)malloc(d->nelems * sizeof(double));
+    d->xf_trig = (float  *)malloc(d->nelems * sizeof(float));
+    d->xf_exp  = (float  *)malloc(d->nelems * sizeof(float));
+    d->xf_log  = (float  *)malloc(d->nelems * sizeof(float));
+    d->gd_sin = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_cos = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_exp = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_log = (double *)malloc(d->nelems * sizeof(double));
+    d->gf_sin = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_cos = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_exp = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_log = (float  *)malloc(d->nelems * sizeof(float));
     /* u35 tier golden outputs */
-    d->gd_sin35 = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_cos35 = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_log35 = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_exp2_35 = (double *)malloc(ELEMS * sizeof(double));
-    d->gf_sin35 = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_cos35 = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_log35 = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_exp2_35 = (float  *)malloc(ELEMS * sizeof(float));
+    d->gd_sin35 = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_cos35 = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_log35 = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_exp2_35 = (double *)malloc(d->nelems * sizeof(double));
+    d->gf_sin35 = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_cos35 = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_log35 = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_exp2_35 = (float  *)malloc(d->nelems * sizeof(float));
     /* new families: inputs */
-    d->xd_inv  = (double *)malloc(ELEMS * sizeof(double));
-    d->xd_cbrt = (double *)malloc(ELEMS * sizeof(double));
-    d->xd_pow2 = (double *)malloc(ELEMS * sizeof(double));
-    d->xd_pexp = (double *)malloc(ELEMS * sizeof(double));
-    d->xf_inv  = (float  *)malloc(ELEMS * sizeof(float));
-    d->xf_cbrt = (float  *)malloc(ELEMS * sizeof(float));
-    d->xf_pow2 = (float  *)malloc(ELEMS * sizeof(float));
-    d->xf_pexp = (float  *)malloc(ELEMS * sizeof(float));
+    d->xd_inv  = (double *)malloc(d->nelems * sizeof(double));
+    d->xd_cbrt = (double *)malloc(d->nelems * sizeof(double));
+    d->xd_pow2 = (double *)malloc(d->nelems * sizeof(double));
+    d->xd_pexp = (double *)malloc(d->nelems * sizeof(double));
+    d->xf_inv  = (float  *)malloc(d->nelems * sizeof(float));
+    d->xf_cbrt = (float  *)malloc(d->nelems * sizeof(float));
+    d->xf_pow2 = (float  *)malloc(d->nelems * sizeof(float));
+    d->xf_pexp = (float  *)malloc(d->nelems * sizeof(float));
     /* new families: golden outputs */
-    d->gd_asin = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_atan = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_cbrt = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_log10 = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_sinh = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_tanh = (double *)malloc(ELEMS * sizeof(double));
-    d->gd_pow = (double *)malloc(ELEMS * sizeof(double));
-    d->gf_asin = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_atan = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_cbrt = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_log10 = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_sinh = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_tanh = (float  *)malloc(ELEMS * sizeof(float));
-    d->gf_pow = (float  *)malloc(ELEMS * sizeof(float));
+    d->gd_asin = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_atan = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_cbrt = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_log10 = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_sinh = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_tanh = (double *)malloc(d->nelems * sizeof(double));
+    d->gd_pow = (double *)malloc(d->nelems * sizeof(double));
+    d->gf_asin = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_atan = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_cbrt = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_log10 = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_sinh = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_tanh = (float  *)malloc(d->nelems * sizeof(float));
+    d->gf_pow = (float  *)malloc(d->nelems * sizeof(float));
     if (!d->xd_trig || !d->xd_exp || !d->xd_log ||
         !d->xf_trig || !d->xf_exp || !d->xf_log ||
         !d->gd_sin || !d->gd_cos || !d->gd_exp || !d->gd_log ||
@@ -213,15 +263,15 @@ static int sleef_neon_init(struct test *test)
     }
 
     /* double inputs, per domain */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double u = uniform01();
         d->xd_trig[i] = (u * 2.0 - 1.0) * 3.141592653589793;   /* [-pi, pi] */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double u = uniform01();
         d->xd_exp[i] = (u * 2.0 - 1.0) * 20.0;                 /* [-20, 20) */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double u = uniform01();
         d->xd_log[i] = (u + 1.0e-300) * 1.0e10;                /* positive */
     }
@@ -233,15 +283,15 @@ static int sleef_neon_init(struct test *test)
      * the whole input domain, determinism never depends on accuracy (the
      * golden values come from the very same kernel), and the init finiteness
      * tripwire below backstops the rest. */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float u = (float)uniform01();
         d->xf_trig[i] = (u * 2.0f - 1.0f) * 3.14159265f;       /* [-pi, pi] */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float u = (float)uniform01();
         d->xf_exp[i] = (u * 2.0f - 1.0f) * 20.0f;              /* [-20, 20) */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float u = (float)uniform01();
         d->xf_log[i] = (u + 1.0e-30f) * 1.0e10f;               /* positive */
     }
@@ -249,19 +299,19 @@ static int sleef_neon_init(struct test *test)
     /* new-family inputs, double. log10 shares xd_log (positive mapping),
      * sinh/tanh share xd_exp ([-20,20) — see the boundary analysis above
      * for why the tanh clamp at |x|>18.715 makes |tanh| <= 1 inclusive). */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double u = uniform01();
         d->xd_inv[i] = u * 2.0 - 1.0;                          /* [-1, 1) */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double u = uniform01();
         d->xd_cbrt[i] = u * 2000.0 - 1000.0;                   /* [-1000, 1000) */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double u = uniform01();
         d->xd_pow2[i] = 1.0 + u * 9.0;                         /* [1, 10) base */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double u = uniform01();
         d->xd_pexp[i] = u * 8.0 - 4.0;                         /* [-4, 4) exponent */
     }
@@ -270,19 +320,19 @@ static int sleef_neon_init(struct test *test)
      * above: e.g. 1+u*9 can round up to exactly 10.0f and the asin input
      * can reach exactly +-1.0f — both still inside/at the documented
      * domain edge, and determinism never depends on accuracy) */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float u = (float)uniform01();
         d->xf_inv[i] = u * 2.0f - 1.0f;                        /* [-1, 1) */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float u = (float)uniform01();
         d->xf_cbrt[i] = u * 2000.0f - 1000.0f;                 /* [-1000, 1000) */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float u = (float)uniform01();
         d->xf_pow2[i] = 1.0f + u * 9.0f;                       /* [1, 10) base */
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float u = (float)uniform01();
         d->xf_pexp[i] = u * 8.0f - 4.0f;                       /* [-4, 4) exponent */
     }
@@ -290,7 +340,7 @@ static int sleef_neon_init(struct test *test)
     /* golden outputs from the very same kernels, once; any non-finite
      * result would poison the byte-exact comparison (NaN != NaN), so fail
      * loudly at the source instead (same tripwire as openblas_dgemm) */
-    for (int i = 0; i < ELEMS; i += 2) {
+    for (int i = 0; i < d->nelems; i += 2) {
         float64x2_t x = vld1q_f64(&d->xd_trig[i]);
         vst1q_f64(&d->gd_sin[i], Sleef_sind2_u10advsimd(x));
         vst1q_f64(&d->gd_cos[i], Sleef_cosd2_u10advsimd(x));
@@ -316,7 +366,7 @@ static int sleef_neon_init(struct test *test)
         vst1q_f64(&d->gd_pow[i], Sleef_powd2_u10advsimd(vld1q_f64(&d->xd_pow2[i]),
                                                         vld1q_f64(&d->xd_pexp[i])));
     }
-    for (int i = 0; i < ELEMS; i += 4) {
+    for (int i = 0; i < d->nelems; i += 4) {
         float32x4_t x = vld1q_f32(&d->xf_trig[i]);
         vst1q_f32(&d->gf_sin[i], Sleef_sinf4_u10advsimd(x));
         vst1q_f32(&d->gf_cos[i], Sleef_cosf4_u10advsimd(x));
@@ -339,7 +389,7 @@ static int sleef_neon_init(struct test *test)
         vst1q_f32(&d->gf_pow[i], Sleef_powf4_u10advsimd(vld1q_f32(&d->xf_pow2[i]),
                                                         vld1q_f32(&d->xf_pexp[i])));
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double gs = d->gd_sin[i], gc = d->gd_cos[i];
         double ge = d->gd_exp[i], gl = d->gd_log[i];
         if (gs != gs || gs > 1.0 || gs < -1.0 || gc != gc || gc > 1.0 || gc < -1.0 ||
@@ -349,7 +399,7 @@ static int sleef_neon_init(struct test *test)
                             "(domain mapping needs tighter scaling)", i);
         }
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float gs = d->gf_sin[i], gc = d->gf_cos[i];
         float ge = d->gf_exp[i], gl = d->gf_log[i];
         if (gs != gs || gs > 1.0f || gs < -1.0f || gc != gc || gc > 1.0f || gc < -1.0f ||
@@ -362,7 +412,7 @@ static int sleef_neon_init(struct test *test)
     /* finiteness sentinels, u35 tier. exp2(20) ~ 1.05e6 so the bound is
      * 1e7 (an order of headroom); sin/cos stay in [-1,1]; log shares the
      * original log range. */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double gs = d->gd_sin35[i], gc = d->gd_cos35[i];
         double gl = d->gd_log35[i], ge = d->gd_exp2_35[i];
         if (gs != gs || gs > 1.0 || gs < -1.0 || gc != gc || gc > 1.0 || gc < -1.0 ||
@@ -372,7 +422,7 @@ static int sleef_neon_init(struct test *test)
                             "(domain mapping needs tighter scaling)", i);
         }
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float gs = d->gf_sin35[i], gc = d->gf_cos35[i];
         float gl = d->gf_log35[i], ge = d->gf_exp2_35[i];
         if (gs != gs || gs > 1.0f || gs < -1.0f || gc != gc || gc > 1.0f || gc < -1.0f ||
@@ -393,7 +443,7 @@ static int sleef_neon_init(struct test *test)
      *    |x| > 18.714973875 (see boundary analysis; deterministic)
      *  - pow: g in (0, 1e4] (pow(10,4)=1e4 is the theoretical max, not
      *    reached; strictly positive since base >= 1 > 0) */
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         double ga = d->gd_asin[i], gt = d->gd_atan[i], gc = d->gd_cbrt[i];
         double gl10 = d->gd_log10[i], gsh = d->gd_sinh[i], gth = d->gd_tanh[i], gp = d->gd_pow[i];
         if (ga != ga || ga > 1.6 || ga < -1.6 ||
@@ -407,7 +457,7 @@ static int sleef_neon_init(struct test *test)
                             "(domain mapping needs tighter scaling)", i);
         }
     }
-    for (int i = 0; i < ELEMS; ++i) {
+    for (int i = 0; i < d->nelems; ++i) {
         float ga = d->gf_asin[i], gt = d->gf_atan[i], gc = d->gf_cbrt[i];
         float gl10 = d->gf_log10[i], gsh = d->gf_sinh[i], gth = d->gf_tanh[i], gp = d->gf_pow[i];
         if (ga != ga || ga > 1.6f || ga < -1.6f ||
@@ -430,198 +480,198 @@ static int sleef_neon_run(struct test *test, int cpu)
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch output buffers */
         if (__builtin_expect(!od || !of, 0)) {
-            od = (double *)calloc(1, ELEMS * sizeof(double));
-            of = (float  *)calloc(1, ELEMS * sizeof(float));
+            od = (double *)calloc(1, d->nelems * sizeof(double));
+            of = (float  *)calloc(1, d->nelems * sizeof(float));
             if (!od || !of)
                 report_fail_msg("OOM allocating thread scratch (%zu bytes)",
-                                (size_t)ELEMS * (sizeof(double) + sizeof(float)));
+                                (size_t)d->nelems * (sizeof(double) + sizeof(float)));
         }
 
         /* compute-out: each family replays its own domain inputs through
          * the same kernels and lands in the thread-private scratch */
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_trig[i]);
             vst1q_f64(&od[i], Sleef_sind2_u10advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_sin, ELEMS, "sin double");
+        memcmp_or_fail(od, d->gd_sin, d->nelems, "sin double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_trig[i]);
             vst1q_f64(&od[i], Sleef_cosd2_u10advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_cos, ELEMS, "cos double");
+        memcmp_or_fail(od, d->gd_cos, d->nelems, "cos double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_exp[i]);
             vst1q_f64(&od[i], Sleef_expd2_u10advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_exp, ELEMS, "exp double");
+        memcmp_or_fail(od, d->gd_exp, d->nelems, "exp double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_log[i]);
             vst1q_f64(&od[i], Sleef_logd2_u10advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_log, ELEMS, "log double");
+        memcmp_or_fail(od, d->gd_log, d->nelems, "log double");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_trig[i]);
             vst1q_f32(&of[i], Sleef_sinf4_u10advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_sin, ELEMS, "sin float");
+        memcmp_or_fail(of, d->gf_sin, d->nelems, "sin float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_trig[i]);
             vst1q_f32(&of[i], Sleef_cosf4_u10advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_cos, ELEMS, "cos float");
+        memcmp_or_fail(of, d->gf_cos, d->nelems, "cos float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_exp[i]);
             vst1q_f32(&of[i], Sleef_expf4_u10advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_exp, ELEMS, "exp float");
+        memcmp_or_fail(of, d->gf_exp, d->nelems, "exp float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_log[i]);
             vst1q_f32(&of[i], Sleef_logf4_u10advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_log, ELEMS, "log float");
+        memcmp_or_fail(of, d->gf_log, d->nelems, "log float");
 
         /* u35 second-accuracy tier: same inputs, other polynomial chain */
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_trig[i]);
             vst1q_f64(&od[i], Sleef_sind2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_sin35, ELEMS, "sin35 double");
+        memcmp_or_fail(od, d->gd_sin35, d->nelems, "sin35 double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_trig[i]);
             vst1q_f64(&od[i], Sleef_cosd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_cos35, ELEMS, "cos35 double");
+        memcmp_or_fail(od, d->gd_cos35, d->nelems, "cos35 double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_log[i]);
             vst1q_f64(&od[i], Sleef_logd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_log35, ELEMS, "log35 double");
+        memcmp_or_fail(od, d->gd_log35, d->nelems, "log35 double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_exp[i]);
             vst1q_f64(&od[i], Sleef_exp2d2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_exp2_35, ELEMS, "exp2_35 double");
+        memcmp_or_fail(od, d->gd_exp2_35, d->nelems, "exp2_35 double");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_trig[i]);
             vst1q_f32(&of[i], Sleef_sinf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_sin35, ELEMS, "sin35 float");
+        memcmp_or_fail(of, d->gf_sin35, d->nelems, "sin35 float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_trig[i]);
             vst1q_f32(&of[i], Sleef_cosf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_cos35, ELEMS, "cos35 float");
+        memcmp_or_fail(of, d->gf_cos35, d->nelems, "cos35 float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_log[i]);
             vst1q_f32(&of[i], Sleef_logf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_log35, ELEMS, "log35 float");
+        memcmp_or_fail(of, d->gf_log35, d->nelems, "log35 float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_exp[i]);
             vst1q_f32(&of[i], Sleef_exp2f4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_exp2_35, ELEMS, "exp2_35 float");
+        memcmp_or_fail(of, d->gf_exp2_35, d->nelems, "exp2_35 float");
 
         /* new families: asin/atan/cbrt/log10/sinh/tanh/pow */
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_inv[i]);
             vst1q_f64(&od[i], Sleef_asind2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_asin, ELEMS, "asin double");
+        memcmp_or_fail(od, d->gd_asin, d->nelems, "asin double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_inv[i]);
             vst1q_f64(&od[i], Sleef_atand2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_atan, ELEMS, "atan double");
+        memcmp_or_fail(od, d->gd_atan, d->nelems, "atan double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_cbrt[i]);
             vst1q_f64(&od[i], Sleef_cbrtd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_cbrt, ELEMS, "cbrt double");
+        memcmp_or_fail(od, d->gd_cbrt, d->nelems, "cbrt double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_log[i]);
             vst1q_f64(&od[i], Sleef_log10d2_u10advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_log10, ELEMS, "log10 double");
+        memcmp_or_fail(od, d->gd_log10, d->nelems, "log10 double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_exp[i]);
             vst1q_f64(&od[i], Sleef_sinhd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_sinh, ELEMS, "sinh double");
+        memcmp_or_fail(od, d->gd_sinh, d->nelems, "sinh double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t x = vld1q_f64(&d->xd_exp[i]);
             vst1q_f64(&od[i], Sleef_tanhd2_u35advsimd(x));
         }
-        memcmp_or_fail(od, d->gd_tanh, ELEMS, "tanh double");
+        memcmp_or_fail(od, d->gd_tanh, d->nelems, "tanh double");
 
-        for (int i = 0; i < ELEMS; i += 2) {
+        for (int i = 0; i < d->nelems; i += 2) {
             float64x2_t b = vld1q_f64(&d->xd_pow2[i]);
             float64x2_t e = vld1q_f64(&d->xd_pexp[i]);
             vst1q_f64(&od[i], Sleef_powd2_u10advsimd(b, e));
         }
-        memcmp_or_fail(od, d->gd_pow, ELEMS, "pow double");
+        memcmp_or_fail(od, d->gd_pow, d->nelems, "pow double");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_inv[i]);
             vst1q_f32(&of[i], Sleef_asinf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_asin, ELEMS, "asin float");
+        memcmp_or_fail(of, d->gf_asin, d->nelems, "asin float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_inv[i]);
             vst1q_f32(&of[i], Sleef_atanf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_atan, ELEMS, "atan float");
+        memcmp_or_fail(of, d->gf_atan, d->nelems, "atan float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_cbrt[i]);
             vst1q_f32(&of[i], Sleef_cbrtf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_cbrt, ELEMS, "cbrt float");
+        memcmp_or_fail(of, d->gf_cbrt, d->nelems, "cbrt float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_log[i]);
             vst1q_f32(&of[i], Sleef_log10f4_u10advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_log10, ELEMS, "log10 float");
+        memcmp_or_fail(of, d->gf_log10, d->nelems, "log10 float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_exp[i]);
             vst1q_f32(&of[i], Sleef_sinhf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_sinh, ELEMS, "sinh float");
+        memcmp_or_fail(of, d->gf_sinh, d->nelems, "sinh float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t x = vld1q_f32(&d->xf_exp[i]);
             vst1q_f32(&of[i], Sleef_tanhf4_u35advsimd(x));
         }
-        memcmp_or_fail(of, d->gf_tanh, ELEMS, "tanh float");
+        memcmp_or_fail(of, d->gf_tanh, d->nelems, "tanh float");
 
-        for (int i = 0; i < ELEMS; i += 4) {
+        for (int i = 0; i < d->nelems; i += 4) {
             float32x4_t b = vld1q_f32(&d->xf_pow2[i]);
             float32x4_t e = vld1q_f32(&d->xf_pexp[i]);
             vst1q_f32(&of[i], Sleef_powf4_u10advsimd(b, e));
         }
-        memcmp_or_fail(of, d->gf_pow, ELEMS, "pow float");
+        memcmp_or_fail(of, d->gf_pow, d->nelems, "pow float");
     }
     return EXIT_SUCCESS;
 }
@@ -645,7 +695,7 @@ static int sleef_neon_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(sleef_neon, "SLEEF vectorized transcendentals (NEON polynomial FMA chains, sin/cos/exp/log + u35 tier (exp2) + asin/atan/cbrt/log10/sinh/tanh/pow, double+float)")
+DECLARE_TEST(sleef_neon, "SLEEF vectorized transcendentals (NEON polynomial FMA chains, sin/cos/exp/log + u35 tier (exp2) + asin/atan/cbrt/log10/sinh/tanh/pow, double+float; footprint knob -O sleef_neon.nelems=N, 128..262144, default 1024)")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_init = sleef_neon_init,
   .test_run = sleef_neon_run,

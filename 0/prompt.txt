@@ -1,0 +1,1 @@
+构建、验证新增的sve512_gather_scatter_arm用例，验证通过后，push到github远程仓

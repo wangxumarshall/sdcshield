@@ -1,6 +1,6 @@
 # memcpy_rewr 无 conf 时退化原版默认逻辑（自适应参数）实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use Markdown task-list checkboxes for tracking (live plan = single source of truth for done vs pending).
 
 **Goal:** `memcpy_rewr` 在策略配置文件缺席时不再 `EXIT_SKIP`，而是退化成原版独立工具（GlusterFS-IOT demo）的默认语义运行，且默认参数按 CPU 核数与可用内存自适应取最大压力；conf 存在时行为完全不变。
 
@@ -48,7 +48,7 @@
 - Consumes: 既有 `strategy_config_load`/`strategy_config_pick`（`strategy_config.h`，签名不变）、`Strategy{name, params}`（`params` 为 `std::map<std::string,std::string>`）、`thread_count()`（init 期有效，既有 561 行已在用）、`log_info`/`log_skip(TestResourceIssueSkipCategory, ...)`。
 - Produces: `static long read_mem_available_kib(void)`（返回 KiB，失败 -1）、`static int default_block_size(int threads)`（返回字节，[64 KiB, c_size]）；内建策略名 `"default_original"`（出现在 `-vv` 日志）；日志行新增 `producer_count=%d` 字段（conf 模式同样输出——它是配置旋钮值，numa_split/die_even_odd 策略下无语义，值恒为默认 4 或 conf 键值）。
 
-- [ ] **Step 1: 切工作分支**
+- [x] **Step 1: 切工作分支**
 
 ```bash
 cd /home/sdc/wangxu/sdcshield
@@ -58,7 +58,7 @@ git status --short   # 确认 dgemm.cpp 修改与 gemm 计划仍在未跟踪/修
 
 预期：新分支创建成功；`git status --short` 仍显示 ` M tests/cpu/openblas_gemm/dgemm.cpp` 与 `?? docs/superpowers/plans/2026-09-16-gemm-mdim-knob.md`（它们留在工作区但不归本分支管，后续不 add）。
 
-- [ ] **Step 2: 加两个 include**
+- [x] **Step 2: 加两个 include**
 
 在 `#include <sys/types.h>`（约 48 行）之后追加：
 
@@ -67,7 +67,7 @@ git status --short   # 确认 dgemm.cpp 修改与 gemm 计划仍在未跟踪/修
 #include <cerrno>     /* ENOENT/ENOTDIR discrimination     */
 ```
 
-- [ ] **Step 3: 加 MemAvailable 读取 helper**
+- [x] **Step 3: 加 MemAvailable 读取 helper**
 
 插入位置：`role_for_cpu` 函数结束（约 555 行 `}`）之后、`/* ---- SDCShield test entry points ---- */` 注释之前：
 
@@ -124,7 +124,7 @@ static int default_block_size(int threads)
 }
 ```
 
-- [ ] **Step 4: 重排 init 的 conf 解析段**
+- [x] **Step 4: 重排 init 的 conf 解析段**
 
 将现有 583-617 行的 conf 定位+加载+选择段（`/* Locate the default config... */` 注释到 `strategy_config_pick` 的 `if (!s) {...}` 结束）整体替换为：
 
@@ -200,7 +200,7 @@ static int default_block_size(int threads)
 
 其后的既有代码（`st->strategy = s; st->strategy_index = idx;`、三个 `get_long` 参数提取、NUMA 集合构建、范围检查、`init_iot`、gl_tester 播种、`test->data = st;`）**原样不动**——默认模式的参数经 `get_long` 从合成 Strategy 读出，与 conf 模式同一条代码路径。注意：`st->strategy_set` 是值成员，合成策略压入后 `s` 指向其内部，测试生命周期内有效（既有所有权注释 600-602 行描述的同一机制）。
 
-- [ ] **Step 5: 日志行加 producer_count**
+- [x] **Step 5: 日志行加 producer_count**
 
 将既有 log_info（约 655 行）：
 
@@ -223,7 +223,7 @@ static int default_block_size(int threads)
 
 （`st->producer_count` 在此行之前已由 `get_long("producer_count", 4)` 赋值；conf 模式下输出的是配置旋钮值——numa_split/die_even_odd 策略不用它，打印 4 或 conf 键值，属诚实输出。）
 
-- [ ] **Step 6: 构建干净**
+- [x] **Step 6: 构建干净**
 
 ```bash
 ninja -C /home/sdc/wangxu/sdcshield/builddir
@@ -231,7 +231,7 @@ ninja -C /home/sdc/wangxu/sdcshield/builddir
 
 预期：`ninja: no work to do` 或正常重编链接成功，**零新增 error/warning**（预存在的良性警告可接受）。任何由本次改动引入的警告/错误 = 失败，修复后重跑。
 
-- [ ] **Step 7: 默认模式全核验证（conf 缺席 → 自适应跑起来）**
+- [x] **Step 7: 默认模式全核验证（conf 缺席 → 自适应跑起来）**
 
 ```bash
 SANDSTONE_STRATEGY_CONF=/nonexistent ./builddir/sdcshield -e memcpy_rewr -t 5000 -n 128 -vv 2>&1 \
@@ -247,7 +247,7 @@ SANDSTONE_STRATEGY_CONF=/nonexistent ./builddir/sdcshield -e memcpy_rewr -t 5000
 
 内存实触合理性（观察方式）：另开窗口 `grep VmRSS /proc/$(pgrep -f 'sdcshield -e memcpy_rewr')/status` 或事后 `/usr/bin/time -v` 观察峰值 RSS 量级 ≈ 1.3 GiB（118 consumer×10 MiB + 10 producer×2 MiB + 共享），确认无 OOM、无异常膨胀。
 
-- [ ] **Step 8: 默认模式最小形态验证（max(1,·) 钳位）**
+- [x] **Step 8: 默认模式最小形态验证（max(1,·) 钳位）**
 
 ```bash
 SANDSTONE_STRATEGY_CONF=/nonexistent ./builddir/sdcshield -e memcpy_rewr -t 2000 -n 2 -vv 2>&1 \
@@ -256,7 +256,7 @@ SANDSTONE_STRATEGY_CONF=/nonexistent ./builddir/sdcshield -e memcpy_rewr -t 2000
 
 预期：`strategy[0]=default_original block_size=<按 2 线程重算：MemAvailable×1024/2/2/6 → 仍封顶 2097152> threads=2 producer_count=1 numa_nodes=1 ...`，`result: pass`。`producer_count=1` 证明 `max(1, 2/12)=1` 钳位生效（1 producer + 1 consumer 最小可跑形态）。
 
-- [ ] **Step 9: conf 模式回归（存在即赢，值不变）**
+- [x] **Step 9: conf 模式回归（存在即赢，值不变）**
 
 ```bash
 SANDSTONE_STRATEGY_INDEX=1 ./builddir/sdcshield -e memcpy_rewr -t 3000 -n 8 -vv 2>&1 \
@@ -265,7 +265,7 @@ SANDSTONE_STRATEGY_INDEX=1 ./builddir/sdcshield -e memcpy_rewr -t 3000 -n 8 -vv 
 
 预期：`strategy[1]=same_die_l3_brawl block_size=65536 threads=8 producer_count=4 numa_nodes=1 ...`（block_size 来自 conf 而非自适应；producer_count=4 是 `get_long` 默认——该策略无此键），`result: pass`。再跑 `SANDSTONE_STRATEGY_INDEX=2`，预期 `strategy[2]=few_producer_many_consumer_storm ... producer_count=4`（该策略 conf 显式给 4）。
 
-- [ ] **Step 10: 解析错误仍然 loudly skip**
+- [x] **Step 10: 解析错误仍然 loudly skip**
 
 ```bash
 printf 'role_rule = numa_split\n' > /tmp/bad_conf.conf
@@ -275,7 +275,7 @@ SANDSTONE_STRATEGY_CONF=/tmp/bad_conf.conf ./builddir/sdcshield -e memcpy_rewr -
 
 预期：`result: skip`，`skip-reason: 'memcpy_rewr: strategy config error: line 1: parameter outside any [strategy: ...] block'`——文件存在但坏 → 不进默认模式、不静默吞错（现状保持）。
 
-- [ ] **Step 11: 无关测试回归**
+- [x] **Step 11: 无关测试回归**
 
 ```bash
 ./builddir/sdcshield -e zstd19 -t 3000 -n 1 2>&1 | tail -1
@@ -283,11 +283,11 @@ SANDSTONE_STRATEGY_CONF=/tmp/bad_conf.conf ./builddir/sdcshield -e memcpy_rewr -
 
 预期：`exit: pass`，零 SIGSEGV。
 
-- [ ] **Step 12: x86-64 非回归检查（按检查确认）**
+- [x] **Step 12: x86-64 非回归检查（按检查确认）**
 
 `git diff feat/third-party-sdc-libs -- tests/` 审查：全部改动位于 `tests/cpu/memory/memcpy_rewr.cpp` 的 `#ifdef __aarch64__` 区内（整个文件体本就在 37 行的 guard 内），meson guard（`tests/cpu/meson.build:105` `host_machine.cpu_family() == 'aarch64'`）未动，x86 构建不编译此文件。结论写进 commit message。
 
-- [ ] **Step 13: 提交并推送**
+- [x] **Step 13: 提交并推送**
 
 ```bash
 git add tests/cpu/memory/memcpy_rewr.cpp
@@ -334,7 +334,7 @@ git push -u origin feat/memcpy-rewr-default-mode
 - Consumes: Task 1 的实际行为与其验证输出（文档断言必须与之一致）。
 - Produces: 无代码接口；文档准确性。
 
-- [ ] **Step 1: conf 头部注释追加默认模式说明**
+- [x] **Step 1: conf 头部注释追加默认模式说明**
 
 在 `memcpy_rewr_strategies.conf` 的头部注释块中、`# role_rule values` 行之前插入：
 
@@ -349,7 +349,7 @@ git push -u origin feat/memcpy-rewr-default-mode
 # parse still skips loudly.
 ```
 
-- [ ] **Step 2: 测试文件头注释追加一句**
+- [x] **Step 2: 测试文件头注释追加一句**
 
 在 `memcpy_rewr.cpp` 头部注释的 "Strategy selection is handled by the reusable strategy_config framework (SANDSTONE_STRATEGY_INDEX cycles strategies round-robin across repeated invocations; SANDSTONE_STRATEGY_CONF overrides the config path)." 段末（约 27 行 `*/` 前）追加：
 
@@ -361,13 +361,13 @@ git push -u origin feat/memcpy-rewr-default-mode
  *  [64 KiB, c_size] — see default_block_size() in the implementation.
 ```
 
-- [ ] **Step 3: 文档断言核对（对照 Task 1 真实输出）**
+- [x] **Step 3: 文档断言核对（对照 Task 1 真实输出）**
 
 逐条核对上述两处文档断言与 Task 1 Step 7/8/9/10 粘贴的观察输出一致：默认模式确实运行（非 skip）、block_size 自适应封顶 2097152、producer_count=10/1 钳位、解析错误仍 skip、conf 模式不变。任何不一致 → 修文档（或如果是代码错，回 Task 1 修复重验）。conf 文件与头注释不参与编译，无需重编；但跑一次 `ninja -C builddir` 确认无意外（预期 no work to do 或仅时间戳重编）。
 
 README.md 不改：其测试总表（191 行）只列检测域与用例名，不描述 conf/默认行为，无准确性问题；CLAUDE.md 同样未涉及该测试的 conf 行为。本任务的两处头注释即该机制的权威文档。
 
-- [ ] **Step 4: 提交（含计划归档）并推送**
+- [x] **Step 4: 提交（含计划归档）并推送**
 
 ```bash
 git add tests/cpu/memory/memcpy_rewr_strategies.conf tests/cpu/memory/memcpy_rewr.cpp \

@@ -27,7 +27,7 @@
  *    config path). When no config file is present (default path missing
  *    or SANDSTONE_STRATEGY_CONF dangling), the test degrades to the
  *    original tool's default mode instead of skipping: first-N-producers
- *    roles (N = threads/12) and a MemAvailable-adaptive block_size
+ *    roles (N = max(1, threads/12)) and a MemAvailable-adaptive block_size
  *    clamped to [64 KiB, c_size] — see default_block_size() in the
  *    implementation.
  *

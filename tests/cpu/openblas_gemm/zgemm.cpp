@@ -17,6 +17,13 @@
  * four real GEMMs (CORE179 §3.7: cdouble is the lowest-rate but
  * confirmed-triggering eigen path; this widens complex-path coverage with a
  * different scheduling sample).
+ * The matrix dimension is runtime-configurable via the test knob
+ * "-O mdim=N" (16..1024, default 256), sweeping the working set
+ * across L1D (mdim=64: 64KB) / L2 (256: 1MB) / LLC (512: 4MB) /
+ * DRAM (1024: 16MB) per complex-double matrix — the CORE179 probes
+ * showed the store->reload cache-domain pattern is a triggering
+ * discriminator, so each size class exercises different forwarding
+ * paths.
  * @endparblock
  */
 
@@ -27,10 +34,9 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define M_DIM 256
-
 namespace {
 struct zgemm_test_data {
+    int mdim;            /* matrix dimension, from the -O mdim=N knob */
     double *a;           /* interleaved (re, im) pairs: 2*n2 doubles */
     double *b;
     double *golden;      /* C = A*B computed once in init; read-only after */
@@ -74,7 +80,12 @@ static double random_bounded(void) {
 static int openblas_zgemm_init(struct test *test) {
     auto d = new(zgemm_test_data);
     test->data = d;
-    size_t n2 = 2 * M_DIM * M_DIM;   /* interleaved (re, im) double pairs */
+    int64_t knob = get_testspecific_knob_value_int(test, "mdim", 256);
+    if (knob < 16 || knob > 1024) {
+        report_fail_msg("mdim knob out of range: %ld (valid 16..1024, default 256)", (long)knob);
+    }
+    d->mdim = (int)knob;
+    size_t n2 = 2 * (size_t)d->mdim * (size_t)d->mdim;   /* interleaved (re, im) double pairs */
     d->a      = (double *)malloc(n2 * sizeof(double));
     d->b      = (double *)malloc(n2 * sizeof(double));
     d->golden = (double *)malloc(n2 * sizeof(double));
@@ -83,18 +94,19 @@ static int openblas_zgemm_init(struct test *test) {
     }
     /* high-entropy random operands (framework RNG; libc rand is trapped).
      * Bounded magnitude as in openblas_dgemm: real and imaginary parts are
-     * filled independently from random_bounded, so the K=256 complex dot
-     * products are bounded by K * (2e-3)^2 ~ 1e-3 per component — forty
-     * orders of magnitude from overflow and far from subnormal rounding,
-     * while the full 52-bit mantissas stay random (the SDC payload). */
+     * filled independently from random_bounded, so the K=mdim complex dot
+     * products are bounded by K * (2e-3)^2 <= ~4e-3 per component (K <= 1024)
+     * — forty orders of magnitude from overflow and far from subnormal
+     * rounding, while the full 52-bit mantissas stay random (the SDC
+     * payload). */
     for (size_t i = 0; i < n2; ++i) {
         d->a[i] = random_bounded();
         d->b[i] = random_bounded();
     }
     cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                M_DIM, M_DIM, M_DIM,
-                ONE, d->a, M_DIM, d->b, M_DIM,
-                ZERO, d->golden, M_DIM);
+                d->mdim, d->mdim, d->mdim,
+                ONE, d->a, d->mdim, d->b, d->mdim,
+                ZERO, d->golden, d->mdim);
     /* reject a NaN/Inf-polluted golden at the source: if the random operands
      * produced a non-finite product the byte-exact comparison below would be
      * meaningless (NaN != NaN), so fail loudly instead of silently passing.
@@ -111,7 +123,7 @@ static int openblas_zgemm_init(struct test *test) {
 
 static int openblas_zgemm_run(struct test *test, int cpu) {
     auto d = CAST(test->data);
-    size_t bytes = 2 * M_DIM * M_DIM * sizeof(double);
+    size_t bytes = 2 * (size_t)d->mdim * d->mdim * sizeof(double);
     long iter = 0;
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
@@ -128,9 +140,9 @@ static int openblas_zgemm_run(struct test *test, int cpu) {
         memcpy(b_copy, d->b, bytes);
 
         cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                    M_DIM, M_DIM, M_DIM,
-                    ONE, a_copy, M_DIM, b_copy, M_DIM,
-                    ZERO, c, M_DIM);
+                    d->mdim, d->mdim, d->mdim,
+                    ONE, a_copy, d->mdim, b_copy, d->mdim,
+                    ZERO, c, d->mdim);
 
         ++iter;
         /* verify-out: byte-exact golden compare of inputs and product */
@@ -140,7 +152,7 @@ static int openblas_zgemm_run(struct test *test, int cpu) {
         if (memcmp(b_copy, d->b, bytes) != 0) {
             report_fail_msg("input B corrupted after GEMM (iteration %ld)", iter);
         }
-        memcmp_or_fail(c, d->golden, 2 * M_DIM * M_DIM);
+        memcmp_or_fail(c, d->golden, 2 * (size_t)d->mdim * d->mdim);
     }
     return EXIT_SUCCESS;
 }

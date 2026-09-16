@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M2NA8B9VKTV1P96DWMG07G40",
+  "strategy": "manual-commit",
+  "branch": "feat/vendor-isa-l",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CLAUDE.md",
+    "README.md",
+    "docs/offline-build-dependencies.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28967,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 6308096,
+    "output_tokens": 12227,
+    "api_call_count": 60
+  }
+}

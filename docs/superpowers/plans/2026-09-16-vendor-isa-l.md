@@ -33,7 +33,7 @@
 - Consumes: nothing (self-contained).
 - Produces: `third-party/isa-l/build.sh` which, when run, creates `third-party/isa-l/install/lib/libisal.a` + `third-party/isa-l/install/include/isa-l/{crc.h,crc64.h,igzip_lib.h,...}` + `install/include/isa-l.h`. Task 2's meson probe depends on exactly these paths.
 
-- [ ] **Step 1: Create the directory and download the tarball**
+- [x] **Step 1: Create the directory and download the tarball**
 
 ```bash
 mkdir -p third-party/isa-l
@@ -43,7 +43,7 @@ sha256sum third-party/isa-l/isa-l-2.32.1.tar.gz
 # MUST print: d9f7179ab0e14a3db9b610fac22793854a1435e8423ec9ce07f4cbedc5f92f5e
 ```
 
-- [ ] **Step 2: Write build.sh**
+- [x] **Step 2: Write build.sh**
 
 Content modeled on `third-party/sleef/build.sh` (idempotent, `set -euo pipefail`, JOBS=$(nproc), probe-verified annotation). Key decisions baked into the comments:
 - Why `make -f Makefile.unx` and not autoconf: no autogen/configure dance needed, and the autoconf path drags in nasm checks that are irrelevant on aarch64.
@@ -94,7 +94,7 @@ rm -rf install/bin install/share
 echo "OK: $(ls -la install/lib/libisal.a)"
 ```
 
-- [ ] **Step 3: Write .gitignore**
+- [x] **Step 3: Write .gitignore**
 
 Mirror `third-party/sleef/.gitignore` (`sleef-3.9.0/`, `build/`, `install/` — only the first applies here):
 
@@ -103,7 +103,7 @@ isa-l-2.32.1/
 install/
 ```
 
-- [ ] **Step 4: Run build.sh and verify real output**
+- [x] **Step 4: Run build.sh and verify real output**
 
 ```bash
 chmod +x third-party/isa-l/build.sh
@@ -117,14 +117,14 @@ nm third-party/isa-l/install/lib/libisal.a | grep -cE "crc32_gzip_refl|crc64_ecm
 
 Real expected output (from probe): `install/lib/libisal.a` ~450 KB; `install/include/isa-l/` contains crc.h crc64.h erasure_code.h gf_vect_mul.h igzip_lib.h isal_api.h mem_routines.h raid.h + `install/include/isa-l.h`.
 
-- [ ] **Step 5: Verify headers compile standalone against a test TU**
+- [x] **Step 5: Verify headers compile standalone against a test TU**
 
 ```bash
 printf '#include <isa-l/igzip_lib.h>\n#include <isa-l/crc.h>\n#include <isa-l/crc64.h>\nint main(void){return 0;}\n' > /tmp/isal_hdr_test.c
 gcc -I third-party/isa-l/install/include -Wall -Wextra -c /tmp/isal_hdr_test.c -o /tmp/isal_hdr_test.o && echo HEADERS-OK
 ```
 
-- [ ] **Step 6: Commit (tarball ~825 KB — same order as sleef tarball, fine for this repo's provenance convention)**
+- [x] **Step 6: Commit (tarball ~825 KB — same order as sleef tarball, fine for this repo's provenance convention)**
 
 ```bash
 git add third-party/isa-l/isa-l-2.32.1.tar.gz third-party/isa-l/build.sh third-party/isa-l/.gitignore
@@ -147,7 +147,7 @@ in the next commit."
 - Consumes: `third-party/isa-l/install/lib/libisal.a` + `install/include/` from Task 1.
 - Produces: `isal_lib` (a found dependency object in both the vendored and system branches) consumed by `tests_set_base.add(when: isal_lib, ...)` and the `tests_base_a` `dependencies:` list — names unchanged, so no other build-file edits.
 
-- [ ] **Step 1: Replace the find_library gate with a vendored-probe + fallback**
+- [x] **Step 1: Replace the find_library gate with a vendored-probe + fallback**
 
 Replace the current block (lines ~676-700):
 
@@ -199,21 +199,21 @@ endif
 
 The subsequent `tests_set_base.add(when : isal_lib, if_true : files(...))` and the `isal_lib` entry in `tests_base_a`'s `dependencies:` list stay exactly as they are (a `declare_dependency` is a valid `when:` gate and dependency entry — same as `openblas_dep`/`sleef_dep`).
 
-- [ ] **Step 2: Reconfigure and confirm the vendored branch is taken**
+- [x] **Step 2: Reconfigure and confirm the vendored branch is taken**
 
 ```bash
 meson setup --reconfigure builddir 2>&1 | grep -i isal
 # expected line: Message: Using vendored isa-l (third-party/isa-l/install)
 ```
 
-- [ ] **Step 3: Build clean**
+- [x] **Step 3: Build clean**
 
 ```bash
 ninja -C builddir 2>&1 | tail -3
 # expected: no new errors/warnings; "Linking target sdcshield" (or already up-to-date + relink)
 ```
 
-- [ ] **Step 4: Prove the binary links the VENDORED archive, not the system one**
+- [x] **Step 4: Prove the binary links the VENDORED archive, not the system one**
 
 ```bash
 # (a) confirm no dynamic dependency on libisal:
@@ -238,7 +238,7 @@ Real proof captured for the commit message: the hidden-system-lib relink succeed
 
 Note: this step needs sudo; if sudo is unavailable, the alternative proof is `meson setup --reconfigure` message + `nm builddir/sdcshield | grep crc64_rocksoft` succeeding (2.32.1-only symbol — the system 2.30.x does not export it; verify with `nm /usr/lib/libisal.a | grep -c rocksoft` first and record both counts).
 
-- [ ] **Step 5: Functional verification — all 11 isal tests pass**
+- [x] **Step 5: Functional verification — all 11 isal tests pass**
 
 ```bash
 ./builddir/sdcshield -e isal_igzip,isal_crc32_gzip,isal_crc_ieee,isal_crc_iscsi,isal_crc_t10dif,isal_crc64_ecma182_norm,isal_crc64_ecma182_refl,isal_crc64_iso_norm,isal_crc64_iso_refl,isal_crc64_jones_norm,isal_crc64_jones_refl -t 3000 -n 1
@@ -252,7 +252,7 @@ Also single-test with default threading for one of them:
 # expected: result: pass across all CPU threads
 ```
 
-- [ ] **Step 6: Regression check — unaffected tests**
+- [x] **Step 6: Regression check — unaffected tests**
 
 ```bash
 ./builddir/sdcshield -e zstd19 -t 3000 -n 1
@@ -260,11 +260,11 @@ Also single-test with default threading for one of them:
 ./builddir/sdcshield --list-tests | wc -l   # record count; no tests lost vs pre-change (278 at default quality + the isal tests were already in that count)
 ```
 
-- [ ] **Step 7: x86-64 non-regression check (by inspection)**
+- [x] **Step 7: x86-64 non-regression check (by inspection)**
 
 The diff touches only the `isal_lib` resolution block: on any host without `third-party/isa-l/install` (every x86 CI host), the code path is byte-identical to before (`cpp.find_library('isal', required:false, static:true)`); with the vendored install present, x86 would additionally link the vendored lib — behavior-preserving since isa-l is arch-portable. No `#ifdef __x86_64__` source is touched; no x86 meson guard is changed. Record this reasoning in the commit message.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add tests/cpu/meson.build
@@ -292,7 +292,7 @@ x86 hosts without the vendored install keep the exact prior path."
 - Consumes: final behavior from Task 2 (vendored-first, system fallback).
 - Produces: docs stating (truthfully): vendored isa-l 2.32.1 is the default source when `third-party/isa-l/install` exists; system libisal is now only a fallback; `libisa-l-devel` moves from required to optional on openEuler hosts.
 
-- [ ] **Step 1: Update README.md**
+- [x] **Step 1: Update README.md**
 
 Three edits:
 
@@ -310,7 +310,7 @@ isa-l（`isal_igzip` + 10 个 `isal_crc*`）自 2026-09-16 起 vendor 到 `third
 
 (c) The first-build-order comment (~line 178, `./third-party/openssl/build.sh && ./third-party/openblas/build.sh && ./third-party/sleef/build.sh`): append `&& ./third-party/isa-l/build.sh` and update the preceding sentence "（pocketfft 无需预构建）" to also note isa-l is now part of the optional prebuild set (pocketfft 仍无需预构建).
 
-- [ ] **Step 2: Update docs/offline-build-dependencies.md**
+- [x] **Step 2: Update docs/offline-build-dependencies.md**
 
 Truthful updates reflecting the new fallback chain:
 
@@ -322,7 +322,7 @@ Truthful updates reflecting the new fallback chain:
 
 (d) Line ~181 troubleshooting item 1 ("isal 找不到"): rewrite symptom/solution — now the fix is `./third-party/isa-l/build.sh`（离线场景：仓库自带 tarball，无需网络）; system RPM only needed if one insists on the fallback path.
 
-- [ ] **Step 3: Update CLAUDE.md**
+- [x] **Step 3: Update CLAUDE.md**
 
 (a) "Vendored third-party libraries" section list: add after the sleef bullet:
 
@@ -332,7 +332,7 @@ Truthful updates reflecting the new fallback chain:
 
 (b) Build & run quick-start comment block: update "run each build.sh once BEFORE first meson setup — openssl, openblas, sleef" to include isa-l; update the `isal_igzip` example line comment `(system libisal, no vendored lib)` → `(vendored third-party/isa-l, static)`.
 
-- [ ] **Step 4: Verify doc claims against reality**
+- [x] **Step 4: Verify doc claims against reality**
 
 ```bash
 ./builddir/sdcshield --list-tests | grep -c isal    # 11 — matches docs claim
@@ -340,7 +340,7 @@ ls third-party/isa-l/install/lib/libisal.a          # exists — "默认启用" 
 meson setup --reconfigure builddir 2>&1 | grep -i "isa-l"   # "Using vendored isa-l" — fallback claim testable
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md docs/offline-build-dependencies.md CLAUDE.md
@@ -361,7 +361,7 @@ the fallback path); CLAUDE.md third-party list + quick-start comments."
 - Consumes: Tasks 1-3 committed.
 - Produces: the final verification evidence quoted in the summary; branch pushed to remote.
 
-- [ ] **Step 1: Clean-slate rebuild from vendored libs only**
+- [x] **Step 1: Clean-slate rebuild from vendored libs only**
 
 ```bash
 # prove the vendored path is self-sufficient: system isal hidden, full rebuild
@@ -373,7 +373,7 @@ sudo mv /usr/lib/libisal.a.hidden /usr/lib/libisal.a
 
 (Skip the sudo-hiding if Task 2 Step 4's hide-relink was already performed and captured — one hide-cycle proof is sufficient; then this step reduces to a plain rebuild + run.)
 
-- [ ] **Step 2: Full isal suite + regression battery**
+- [x] **Step 2: Full isal suite + regression battery**
 
 ```bash
 ./builddir/sdcshield -e isal_igzip,isal_crc32_gzip,isal_crc_ieee,isal_crc_iscsi,isal_crc_t10dif,isal_crc64_ecma182_norm,isal_crc64_ecma182_refl,isal_crc64_iso_norm,isal_crc64_iso_refl,isal_crc64_jones_norm,isal_crc64_jones_refl -t 5000 -n 1
@@ -382,14 +382,14 @@ sudo mv /usr/lib/libisal.a.hidden /usr/lib/libisal.a
 # all expected: exit: pass
 ```
 
-- [ ] **Step 3: Multi-threaded isal_igzip smoke (the SDC-representative config)**
+- [x] **Step 3: Multi-threaded isal_igzip smoke (the SDC-representative config)**
 
 ```bash
 ./builddir/sdcshield -e isal_igzip -t 5000
 # expected: pass on all cores (this is the config the docs recommend)
 ```
 
-- [ ] **Step 4: Push the branch**
+- [x] **Step 4: Push the branch**
 
 ```bash
 git push -u origin feat/vendor-isa-l

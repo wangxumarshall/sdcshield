@@ -17,6 +17,12 @@
  * vector throughput of the fmla pipeline, and float and double exercise
  * different corner bits of the multiply-add datapath (SEVI: single-lane
  * failures dominate). A scheduling sample beside dgemm/Eigen/ACL GEMM.
+ * The matrix dimension is runtime-configurable via the test knob
+ * "-O mdim=N" (16..1024, default 256), sweeping the working set
+ * across L1D (mdim=64: 16KB) / L2 (256: 256KB) / LLC (512: 1MB) /
+ * DRAM (1024: 4MB) — the CORE179 probes showed the store->reload
+ * cache-domain pattern is a triggering discriminator, so each size
+ * class exercises different forwarding paths.
  * @endparblock
  */
 
@@ -27,10 +33,9 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define M_DIM 256
-
 namespace {
 struct sgemm_test_data {
+    int mdim;             /* matrix dimension, from the -O mdim=N knob */
     float *a;
     float *b;
     float *golden;      /* C = A*B computed once in init; read-only after */
@@ -70,7 +75,12 @@ static float random_bounded(void) {
 static int openblas_sgemm_init(struct test *test) {
     auto d = new(sgemm_test_data);
     test->data = d;
-    size_t n2 = M_DIM * M_DIM;
+    int64_t knob = get_testspecific_knob_value_int(test, "mdim", 256);
+    if (knob < 16 || knob > 1024) {
+        report_fail_msg("mdim knob out of range: %ld (valid 16..1024, default 256)", (long)knob);
+    }
+    d->mdim = (int)knob;
+    size_t n2 = (size_t)d->mdim * (size_t)d->mdim;
     d->a      = (float *)malloc(n2 * sizeof(float));
     d->b      = (float *)malloc(n2 * sizeof(float));
     d->golden = (float *)malloc(n2 * sizeof(float));
@@ -78,8 +88,8 @@ static int openblas_sgemm_init(struct test *test) {
         report_fail_msg("OOM allocating %zu bytes", n2 * sizeof(float) * 3);
     }
     /* high-entropy random operands (framework RNG; libc rand is trapped).
-     * Bounded magnitude as in openblas_dgemm: the K=256 dot products are
-     * bounded by K * (2e-3)^2 ~ 1e-3 — nowhere near float overflow and far
+     * Bounded magnitude as in openblas_dgemm: the K=mdim dot products are
+     * bounded by K * (2e-3)^2 <= ~4e-3 — nowhere near float overflow and far
      * from subnormal rounding, while the random mantissa bits remain the
      * SDC payload. */
     for (size_t i = 0; i < n2; ++i) {
@@ -87,9 +97,9 @@ static int openblas_sgemm_init(struct test *test) {
         d->b[i] = random_bounded();
     }
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                M_DIM, M_DIM, M_DIM,
-                1.0f, d->a, M_DIM, d->b, M_DIM,
-                0.0f, d->golden, M_DIM);
+                d->mdim, d->mdim, d->mdim,
+                1.0f, d->a, d->mdim, d->b, d->mdim,
+                0.0f, d->golden, d->mdim);
     /* reject a NaN/Inf-polluted golden at the source: if the random operands
      * produced a non-finite product the byte-exact comparison below would be
      * meaningless (NaN != NaN), so fail loudly instead of silently passing */
@@ -105,7 +115,7 @@ static int openblas_sgemm_init(struct test *test) {
 
 static int openblas_sgemm_run(struct test *test, int cpu) {
     auto d = CAST(test->data);
-    size_t bytes = M_DIM * M_DIM * sizeof(float);
+    size_t bytes = (size_t)d->mdim * d->mdim * sizeof(float);
     long iter = 0;
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
@@ -122,9 +132,9 @@ static int openblas_sgemm_run(struct test *test, int cpu) {
         memcpy(b_copy, d->b, bytes);
 
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                    M_DIM, M_DIM, M_DIM,
-                    1.0f, a_copy, M_DIM, b_copy, M_DIM,
-                    0.0f, c, M_DIM);
+                    d->mdim, d->mdim, d->mdim,
+                    1.0f, a_copy, d->mdim, b_copy, d->mdim,
+                    0.0f, c, d->mdim);
 
         ++iter;
         /* verify-out: byte-exact golden compare of inputs and product */
@@ -134,7 +144,7 @@ static int openblas_sgemm_run(struct test *test, int cpu) {
         if (memcmp(b_copy, d->b, bytes) != 0) {
             report_fail_msg("input B corrupted after GEMM (iteration %ld)", iter);
         }
-        memcmp_or_fail(c, d->golden, M_DIM * M_DIM);
+        memcmp_or_fail(c, d->golden, (size_t)d->mdim * d->mdim);
     }
     return EXIT_SUCCESS;
 }

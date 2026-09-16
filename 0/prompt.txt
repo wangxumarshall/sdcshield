@@ -1,0 +1,1 @@
+/goal isal_igzip 测试用的是系统 /usr/lib/libisal（isa-l 压缩），没有放进 third-party。解决这个问题，

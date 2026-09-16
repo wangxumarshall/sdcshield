@@ -1,0 +1,1 @@
+我们再写几个测试用例，你分别再之前的路径上创建tests/cpu/misc/sve512_f64_chain_arm.cpp；tests/cpu/misc/sve512_f64_special_arm.cpp；tests/cpu/misc/sve512_f32_chain_arm.cpp；三个空文件，稍后我给你代码，你等待一下。

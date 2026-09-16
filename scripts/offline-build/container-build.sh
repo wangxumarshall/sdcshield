@@ -130,6 +130,17 @@ fi
 # 系统默认 gcc 是 7.3(无 C++20/23)。激活 toolset: 把其 bin 加 PATH, 设 CC/CXX,
 # 设 lib/include 搜索路径(LDFLAGS/CPPFLAGS/-isystem), 让 meson 用 gcc-10 而非 gcc-7。
 TOOLSET_ROOT="/opt/openEuler/gcc-toolset-10/root"
+if [ -n "${OPENEULER_MACRO:-}" ] && [ ! -d "$TOOLSET_ROOT/usr/bin" ]; then
+    # 部分镜像(实测 20.03-LTS-SP4)烘焙层缺 toolset。RPM 树里有全套 gcc-toolset-10-*,
+    # 此处从 /rpms 强装(镜像层"依赖已就绪跳过安装"分支不覆盖这种缺包,兜底在此)。
+    echo "  toolset 缺失于镜像层,从 RPM 树强装 gcc-toolset-10..."
+    for tspkg in gcc-toolset-10-runtime gcc-toolset-10-gcc gcc-toolset-10-gcc-c++ \
+                 gcc-toolset-10-binutils gcc-toolset-10-libstdc++-devel \
+                 gcc-toolset-10-libgcc gcc-toolset-10-libatomic gcc-toolset-10-libgomp; do
+        f=$(ls "$RPMDIR"/${tspkg}-*.rpm 2>/dev/null | head -1) || true
+        [ -n "$f" ] && rpm -Uvh --nodeps --force "$f" >/dev/null 2>&1 || true
+    done
+fi
 if [ -n "${OPENEULER_MACRO:-}" ] && [ -d "$TOOLSET_ROOT/usr/bin" ]; then
     TS_BIN="$TOOLSET_ROOT/usr/bin"
     # toolset 的 gcc/g++ 二进制名为 gcc/g++(非 gcc-10); 加 PATH 优先于系统 gcc-7
@@ -162,7 +173,12 @@ SRCW="$BUILD/src"
 # 失败:undefined reference to `__isoc23_strtol'(openblas_env.c / e_afalg.c /
 # rand_unix.c)。检测:install/.glibc-build-tag(宿主 build.sh 写入或此处写入)
 # 与当前容器 ldd --version 不一致 → 删掉 install/,在容器内用该系列原生工具链重建。
-VENDORED_GLIBC="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$' || echo unknown)"
+# 注意:不能用 `ldd --version | head -1 | grep ...` 链 — inner 脚本 set -o pipefail,
+# head 提前关闭管道使 ldd 收 SIGPIPE(141),|| echo unknown 兜底会把 "unknown" 追加在
+# grep 已输出的版本号后面,VENDORED_GLIBC 变成两行 "2.38\nunknown" → tag 比较永假 →
+# 每次都重建(2026-09-16 24.03-SP3 重验实测踩坑)。getconf 是单命令,无管道无 SIGPIPE。
+VENDORED_GLIBC="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}' || true)"
+VENDORED_GLIBC="${VENDORED_GLIBC:-unknown}"
 # 20.03 最小 KIWI 镜像无 GNU tar,只有 bsdtar(libarchive);兼容两者。
 TAR_BIN="$(command -v tar || command -v bsdtar || echo tar)"
 rebuild_vendored() {

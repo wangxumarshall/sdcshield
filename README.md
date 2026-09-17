@@ -198,7 +198,7 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release &&
 | `mdim=2048` | 32MB | 16MB | 32MB | 64MB | DRAM/远端 NUMA |
 | `mdim=4096` | 128MB | 64MB | 128MB | 256MB | 大页/NUMA 交错 |
 
-（cgemm 元素 = 交错 (re,im) float 对 = 8 字节/元素，与 zgemm 同为 2×float 宽度；矩阵字节数与 dgemm 相同。）
+（cgemm 元素 = 交错 (re,im) float 对 = 8 字节/元素，是 zgemm 的 complex-float 对应物（zgemm = complex double = 16 字节/元素）；矩阵字节数与 dgemm 相同。）
 
 **全核内存预算表（scratch 合计 = 3 矩阵 × 核数；选档前先对照主机内存）**：
 

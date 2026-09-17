@@ -239,6 +239,13 @@ if host_machine.cpu_family() == 'aarch64'
             # RMode x FZ cartesian on the SVE datapath (the rounding
             # decision silicon is per-engine even though FPCR is shared).
             'sve_fpcr_cartesian_arm.cpp',
+            # Full-width SVE di/dt power virus: dependent svmla_f64_x burst
+            # with alternating high-Hamming operands + periodic
+            # stack-reload SVE loads inside the burst window (address
+            # generation x burst compound), yield stalls between bursts —
+            # the SVE-512 port of power_virus_dit (SEVI Obs.4: wider
+            # vectors carry additional low-frequency SDC).
+            'power_virus_dit_sve_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

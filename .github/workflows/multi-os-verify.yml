@@ -161,7 +161,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p results
-          python3 scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" \
+          python3 -u scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" \
             > verify.log 2>&1
           rc=$?
           tail -40 verify.log
@@ -173,7 +173,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p results
-          python3 scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" --smoke \
+          python3 -u scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" --smoke \
             > verify.log 2>&1
           rc=$?
           tail -40 verify.log

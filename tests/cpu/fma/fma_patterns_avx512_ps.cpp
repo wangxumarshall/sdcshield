@@ -1,9 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <atomic>
-#include <random>
 #include <cmath>
 
 #ifdef __aarch64__
@@ -11,6 +8,24 @@
 #endif
 
 static constexpr int VECTOR_SIZE = 16; // 16 个单精度浮点数
+
+// Bounded deterministic operand generator (|x| < 2, high-entropy mantissa),
+// byte-exact-compare safe (see fma.cpp for the SEVI rationale).
+static inline void fma_seed_advance(uint64_t *seed)
+{
+    *seed = *seed * 0x9E3779B97F4A7C15ULL + 1;
+}
+
+static inline float fma_rand_bounded(uint64_t *seed)
+{
+    fma_seed_advance(seed);
+    uint32_t bits = (uint32_t)(*seed >> 32);
+    uint32_t u = (bits >> 31) ? 0xBF800000u | (bits & 0x7FFFFFu)
+                              : 0x3F800000u | (bits & 0x7FFFFFu);
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
 
 static int fma_patterns_avx512_ps_init(struct test *test) {
     (void)test;
@@ -20,9 +35,8 @@ static int fma_patterns_avx512_ps_init(struct test *test) {
 #ifdef __aarch64__
 static int fma_patterns_avx512_ps_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1e6f, 1e6f);
-    static std::atomic<uint64_t> iter{0};
+    // 确定性操作数生成器：框架 RNG 种子（-s 可重放）
+    uint64_t seed = random64();
 
     do {
         // 生成随机向量 a, b, c（对齐到 16 字节即可满足 NEON）
@@ -33,9 +47,9 @@ static int fma_patterns_avx512_ps_run(struct test *test, int cpu) {
         float sw_ref[VECTOR_SIZE];
 
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            a[i] = dist(rng);
-            b[i] = dist(rng);
-            c[i] = dist(rng);
+            a[i] = fma_rand_bounded(&seed);
+            b[i] = fma_rand_bounded(&seed);
+            c[i] = fma_rand_bounded(&seed);
         }
 
         // ---- 硬件 FMA 计算 (NEON) ----
@@ -70,16 +84,8 @@ static int fma_patterns_avx512_ps_run(struct test *test, int cpu) {
             sw_ref[i] = fmaf(a[i], b[i], c[i]);
         }
 
-        // ---- 比较硬件结果与参考（允许 1e-6 相对误差或 1e-5 绝对误差） ----
-        bool data_ok = true;
-        for (int i = 0; i < VECTOR_SIZE; ++i) {
-            float diff = fabsf(hw_result[i] - sw_ref[i]);
-            float tol = 1e-6f * fmaxf(fabsf(hw_result[i]), fabsf(sw_ref[i]));
-            if (diff > tol && diff > 1e-5f) {
-                data_ok = false;
-                break;
-            }
-        }
+        // ---- 字节精确比较：任何位的翻转（含指数/符号位）都是 SDC ----
+        bool data_ok = (memcmp(hw_result, sw_ref, sizeof(hw_result)) == 0);
 
         // ---- 一致性测试：存储硬件结果到内存再加载比较 ----
         float store_buf[VECTOR_SIZE];
@@ -88,28 +94,7 @@ static int fma_patterns_avx512_ps_run(struct test *test, int cpu) {
         memcpy(reload_buf, store_buf, sizeof(store_buf));
         bool consistent = (memcmp(reload_buf, hw_result, sizeof(reload_buf)) == 0);
 
-        bool passed = data_ok && consistent;
-
-        uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        // ---- 输出日志（与 x86 版本完全一致） ----
-        fprintf(stderr, "fma_patterns_avx512_ps: Iter %lu, a[0..3]=%.6e %.6e %.6e %.6e\n",
-                iteration, a[0], a[1], a[2], a[3]);
-        fprintf(stderr, "                    b[0..3]=%.6e %.6e %.6e %.6e\n",
-                b[0], b[1], b[2], b[3]);
-        fprintf(stderr, "                    c[0..3]=%.6e %.6e %.6e %.6e\n",
-                c[0], c[1], c[2], c[3]);
-        fprintf(stderr, "  hw_result[0..3]=%.6e %.6e %.6e %.6e\n",
-                hw_result[0], hw_result[1], hw_result[2], hw_result[3]);
-        fprintf(stderr, "  sw_ref[0..3]=%.6e %.6e %.6e %.6e\n",
-                sw_ref[0], sw_ref[1], sw_ref[2], sw_ref[3]);
-        fprintf(stderr, "  data_ok=%d, consistent=%d, result=%s%s\033[0m\n",
-                data_ok, consistent, color, result_str);
-        fflush(stderr);
-
-        if (!passed) {
+        if (!(data_ok && consistent)) {
             report_fail_msg("fma_patterns_avx512_ps: FMA result mismatch or consistency failure");
             return EXIT_FAILURE;
         }

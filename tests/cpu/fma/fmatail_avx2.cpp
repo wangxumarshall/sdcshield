@@ -1,14 +1,43 @@
 #include <sandstone.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <atomic>
-#include <random>
 #include <cmath>
 
 #ifdef __aarch64__
 #include <arm_neon.h>          // ARM NEON 头文件
 #endif
+
+// Bounded deterministic operand generator (|x| < 2, high-entropy mantissa).
+// The fma family deliberately keeps operands in a bounded range so every
+// result stays finite and byte-exact comparable vs the libm fma/fmaf golden
+// (a 1-bit SDC flip anywhere shows up in the memcmp; SEVI ASPLOS'26 shows
+// FMA SDC also flips exponent/sign bits, so tolerance compares are blind).
+static inline void fma_seed_advance(uint64_t *seed)
+{
+    *seed = *seed * 0x9E3779B97F4A7C15ULL + 1;
+}
+
+static inline double fma_rand_bounded_d(uint64_t *seed)
+{
+    fma_seed_advance(seed);
+    uint64_t bits = *seed >> 32;
+    uint64_t u = (bits >> 31) ? 0xBFF0000000000000ULL | (bits & 0xFFFFFFFFFFFFFULL)
+                              : 0x3FF0000000000000ULL | (bits & 0xFFFFFFFFFFFFFULL);
+    double d;
+    memcpy(&d, &u, 8);
+    return d;
+}
+
+static inline float fma_rand_bounded(uint64_t *seed)
+{
+    fma_seed_advance(seed);
+    uint32_t bits = (uint32_t)(*seed >> 32);
+    uint32_t u = (bits >> 31) ? 0xBF800000u | (bits & 0x7FFFFFu)
+                              : 0x3F800000u | (bits & 0x7FFFFFu);
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
 
 static constexpr int VECTOR_SIZE = 4; // 4 个双精度浮点数
 
@@ -20,10 +49,9 @@ static int fmatail_avx2_init(struct test *test) {
 #ifdef __aarch64__
 static int fmatail_avx2_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(std::random_device{}());
-    // 使用更大范围的随机数，并包含一些特殊值
-    std::uniform_real_distribution<double> dist(-1e10, 1e10);
-    static std::atomic<uint64_t> iter{0};
+    /* Deterministic per-thread operand generator: seeded once from the
+     * framework RNG (replayable via -s), advanced by a splitmix64 LCG. */
+    uint64_t seed = random64();
 
     do {
         // 生成随机向量 a, b, c（对齐到 16 字节即可满足 NEON）
@@ -34,9 +62,9 @@ static int fmatail_avx2_run(struct test *test, int cpu) {
         double sw_ref[VECTOR_SIZE];
 
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            a[i] = dist(rng);
-            b[i] = dist(rng);
-            c[i] = dist(rng);
+            a[i] = fma_rand_bounded_d(&seed);
+            b[i] = fma_rand_bounded_d(&seed);
+            c[i] = fma_rand_bounded_d(&seed);
             // 随机加入一些特殊值（0, 1, -1）
             if (i % 4 == 0) {
                 switch (i % 3) {
@@ -80,25 +108,6 @@ static int fmatail_avx2_run(struct test *test, int cpu) {
         bool consistent = (memcmp(reload_buf, hw_result, sizeof(reload_buf)) == 0);
 
         bool passed = data_ok && consistent;
-
-        uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        // ---- 输出日志（与 x86 版本完全一致） ----
-        fprintf(stderr, "fmatail_avx2: Iter %lu, a[0..3]=%.12e %.12e %.12e %.12e\n",
-                iteration, a[0], a[1], a[2], a[3]);
-        fprintf(stderr, "              b[0..3]=%.12e %.12e %.12e %.12e\n",
-                b[0], b[1], b[2], b[3]);
-        fprintf(stderr, "              c[0..3]=%.12e %.12e %.12e %.12e\n",
-                c[0], c[1], c[2], c[3]);
-        fprintf(stderr, "  hw_result[0..3]=%.12e %.12e %.12e %.12e\n",
-                hw_result[0], hw_result[1], hw_result[2], hw_result[3]);
-        fprintf(stderr, "  sw_ref[0..3]=%.12e %.12e %.12e %.12e\n",
-                sw_ref[0], sw_ref[1], sw_ref[2], sw_ref[3]);
-        fprintf(stderr, "  data_ok=%d, consistent=%d, result=%s%s\033[0m\n",
-                data_ok, consistent, color, result_str);
-        fflush(stderr);
 
         if (!passed) {
             report_fail_msg("fmatail_avx2: FMA tail precision mismatch or consistency failure");

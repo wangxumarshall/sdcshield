@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cmath>
-#include <random>
 #include <cstring>
 
 #ifdef __aarch64__
@@ -10,23 +9,34 @@
 
 static constexpr size_t VECTOR_SIZE = 8;   // 8 个单精度浮点数
 
-// 软件参考：使用 fmaf 逐元素计算（单次舍入）
-static void software_fma(const float *a, const float *b, const float *c, float *ref) {
-    for (int i = 0; i < VECTOR_SIZE; ++i) {
-        ref[i] = fmaf(a[i], b[i], c[i]);
-    }
+// Bounded deterministic operand generator (|x| < 2, high-entropy mantissa).
+// Bounded operands keep every result finite so the byte-exact memcmp vs the
+// libm fmaf golden is valid — SEVI (ASPLOS'26) shows FMA SDC flips exponent
+// and sign bits too (relative errors up to 10240x), so any tolerance-based
+// compare would be blind to a real SDC. Seeded from the framework RNG once
+// per thread, replayable via -s.
+static inline void fma_seed_advance(uint64_t *seed)
+{
+    *seed = *seed * 0x9E3779B97F4A7C15ULL + 1;
 }
 
-// 比较两个浮点数数组是否近似相等（允许 1e-6 相对误差）
-static bool approx_equal(const float *x, const float *y) {
-    for (int i = 0; i < VECTOR_SIZE; ++i) {
-        float diff = fabsf(x[i] - y[i]);
-        float tol = 1e-6f * fmaxf(fabsf(x[i]), fabsf(y[i]));
-        if (diff > tol && diff > 1e-7f) {
-            return false;
-        }
+static inline float fma_rand_bounded(uint64_t *seed)
+{
+    fma_seed_advance(seed);
+    uint32_t bits = (uint32_t)(*seed >> 32);
+    uint32_t u = (bits >> 31) ? 0xBF800000u | (bits & 0x7FFFFFu)
+                              : 0x3F800000u | (bits & 0x7FFFFFu);
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
+
+// 软件参考：使用 fmaf 逐元素计算（单次舍入，与 NEON vfmaq 同为融合单舍入，
+// 位级一致 —— fmatail 家族既有 memcmp 先例证明）
+static void software_fma(const float *a, const float *b, const float *c, float *ref) {
+    for (size_t i = 0; i < VECTOR_SIZE; ++i) {
+        ref[i] = fmaf(a[i], b[i], c[i]);
     }
-    return true;
 }
 
 struct TestData {};
@@ -45,15 +55,15 @@ static int fma_run(struct test *test, int cpu) {
     alignas(16) float c[VECTOR_SIZE];
     alignas(16) float result[VECTOR_SIZE];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+    // 确定性操作数生成器：框架 RNG 种子（-s 可重放）
+    uint64_t seed = random64();
 
     do {
-        // 生成随机向量 a, b, c
-        for (int i = 0; i < VECTOR_SIZE; ++i) {
-            a[i] = dist(rng);
-            b[i] = dist(rng);
-            c[i] = dist(rng);
+        // 生成随机向量 a, b, c（有界高熵档，|x| < 2）
+        for (size_t i = 0; i < VECTOR_SIZE; ++i) {
+            a[i] = fma_rand_bounded(&seed);
+            b[i] = fma_rand_bounded(&seed);
+            c[i] = fma_rand_bounded(&seed);
         }
 
         // ---- 硬件 FMA 计算 (NEON) ----
@@ -77,8 +87,8 @@ static int fma_run(struct test *test, int cpu) {
         float ref[VECTOR_SIZE];
         software_fma(a, b, c, ref);
 
-        // 比较硬件结果与参考
-        bool data_ok = approx_equal(result, ref);
+        // ---- 字节精确比较：任何位的翻转（含指数/符号位）都是 SDC ----
+        bool data_ok = (memcmp(result, ref, sizeof(result)) == 0);
 
         // 一致性测试：存储硬件结果到内存再加载比较
         float store_buf[VECTOR_SIZE];

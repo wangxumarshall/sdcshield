@@ -44,7 +44,7 @@ sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzs
 ./third-party/sleef/build.sh             # → install/lib/libsleef.a（sleef_neon / sleef_sve）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
-./builddir/sdcshield --list-tests        # 应列出 279 个 PROD 用例
+./builddir/sdcshield --list-tests        # 应列出 291 个 PROD 用例
 
 ```
 
@@ -225,15 +225,15 @@ done
 
 ## 测试用例与检测能力
 
-当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）共 **288 个用例**：PROD 279、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）共 **300 个用例**：PROD 291、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
 | 内存 / 拷贝 | `memcpy_l{1d,2,3}_cache_size`、`memcpy_rewr`、`mem_disambiguation`、`mmu_stress_arm` | 各级缓存带宽、store-to-load 转发、跨行一致性与内存序、TLB 扰动 |
-| 缓存 / 互联 | `cachebounce`、`mesh_upi_*`（27） | cache line 弹跳、CLFLUSH 压力、MESH/UPI 多核读写协同 |
+| 缓存 / 互联 | `cachebounce`、`mesh_upi_*`（27 int + `mesh_upi_avx512_symm_f64` 首个 FP 变体：跨核共享数据 × FMA 计算复合） | cache line 弹跳、CLFLUSH 压力、MESH/UPI 多核读写协同 |
 | 锁 / 原子 | `lock*`、`lockless_cmpxchg*`、`atomic_simd_*`、`spinlock_*`（32） | 锁指令、无锁 cmpxchg、128/256/512 位原子、自旋锁各类竞争（ARM64 atomic） |
 | 向量 / SIMD | `swizzle`、`insert_extract`、`kreg1`–`kreg9`、`gather*` | NEON 排列/插入抽取、掩码寄存器（x86 k-reg 仿真）、gather/scatter |
-| FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values` | FMA 模式与尾数精度穷举、特殊值逐字节 golden 比对 |
+| FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values`、`fpcr_rounding_cartesian_arm` | FMA 模式与尾数精度穷举（全部字节精确比对）、特殊值逐字节 golden、FPCR 舍入模式×FZ×操作数笛卡尔（NEON + SVE 伴生 `sve_fpcr_cartesian_arm`，逐模式 tie 存活断言） |
 | 算术 / 大整数 | `adcx`、`adox`、`adcxlong`、`adcx_arm`、`bigint_mulx_arm`、`gmp_big*` | 进位/溢出链、GMP 大整数乘加、高汉明距离操作数压满加法器 |
 | CRC / 校验 | `crc32`、`isal_crc{32,64}_*`、`zpclmul*` | `crc32` 指令、isa-l CRC32/CRC64 各标准、zlib PCLMUL 折叠 |
 | 压缩 | `zlib*`、`zstd*`、`zfuzz`、`isal_igzip` | zlib/zstd 压缩-解压往返、各级别、fuzz、isa-l deflate/inflate 往返 |
@@ -245,7 +245,7 @@ done
 | OpenSSL SHA | `openssl_sha` | SHA-256/384/512 vs golden（默认构建，优先 vendored OpenSSL） |
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
-| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀） |
+| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`（读偏移显式断言 + u64base/宽步距变体）、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`（chain 家族带 `-O <test>.bounded=0|1` 双值域旋钮）、`sve512_nt_reload_arm`（ld1rd/ldnt1d/stnt1d 触发指令窗口 + 栈重装载距离 1..4 旋钮）、`sve512_fmmla_arm`（SVE2 矩阵外积 f32/f64）、`sve2_cross_precision_arm`（FP16/BF16 跨精度）、`sve512_fcmla_arm`（复数 FMA 全旋转）、`sve512_pred_ops_arm`（谓词密度/翻转/FADDA/FFR）、`sve_fpcr_cartesian_arm`（SVE 侧舍入网络）、`power_virus_dit_sve_arm`（全宽 SVE di/dt 病毒） | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀）、`sme_fmopa_za_arm`（SME FMOPA/ZA 外积链,纯 inline asm、GCC 可编；内核未暴露 HWCAP2_SME 时干净 skip,先用 `--selftests -e selftest_sme_sigill_probe` 一次跑定论内核支持） |
 | ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别（uint64x2 旋转 ALU + 向量 store/reload/store）、ldr_at_top 扫描顺序变体（升/降序交替，区分槽位局部 vs 前进位置特征）、core-179 字节交换往返触发探针组 |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
 
@@ -255,11 +255,22 @@ done
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 4 |
-| 2 | PROD（默认）| `quality >= 2` | 279 |
-| | **合计** | | **288** |
+| 2 | PROD（默认）| `quality >= 2` | 291 |
+| | **合计** | | **300** |
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm_crypto`、`ist_sbaf`、`neon_add`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
+
+### SDC 激发增强套件（2026-09-17）
+
+基于 31 篇 SDC 文献综合（`docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`）与 cn23154 NUMA3 故障签名研究的 16 项增强已全部落地：
+
+- **检测强度修复**：fma 家族（11 文件）容差比较全部升级为字节精确 memcmp（SEVI：FMA SDC 亦翻指数/符号位,误差可达 10240×）;fma/gather 家族 RNG 全部改为框架 RNG（`-s` 可重放）;热循环 fprintf 全部移除（ITHICA execution context 敏感）。
+- **触发指令窗口覆盖**：`sve512_nt_reload_arm` 是 ld1rd/ldnt1d/stnt1d（NUMA3 VA 通路故障的触发指令形态）在全仓的首个覆盖,reload→use 距离 1..4 参数化扫描。
+- **SVE2/SME 指令族**：FMMLA 矩阵外积、FP16/BF16 跨精度、FCMLA 复数全旋转、谓词网络/FADDA/FFR、FPCR 舍入模式×FZ 笛卡尔、SVE di/dt 病毒、SME FMOPA/ZA——每族一个测试,标量同序 golden + 字节级比较 + 一步 lane-mapping 自检。
+- **跨核共享×FP 复合**：`mesh_upi_avx512_symm_f64` 是 mesh 家族（27 个 int 测试）的首个浮点变体。
+- **campaign 与诊断**：`scripts/run/run_cluster_anchored.sh`（簇锚定 + 健康簇对照 + 30min 长驻/快速轮换双节奏,Ripple 7% 类缺陷需后者）;崩溃消息自动报告 VA[55:48] 非零签名形状;`memcmp_or_fail` 失败时输出 lane 偏移直方图（SEVI 98.5% 单 lane 指纹）。
+- **已知限制（诚实声明）**：SVE/SVE2/SME 类测试在无 SVE 宿主机（本机 Kunpeng 920）验证到「编译 + 指令生成 + 干净 skip」级,真实验证需 cn23154（0xd22）;`acl_gemm` 因 fork-safety 恒 skip 未改;全仓另有 ~112 文件使用非框架 RNG（本轮只修了 fma/gather 家族）,后续按族清理。
 
 ### 占位用例的诚实跳过
 

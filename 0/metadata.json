@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M2PQFMSY1J93FDNWDAT1G9RQ",
+  "session_id": "21476f41-613b-4c1f-a15c-8a99abc6eb18",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-17T03:45:10.248134495Z",
+  "branch": "feat/sdc-excitation-enhancement-20260917",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "glm-5.3",
+  "turn_id": "acb4b3dce260",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 689470,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 20640832,
+    "output_tokens": 223002,
+    "api_call_count": 118
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-call_07792ad0e05d4e70b4e03004",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "acb4b3dce260",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "5f5cd412-4b39-44d8-a0f2-4c5f9816abd0"
+        ],
+        "tool_use_id": "call_07792ad0e05d4e70b4e03004"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "call_07792ad0e05d4e70b4e03004"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  }
+}

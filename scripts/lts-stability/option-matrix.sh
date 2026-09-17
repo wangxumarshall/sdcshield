@@ -41,8 +41,13 @@ MATRIX_IDS=(
     m25_total_time_mode
     m26_verbose_vv
     m27_ipsec_static_ssl
-    m28_maxtestcount_1sec
+    m29_knob_igzip_level_max
+    m30_new_ssl_tests
 )
+
+# 2026-09-17 增补(main 901ca96..ebe0bf1 新测试集):
+#   m29: isal_igzip 压缩等级旋钮(level=3;level 0/1 已被 m01 基线的 default level 1 覆盖)
+#   m30: openssl_sha3 + openssl_sm3sm4(国密摘要)新 SSL 测试 + igzip 默认级
 
 # eigen 数值敏感测试(CLAUDE.md: 大规模多线程下 ULP 级偶发假 FAIL,-n 1 稳定)
 EIGEN_FLAKY="eigen_svd_double eigen_sparse eigen_svd_cdouble eigen_svd_cdouble_sve"
@@ -91,8 +96,8 @@ run_m14_knob_zstd_level_high() { "$BIN" -e zstd19 --ignore-timeout -t "$T_SHORT"
 run_m15_knob_zlib_level_low()  { "$BIN" -e zlib9  --ignore-timeout -t "$T_SHORT" -n 4 -O zlib9.level=1  -O zlib9.maxbuffersize=4096 -o "$OUT/m15.yaml"; }
 run_m16_knob_zlib_level_high() { "$BIN" -e zlib9  --ignore-timeout -t "$T_SHORT" -n 4 -O zlib9.level=9  -o "$OUT/m16.yaml"; }
 
-run_m17_knob_openblas_mdim_min() { "$BIN" -e openblas_dgemm -e openblas_sgemm -e openblas_zgemm --ignore-timeout -t "$T_SHORT" -n 4 -O openblas_dgemm.mdim=16 -O openblas_sgemm.mdim=16 -O openblas_zgemm.mdim=16 -o "$OUT/m17.yaml"; }
-run_m18_knob_openblas_mdim_max() { "$BIN" -e openblas_dgemm -e openblas_sgemm -e openblas_zgemm --ignore-timeout -t "$T_SHORT" -n 4 -O openblas_dgemm.mdim=4096 -O openblas_sgemm.mdim=4096 -O openblas_zgemm.mdim=4096 -o "$OUT/m18.yaml"; }
+run_m17_knob_openblas_mdim_min() { "$BIN" -e openblas_dgemm -e openblas_sgemm -e openblas_zgemm -e openblas_cgemm -e openblas_lu --ignore-timeout -t "$T_SHORT" -n 4 -O openblas_dgemm.mdim=16 -O openblas_sgemm.mdim=16 -O openblas_zgemm.mdim=16 -O openblas_cgemm.mdim=16 -O openblas_lu.n=16 -o "$OUT/m17.yaml"; }
+run_m18_knob_openblas_mdim_max() { "$BIN" -e openblas_dgemm -e openblas_sgemm -e openblas_zgemm -e openblas_cgemm -e openblas_lu --ignore-timeout -t "$T_SHORT" -n 4 -O openblas_dgemm.mdim=4096 -O openblas_sgemm.mdim=4096 -O openblas_zgemm.mdim=4096 -O openblas_cgemm.mdim=4096 -O openblas_lu.n=2048 -o "$OUT/m18.yaml"; }
 
 run_m19_memcpy_rewr_strategy0() { SANDSTONE_STRATEGY_INDEX=0 "$BIN" -e memcpy_rewr --ignore-timeout -t "$T_SHORT" -n 8 -o "$OUT/m19.yaml"; }
 run_m20_memcpy_rewr_strategy1() { SANDSTONE_STRATEGY_INDEX=1 "$BIN" -e memcpy_rewr --ignore-timeout -t "$T_SHORT" -n 8 -o "$OUT/m20.yaml"; }
@@ -138,3 +143,10 @@ run_m26_verbose_vv() {
 run_m27_ipsec_static_ssl() { "$BIN" -e 'ipsec*' -e openssl_sha --ignore-timeout -t "$T_SHORT" -n 8 -o "$OUT/m27.yaml"; }
 
 run_m28_maxtestcount_1sec() { "$BIN" --ignore-timeout --1sec --max-test-count 30 -n 8 -o "$OUT/m28.yaml"; }
+
+run_m29_knob_igzip_level_max() { "$BIN" -e isal_igzip --ignore-timeout -t "$T_SHORT" -n 4 -O isal_igzip.level=3 -o "$OUT/m29.yaml"; }
+
+# 新 SSL/压缩测试(main 新增):sha3(Keccak 海绵)、sm3sm4(国密)、igzip(isa-l deflate)。
+# 这些在 15 镜像上全部编入(sha3/sm3sm4 随 vendored openssl;igzip 随 vendored isa-l —
+# 其静态库仅引用 memcpy/strnlen,glibc 2.28+ 安全,无需容器内重建)。
+run_m30_new_ssl_tests() { "$BIN" -e openssl_sha3 -e openssl_sm3sm4 -e isal_igzip --ignore-timeout -t "$T_SHORT" -n 8 -o "$OUT/m30.yaml"; }

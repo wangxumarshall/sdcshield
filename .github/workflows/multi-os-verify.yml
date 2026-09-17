@@ -39,12 +39,12 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container:
       image: ghcr.io/wangxumarshall/sdcshield-offline:${{ matrix.series }}-${{ matrix.sp }}
-      # 用 GITHUB_TOKEN 认证拉取 ghcr.io(同一 account 下 packages:read)。
-      # 公开镜像无需此认证,私有镜像则必需;username 固定为镜像 owner(不可用 github.actor:
-      # schedule 触发时 actor 为空,会导致 docker login 失败)。
+      # 私有镜像在 user 命名空间 ghcr.io,wangxumarshall/sdcshield-offline,GITHUB_TOKEN
+      # (repo-scoped)拉不动。用 GHCR_TOKEN(repo secret,classic PAT 带 read:packages)
+      # 认证。username 固定 wangxumarshall(github.actor 在 schedule 下为空会致 login 失败)。
       credentials:
         username: wangxumarshall
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ secrets.GHCR_TOKEN }}
       options: --user root        # 镜像内源码构建/装包需 root
     strategy:
       fail-fast: false            # 15 个镜像互不拖累,全跑完再出结论

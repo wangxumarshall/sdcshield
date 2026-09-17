@@ -274,6 +274,11 @@ if framework_config.get('SANDSTONE_SSL_BUILD') == 1
             # copy/compute/verify pattern as openssl_sha, orthogonal
             # AND-XOR-rotate datapath vs SHA-2's additive chains.
             'openssl/openssl_sha3.cpp',
+            # SM3/SM4 Chinese national crypto (国密): SM3 digest (integer
+            # mixing structure distinct from SHA-2/3) + SM4 block cipher
+            # (own S-box/round function vs AES) — two new integer-path
+            # phases; EVP golden encrypt/decrypt-roundtrip/digest pattern.
+            'openssl/openssl_sm3sm4.cpp',
             # Intel IPSEC suite. On x86-64 the _sse/_avx/_avx512/_x86_64
             # variants gate on x86 arch constants via IPSEC_X86_GATE(); on
             # AArch64 the gate is dropped (the variants are all portable
@@ -474,6 +479,7 @@ if host_machine.cpu_family() == 'aarch64' and run_command('test', '-f',
             'openblas_gemm/sgemm.cpp',
             'openblas_gemm/zgemm.cpp',
             'openblas_gemm/cgemm.cpp',
+            'openblas_gemm/lu.cpp',
         )
     )
 else

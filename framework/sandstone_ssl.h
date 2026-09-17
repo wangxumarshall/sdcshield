@@ -991,6 +991,11 @@
     F(EVP_seed_cfb)                              \
     F(EVP_seed_ecb)                              \
     F(EVP_seed_ofb)                              \
+    F(EVP_sm4_cbc)                               \
+    F(EVP_sm4_cfb128)                            \
+    F(EVP_sm4_ctr)                               \
+    F(EVP_sm4_ecb)                               \
+    F(EVP_sm4_ofb)                               \
     F(EVP_sha1)                                  \
     F(EVP_sha224)                                \
     F(EVP_sha256)                                \

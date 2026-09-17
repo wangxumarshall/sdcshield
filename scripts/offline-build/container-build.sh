@@ -144,7 +144,7 @@ if [ -n "${OPENEULER_MACRO:-}" ] && [ ! -d "$TOOLSET_ROOT/usr/bin" ]; then
     for tspkg in gcc-toolset-10-runtime gcc-toolset-10-gcc gcc-toolset-10-cpp gcc-toolset-10-gcc-c++ \
                  gcc-toolset-10-binutils gcc-toolset-10-libstdc++-devel \
                  gcc-toolset-10-libgcc gcc-toolset-10-libatomic gcc-toolset-10-libgomp \
-                 libmpc mpfr gmp binutils glibc-devel; do
+                 libmpc mpfr gmp binutils glibc-devel gcc-toolset-10-libstdc++; do
         f=$(ls "$RPMDIR"/${tspkg}-*.rpm 2>/dev/null | head -1) || true
         [ -n "$f" ] && rpm -Uvh --nodeps --force "$f" >/dev/null 2>&1 || true
     done

@@ -176,9 +176,25 @@ static int sve512_f64_chain_arm_init(struct test *test)
         const size_t n64 = CHAIN_STEPS * data->vl_d;
         data->m_f64.resize(n64);
         data->a_f64.resize(n64);
+        // Value-domain knob (SEVI ASPLOS'26 Obs.19: bounded vs unbounded
+        // inputs differ up to 245x in SDC frequency on the same core).
+        // bounded=1 (default): the finite high-Hamming table, |x| <= 2.
+        // bounded=0: full-entropy mantissas with exponent clamped to
+        // [1-8, 1+8] so the chain still cannot overflow to Inf/NaN and
+        // the byte-exact golden stays valid.
+        int64_t bounded = get_testspecific_knob_value_int(test, "bounded", 1);
         for (size_t i = 0; i < n64; ++i) {
-            data->m_f64[i] = F64_FINITE[(i * 7 + 1) % F64_FINITE_SIZE];
-            data->a_f64[i] = F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE];
+            if (bounded) {
+                data->m_f64[i] = F64_FINITE[(i * 7 + 1) % F64_FINITE_SIZE];
+                data->a_f64[i] = F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE];
+            } else {
+                uint64_t rm = splitmix64(0xB0B00000ULL + i);
+                uint64_t ra = splitmix64(0x0B0B0000ULL + i);
+                uint64_t em = 0x3FFULL - 8 + (rm >> 61);       // [1-8, 1+8]
+                uint64_t ea = 0x3FFULL - 8 + (ra >> 61);
+                data->m_f64[i] = (em << 52) | (rm & 0xFFFFFFFFFFFFFULL);
+                data->a_f64[i] = (ea << 52) | (ra & 0xFFFFFFFFFFFFFULL);
+            }
         }
 
         test->data = data.release();

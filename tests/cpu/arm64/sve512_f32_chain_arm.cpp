@@ -160,9 +160,23 @@ static int sve512_f32_chain_arm_init(struct test *test)
         const size_t n32 = CHAIN_STEPS * data->vl_w;
         data->m_f32.resize(n32);
         data->a_f32.resize(n32);
+        // Value-domain knob (SEVI Obs.19: bounded vs unbounded inputs
+        // differ up to 245x in SDC frequency on the same core).
+        int64_t bounded = get_testspecific_knob_value_int(test, "bounded", 1);
         for (size_t i = 0; i < n32; ++i) {
-            data->m_f32[i] = F32_FINITE[(i * 7 + 1) % F32_FINITE_SIZE];
-            data->a_f32[i] = F32_FINITE[(i * 5 + 3) % F32_FINITE_SIZE];
+            if (bounded) {
+                data->m_f32[i] = F32_FINITE[(i * 7 + 1) % F32_FINITE_SIZE];
+                data->a_f32[i] = F32_FINITE[(i * 5 + 3) % F32_FINITE_SIZE];
+            } else {
+                // unbounded: full-entropy mantissa, exponent clamped to
+                // [1-4, 1+3] so the chain cannot overflow (golden valid)
+                uint64_t rm = splitmix64(0xB0B00000ULL + i);
+                uint64_t ra = splitmix64(0x0B0B0000ULL + i);
+                uint32_t em = 0x7Fu - 4 + (uint32_t)(rm >> 62);
+                uint32_t ea = 0x7Fu - 4 + (uint32_t)(ra >> 62);
+                data->m_f32[i] = (em << 23) | ((uint32_t)rm & 0x7FFFFFu);
+                data->a_f32[i] = (ea << 23) | ((uint32_t)ra & 0x7FFFFFu);
+            }
         }
 
         test->data = data.release();

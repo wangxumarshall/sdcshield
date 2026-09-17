@@ -144,6 +144,12 @@ tests_set_base.add(
         'mesh/mesh_upi_avx512_asymm_write_only_int.cpp',
         'mesh/mesh_upi_avx512_sym.cpp',
         'mesh/mesh_upi_avx512_symm_int.cpp',
+        # First FP mesh variant: cross-core shared-data f64
+        # production/consumption — NEON vfmaq_f64 chains on both sides
+        # of the shared buffer with exact 0.5-multiple arithmetic
+        # (order-independent sums, byte-exact). The remote-access x
+        # compute compound the int-only mesh family never covered.
+        'mesh/mesh_upi_avx512_symm_f64.cpp',
         'mesh/mesh_upi_sse_asymm_distrib_int.cpp',
         'mesh/mesh_upi_sse_asymm_distrib_write_int.cpp',
         'mesh/mesh_upi_sse_asymm_int.cpp',

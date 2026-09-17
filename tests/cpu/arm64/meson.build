@@ -218,6 +218,15 @@ if host_machine.cpu_family() == 'aarch64'
             # ld1rd broadcasts; byte-exact golden with identical op order;
             # VA[63:48] canary per outer iteration.
             'sve512_nt_reload_arm.cpp',
+            # Complex FMA (FCMLA) all-rotation chain: svcmla_f64 at
+            # 0/90/180/270 (literal rotation -> one specialized function
+            # each) over dependent 512-step chains; golden is the DDI 0616
+            # fused-semantics fma expansion (NOT std::complex — its
+            # multiply is double-rounded); worked-example self-check per
+            # rotation. Complex datapath had zero instruction-level
+            # coverage (eigen_svd_cdouble only goes through scalar
+            # complex expansion). SVE1 — any SVE machine runs it.
+            'sve512_fcmla_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

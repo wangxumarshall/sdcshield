@@ -126,6 +126,13 @@ else
     fi
 fi
 
+# ld 符号链接兜底对"镜像烘焙分支"同样必要: 烘焙镜像(依赖已就绪跳过安装)也可能缺
+# /usr/bin/ld(尤其 20.03-SP4 这种 toolset 靠自愈强装的场景, collect2 需要系统 ld)。
+if [ ! -e /usr/bin/ld ] && [ -e /usr/bin/ld.bfd ]; then
+    ln -sf /usr/bin/ld.bfd /usr/bin/ld
+    echo "  建 /usr/bin/ld → ld.bfd 符号链接(烘焙分支兜底)"
+fi
+
 # 20.03: gcc-10 以 SCL gcc-toolset-10 形式安装(在 /opt/openEuler/gcc-toolset-10/root/)。
 # 系统默认 gcc 是 7.3(无 C++20/23)。激活 toolset: 把其 bin 加 PATH, 设 CC/CXX,
 # 设 lib/include 搜索路径(LDFLAGS/CPPFLAGS/-isystem), 让 meson 用 gcc-10 而非 gcc-7。

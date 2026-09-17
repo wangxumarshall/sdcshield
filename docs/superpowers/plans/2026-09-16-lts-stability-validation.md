@@ -36,38 +36,22 @@
 
 ---
 
-### Task 1: 编写 scripts/lts-stability/ 一键式验证脚本
+### Task 1: 编写 scripts/lts-stability/ 一键式验证脚本 ✅ 已完成(2026-09-16)
 
-**Files:**
-- Create: `scripts/lts-stability/run-lts-stability.sh`(主入口:单镜像全矩阵 → 15 镜像编排)
-- Create: `scripts/lts-stability/option-matrix.sh`(选项矩阵定义,被主脚本 source)
-- Create: `scripts/lts-stability/README.md`
+**完成记录:**
+- `scripts/lts-stability/{run-lts-stability.sh,option-matrix.sh,README.md}` 落地,28 选项组合矩阵。
+- 语法检查 + 本机(builddir-full,286 测试)逐条目真实执行验证(m01-m28 + x23/x24)。
+- 冒烟:`./run-lts-stability.sh 24.03 SP3 --smoke` → `RESULT: PASS openEuler-24.03LTS_SP3 (matrix 1/1 yaml_fail=0)`。
+- **执行中发现并修复 4 个真实 bug**(各自独立 commit,见 git log):
+  1. `container-build.sh` ACL 头挂载无 `:Z`(rootless+SELinux enforcing 下 Permission denied)。
+  2. `framework/meson.build` crypto_dep 从未传给 framework 库自身 → openssl 头靠系统路径侥幸命中(24.03),22.03/20.03(openssl 1.1.1)编译失败 → 加 `framework_ssl_deps`。
+  3. `tests/cpu/arithmetic_arm/meson.build` 无条件链接 host 硬编码的 libclang_rt.builtins.a → 22.03/20.03 链接失败 → probe 门控。
+  4. vendored 库 host 构建(glibc 2.38 的 `__isoc23_strtol`)在 22.03(2.34)/20.03(2.28)链接失败 → inner 脚本按 `.glibc-build-tag` 容器内原生重建 openssl/openblas,sleef 无 cmake 优雅缺席;tar→bsdtar 兼容 20.03。
+- 并行安全:per-series 源码硬链接副本(cp -al,排除 rpms/.git/dist/build-out),消除共享 /src 挂载的并发 :Z relabel 竞态(首次 15/15 FAIL 的根因)。
+- 三系列冒烟全 PASS:24.03-SP1(277 测试)/ 22.03-LTS(272)/ 20.03-LTS(272),ipsec=46+openssl_sha=1 全部编入。
 
-**设计:**
-
-每镜像执行阶段(输入:series sp):
-1. 镜像就绪检查(podman image inspect)。
-2. 容器内原生构建全功能二进制(meson -Dssl_link_type=static;22.03/20.03 注入 polyfill,复用 container-build.sh 的 EXTRA_MESON 机制,追加 -Dssl_link_type=static;vendored 库的 install/ 随 /src 只读挂载天然可用)。
-3. 选项矩阵执行(每个组合独立 podman run,timeout 保护,-o yaml 输出到挂载目录):
-   - M1 全量基线:`-t 1000 -n 8 --ignore-timeout`(286 测试)
-   - M2 eigen flaky -n1:4 测试各 `-n 1 -t 1000`
-   - M3 quality 扫描:`--quality=-1 -t 500 -n 8`(295 测试,含 SKIP 级)与 `--quality=0 -t 500 -n 8`(290)
-   - M4 全核:`-t 1000`(默认 -n = 191 线程,排除 4 个 eigen flaky,单独 -n1 补)
-   - M5 RNG 扫描:zstd19/crc32/fma 三测试 × `-s Constant:1/LCG:1/AES:1`(AES 不在则 default)
-   - M6 cpuset:zstd19 × `--cpuset=0` / `--cpuset=0,24,48,72`(跨 NUMA)
-   - M7 严格模式:`-F --strict-runtime -t 800 -n 8` + `--test-list-randomize -t 800 -n 8`
-   - M8 测试旋钮:zstd19 `-O zstd19.level=1/19`、zlib9 `-O zlib9.level=1/9`、openblas_dgemm `-O openblas_dgemm.mdim=16/4096`、memcpy_rewr × SANDSTONE_STRATEGY_INDEX=0/1/2
-   - M9 selftests:`--selftests -t 300 -n 4 --ignore-timeout`(142 个)
-   - M10 崩溃上下文:`--on-crash=context -e selftest_sigsegv -vv`(期望:干净捕获崩溃,非工具本身 crash)
-   - M11 -T 模式:`-T 10s --strict-runtime -n 8`(限制测试数 --max-test-count 20 防超时)
-   - M12 verbose:抽样 5 个测试 `-vv`
-4. 判定:全部组合 exit code 0(yaml 无 result: fail、无 crash 标志、期望 fail 的 selftest 除外)→ `RESULT: PASS <tag>`。
-
-15 镜像编排:`run-lts-stability.sh --all`,xargs -P 3 并行(3 系列,每系列 5 SP 串行,避免 podman/RAM 过载),汇总 15 行 RESULT。
-
-**验证(Task 1 完成标准):**
-- [ ] `bash -n` 语法通过;`--help` 输出正常
-- [ ] 单镜像冒烟:`./run-lts-stability.sh 24.03 SP3 --smoke`(只跑 M1 短版)真实输出 `RESULT: PASS`
+- [x] `bash -n` 语法通过
+- [x] 单镜像冒烟真实输出 `RESULT: PASS`
 
 ---
 

@@ -121,6 +121,14 @@ jobs:
             echo "activated gcc-toolset-10: $(gcc --version 2>/dev/null | head -1)"
           fi
           echo "::group::vendored libraries"
+          # 20.03-LTS 最小镜像只有 bsdtar(无 GNU tar);vendored 的 build.sh 硬编码 tar。
+          # 这里 tar 缺 -> ln -s bsdtar 兜底(bsdtar 兼容 xzf --strip-components)。align
+          # container-build.sh 的 TAR_BIN 兜底思路。
+          if ! command -v tar >/dev/null 2>&1 && command -v bsdtar >/dev/null 2>&1; then
+            mkdir -p /usr/local/bin
+            ln -sf "$(command -v bsdtar)" /usr/local/bin/tar
+            echo "shim tar -> bsdtar (20.03 最小镜像无 GNU tar)"
+          fi
           # sleef 需 cmake:24.03 镜像 cmake 断链(缺 libuv.so.1)、22.03/20.03 无 cmake → 优雅缺席
           # (与 container-build.sh 一致)。openssl/openblas/isa-l 均 make 路径,镜像内可重建。
           for lib in openssl openblas isa-l; do

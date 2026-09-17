@@ -681,7 +681,13 @@ tests_set_base.add(
 # without libisal installed.
 #  - crc/isal_*.cpp (10): CRC functions.
 #  - isa-l/igzip.cpp: igzip deflate/inflate round-trip SDC stress.
-isal_lib = cpp.find_library('isal', required : false, static : true)
+# Link dynamically: the project links with b_pie=true, and the host's static
+# /usr/lib/libisal.a is compiled without -fPIC, so pulling it into the PIE
+# executable fails with "R_AARCH64_ADR_PREL_PG_HI21 against __stack_chk_guard
+# ... recompile with -fPIC" at link time (observed 2026-09-17, after the
+# 2026-09-17 meson reconfigure regenerated build.ninja; the 2026-09-16 link
+# had used a stale build.ninja). The shared libisal.so is PIC and links cleanly.
+isal_lib = cpp.find_library('isal', required : false)
 tests_set_base.add(
     when : isal_lib,
     if_true : files(

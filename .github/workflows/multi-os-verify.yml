@@ -102,6 +102,24 @@ jobs:
         run: |
           set -uo pipefail
           export JOBS="$(nproc)"
+          case "$SERIES" in
+            24.03) CPPSTD="gnu++23"; OEU_MACRO=""; MESON_CMD="meson" ;;
+            22.03) CPPSTD="gnu++20"; OEU_MACRO="OPENEULER_22_03"; MESON_CMD="meson" ;;
+            20.03) CPPSTD="gnu++20"; OEU_MACRO="OPENEULER_20_03"; MESON_CMD="python3 third-party/meson/meson-0.59.4/meson.py" ;;
+          esac
+          # 20.03 默认 gcc 是 7.3(无 C++20),必须激活镜像烘焙的 gcc-toolset-10
+          # (在 /opt/openEuler/gcc-toolset-10/root/,含 gcc-10 + 其 libstdc++)。对齐
+          # container-build.sh 的 toolset 激活块: PATH/CC/CXX/LDFLAGS(rpath)/PKG_CONFIG_PATH。
+          # 22.03(gcc-10.3.1 默认)/24.03(gcc-12)无此目录 → 自然跳过。
+          TOOLSET_ROOT="/opt/openEuler/gcc-toolset-10/root"
+          if [ -d "$TOOLSET_ROOT/usr/bin" ]; then
+            export PATH="$TOOLSET_ROOT/usr/bin:$PATH"
+            export CC="$TOOLSET_ROOT/usr/bin/gcc"
+            export CXX="$TOOLSET_ROOT/usr/bin/g++"
+            export LDFLAGS="-L$TOOLSET_ROOT/usr/lib64 -Wl,-rpath,$TOOLSET_ROOT/usr/lib64 ${LDFLAGS:-}"
+            export PKG_CONFIG_PATH="$TOOLSET_ROOT/usr/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
+            echo "activated gcc-toolset-10: $(gcc --version 2>/dev/null | head -1)"
+          fi
           echo "::group::vendored libraries"
           # sleef 需 cmake:24.03 镜像 cmake 断链(缺 libuv.so.1)、22.03/20.03 无 cmake → 优雅缺席
           # (与 container-build.sh 一致)。openssl/openblas/isa-l 均 make 路径,镜像内可重建。
@@ -109,18 +127,14 @@ jobs:
             ( cd "third-party/$lib" && bash build.sh ) || { echo "::error::$lib build failed"; exit 1; }
           done
           echo "::endgroup::"
-          case "$SERIES" in
-            24.03) CPPSTD="gnu++23"; OEU_MACRO=""; MESON_CMD="meson" ;;
-            22.03) CPPSTD="gnu++20"; OEU_MACRO="OPENEULER_22_03"; MESON_CMD="meson" ;;
-            20.03) CPPSTD="gnu++20"; OEU_MACRO="OPENEULER_20_03"; MESON_CMD="python3 third-party/meson/meson-0.59.4/meson.py" ;;
-          esac
           export CXXFLAGS="${CXXFLAGS:-}"
           if [ -n "$OEU_MACRO" ]; then
             export CXXFLAGS="-D${OEU_MACRO} -include $(pwd)/framework/compat/cpp23_polyfill.h -include unistd.h -isystem $(pwd)/framework/compat ${CXXFLAGS}"
           fi
           ACL_OPT=""; [ -n "$OEU_MACRO" ] && ACL_OPT="-Denable_acl=disabled"
           echo "::group::meson setup ($CPPSTD $ACL_OPT)"
-          PKG_CONFIG_PATH="$(pwd)/third-party/eigen5" $MESON_CMD setup builddir --buildtype=release \
+          # eigen5 前置(pkg-config 兼容保留),toolset pkgconfig(20.03)已在 PKG_CONFIG_PATH 里
+          PKG_CONFIG_PATH="$(pwd)/third-party/eigen5:${PKG_CONFIG_PATH:-}" $MESON_CMD setup builddir --buildtype=release \
             -Dcpp_std="$CPPSTD" $ACL_OPT
           echo "::endgroup::"
           echo "::group::ninja"

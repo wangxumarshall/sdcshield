@@ -250,6 +250,12 @@ if host_machine.cpu_family() == 'aarch64'
             # one-step lane-mapping self-check (the mapping is worked out
             # in the docblock — a golden bug must never report as SDC).
             'sve512_fmmla_arm.cpp',
+            # Cross-precision chains: svmlalb/svmlalt (FP16->FP32) and
+            # svbfdot (BF16->FP32) — independent low-precision pipelines
+            # and widening accumulators the regular FMLA tests never
+            # touch; exact-table operands keep the chain byte-comparable;
+            # per-family one-step self-checks.
+            'sve2_cross_precision_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [
@@ -263,7 +269,7 @@ if host_machine.cpu_family() == 'aarch64'
             default_cpp_warn,
             default_cpp_flags,
             march_generic_flags,
-            '-march=armv9-a+sve2+f32mm+f64mm',
+            '-march=armv9-a+sve2+bf16+f32mm+f64mm',
         ],
     )
 

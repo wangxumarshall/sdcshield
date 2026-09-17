@@ -235,6 +235,10 @@ if host_machine.cpu_family() == 'aarch64'
             # is silent (wrong lanes compute; result stays bit-legal) —
             # exactly an SDC shape.
             'sve512_pred_ops_arm.cpp',
+            # SVE companion of fpcr_rounding_cartesian_arm: the same FPCR
+            # RMode x FZ cartesian on the SVE datapath (the rounding
+            # decision silicon is per-engine even though FPCR is shared).
+            'sve_fpcr_cartesian_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

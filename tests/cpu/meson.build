@@ -589,6 +589,12 @@ tests_set_base.add(
 tests_set_base.add(
     files(
         'fma/fma.cpp',
+        # FPCR rounding-mode x FZ cartesian (NEON): the rounding network is
+        # a distinct FPU silicon region the rest of the suite exercises
+        # only at the reset default. Same-mode fesetround golden, software
+        # FZ flush mirror, per-mode tie liveness assertion, FPCR
+        # save/restore discipline. Runs on ANY aarch64 (no SVE needed).
+        'fma/fpcr_rounding_cartesian_arm.cpp',
         'fma/fma_patterns_avx512_pd.cpp',
         'fma/fma_patterns_avx512_ps.cpp',
         'fma/fma_tail_avx2.cpp',

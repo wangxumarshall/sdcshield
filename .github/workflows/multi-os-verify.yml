@@ -1,0 +1,205 @@
+name: Multi-OS Verify
+
+# 多 openEuler 版本(20.03 / 22.03 / 24.03 × LTS+SP1~SP4 = 15)每日全量功能验证 + 跨 OS 基准。
+#
+# 原生容器执行模式:作业直接 `container:` 运行在目标 ghcr.io 构建镜像里(代码由
+# actions/checkout 自动挂载到容器工作目录),配置最简洁、无 docker 嵌套、无 SELinux :Z 竞态。
+#
+# 触发:每天 12:00(北京时间 UTC+8)的 cron + 手动 workflow_dispatch。
+#   注意 GitHub cron 按 UTC 解释:"0 4 * * *" = UTC 04:00 = 北京时间 12:00。
+#   cron 只对默认分支生效;其它分支用 workflow_dispatch(可选 verify_depth 参数)。
+
+on:
+  schedule:
+    - cron: '0 4 * * *'          # 每天 UTC 04:00 = 北京时间 12:00
+  workflow_dispatch:
+    inputs:
+      verify_depth:
+        description: '验证深度(full = 全量+参数扫描 / smoke = 快档:list-tests + zstd19)'
+        required: false
+        default: 'full'
+        type: choice
+        options: [full, smoke]
+
+permissions:
+  contents: read
+  packages: read                 # 从 ghcr.io 拉私有镜像必需(公开镜像也可留)
+
+# 并行度上限:GHA 免费版同仓并发 20 job,15 个镜像 job + 1 个 report 无压力;
+# 若换 self-hosted 小机器可调低(见 docs/multi-version-build-deploy.md GHA 章节)。
+concurrency:
+  group: multi-os-verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false       # 日报不互相取消
+
+jobs:
+  verify:
+    name: verify (${{ matrix.series }}-${{ matrix.sp }})
+    # GitHub hosted aarch64 运行器(原生支持 container: 属性,需 arm64 镜像)。
+    # 如需在自建 kunpeng920 runner 上跑,改成 labels: [self-hosted, linux, arm64]。
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ghcr.io/wangxumarshall/sdcshield-offline:${{ matrix.series }}-${{ matrix.sp }}
+      # 用 GITHUB_TOKEN 认证拉取 ghcr.io(同一 account 下 packages:read)。
+      # 公开镜像无需此认证,私有镜像则必需;username 固定为镜像 owner(不可用 github.actor:
+      # schedule 触发时 actor 为空,会导致 docker login 失败)。
+      credentials:
+        username: wangxumarshall
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root        # 镜像内源码构建/装包需 root
+    strategy:
+      fail-fast: false            # 15 个镜像互不拖累,全跑完再出结论
+      matrix:
+        include:
+          # 三系列 × LTS+SP1~SP4 = 15。sp 用完整后缀(与 ghcr 镜像 tag 严格一致:24.03-LTS-SP3);
+          # series 决定 toolchain/宏/polyfill 分支(构建只在同一 series 内一致)。
+          - { series: '20.03', sp: 'LTS' }
+          - { series: '20.03', sp: 'LTS-SP1' }
+          - { series: '20.03', sp: 'LTS-SP2' }
+          - { series: '20.03', sp: 'LTS-SP3' }
+          - { series: '20.03', sp: 'LTS-SP4' }
+          - { series: '22.03', sp: 'LTS' }
+          - { series: '22.03', sp: 'LTS-SP1' }
+          - { series: '22.03', sp: 'LTS-SP2' }
+          - { series: '22.03', sp: 'LTS-SP3' }
+          - { series: '22.03', sp: 'LTS-SP4' }
+          - { series: '24.03', sp: 'LTS' }
+          - { series: '24.03', sp: 'LTS-SP1' }
+          - { series: '24.03', sp: 'LTS-SP2' }
+          - { series: '24.03', sp: 'LTS-SP3' }
+          - { series: '24.03', sp: 'LTS-SP4' }
+    env:
+      SERIES: ${{ matrix.series }}
+      SP: ${{ matrix.sp }}
+    # 全量+参数扫描实测(本机 canary)单作业可达 ~30 min;镜像+构建另计。留足余量。
+    timeout-minutes: 120
+    steps:
+      # 原生容器模式:checkout 即把源码克隆进容器工作目录(容器内已预置 git)。
+      # 子模块(rpms)不 checkout —— 构建镜像已烘焙全部依赖 + 20.03 工具集。
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      # ---- 依赖缓存:vendor 库 tar 缓存,规避跨 OS/glibc 兼容问题并提速 ----
+      # 键:series+sp(区分 20.03 gcc-10 工具集产物,其 ABI 与 24.03 不同)。
+      - name: Cache vendored library builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            third-party/openssl/install
+            third-party/openblas/install
+            third-party/sleef/install
+            third-party/isa-l/install
+          key: sdcshield-vendor-${{ matrix.series }}-${{ matrix.sp }}-${{ hashFiles('third-party/openssl/openssl-*.tar.gz', 'third-party/openblas/OpenBLAS-*.tar.gz', 'third-party/sleef/sleef-*.tar.gz', 'third-party/isa-l/isa-l-*.tar.gz') }}
+          restore-keys: |
+            sdcshield-vendor-${{ matrix.series }}-${{ matrix.sp }}-
+
+      # ---- 源码构建(镜像内已装全部依赖,直接 meson+ninja) ----
+      # 22.03/20.03 注入 -DOPENEULER_22_03 / _20_03 + cpp23 polyfill + cpp_std=gnu++20;
+      # 20.03 用仓内 vendored meson 0.59.4(python3.7 可跑,系统无 meson)。
+      - name: Build (vendored libs + meson + ninja)
+        shell: bash
+        run: |
+          set -uo pipefail
+          export JOBS="$(nproc)"
+          echo "::group::vendored libraries"
+          # sleef 需 cmake:24.03 镜像 cmake 断链(缺 libuv.so.1)、22.03/20.03 无 cmake → 优雅缺席
+          # (与 container-build.sh 一致)。openssl/openblas/isa-l 均 make 路径,镜像内可重建。
+          for lib in openssl openblas isa-l; do
+            ( cd "third-party/$lib" && bash build.sh ) || { echo "::error::$lib build failed"; exit 1; }
+          done
+          echo "::endgroup::"
+          case "$SERIES" in
+            24.03) CPPSTD="gnu++23"; OEU_MACRO=""; MESON_CMD="meson" ;;
+            22.03) CPPSTD="gnu++20"; OEU_MACRO="OPENEULER_22_03"; MESON_CMD="meson" ;;
+            20.03) CPPSTD="gnu++20"; OEU_MACRO="OPENEULER_20_03"; MESON_CMD="python3 third-party/meson/meson-0.59.4/meson.py" ;;
+          esac
+          export CXXFLAGS="${CXXFLAGS:-}"
+          if [ -n "$OEU_MACRO" ]; then
+            export CXXFLAGS="-D${OEU_MACRO} -include $(pwd)/framework/compat/cpp23_polyfill.h -include unistd.h -isystem $(pwd)/framework/compat ${CXXFLAGS}"
+          fi
+          ACL_OPT=""; [ -n "$OEU_MACRO" ] && ACL_OPT="-Denable_acl=disabled"
+          echo "::group::meson setup ($CPPSTD $ACL_OPT)"
+          PKG_CONFIG_PATH="$(pwd)/third-party/eigen5" $MESON_CMD setup builddir --buildtype=release \
+            -Dcpp_std="$CPPSTD" $ACL_OPT
+          echo "::endgroup::"
+          echo "::group::ninja"
+          ninja -C builddir
+          echo "::endgroup::"
+          echo "::group::self-check"
+          N="$(builddir/sdcshield --list-tests 2>/dev/null | wc -l)"
+          echo "list-tests: $N"
+          [ "$N" -gt 100 ] || { echo "::error::too few tests ($N)"; exit 1; }
+          builddir/sdcshield --dump-cpu-info | head -1
+          echo "::endgroup::"
+
+      # ---- 全量参数功能验证(脚本见 scripts/gha/verify-params.py) ----
+      - name: Verify (full parameter sweep)
+        if: ${{ inputs.verify_depth != 'smoke' }}
+        shell: bash
+        run: |
+          mkdir -p results
+          python3 scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" \
+            > verify.log 2>&1
+          rc=$?
+          tail -40 verify.log
+          exit $rc
+
+      # ---- 快档验证(workflow_dispatch 选 smoke 时) ----
+      - name: Verify (smoke)
+        if: ${{ inputs.verify_depth == 'smoke' }}
+        shell: bash
+        run: |
+          mkdir -p results
+          python3 scripts/gha/verify-params.py --bin "$(pwd)/builddir/sdcshield" --out "$(pwd)/results" --smoke \
+            > verify.log 2>&1
+          rc=$?
+          tail -40 verify.log
+          exit $rc
+
+      # ---- 跨 OS 基准(固定 loop 数,同工作量墙钟对比) ----
+      - name: Benchmark (fixed loop count)
+        shell: bash
+        run: |
+          mkdir -p benchmark
+          bash scripts/gha/benchmark.sh "$(pwd)/builddir/sdcshield" "$(pwd)/benchmark" \
+            > benchmark.log 2>&1
+          rc=$?
+          cat benchmark.log
+          exit $rc
+
+      # ---- 上传结果(成功与否都传,便于诊断) ----
+      - name: Upload logs & benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-${{ matrix.series }}-${{ matrix.sp }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            results/
+            verify.log
+            benchmark/benchmark.tsv
+            benchmark.log
+            builddir/sdcshield-*.yaml
+            builddir/sdcshield-*.log
+
+  report:
+    name: report
+    needs: verify
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for scripts/gha/benchmark-summary.py)
+        uses: actions/checkout@v6
+      - name: Download all artifacts (keep per-image dirs)
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+          pattern: verify-*
+      # 不 merge:15 个 benchmark.tsv 各占一名。汇总成一张跨 OS 对比表。
+      - name: Build cross-OS benchmark summary
+        run: |
+          set +e
+          python3 scripts/gha/benchmark-summary.py >> "$GITHUB_STEP_SUMMARY"
+          echo "report done"

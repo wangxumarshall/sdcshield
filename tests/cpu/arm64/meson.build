@@ -209,6 +209,15 @@ if host_machine.cpu_family() == 'aarch64'
             # 1.5*iterations*(j+1) (RADIUS=6), the stale RADIUS=4 formula
             # iterations*(j+1) was a software false positive.
             'sve512_stencil_axis_arm.cpp',
+            # Non-temporal access + stack-reload window family: the first
+            # coverage of ld1rd/ldnt1d/stnt1d — the NUMA3 VA-path fault's
+            # trigger-instruction window (field diagnosis 2026-09). Inline
+            # asm (no ACLE intrinsic exists for ld1rd/ldnt1d-with-offset);
+            # reload->use distance is a 1..4 knob; base pointer re-
+            # materializes from the stack at every noinline step; per-step
+            # ld1rd broadcasts; byte-exact golden with identical op order;
+            # VA[63:48] canary per outer iteration.
+            'sve512_nt_reload_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

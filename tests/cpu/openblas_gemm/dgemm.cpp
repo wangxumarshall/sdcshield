@@ -22,6 +22,22 @@
  * 128MB per matrix) — the CORE179 probes showed the store->reload
  * cache-domain pattern is a triggering discriminator, so each size
  * class exercises different forwarding paths.
+ * Two further runtime knobs (same test-id prefix rule) sweep orthogonal
+ * axes of the kernel beside the working-set size: "-O
+ * openblas_dgemm.transab=0..3" selects the TransA/TransB quadrant
+ * (bit1=TransA, bit0=TransB: 0=NN default, 1=NT, 2=TN, 3=TT) —
+ * transposed operands walk OpenBLAS's different internal packing
+ * routines, i.e. different instruction-scheduling phases; and "-O
+ * openblas_dgemm.beta_permille=0..1000000" sets beta=permille/1000
+ * (default 0 = historical pure store into C; 1000 = beta 1.0), which
+ * exercises the kernel's C read-modify-write path (C = alpha*op(A)*op(B)
+ * + beta*C reads C instead of only writing it). With beta != 0 the
+ * initial content of C participates in the result, so init seeds the
+ * golden buffer and every run iteration seeds the thread-local C with
+ * the same deterministic non-zero pattern (0.5*(i&63)/64.0, magnitude
+ * <= ~0.49) before the cblas call; the golden finiteness sentinel below
+ * still holds since |C| <= ~1.7e-2 + beta*0.5 <= ~0.52, hundreds of
+ * orders of magnitude below the 1e300 cutoff.
  * @endparblock
  */
 
@@ -35,9 +51,14 @@
 namespace {
 struct gemm_test_data {
     int mdim;             /* matrix dimension, from the -O openblas_dgemm.mdim=N knob */
+    int transab;          /* TransA/TransB quadrant from -O openblas_dgemm.transab=0..3
+                             (bit1=TransA, bit0=TransB: 0=NN 1=NT 2=TN 3=TT) */
+    double beta;          /* beta = beta_permille/1000 from -O openblas_dgemm.beta_permille
+                             (0.0 = historical pure store into C; != 0 exercises the
+                             C read-modify-write path) */
     double *a;
     double *b;
-    double *golden;      /* C = A*B computed once in init; read-only after */
+    double *golden;      /* C = alpha*op(A)*op(B) + beta*C computed once in init; read-only after */
 };
 
 /* Scratch buffers are per-thread: the framework runs one worker thread per
@@ -74,6 +95,16 @@ static int openblas_dgemm_init(struct test *test) {
         report_fail_msg("mdim knob out of range: %ld (valid 16..4096, default 256)", (long)knob);
     }
     d->mdim = (int)knob;
+    int64_t transab = get_testspecific_knob_value_int(test, "transab", 0);
+    if (transab < 0 || transab > 3) {
+        report_fail_msg("transab knob out of range: %ld (valid 0..3: 0=NN 1=NT 2=TN 3=TT, default 0)", (long)transab);
+    }
+    int64_t beta_pm = get_testspecific_knob_value_int(test, "beta_permille", 0);
+    if (beta_pm < 0 || beta_pm > 1000000) {
+        report_fail_msg("beta_permille knob out of range: %ld (valid 0..1000000, default 0; beta=permille/1000)", (long)beta_pm);
+    }
+    d->transab = (int)transab;
+    d->beta    = (double)beta_pm / 1000.0;
     size_t n2 = (size_t)d->mdim * (size_t)d->mdim;
     d->a      = (double *)malloc(n2 * sizeof(double));
     d->b      = (double *)malloc(n2 * sizeof(double));
@@ -96,10 +127,21 @@ static int openblas_dgemm_init(struct test *test) {
         d->a[i] = random_bounded();
         d->b[i] = random_bounded();
     }
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+    /* beta != 0 makes C's initial content part of the result
+     * (C = alpha*op(A)*op(B) + beta*C), so seed the golden buffer with a
+     * deterministic non-zero pattern before the reference call — test_run
+     * seeds its thread-local C with the very same pattern before every
+     * cblas call, keeping the byte-exact comparison valid (with the
+     * default beta=0 the seed is fully overwritten, so the historical
+     * behavior stays byte-identical). */
+    for (size_t i = 0; i < n2; ++i)
+        d->golden[i] = 0.5 * (double)(i & 63) / 64.0;
+    cblas_dgemm(CblasRowMajor,
+                (d->transab & 2) ? CblasTrans : CblasNoTrans,
+                (d->transab & 1) ? CblasTrans : CblasNoTrans,
                 d->mdim, d->mdim, d->mdim,
                 1.0, d->a, d->mdim, d->b, d->mdim,
-                0.0, d->golden, d->mdim);
+                d->beta, d->golden, d->mdim);
     /* reject a NaN/Inf-polluted golden at the source: if the random operands
      * produced a non-finite product the byte-exact comparison below would be
      * meaningless (NaN != NaN), so fail loudly instead of silently passing */
@@ -116,6 +158,7 @@ static int openblas_dgemm_init(struct test *test) {
 static int openblas_dgemm_run(struct test *test, int cpu) {
     auto d = CAST(test->data);
     size_t bytes = (size_t)d->mdim * d->mdim * sizeof(double);
+    size_t n2 = (size_t)d->mdim * d->mdim;
     long iter = 0;
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
@@ -131,10 +174,19 @@ static int openblas_dgemm_run(struct test *test, int cpu) {
         memcpy(a_copy, d->a, bytes);
         memcpy(b_copy, d->b, bytes);
 
-        cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+        /* re-seed C's initial content every iteration: with beta != 0 the
+         * kernel reads C (read-modify-write), so each iteration must start
+         * from the same deterministic pattern the golden product was seeded
+         * with in init (recomputed inline — no extra shared array) */
+        for (size_t i = 0; i < n2; ++i)
+            c[i] = 0.5 * (double)(i & 63) / 64.0;
+
+        cblas_dgemm(CblasRowMajor,
+                    (d->transab & 2) ? CblasTrans : CblasNoTrans,
+                    (d->transab & 1) ? CblasTrans : CblasNoTrans,
                     d->mdim, d->mdim, d->mdim,
                     1.0, a_copy, d->mdim, b_copy, d->mdim,
-                    0.0, c, d->mdim);
+                    d->beta, c, d->mdim);
 
         ++iter;
         /* verify-out: byte-exact golden compare of inputs and product */

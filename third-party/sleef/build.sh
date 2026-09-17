@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 JOBS=${JOBS:-$(nproc)}
-[ -f install/lib/libsleef.a ] && { echo "install/ already present"; exit 0; }
+[ -f install/lib/libsleef.a ] && { ldd --version 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+$" > install/.glibc-build-tag 2>/dev/null; echo "install/ already present"; exit 0; }
 tar xzf sleef-3.9.0.tar.gz
 cmake -S sleef-3.9.0 -B build \
     -DCMAKE_BUILD_TYPE=Release \

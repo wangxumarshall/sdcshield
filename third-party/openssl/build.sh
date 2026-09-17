@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 JOBS=${JOBS:-$(nproc)}
-[ -f install/lib/libcrypto.a ] && { echo "install/ already present"; exit 0; }
+[ -f install/lib/libcrypto.a ] && { ldd --version 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+$" > install/.glibc-build-tag 2>/dev/null; echo "install/ already present"; exit 0; }
 rm -rf openssl-3.5.0
 mkdir openssl-3.5.0
 tar xzf openssl-3.5.0.tar.gz -C openssl-3.5.0 --strip-components=1

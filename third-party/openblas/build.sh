@@ -25,7 +25,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 JOBS=${JOBS:-$(nproc)}
-[ -f install/lib/libopenblas.a ] && { echo "install/ already present"; exit 0; }
+[ -f install/lib/libopenblas.a ] && { ldd --version 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+$" > install/.glibc-build-tag 2>/dev/null; echo "install/ already present"; exit 0; }
 tar xzf OpenBLAS-0.3.29.tar.gz
 cd OpenBLAS-0.3.29
 make -j"$JOBS" TARGET=TSV110 USE_THREAD=0 USE_LOCKING=1 NO_SHARED=1 NOFORTRAN=1 NO_AFFINITY=1

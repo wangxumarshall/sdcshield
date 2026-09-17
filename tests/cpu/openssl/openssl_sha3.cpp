@@ -80,6 +80,7 @@ static void ssl_sha3_224(sha3_elem *target)
     s_EVP_DigestInit_ex(mdctx, md, NULL);
     s_EVP_DigestUpdate(mdctx, &target->plain_text[0], PLAINTEXT_SIZE);
     s_EVP_DigestFinal_ex(mdctx, &target->sha3_224sum[0], &md_len);
+    s_EVP_MD_CTX_free(mdctx);
 }
 
 static void ssl_sha3_256(sha3_elem *target)
@@ -95,6 +96,7 @@ static void ssl_sha3_256(sha3_elem *target)
     s_EVP_DigestInit_ex(mdctx, md, NULL);
     s_EVP_DigestUpdate(mdctx, &target->plain_text[0], PLAINTEXT_SIZE);
     s_EVP_DigestFinal_ex(mdctx, &target->sha3_256sum[0], &md_len);
+    s_EVP_MD_CTX_free(mdctx);
 }
 
 static void ssl_sha3_384(sha3_elem *target)
@@ -110,6 +112,7 @@ static void ssl_sha3_384(sha3_elem *target)
     s_EVP_DigestInit_ex(mdctx, md, NULL);
     s_EVP_DigestUpdate(mdctx, &target->plain_text[0], PLAINTEXT_SIZE);
     s_EVP_DigestFinal_ex(mdctx, &target->sha3_384sum[0], &md_len);
+    s_EVP_MD_CTX_free(mdctx);
 }
 
 static void ssl_sha3_512(sha3_elem *target)
@@ -125,6 +128,7 @@ static void ssl_sha3_512(sha3_elem *target)
     s_EVP_DigestInit_ex(mdctx, md, NULL);
     s_EVP_DigestUpdate(mdctx, &target->plain_text[0], PLAINTEXT_SIZE);
     s_EVP_DigestFinal_ex(mdctx, &target->sha3_512sum[0], &md_len);
+    s_EVP_MD_CTX_free(mdctx);
 }
 
 static void ssl_shake128(sha3_elem *target)
@@ -140,6 +144,7 @@ static void ssl_shake128(sha3_elem *target)
     s_EVP_DigestInit_ex(mdctx, md, NULL);
     s_EVP_DigestUpdate(mdctx, &target->plain_text[0], PLAINTEXT_SIZE);
     s_EVP_DigestFinalXOF(mdctx, &target->shake128sum[0], SHAKE128_OUT_LENGTH);
+    s_EVP_MD_CTX_free(mdctx);
 }
 
 static int ssl_sha3_init(struct test* test)

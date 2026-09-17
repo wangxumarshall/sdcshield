@@ -170,8 +170,11 @@ static double uniform01(void)
  *    exactly +-1.0 by design. The sentinel therefore checks |g| <= 1
  *    (not < 1): the clamp value 1.0 is a legitimate, deterministic
  *    kernel output, and clamped-to-1.0 is still byte-comparable (same
- *    clamp fires on replay). The float kernel uses the same threshold —
- *    xf_exp can reach exactly 20.0f after narrowing, same story.
+ *    clamp fires on replay). The float kernel clamps at a different
+ *    threshold — 8.664339742f (sleefsimdsp.c), not the double 18.714973875
+ *    (the two thresholds are per-element-type constants) — but the same
+ *    |g| <= 1 sentinel conclusion holds for both: inputs above the float
+ *    threshold still clamp to exactly +-1.0f by design.
  *  - pow : base 1+u*9 in [1, 10-2^-49] (u*9 scaling, +1 keeps it >= 1:
  *    avoids 0^0, 0^negative and negative-base branch complexity
  *    entirely — every base is a positive normal number). Exponent

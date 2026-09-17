@@ -47,8 +47,9 @@
  * the same deterministic non-zero pattern (0.5*(i&63)/64.0, magnitude
  * <= ~0.49, filling the interleaved (re, im) buffer alike) before the
  * cblas call; the golden finiteness sentinel below still holds since
- * |C| <= ~1.7e-2 + beta*0.5 <= ~0.52 per component, tens of orders of
- * magnitude below the 1e30 float cutoff.
+ * |C| <= ~7e-2 + beta*0.5 (≈ 0.52 at the beta ≤ 1 operating point,
+ * ≈ 500 across the full beta_permille=1000000 range — still tens of
+ * orders of magnitude below the 1e30f cutoff) per component.
  * @endparblock
  */
 

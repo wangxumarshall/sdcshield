@@ -503,7 +503,7 @@ git push
 ### Task 10: `openssl_sm3sm4` — 国密摘要 + 分组密码往返
 
 **Files:**
-- Modify: `framework/sandstone_ssl.h`（`SANDSTONE_SSL_EVP_FUNCTIONS` 宏，`F(EVP_sha1) \` 行前加 6 行 `F(EVP_sm4_cbc)` 等——宏区按字母序，sm4 系列插在 `F(EVP_seed_ofb)` 与 `F(EVP_sha1)` 之间）
+- Modify: `framework/sandstone_ssl.h`（`SANDSTONE_SSL_EVP_FUNCTIONS` 宏，`F(EVP_sha1) \` 行前加 5 行 `F(EVP_sm4_cbc)` 等——宏区按字母序，sm4 系列插在 `F(EVP_seed_ofb)` 与 `F(EVP_sha1)` 之间）
 - Create: `tests/cpu/openssl/openssl_sm3sm4.cpp`
 - Modify: `tests/cpu/meson.build`（openssl_sha3 挂线行后再加本文件，Task 1 同位置）
 

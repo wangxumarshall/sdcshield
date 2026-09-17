@@ -49,26 +49,28 @@ static inline uint64_t splitmix64(uint64_t x)
 
 struct SveGatherScatterData {
     size_t vl_d;
-    std::vector<uint64_t> seeds_f64;
-    std::vector<uint64_t> gather_src;
-    std::vector<uint64_t> gather_idx;
-    std::vector<uint64_t> scatter_dst;
-    std::vector<uint64_t> scatter_golden;
+    std::vector<uint64_t> seeds_f64;   // 只读共享
+    std::vector<uint64_t> gather_src;  // 只读共享
+    std::vector<uint64_t> gather_idx;  // 只读共享(置换索引表)
+    // 注意: scatter_dst / scatter_golden 是每线程每迭代的可变 scratch,不能放共享 data ——
+    // -n>1 时框架对每个 worker 线程共享同一个 test->data,并发改写同一块 scatter 缓冲会
+    // 相互踩踏(实测 -n 4 时上半 lane 读到 0x0:某线程的 std::fill 清掉了另一线程正在比对的
+    // lane)。改为 test_run 内栈上分配,与 sve512_f64_chain_arm 的 hw/gold 同模式。
 };
 
 #ifdef __aarch64__
 
-static void gather_scatter_golden(SveGatherScatterData *d)
+static void gather_scatter_golden(const SveGatherScatterData *d, uint64_t *golden_out)
 {
     for (size_t i = 0; i < d->gather_idx.size(); ++i) {
         double v;
         memcpy(&v, &d->gather_src[d->gather_idx[i]], 8);
         v = std::fma(v, v, 1.5);
-        memcpy(&d->scatter_golden[d->gather_idx[i]], &v, 8);
+        memcpy(&golden_out[d->gather_idx[i]], &v, 8);
     }
 }
 
-static void gather_scatter_hw(SveGatherScatterData *d)
+static void gather_scatter_hw(const SveGatherScatterData *d, uint64_t *dst_out)
 {
     const size_t n = d->gather_idx.size();
     const size_t lanes = d->vl_d;
@@ -80,7 +82,7 @@ static void gather_scatter_hw(SveGatherScatterData *d)
             pg, reinterpret_cast<const double *>(d->gather_src.data()), vidx);
         v = svmla_f64_x(pg, one_half, v, v);
         svst1_scatter_u64index_f64(
-            pg, reinterpret_cast<double *>(d->scatter_dst.data()), vidx, v);
+            pg, reinterpret_cast<double *>(dst_out), vidx, v);
     }
 }
 
@@ -115,8 +117,6 @@ static int sve512_gather_scatter_arm_init(struct test *test)
         const size_t gn = 64 * data->vl_d;
         data->gather_src.resize(gn);
         data->gather_idx.resize(gn);
-        data->scatter_dst.assign(gn, 0);
-        data->scatter_golden.resize(gn);
         for (size_t i = 0; i < gn; ++i) {
             data->gather_src[i] = data->seeds_f64[i % data->vl_d];
             data->gather_idx[i] = i;
@@ -140,22 +140,27 @@ static int sve512_gather_scatter_arm_init(struct test *test)
 static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
 {
     (void)cpu;
-    auto *d = static_cast<SveGatherScatterData *>(test->data);
+    const auto *d = static_cast<SveGatherScatterData *>(test->data);
+    const size_t gn = d->gather_idx.size();
+
+    // 每线程每迭代的栈上 scratch(dst/golden 可写),不共享 —— 规避 -n>1 并发踩踏
+    // (与 sve512_f64_chain_arm 的 hw/gold 同模式)。
+    std::vector<uint64_t> scatter_dst(gn, 0);
+    std::vector<uint64_t> scatter_golden(gn, 0);
 
     do {
         bool all_passed = true;
 
-        gather_scatter_hw(d);
-        gather_scatter_golden(d);
-        for (size_t i = 0; i < d->scatter_dst.size(); ++i) {
-            if (d->scatter_dst[i] != d->scatter_golden[i]) {
+        gather_scatter_hw(d, scatter_dst.data());
+        gather_scatter_golden(d, scatter_golden.data());
+        for (size_t i = 0; i < gn; ++i) {
+            if (scatter_dst[i] != scatter_golden[i]) {
                 report_f64_lane_mismatch("sve512_gather_scatter", i,
-                                         d->scatter_golden[i],
-                                         d->scatter_dst[i]);
+                                         scatter_golden[i],
+                                         scatter_dst[i]);
                 all_passed = false;
             }
         }
-        std::fill(d->scatter_dst.begin(), d->scatter_dst.end(), 0);
 
         if (!all_passed) {
             report_fail_msg(
@@ -163,6 +168,7 @@ static int sve512_gather_scatter_arm_run(struct test *test, int cpu)
             return EXIT_FAILURE;
         }
 
+        std::fill(scatter_dst.begin(), scatter_dst.end(), 0);
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;

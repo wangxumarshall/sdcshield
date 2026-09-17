@@ -2,7 +2,24 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
+
+
+// Deterministic per-thread RNG (framework-seeded, replayable via -s).
+// Replaces std::mt19937(std::random_device{}) whose results could not be
+// reproduced with -s after a failure.
+static inline uint64_t gather_rand64(uint64_t *seed)
+{
+    *seed = *seed * 0x9E3779B97F4A7C15ULL + 1;
+    return *seed;
+}
+
+static inline double gather_value_d(uint64_t *seed)
+{
+    uint64_t r = gather_rand64(seed);
+    // bounded [-1000, 1000) with full-entropy low bits
+    double d = (double)(r >> 11) * (1.0 / 9007199254740992.0); // [0,1)
+    return d * 2000.0 - 1000.0;
+}
 
 static constexpr int VECTOR_SIZE = 4;          // 4 个双精度浮点数
 static constexpr int DATA_SIZE = 1024;         // 源数据大小
@@ -18,18 +35,16 @@ static int gather_f64_run(struct test *test, int cpu) {
     alignas(16) double src[DATA_SIZE];
     long long indices[VECTOR_SIZE];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<double> double_dist(-1000.0, 1000.0);
-    std::uniform_int_distribution<int> idx_dist(0, DATA_SIZE - 1);
+    uint64_t seed = random64();
 
     do {
         // 生成随机源数据
         for (int i = 0; i < DATA_SIZE; ++i) {
-            src[i] = double_dist(rng);
+            src[i] = gather_value_d(&seed);
         }
         // 生成随机索引（64位）
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            indices[i] = idx_dist(rng);
+            indices[i] = (int)(gather_rand64(&seed) % (uint64_t)DATA_SIZE);
         }
 
         // ---- 硬件 Gather（标量模拟，逐个加载） ----

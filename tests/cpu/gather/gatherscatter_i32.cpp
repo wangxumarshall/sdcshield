@@ -1,7 +1,21 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstring>
-#include <random>
+
+
+// Deterministic per-thread RNG (framework-seeded, replayable via -s).
+// Replaces std::mt19937(std::random_device{}) whose results could not be
+// reproduced with -s after a failure.
+static inline uint64_t gather_rand64(uint64_t *seed)
+{
+    *seed = *seed * 0x9E3779B97F4A7C15ULL + 1;
+    return *seed;
+}
+
+static inline int32_t gather_value_i(uint64_t *seed)
+{
+    return (int32_t)(gather_rand64(seed) % 20001) - 10000;
+}
 
 static constexpr int VECTOR_SIZE = 16;          // 16 个 int32
 static constexpr int DATA_SIZE = 1024;          // 源/目标数据大小
@@ -18,20 +32,18 @@ static int gatherscatter_i32_run(struct test *test, int cpu) {
     alignas(16) int32_t dst[DATA_SIZE];
     int32_t indices[VECTOR_SIZE];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> int_dist(-10000, 10000);
-    std::uniform_int_distribution<int> idx_dist(0, DATA_SIZE - 1);
+    uint64_t seed = random64();
 
     do {
         // 生成随机源数据
         for (int i = 0; i < DATA_SIZE; ++i) {
-            src[i] = int_dist(rng);
+            src[i] = gather_value_i(&seed);
         }
         // 清空目标数组
         memset(dst, 0, sizeof(dst));
         // 生成随机索引（16个）
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            indices[i] = idx_dist(rng);
+            indices[i] = (int)(gather_rand64(&seed) % (uint64_t)DATA_SIZE);
         }
 
         // ---- 硬件执行（标量模拟 gather + scatter） ----

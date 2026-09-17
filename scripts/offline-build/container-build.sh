@@ -134,7 +134,7 @@ if [ -n "${OPENEULER_MACRO:-}" ] && [ ! -d "$TOOLSET_ROOT/usr/bin" ]; then
     # 部分镜像(实测 20.03-LTS-SP4)烘焙层缺 toolset。RPM 树里有全套 gcc-toolset-10-*,
     # 此处从 /rpms 强装(镜像层"依赖已就绪跳过安装"分支不覆盖这种缺包,兜底在此)。
     echo "  toolset 缺失于镜像层,从 RPM 树强装 gcc-toolset-10..."
-    for tspkg in gcc-toolset-10-runtime gcc-toolset-10-gcc gcc-toolset-10-gcc-c++ \
+    for tspkg in gcc-toolset-10-runtime gcc-toolset-10-gcc gcc-toolset-10-cpp gcc-toolset-10-gcc-c++ \
                  gcc-toolset-10-binutils gcc-toolset-10-libstdc++-devel \
                  gcc-toolset-10-libgcc gcc-toolset-10-libatomic gcc-toolset-10-libgomp; do
         f=$(ls "$RPMDIR"/${tspkg}-*.rpm 2>/dev/null | head -1) || true

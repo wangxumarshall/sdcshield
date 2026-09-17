@@ -148,6 +148,18 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 
 详见 [docs/multi-version-build-deploy.md](docs/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
 
+### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
+
+本地 podman 上的**最严格**验证入口（GHA 日报的本地超集,29 条目选项矩阵 × 全部测试用例,含 `--quality=-1` SKIP 级、三 RNG 引擎、cpuset 跨 NUMA、全部 `-O` 测试旋钮、selftests、`--on-crash=context` 等）:
+
+```console
+./scripts/lts-stability/run-all-15.sh            # 15 镜像 × 29 条目(3 系列并行,~5h)
+./scripts/lts-stability/run-all-15.sh --smoke    # 链路快检(每镜像只跑 m01 基线)
+./scripts/lts-stability/run-lts-stability.sh 24.03 SP3   # 单镜像全矩阵
+```
+
+每镜像流程:容器内原生构建全功能二进制（`-Dssl_link_type=static` + vendored openssl/openblas/isa-l,glibc 不匹配时容器内重建）→ 29 条目严格矩阵 → `RESULT: PASS|FAIL <tag>`。全部 15 PASS 才 exit 0。2026-09-17 全链路实测 **15/15 PASS**(main `ebe0bf1`,290 测试集),过程中发现并修复 8 个跨版本软件 bug(详见 [docs/cases/lts-stability-2026-09-17/README.md](docs/cases/lts-stability-2026-09-17/README.md))。
+
 
 
 ## OpenSSL SHA（`openssl_sha`，默认构建）

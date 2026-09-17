@@ -55,14 +55,14 @@
 
 ---
 
-### Task 2: 执行 15 镜像全矩阵验证(多 subagent 并行)
+### Task 2: 执行 15 镜像全矩阵验证(多 subagent 并行)✅ 完成(2026-09-17,15/15 PASS)
 
 **流程:** 3 个 subagent 各负责一个系列(24.03/22.03/20.03 的 5 个 SP),跑 `run-lts-stability.sh <series> all`(脚本内部对 5 SP 串行、镜像内矩阵完整执行)。主 agent 汇总 15 个 RESULT 行;任何 FAIL → 定位(log 在 build-out/lts-stability/<tag>/)→ 修复(bug fix 独立 commit)→ 重跑该镜像全矩阵 → 全 15 PASS。
 
-- [ ] 24.03 系列(5 SP)全矩阵 PASS
-- [ ] 22.03 系列(5 SP)全矩阵 PASS
-- [ ] 20.03 系列(5 SP)全矩阵 PASS
-- [ ] 汇总报告写入 `docs/cases/lts-stability-2026-09-16/`(15×RESULT 行 + 问题修复记录)
-- [ ] README 增补脚本用法(大颗粒度文档同步)
+- [x] 24.03 系列(5 SP)全矩阵 PASS(R2: 29/29 × 5)
+- [x] 22.03 系列(5 SP)全矩阵 PASS(R2: 29/29 × 5,含 sm3sm4/binutils 修复)
+- [x] 20.03 系列(5 SP)全矩阵 PASS(R2: 29/29 × 5,SP4 toolset 自愈链验证)
+- [x] 汇总报告写入 `docs/cases/lts-stability-2026-09-17/`(15×RESULT 行 + 问题修复记录)
+- [x] README 增补脚本用法(大颗粒度文档同步)
 
 **Bug 修复纪律:** 每个发现的 bug = 独立 commit(含根因分析 + 真实重验输出),修复后受影响镜像全矩阵重跑。

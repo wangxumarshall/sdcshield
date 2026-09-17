@@ -15,7 +15,13 @@
 ## 用法
 
 ```bash
-# 单镜像全矩阵(28 个选项组合)
+# 一键式:15 镜像全矩阵(3 系列并行,~5 小时;全 15 PASS 才 exit 0)
+./scripts/lts-stability/run-all-15.sh
+
+# 一键式快速链路验证(每镜像只跑 m01)
+./scripts/lts-stability/run-all-15.sh --smoke
+
+# 单镜像全矩阵(29 个选项组合)
 ./scripts/lts-stability/run-lts-stability.sh 24.03 SP3
 
 # 单镜像快速冒烟(只跑 m01 基线)
@@ -31,7 +37,7 @@ SKIP_BUILD=1 ./scripts/lts-stability/run-lts-stability.sh 24.03 SP3   # 复用�
 
 stdout 每镜像一行 `RESULT: PASS|FAIL <tag> (...)`,15 个全 PASS 才算通过。
 
-## 选项矩阵(28 个组合,`option-matrix.sh`)
+## 选项矩阵(29 个组合,`option-matrix.sh`)
 
 | 条目 | 覆盖维度 |
 |---|---|
@@ -43,7 +49,7 @@ stdout 每镜像一行 `RESULT: PASS|FAIL <tag> (...)`,15 个全 PASS 才算通�
 | m09/m10 | `--cpuset` 单核 / 跨 NUMA 8 核 |
 | m11/m12 | `-F --strict-runtime` / `--test-list-randomize` |
 | m13-m16 | zstd/zlib level+maxbuffersize 测试旋钮(`-O`) |
-| m17/m18 | openblas GEMM mdim=16/4096 旋钮 |
+| m17/m18 | openblas GEMM mdim=16/4096 旋钮(含 cgemm.mdim / openblas_lu.n) |
 | m19-m22 | memcpy_rewr 策略 0/1/2(SANDSTONE_STRATEGY_INDEX)+ 默认模式 |
 | x23 | 框架 selftests(freeze 家族 disable——它们等待框架 SIGQUIT,会把单条目拖挂;其余 137 个全跑,注入 fail/crash 为预期) |
 | x24 | `--on-crash=context -e selftest_sigsegv -vv`(崩溃上下文捕获) |
@@ -51,6 +57,8 @@ stdout 每镜像一行 `RESULT: PASS|FAIL <tag> (...)`,15 个全 PASS 才算通�
 | m26 | `-vv` 抽样 5 测试 |
 | m27 | ipsec 46 + openssl_sha(SSL 静态链接验证) |
 | m28 | `--1sec` 覆盖驱动模式 |
+| m29 | isal_igzip.level=3 压缩等级旋钮 |
+| m30 | openssl_sha3 + openssl_sm3sm4 + isal_igzip(coverage-max 新测试集) |
 
 判定(m 系):exit 0 + yaml 无 `result: fail` + 无工具级崩溃标志;
 x 系(预期注入失败):完成执行且不挂死即 PASS。

@@ -684,15 +684,35 @@ tests_set_base.add(
     )
 )
 
-# isa-l (libisal) tests. The host ships /usr/lib/libisal.a (static) and
-# /usr/lib/libisal.so but no libisal.pc, so dependency('libisal') fails here;
-# use cpp.find_library('isal') instead (mirrors the reference tree). isal is a
-# portable C library with arch-optimised dispatch internally, so the isal_*
-# tests build on all arches; required:false keeps the build working on hosts
-# without libisal installed.
+# isa-l (libisal) tests — 11 total.
 #  - crc/isal_*.cpp (10): CRC functions.
 #  - isa-l/igzip.cpp: igzip deflate/inflate round-trip SDC stress.
-isal_lib = cpp.find_library('isal', required : false, static : true)
+# Prefer the vendored static isa-l under third-party/isa-l/install (built by
+# its build.sh from the committed v2.32.1 tarball — same provenance pattern
+# as openssl/openblas/sleef); fall back to the system package (hosts ship
+# /usr/lib(64)/libisal.{a,so} but no libisal.pc, so dependency('libisal')
+# fails — cpp.find_library works, mirroring the reference tree). isa-l is a
+# portable C library with arch-optimised dispatch internally, so the isal_*
+# tests build on all arches; required:false keeps the build working on hosts
+# with neither vendored install nor system libisal.
+# include_directories() must use a source-tree-relative path (meson rejects
+# absolute paths into the source tree), so the include dir is given relative
+# to this tests/cpu/ subdir while the archive probe and link args use the
+# joined absolute path (same pattern as the openblas/sleef blocks above and
+# the vendored OpenSSL block in framework/meson.build).
+isal_install = meson.current_source_dir() / '../../third-party/isa-l/install'
+if run_command('test', '-f', isal_install / 'lib' / 'libisal.a', check: false).returncode() == 0
+    isal_lib = declare_dependency(
+        include_directories: include_directories('../../third-party/isa-l/install/include', is_system: true),
+        link_args: ['-L' + isal_install / 'lib', '-l:libisal.a'],
+    )
+    message('Using vendored isa-l (third-party/isa-l/install)')
+else
+    isal_lib = cpp.find_library('isal', required : false, static : true)
+    if not isal_lib.found()
+        message('No vendored or system libisal found — isal_* tests disabled. Run third-party/isa-l/build.sh to enable.')
+    endif
+endif
 tests_set_base.add(
     when : isal_lib,
     if_true : files(

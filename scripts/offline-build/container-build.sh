@@ -27,6 +27,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# SDCSRC_ROOT:允许调用方传入一份源码副本的根目录(与真实仓同构),用于
+# 多系列并行构建场景 — 每系列一份副本挂 /src,避免共享 /src 挂载被多个
+# 容器并发 :Z relabel 产生 Permission denied 竞态(relabel 期间 cp -a 会
+# 读到临时不可读的文件,残缺源码 → meson 缺文件错误)。
+# 副本必须包含:framework/ tests/ bats/ scripts/ meson.build meson_options.txt
+# third-party/(含 eigen5 + vendored install/,rpms 子目录可选 — RPM 另行挂载)。
+SDCSRC_ROOT="${SDCSRC_ROOT:-$SRC_ROOT}"
 
 SERIES="${1:?usage: $0 <series> <sp> [meson-args]}"
 SP="${2:?usage: $0 <series> <sp> [meson-args]}"
@@ -119,10 +126,29 @@ else
     fi
 fi
 
+# ld 符号链接兜底对"镜像烘焙分支"同样必要: 烘焙镜像(依赖已就绪跳过安装)也可能缺
+# /usr/bin/ld(尤其 20.03-SP4 这种 toolset 靠自愈强装的场景, collect2 需要系统 ld)。
+if [ ! -e /usr/bin/ld ] && [ -e /usr/bin/ld.bfd ]; then
+    ln -sf /usr/bin/ld.bfd /usr/bin/ld
+    echo "  建 /usr/bin/ld → ld.bfd 符号链接(烘焙分支兜底)"
+fi
+
 # 20.03: gcc-10 以 SCL gcc-toolset-10 形式安装(在 /opt/openEuler/gcc-toolset-10/root/)。
 # 系统默认 gcc 是 7.3(无 C++20/23)。激活 toolset: 把其 bin 加 PATH, 设 CC/CXX,
 # 设 lib/include 搜索路径(LDFLAGS/CPPFLAGS/-isystem), 让 meson 用 gcc-10 而非 gcc-7。
 TOOLSET_ROOT="/opt/openEuler/gcc-toolset-10/root"
+if [ -n "${OPENEULER_MACRO:-}" ] && [ ! -d "$TOOLSET_ROOT/usr/bin" ]; then
+    # 部分镜像(实测 20.03-LTS-SP4)烘焙层缺 toolset。RPM 树里有全套 gcc-toolset-10-*,
+    # 此处从 /rpms 强装(镜像层"依赖已就绪跳过安装"分支不覆盖这种缺包,兜底在此)。
+    echo "  toolset 缺失于镜像层,从 RPM 树强装 gcc-toolset-10..."
+    for tspkg in gcc-toolset-10-runtime gcc-toolset-10-gcc gcc-toolset-10-cpp gcc-toolset-10-gcc-c++ \
+                 gcc-toolset-10-binutils gcc-toolset-10-libstdc++-devel \
+                 gcc-toolset-10-libgcc gcc-toolset-10-libatomic gcc-toolset-10-libgomp \
+                 libmpc mpfr gmp binutils glibc-devel gcc-toolset-10-libstdc++; do
+        f=$(ls "$RPMDIR"/${tspkg}-*.rpm 2>/dev/null | head -1) || true
+        [ -n "$f" ] && rpm -Uvh --nodeps --force "$f" >/dev/null 2>&1 || true
+    done
+fi
 if [ -n "${OPENEULER_MACRO:-}" ] && [ -d "$TOOLSET_ROOT/usr/bin" ]; then
     TS_BIN="$TOOLSET_ROOT/usr/bin"
     # toolset 的 gcc/g++ 二进制名为 gcc/g++(非 gcc-10); 加 PATH 优先于系统 gcc-7
@@ -147,6 +173,93 @@ echo "===== [3/5] meson setup ====="
 # 把只读 /src 拷一份到可写 /build/src(供 meson setup 用,不再 sed 改源码)。
 cp -a "$SRC" "$BUILD/src"
 SRCW="$BUILD/src"
+
+# ---- vendored 第三方库容器内原生重建(仅当宿主产物与本容器 glibc 不兼容) ----
+# third-party/{openssl,openblas,sleef}/install/ 是构建宿主(24.03, glibc 2.38)
+# 上 build.sh 的产物。静态 .a 里可能引用宿主特有符号(实测 __isoc23_strtol,
+# glibc 2.38 的 C23 变体),在老容器(22.03 glibc 2.34 / 20.03 glibc 2.28)链接
+# 失败:undefined reference to `__isoc23_strtol'(openblas_env.c / e_afalg.c /
+# rand_unix.c)。检测:install/.glibc-build-tag(宿主 build.sh 写入或此处写入)
+# 与当前容器 ldd --version 不一致 → 删掉 install/,在容器内用该系列原生工具链重建。
+# 注意:不能用 `ldd --version | head -1 | grep ...` 链 — inner 脚本 set -o pipefail,
+# head 提前关闭管道使 ldd 收 SIGPIPE(141),|| echo unknown 兜底会把 "unknown" 追加在
+# grep 已输出的版本号后面,VENDORED_GLIBC 变成两行 "2.38\nunknown" → tag 比较永假 →
+# 每次都重建(2026-09-16 24.03-SP3 重验实测踩坑)。getconf 是单命令,无管道无 SIGPIPE。
+VENDORED_GLIBC="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}' || true)"
+VENDORED_GLIBC="${VENDORED_GLIBC:-unknown}"
+# 20.03 最小 KIWI 镜像无 GNU tar,只有 bsdtar(libarchive);兼容两者。
+TAR_BIN="$(command -v tar || command -v bsdtar || echo tar)"
+rebuild_vendored() {
+    local name="$1"   # openssl | openblas
+    local dir="$SRCW/third-party/$name"
+    local tagfile="$dir/install/.glibc-build-tag"
+    local built_on
+    built_on=$(cat "$tagfile" 2>/dev/null || echo host-unknown)
+    if [ "$built_on" = "$VENDORED_GLIBC" ] && [ -d "$dir/install/lib" ]; then
+        echo "  vendored $name: install/ 是本容器 glibc $VENDORED_GLIBC 产物,复用"
+        return 0
+    fi
+    echo "  vendored $name: install/ 构建于 glibc $built_on != $VENDORED_GLIBC,容器内重建..."
+    rm -rf "$dir/install"
+    case "$name" in
+        openssl)
+            rm -rf "$dir/openssl-3.5.0"
+            mkdir -p "$dir/openssl-3.5.0"
+            "$TAR_BIN" xzf "$dir/openssl-3.5.0.tar.gz" -C "$dir/openssl-3.5.0" --strip-components=1
+            ( cd "$dir/openssl-3.5.0" \
+              && ./Configure linux-aarch64 --prefix="$dir/install" \
+                   no-shared no-tests no-docs no-apps --release \
+              && make -j"${VENDORED_JOBS:-16}" build_sw \
+              && (make install_sw 2>/dev/null || make install_dev) )
+            ;;
+        openblas)
+            rm -rf "$dir/OpenBLAS-0.3.29"
+            "$TAR_BIN" xzf "$dir/OpenBLAS-0.3.29.tar.gz" -C "$dir"
+            ( cd "$dir/OpenBLAS-0.3.29" \
+              && make -j"${VENDORED_JOBS:-16}" TARGET=TSV110 USE_THREAD=0 USE_LOCKING=1 \
+                   NO_SHARED=1 NOFORTRAN=1 NO_AFFINITY=1 \
+              && make PREFIX="$dir/install" NO_SHARED=1 USE_LOCKING=1 install )
+            [ -f "$dir/install/lib/libopenblas_tsv110-r0.3.29.a" ] && \
+                ln -sf libopenblas_tsv110-r0.3.29.a "$dir/install/lib/libopenblas.a"
+            ;;
+    esac
+    echo "$VENDORED_GLIBC" > "$dir/install/.glibc-build-tag"
+}
+if [ -d "$SRCW/third-party/openssl/install" ]; then
+    rebuild_vendored openssl || echo "  WARNING: openssl 容器内重建失败,回退宿主产物" >&2
+fi
+if [ -d "$SRCW/third-party/openblas/install" ]; then
+    rebuild_vendored openblas || echo "  WARNING: openblas 容器内重建失败,回退宿主产物" >&2
+fi
+# sleef 需要 cmake;22.03/20.03 离线容器无 cmake(镜像和 RPM 树都没有完整 cmake 包)。
+# 宿主 libsleef.a 同样有 __isoc23_strtol 风险 → 在无 cmake 的容器里删掉 install/,
+# meson 探测不到即优雅缺席 sleef_neon/sleef_sve(与 isal 在无 libisal 镜像的缺席同模式)。
+if ! command -v cmake >/dev/null 2>&1; then
+    if [ -d "$SRCW/third-party/sleef/install" ]; then
+        echo "  vendored sleef: 容器无 cmake,移除宿主产物(sleef 测试本镜像缺席)"
+        rm -rf "$SRCW/third-party/sleef/install"
+    fi
+else
+    # 容器有 cmake(如 24.03):宿主产物 glibc 相同(镜像==host 同 SP)时
+    # rebuild_vendored 的 tag 检查自然跳过;不同则下述重建(sleef 用 cmake)。
+    if [ -d "$SRCW/third-party/sleef/install" ]; then
+        sleef_tag=$(cat "$SRCW/third-party/sleef/install/.glibc-build-tag" 2>/dev/null || echo host-unknown)
+        if [ "$sleef_tag" != "$VENDORED_GLIBC" ]; then
+            echo "  vendored sleef: install/ 构建于 glibc $sleef_tag != $VENDORED_GLIBC,容器内重建..."
+            rm -rf "$SRCW/third-party/sleef/install" "$SRCW/third-party/sleef/build"
+            ( cd "$SRCW/third-party/sleef" \
+              && "$TAR_BIN" xzf sleef-3.9.0.tar.gz \
+              && cmake -S sleef-3.9.0 -B build \
+                   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+                   -DSLEEF_ENABLE_TLFLOAT=OFF \
+                   -DCMAKE_INSTALL_PREFIX="$PWD/install" \
+                   -DCMAKE_INSTALL_LIBDIR=lib \
+              && cmake --build build -j"${VENDORED_JOBS:-16}" \
+              && cmake --install build )
+            echo "$VENDORED_GLIBC" > "$SRCW/third-party/sleef/install/.glibc-build-tag"
+        fi
+    fi
+fi
 
 # meson_version:源码已声明 >=0.56(project_source_root 引入版,22.03 的 0.59 与
 # 20.03 vendored 0.59.4 均满足),无需再 sed 放宽。
@@ -237,18 +350,25 @@ echo "==> 启动 podman 容器构建..."
 ACL_HDR="/home/sdc/root/arm64-sdc-fuzzing/third_party/arm-opt-install/include"
 ACL_LIB="/usr/lib64"
 CLANG_RT="/usr/lib/clang/17"
-[ -d "$ACL_HDR" ] && EXTRA_MESON+=("-Dacl_incdir=$ACL_HDR")
+# ACL 头/incdir 仅 24.03 系列(容器镜像==host 同 SP,路径有效);22.03/20.03 传
+# -Denable_acl=disabled(inner 脚本),不需要 ACL 头 — 挂载反而引入多系列并行时
+# 对同一 host 目录的并发 :Z relabel 竞态。
+if [ "$SERIES" = "24.03" ] && [ -d "$ACL_HDR" ]; then
+    EXTRA_MESON+=("-Dacl_incdir=$ACL_HDR")
+fi
 EXTRA_MESON_STR="${EXTRA_MESON[*]:-}"
 # :Z 让 podman 给挂载点打 SELinux 私有标签(容器可 exec 挂载的脚本/二进制),
 # 否则 SELinux enforcing 系统会 "Permission denied"(与 verify-built-pristine.sh 一致)。
-MOUNTS=(-v "$SRC_ROOT:/src:ro,Z" -v "$RPMDIR_HOST:/rpms:ro,Z" -v "$OUTDIR_HOST:/out:Z" -v "$INNER_HOST:$INNER:ro,Z")
+MOUNTS=(-v "$SDCSRC_ROOT:/src:ro,Z" -v "$RPMDIR_HOST:/rpms:ro,Z" -v "$OUTDIR_HOST:/out:Z" -v "$INNER_HOST:$INNER:ro,Z")
 # 20.03 用 meson 源码包 (RPM 版的 meson 0.59 跑不动于 python3.7)。
 # 源码包入仓 third-party/meson/meson-0.59.4(11M, 纯源码, 可复现)。
-[ "$SERIES" = "20.03" ] && [ -d "$SRC_ROOT/third-party/meson/meson-0.59.4" ] && \
-    MOUNTS+=(-v "$SRC_ROOT/third-party/meson/meson-0.59.4:/meson-src:ro")
-[ -d "$ACL_HDR" ] && MOUNTS+=(-v "$ACL_HDR:$ACL_HDR:ro")
-[ -d "$ACL_LIB" ] && MOUNTS+=(-v "$ACL_LIB/libarm_compute.so:$ACL_LIB/libarm_compute.so:ro" -v "$ACL_LIB/libarm_compute_graph.so:$ACL_LIB/libarm_compute_graph.so:ro")
-[ -d "$CLANG_RT" ] && MOUNTS+=(-v "$CLANG_RT:$CLANG_RT:ro")
+[ "$SERIES" = "20.03" ] && [ -d "$SDCSRC_ROOT/third-party/meson/meson-0.59.4" ] && \
+    MOUNTS+=(-v "$SDCSRC_ROOT/third-party/meson/meson-0.59.4:/meson-src:ro")
+if [ "$SERIES" = "24.03" ] && [ -d "$ACL_HDR" ]; then
+    MOUNTS+=(-v "$ACL_HDR:$ACL_HDR:ro,Z")
+    [ -d "$ACL_LIB" ] && MOUNTS+=(-v "$ACL_LIB/libarm_compute.so:$ACL_LIB/libarm_compute.so:ro" -v "$ACL_LIB/libarm_compute_graph.so:$ACL_LIB/libarm_compute_graph.so:ro")
+    [ -d "$CLANG_RT" ] && MOUNTS+=(-v "$CLANG_RT:$CLANG_RT:ro")
+fi
 
 timeout 1200 podman run --rm --user=0 \
     "${MOUNTS[@]}" \

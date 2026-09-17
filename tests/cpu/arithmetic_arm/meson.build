@@ -86,13 +86,27 @@ endif
 # compiler-rt builtins: static soft-float integer implementation (__addsf3,
 # __subsf3, __mulsf3, __divsf3 ...). -Wl,--whole-archive prevents the linker
 # from dropping the soft-float symbols as "unused".
+# Probe-gated: the archive only exists where clang-rt is installed (this
+# openEuler 24.03 host). In the 22.03/20.03 offline build containers the path
+# does not exist and the unconditional link_args broke the final link
+# ("c++: error: .../libclang_rt.builtins.a: No such file or directory").
+# When absent, crt_sources is empty and crt_tests_lib is an empty static lib
+# (same graceful-degrade pattern as acl_sources/openblas/sleef).
 # ---------------------------------------------------------------------------
 crt_builtins_path = '/usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/libclang_rt.builtins.a'
-crt_builtins_lib = declare_dependency(
-    link_args : ['-Wl,--whole-archive',
-                  crt_builtins_path,
-                  '-Wl,--no-whole-archive'],
-)
+if run_command('test', '-f', crt_builtins_path, check: false).returncode() == 0
+    crt_builtins_lib = declare_dependency(
+        link_args : ['-Wl,--whole-archive',
+                      crt_builtins_path,
+                      '-Wl,--no-whole-archive'],
+    )
+    crt_sources = files('crt_builtins.cpp',)
+else
+    crt_builtins_lib = declare_dependency()
+    crt_sources = []
+    message('libclang_rt.builtins.a not found at ' + crt_builtins_path +
+            ' — the crt_builtins test is not built on this host.')
+endif
 
 # ---------------------------------------------------------------------------
 # Source grouping. The 10 dep-available tests (7 GMP + 2 ACL + 1 compiler-rt)
@@ -126,9 +140,8 @@ gmp_sources = files(
 # acl_sources is set above (empty when -Denable_acl=disabled or ACL not found).
 
 # 1 compiler-rt test: soft-float __addsf3/__mulsf3/__divsf3 vs golden.
-crt_sources = files(
-    'crt_builtins.cpp',
-)
+# (crt_sources is set in the probe-gated block above — empty when the
+# clang-rt archive is absent on this build host.)
 
 # Excluded — AOR libmathlib.a / libstringlib.a static archives are not present
 # on this host, so these 3 tests would fail to link:

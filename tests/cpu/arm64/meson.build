@@ -227,6 +227,14 @@ if host_machine.cpu_family() == 'aarch64'
             # coverage (eigen_svd_cdouble only goes through scalar
             # complex expansion). SVE1 — any SVE machine runs it.
             'sve512_fcmla_arm.cpp',
+            # Predicate-dimension stress: the predicate network every
+            # full-true SVE test leaves untested — whilelt density sweep
+            # (sentinel-guarded inactive lanes), svnot_b_z complement FMA,
+            # FADDA sequential reduction chain, LDFF1+FFR first-fault
+            # state, FMAXV masked-tree reduction. Predicate bit corruption
+            # is silent (wrong lanes compute; result stays bit-legal) —
+            # exactly an SDC shape.
+            'sve512_pred_ops_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

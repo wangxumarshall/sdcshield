@@ -235,8 +235,41 @@ if host_machine.cpu_family() == 'aarch64'
         ],
     )
 
+    # SVE2 matrix-multiply (FMMLA) SDC stress tests. Separate library
+    # because FMMLA requires -march=armv9-a+sve2+f32mm+f64mm — stronger
+    # than the tests_arm64_sve library's armv8.2-a+sve, and keeping the
+    # SVE2-only instructions out of the SVE1 library means SVE1-only
+    # machines can still run every other SVE test. test_init probes
+    # HWCAP2 (SVE2 + F32MM + F64MM) and returns a clean EXIT_SKIP when
+    # absent. Built only on aarch64.
+    arm64_sve2_lib = static_library(
+        'tests_arm64_sve2',
+        files(
+            # FMMLA f32/f64 dependent chain over the packed 2D-tile lane
+            # mapping, byte-exact vs a same-k-order scalar golden, with a
+            # one-step lane-mapping self-check (the mapping is worked out
+            # in the docblock — a golden bug must never report as SDC).
+            'sve512_fmmla_arm.cpp',
+        ),
+        build_by_default: false,
+        include_directories: [
+            framework_incdir,
+        ],
+        dependencies: [
+            boost_dep,
+        ],
+        cpp_args: [
+            debug_c_flags,
+            default_cpp_warn,
+            default_cpp_flags,
+            march_generic_flags,
+            '-march=armv9-a+sve2+f32mm+f64mm',
+        ],
+    )
+
     sandstone_tests += [
         arm64_tests_lib,
         arm64_sve_lib,
+        arm64_sve2_lib,
     ]
 endif

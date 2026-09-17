@@ -25,6 +25,23 @@
  * complex-double matrix — the CORE179 probes showed the store->reload
  * cache-domain pattern is a triggering discriminator, so each size
  * class exercises different forwarding paths.
+ * Two further runtime knobs (same test-id prefix rule) sweep orthogonal
+ * axes of the kernel beside the working-set size: "-O
+ * openblas_zgemm.transab=0..3" selects the TransA/TransB quadrant
+ * (bit1=TransA, bit0=TransB: 0=NN default, 1=NT, 2=TN, 3=TT) —
+ * transposed operands walk OpenBLAS's different internal packing
+ * routines, i.e. different instruction-scheduling phases; and "-O
+ * openblas_zgemm.beta_permille=0..1000000" sets beta=permille/1000
+ * (default 0 = historical pure store into C; 1000 = beta 1.0), which
+ * exercises the kernel's C read-modify-write path (C = alpha*op(A)*op(B)
+ * + beta*C reads C instead of only writing it). With beta != 0 the
+ * initial content of C participates in the result, so init seeds the
+ * golden buffer and every run iteration seeds the thread-local C with
+ * the same deterministic non-zero pattern (0.5*(i&63)/64.0, magnitude
+ * <= ~0.49, filling the interleaved (re, im) buffer alike) before the
+ * cblas call; the golden finiteness sentinel below still holds since
+ * |C| <= ~1.7e-2 + beta*0.5 <= ~0.52 per component, hundreds of orders
+ * of magnitude below the 1e300 cutoff.
  * @endparblock
  */
 
@@ -38,9 +55,15 @@
 namespace {
 struct zgemm_test_data {
     int mdim;            /* matrix dimension, from the -O openblas_zgemm.mdim=N knob */
+    int transab;         /* TransA/TransB quadrant from -O openblas_zgemm.transab=0..3
+                            (bit1=TransA, bit0=TransB: 0=NN 1=NT 2=TN 3=TT) */
+    double beta;         /* real part of the beta scalar, = beta_permille/1000 from
+                            -O openblas_zgemm.beta_permille (0.0 = historical pure
+                            store into C; != 0 exercises the C read-modify-write path);
+                            passed to cblas as the complex pair {beta, 0.0} */
     double *a;           /* interleaved (re, im) pairs: n2 doubles, n2 = 2*mdim*mdim */
     double *b;
-    double *golden;      /* C = A*B computed once in init; read-only after */
+    double *golden;      /* C = alpha*op(A)*op(B) + beta*C computed once in init; read-only after */
 };
 
 /* Scratch buffers are per-thread: the framework runs one worker thread per
@@ -62,9 +85,10 @@ static thread_local double *c = nullptr;
 /* cblas_zgemm takes the scalars as const void* pointing at an interleaved
  * (re, im) double pair; cblas.h's openblas_complex_double is a C99
  * double _Complex in C++ too, so address the constants through the
- * OpenBLAS-free struct layout (double[2]) to keep it plain. */
+ * OpenBLAS-free struct layout (double[2]) to keep it plain. alpha stays
+ * the literal ONE; beta is knob-controlled, so it is composed as a local
+ * {beta, 0.0} pair from the parsed struct value at each call site. */
 static const double ONE[2]  = {1.0, 0.0};
-static const double ZERO[2] = {0.0, 0.0};
 
 /* Map a random uint64 onto a finite, well-normalised double with a random
  * sign and a random 52-bit mantissa, magnitude in [1e-6, 2e-3]. Same
@@ -86,6 +110,16 @@ static int openblas_zgemm_init(struct test *test) {
         report_fail_msg("mdim knob out of range: %ld (valid 16..4096, default 256)", (long)knob);
     }
     d->mdim = (int)knob;
+    int64_t transab = get_testspecific_knob_value_int(test, "transab", 0);
+    if (transab < 0 || transab > 3) {
+        report_fail_msg("transab knob out of range: %ld (valid 0..3: 0=NN 1=NT 2=TN 3=TT, default 0)", (long)transab);
+    }
+    int64_t beta_pm = get_testspecific_knob_value_int(test, "beta_permille", 0);
+    if (beta_pm < 0 || beta_pm > 1000000) {
+        report_fail_msg("beta_permille knob out of range: %ld (valid 0..1000000, default 0; beta=permille/1000)", (long)beta_pm);
+    }
+    d->transab = (int)transab;
+    d->beta    = (double)beta_pm / 1000.0;
     size_t n2 = 2 * (size_t)d->mdim * (size_t)d->mdim;   /* interleaved (re, im) double pairs */
     d->a      = (double *)malloc(n2 * sizeof(double));
     d->b      = (double *)malloc(n2 * sizeof(double));
@@ -104,10 +138,23 @@ static int openblas_zgemm_init(struct test *test) {
         d->a[i] = random_bounded();
         d->b[i] = random_bounded();
     }
-    cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+    /* beta != 0 makes C's initial content part of the result
+     * (C = alpha*op(A)*op(B) + beta*C), so seed the golden buffer with a
+     * deterministic non-zero pattern before the reference call — test_run
+     * seeds its thread-local C with the very same pattern before every
+     * cblas call, keeping the byte-exact comparison valid (with the
+     * default beta=0 the seed is fully overwritten, so the historical
+     * behavior stays byte-identical). The pattern fills the interleaved
+     * (re, im) buffer element-wise, i.e. real and imaginary parts alike. */
+    for (size_t i = 0; i < n2; ++i)
+        d->golden[i] = 0.5 * (double)(i & 63) / 64.0;
+    const double beta_scalar[2] = {d->beta, 0.0};
+    cblas_zgemm(CblasRowMajor,
+                (d->transab & 2) ? CblasTrans : CblasNoTrans,
+                (d->transab & 1) ? CblasTrans : CblasNoTrans,
                 d->mdim, d->mdim, d->mdim,
                 ONE, d->a, d->mdim, d->b, d->mdim,
-                ZERO, d->golden, d->mdim);
+                beta_scalar, d->golden, d->mdim);
     /* reject a NaN/Inf-polluted golden at the source: if the random operands
      * produced a non-finite product the byte-exact comparison below would be
      * meaningless (NaN != NaN), so fail loudly instead of silently passing.
@@ -126,6 +173,7 @@ static int openblas_zgemm_init(struct test *test) {
 static int openblas_zgemm_run(struct test *test, int cpu) {
     auto d = CAST(test->data);
     size_t bytes = 2 * (size_t)d->mdim * d->mdim * sizeof(double);
+    size_t n2 = 2 * (size_t)d->mdim * d->mdim;   /* interleaved (re, im) double pairs */
     long iter = 0;
     TEST_LOOP(test, 1) {
         /* lazily allocate this thread's scratch buffers */
@@ -141,10 +189,22 @@ static int openblas_zgemm_run(struct test *test, int cpu) {
         memcpy(a_copy, d->a, bytes);
         memcpy(b_copy, d->b, bytes);
 
-        cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+        /* re-seed C's initial content every iteration: with beta != 0 the
+         * kernel reads C (read-modify-write), so each iteration must start
+         * from the same deterministic pattern the golden product was seeded
+         * with in init (recomputed inline — no extra shared array; the
+         * interleaved (re, im) buffer is filled element-wise, real and
+         * imaginary parts alike) */
+        for (size_t i = 0; i < n2; ++i)
+            c[i] = 0.5 * (double)(i & 63) / 64.0;
+
+        const double beta_scalar[2] = {d->beta, 0.0};
+        cblas_zgemm(CblasRowMajor,
+                    (d->transab & 2) ? CblasTrans : CblasNoTrans,
+                    (d->transab & 1) ? CblasTrans : CblasNoTrans,
                     d->mdim, d->mdim, d->mdim,
                     ONE, a_copy, d->mdim, b_copy, d->mdim,
-                    ZERO, c, d->mdim);
+                    beta_scalar, c, d->mdim);
 
         ++iter;
         /* verify-out: byte-exact golden compare of inputs and product */

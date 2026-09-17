@@ -7,17 +7,24 @@
  *
  * @test @b sleef_sve
  * @parblock
- * Stress test for SVE data paths via SLEEF's SVE transcendental functions
- * (sin/cos/exp/log, double, u10 accuracy, sve kernels). Long polynomial
+ * Stress test for SVE data paths via SLEEF's SVE transcendental
+ * functions: the original sin/cos/exp/log double families plus the
+ * float32 tier (svfloat32_t, 4 lanes at fixed VL=128) and the u35
+ * second-accuracy chains (sin/cos/log/exp2 — u35 SVE has no exp, exp2
+ * is its sibling with an independent polynomial chain). Long polynomial
  * FMA dependency chains; results only feed a byte-exact golden compare
  * (data-flow payload: faults surface as wrong values, not crashes —
  * From Gates to SDCs DATE'25). Pure functions => deterministic golden
- * values computed once in init with the same kernels. Covers the
- * newest-instruction-generation risk area (PinDrop Obs12: instructions
- * fail most in their first arch gen) — SVE is the newest-generation
- * vector datapath on ARM64. Compiled in the dedicated tests_sve static
- * library (-march=armv8.2-a+sve -msve-vector-bits=128) so the SVE
- * instructions never leak into the NEON baseline build.
+ * values computed once in init with the same kernels. u10 and u35 are
+ * SLEEF's two INDEPENDENT implementations of the same mathematics
+ * (different coefficients, different FMA-chain schedules), so the
+ * second tier is a free second-phase sample of the same silicon for
+ * the same math. Covers the newest-instruction-generation risk area
+ * (PinDrop Obs12: instructions fail most in their first arch gen) —
+ * SVE is the newest-generation vector datapath on ARM64. Compiled in
+ * the dedicated tests_sve static library (-march=armv8.2-a+sve
+ * -msve-vector-bits=128) so the SVE instructions never leak into the
+ * NEON baseline build.
  *
  * Runtime gate: silicon without SVE (e.g. Kunpeng 920) skips cleanly
  * (CpuNotSupported / EXIT_SKIP). Real execution requires SVE hardware
@@ -37,34 +44,43 @@
 #include <stdlib.h>
 
 /* Fixed 128-bit SVE vector length (-msve-vector-bits=128, matching the
- * tests_sve build block): svfloat64_t is exactly 2 lanes, so ELEMS (even)
- * processes in ELEMS/2 svld1_f64/svst1_f64 pairs with a fully-active
- * predicate — svptrue_b64() is correct because every load/store touches
- * exactly the 2 lanes the fixed VL provides. */
-#define ELEMS 1024   /* elements per family: 512 svfloat64_t vectors (2 lanes each) */
+ * tests_sve build block): svfloat64_t is exactly 2 lanes and svfloat32_t
+ * exactly 4, so ELEMS (divisible by 4) processes in ELEMS/2 svld1_f64/
+ * svst1_f64 pairs (svptrue_b64()) plus ELEMS/4 svld1_f32/svst1_f32
+ * quadruples (svptrue_b32()) with fully-active predicates — each
+ * predicate is correct because every load/store touches exactly the
+ * lanes the fixed VL provides. */
+#define ELEMS 1024   /* elements per family: 512 svfloat64_t vectors (2 lanes) + 256 svfloat32_t vectors (4 lanes) */
 
 namespace {
 struct sleef_test_data {
     /* per-domain inputs (each family keeps its own array so the run loop
      * can replay exactly the inputs the golden values were computed from) */
     double *xd_trig, *xd_exp, *xd_log;
-    /* golden outputs (read-only after init) */
+    float  *xf_trig, *xf_exp, *xf_log;
+    /* golden outputs, u10 tier, double & float (read-only after init) */
     double *gd_sin, *gd_cos, *gd_exp, *gd_log;
+    float  *gf_sin, *gf_cos, *gf_exp, *gf_log;
+    /* u35 second-accuracy tier golden outputs (SLEEF's other polynomial
+     * implementation of the same math; u35 SVE has no exp — exp2 stands
+     * in, itself an independent FMA chain) */
+    double *gd_sin35, *gd_cos35, *gd_log35, *gd_exp2_35;
 };
 }
 
 #define CAST(_x) static_cast<struct sleef_test_data *>(_x)
 
-/* Scratch output buffer is per-thread: the framework runs one worker
+/* Scratch output buffers are per-thread: the framework runs one worker
  * thread per core and they all share test->data, so anything written during
- * test_run must be thread-local (od is the kernel destination, written
+ * test_run must be thread-local (od/of are the kernel destinations, written
  * every iteration). Allocated lazily on first use and intentionally not
  * freed in cleanup, exactly like the sleef_neon / openblas_* scratch
  * buffers: the worker threads are gone (or never existed) when the main
  * thread runs test_cleanup, and the forked child exits right after, so
- * the OS reclaims the storage. calloc zeroes it once so a short first
+ * the OS reclaims the storage. calloc zeroes them once so a short first
  * iteration can never compare garbage. */
 static thread_local double *od = nullptr;
+static thread_local float  *of = nullptr;
 
 /* Uniform double in [0,1) from the framework RNG (top 53 bits; libc rand is
  * trapped by the framework). */
@@ -80,11 +96,30 @@ static double uniform01(void)
  *           inside [-pi, pi] after the roundings. sin/cos of that is
  *           guaranteed finite and well inside [-1, 1].
  *  - exp  : same construction over [-20, 20-2^-48]; exp of that is in
- *           [~2e-9, ~4.85e8], forty orders from overflow.
+ *           [~2e-9, ~4.85e8], forty orders from overflow and far above
+ *           subnormal float (float min normal ~1.2e-38).
  *  - log  : u in [0,1) plus 1e-300 keeps the argument strictly positive
  *           (u==0 gives 1e-300, a normal double), scaled by 1e10: log
  *           arguments span [1e-290, 1e10), all finite, all inside SLEEF's
  *           u10 accuracy domain (positive reals).
+ *  - float narrowing CAUTION: the [0,1) double does NOT stay below 1
+ *           after narrowing — doubles in (1-2^-25, 1) round UP to exactly
+ *           1.0f — so xf_trig/xf_exp can reach exactly +-pi_f / +-20_f
+ *           (the domain edge). Harmless: the kernels carry their accuracy
+ *           guarantee over the whole input domain, determinism never
+ *           depends on accuracy (the golden values come from the very
+ *           same kernel), and the init finiteness tripwire below
+ *           backstops the rest. The float log variant uses a 1e-30f
+ *           offset so it survives the narrowing: arguments span
+ *           [~1e-20, ~1e10).
+ *  - u35 tier: identical input arrays and identical domain analysis as
+ *    the u10 tier above (trig for sin/cos, log for log, exp for exp2 —
+ *    exp2's domain is all reals and exp2 of [-20,20) is [2^-20, 2^20) =
+ *    [~9.5e-7, ~1.05e6], comfortably finite). The u35 kernels are a
+ *    DIFFERENT polynomial implementation of the same functions, so the
+ *    outputs land on different bits than u10 — that is the point
+ *    (second-phase sample), and determinism is per-kernel so the
+ *    byte-exact golden compare stays valid.
  * Every golden value is additionally checked for finiteness in init: a
  * NaN/Inf would make the byte-exact comparison meaningless (NaN != NaN). */
 
@@ -113,16 +148,31 @@ static int sleef_sve_init(struct test *test)
     d->xd_trig = (double *)malloc(ELEMS * sizeof(double));
     d->xd_exp  = (double *)malloc(ELEMS * sizeof(double));
     d->xd_log  = (double *)malloc(ELEMS * sizeof(double));
+    d->xf_trig = (float  *)malloc(ELEMS * sizeof(float));
+    d->xf_exp  = (float  *)malloc(ELEMS * sizeof(float));
+    d->xf_log  = (float  *)malloc(ELEMS * sizeof(float));
     d->gd_sin = (double *)malloc(ELEMS * sizeof(double));
     d->gd_cos = (double *)malloc(ELEMS * sizeof(double));
     d->gd_exp = (double *)malloc(ELEMS * sizeof(double));
     d->gd_log = (double *)malloc(ELEMS * sizeof(double));
+    d->gf_sin = (float  *)malloc(ELEMS * sizeof(float));
+    d->gf_cos = (float  *)malloc(ELEMS * sizeof(float));
+    d->gf_exp = (float  *)malloc(ELEMS * sizeof(float));
+    d->gf_log = (float  *)malloc(ELEMS * sizeof(float));
+    /* u35 tier golden outputs */
+    d->gd_sin35 = (double *)malloc(ELEMS * sizeof(double));
+    d->gd_cos35 = (double *)malloc(ELEMS * sizeof(double));
+    d->gd_log35 = (double *)malloc(ELEMS * sizeof(double));
+    d->gd_exp2_35 = (double *)malloc(ELEMS * sizeof(double));
     if (!d->xd_trig || !d->xd_exp || !d->xd_log ||
-        !d->gd_sin || !d->gd_cos || !d->gd_exp || !d->gd_log) {
+        !d->xf_trig || !d->xf_exp || !d->xf_log ||
+        !d->gd_sin || !d->gd_cos || !d->gd_exp || !d->gd_log ||
+        !d->gf_sin || !d->gf_cos || !d->gf_exp || !d->gf_log ||
+        !d->gd_sin35 || !d->gd_cos35 || !d->gd_log35 || !d->gd_exp2_35) {
         report_fail_msg("OOM in sleef_sve init");
     }
 
-    /* inputs, per domain (same mappings and boundary analysis as sleef_neon) */
+    /* double inputs, per domain (same mappings and boundary analysis as sleef_neon) */
     for (int i = 0; i < ELEMS; ++i) {
         double u = uniform01();
         d->xd_trig[i] = (u * 2.0 - 1.0) * 3.141592653589793;   /* [-pi, pi] */
@@ -134,6 +184,26 @@ static int sleef_sve_init(struct test *test)
     for (int i = 0; i < ELEMS; ++i) {
         double u = uniform01();
         d->xd_log[i] = (u + 1.0e-300) * 1.0e10;                /* positive */
+    }
+
+    /* float inputs, per domain. CAUTION: the [0,1) double does NOT stay
+     * below 1 after narrowing — doubles in (1-2^-25, 1) round UP to exactly
+     * 1.0f — so xf_trig/xf_exp can reach exactly +-pi_f / +-20_f (the domain
+     * edge). Harmless: the u10 kernels carry their accuracy guarantee over
+     * the whole input domain, determinism never depends on accuracy (the
+     * golden values come from the very same kernel), and the init finiteness
+     * tripwire below backstops the rest. */
+    for (int i = 0; i < ELEMS; ++i) {
+        float u = (float)uniform01();
+        d->xf_trig[i] = (u * 2.0f - 1.0f) * 3.14159265f;       /* [-pi, pi] */
+    }
+    for (int i = 0; i < ELEMS; ++i) {
+        float u = (float)uniform01();
+        d->xf_exp[i] = (u * 2.0f - 1.0f) * 20.0f;              /* [-20, 20) */
+    }
+    for (int i = 0; i < ELEMS; ++i) {
+        float u = (float)uniform01();
+        d->xf_log[i] = (u + 1.0e-30f) * 1.0e10f;               /* positive */
     }
 
     /* golden outputs from the very same SVE kernels, once; any non-finite
@@ -148,6 +218,22 @@ static int sleef_sve_init(struct test *test)
         svst1_f64(pg, &d->gd_exp[i], Sleef_expdx_u10sve(x));
         x = svld1_f64(pg, &d->xd_log[i]);
         svst1_f64(pg, &d->gd_log[i], Sleef_logdx_u10sve(x));
+        /* u35 second tier: same inputs, the OTHER polynomial implementation */
+        svst1_f64(pg, &d->gd_sin35[i], Sleef_sindx_u35sve(svld1_f64(pg, &d->xd_trig[i])));
+        svst1_f64(pg, &d->gd_cos35[i], Sleef_cosdx_u35sve(svld1_f64(pg, &d->xd_trig[i])));
+        svst1_f64(pg, &d->gd_log35[i], Sleef_logdx_u35sve(svld1_f64(pg, &d->xd_log[i])));
+        /* u35 has NO exp — exp2 is the independent-chain stand-in */
+        svst1_f64(pg, &d->gd_exp2_35[i], Sleef_exp2dx_u35sve(svld1_f64(pg, &d->xd_exp[i])));
+    }
+    const svbool_t pgf = svptrue_b32();
+    for (int i = 0; i < ELEMS; i += 4) {
+        svfloat32_t x = svld1_f32(pgf, &d->xf_trig[i]);
+        svst1_f32(pgf, &d->gf_sin[i], Sleef_sinfx_u10sve(x));
+        svst1_f32(pgf, &d->gf_cos[i], Sleef_cosfx_u10sve(x));
+        x = svld1_f32(pgf, &d->xf_exp[i]);
+        svst1_f32(pgf, &d->gf_exp[i], Sleef_expfx_u10sve(x));
+        x = svld1_f32(pgf, &d->xf_log[i]);
+        svst1_f32(pgf, &d->gf_log[i], Sleef_logfx_u10sve(x));
     }
     for (int i = 0; i < ELEMS; ++i) {
         double gs = d->gd_sin[i], gc = d->gd_cos[i];
@@ -159,6 +245,29 @@ static int sleef_sve_init(struct test *test)
                             "(domain mapping needs tighter scaling)", i);
         }
     }
+    for (int i = 0; i < ELEMS; ++i) {
+        float gs = d->gf_sin[i], gc = d->gf_cos[i];
+        float ge = d->gf_exp[i], gl = d->gf_log[i];
+        if (gs != gs || gs > 1.0f || gs < -1.0f || gc != gc || gc > 1.0f || gc < -1.0f ||
+            ge != ge || ge > 1.0e30f || ge < 0.0f ||
+            gl != gl || gl > 1.0e30f || gl < -1.0e30f) {
+            report_fail_msg("float golden value not finite/in-range at element %d "
+                            "(domain mapping needs tighter scaling)", i);
+        }
+    }
+    /* finiteness sentinels, u35 tier. exp2(20) ~ 1.05e6 so the bound is
+     * 1e7 (an order of headroom); sin/cos stay in [-1,1]; log shares the
+     * original log range. */
+    for (int i = 0; i < ELEMS; ++i) {
+        double gs = d->gd_sin35[i], gc = d->gd_cos35[i];
+        double gl = d->gd_log35[i], ge = d->gd_exp2_35[i];
+        if (gs != gs || gs > 1.0 || gs < -1.0 || gc != gc || gc > 1.0 || gc < -1.0 ||
+            gl != gl || gl > 1.0e300 || gl < -1.0e300 ||
+            ge != ge || ge > 1.0e7 || ge < 0.0) {
+            report_fail_msg("double u35 golden value not finite/in-range at element %d "
+                            "(domain mapping needs tighter scaling)", i);
+        }
+    }
     return EXIT_SUCCESS;
 }
 
@@ -166,12 +275,13 @@ static int sleef_sve_run(struct test *test, int cpu)
 {
     auto d = CAST(test->data);
     TEST_LOOP(test, 1) {
-        /* lazily allocate this thread's scratch output buffer */
-        if (__builtin_expect(!od, 0)) {
+        /* lazily allocate this thread's scratch output buffers */
+        if (__builtin_expect(!od || !of, 0)) {
             od = (double *)calloc(1, ELEMS * sizeof(double));
-            if (!od)
+            of = (float  *)calloc(1, ELEMS * sizeof(float));
+            if (!od || !of)
                 report_fail_msg("OOM allocating thread scratch (%zu bytes)",
-                                (size_t)ELEMS * sizeof(double));
+                                (size_t)ELEMS * (sizeof(double) + sizeof(float)));
         }
 
         /* compute-out: each family replays its own domain inputs through
@@ -200,6 +310,56 @@ static int sleef_sve_run(struct test *test, int cpu)
             svst1_f64(pg, &od[i], Sleef_logdx_u10sve(x));
         }
         memcmp_or_fail(od, d->gd_log, ELEMS, "log double sve");
+
+        const svbool_t pgf = svptrue_b32();
+        for (int i = 0; i < ELEMS; i += 4) {
+            svfloat32_t x = svld1_f32(pgf, &d->xf_trig[i]);
+            svst1_f32(pgf, &of[i], Sleef_sinfx_u10sve(x));
+        }
+        memcmp_or_fail(of, d->gf_sin, ELEMS, "sin float sve");
+
+        for (int i = 0; i < ELEMS; i += 4) {
+            svfloat32_t x = svld1_f32(pgf, &d->xf_trig[i]);
+            svst1_f32(pgf, &of[i], Sleef_cosfx_u10sve(x));
+        }
+        memcmp_or_fail(of, d->gf_cos, ELEMS, "cos float sve");
+
+        for (int i = 0; i < ELEMS; i += 4) {
+            svfloat32_t x = svld1_f32(pgf, &d->xf_exp[i]);
+            svst1_f32(pgf, &of[i], Sleef_expfx_u10sve(x));
+        }
+        memcmp_or_fail(of, d->gf_exp, ELEMS, "exp float sve");
+
+        for (int i = 0; i < ELEMS; i += 4) {
+            svfloat32_t x = svld1_f32(pgf, &d->xf_log[i]);
+            svst1_f32(pgf, &of[i], Sleef_logfx_u10sve(x));
+        }
+        memcmp_or_fail(of, d->gf_log, ELEMS, "log float sve");
+
+        /* u35 second-accuracy tier: same inputs, other polynomial chain */
+        for (int i = 0; i < ELEMS; i += 2) {
+            svfloat64_t x = svld1_f64(pg, &d->xd_trig[i]);
+            svst1_f64(pg, &od[i], Sleef_sindx_u35sve(x));
+        }
+        memcmp_or_fail(od, d->gd_sin35, ELEMS, "sin35 double sve");
+
+        for (int i = 0; i < ELEMS; i += 2) {
+            svfloat64_t x = svld1_f64(pg, &d->xd_trig[i]);
+            svst1_f64(pg, &od[i], Sleef_cosdx_u35sve(x));
+        }
+        memcmp_or_fail(od, d->gd_cos35, ELEMS, "cos35 double sve");
+
+        for (int i = 0; i < ELEMS; i += 2) {
+            svfloat64_t x = svld1_f64(pg, &d->xd_log[i]);
+            svst1_f64(pg, &od[i], Sleef_logdx_u35sve(x));
+        }
+        memcmp_or_fail(od, d->gd_log35, ELEMS, "log35 double sve");
+
+        for (int i = 0; i < ELEMS; i += 2) {
+            svfloat64_t x = svld1_f64(pg, &d->xd_exp[i]);
+            svst1_f64(pg, &od[i], Sleef_exp2dx_u35sve(x));
+        }
+        memcmp_or_fail(od, d->gd_exp2_35, ELEMS, "exp2_35 double sve");
     }
     return EXIT_SUCCESS;
 }
@@ -208,12 +368,15 @@ static int sleef_sve_cleanup(struct test *test)
 {
     auto d = CAST(test->data);
     free(d->xd_trig); free(d->xd_exp); free(d->xd_log);
+    free(d->xf_trig); free(d->xf_exp); free(d->xf_log);
     free(d->gd_sin); free(d->gd_cos); free(d->gd_exp); free(d->gd_log);
+    free(d->gf_sin); free(d->gf_cos); free(d->gf_exp); free(d->gf_log);
+    free(d->gd_sin35); free(d->gd_cos35); free(d->gd_log35); free(d->gd_exp2_35);
     delete d;
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(sleef_sve, "SLEEF vectorized transcendentals (SVE polynomial FMA chains, sin/cos/exp/log double)")
+DECLARE_TEST(sleef_sve, "SLEEF vectorized transcendentals (SVE polynomial FMA chains, sin/cos/exp/log double+float + u35 tier (exp2) double)")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_init = sleef_sve_init,
   .test_run = sleef_sve_run,

@@ -301,9 +301,46 @@ if host_machine.cpu_family() == 'aarch64'
         ],
     )
 
+    # SME (FEAT_SME) tests. Separate library for -march=armv9-a+sme.
+    # Implemented in pure inline asm: GCC 12.3's <arm_sme.h> is an empty
+    # shell (0 intrinsics — probed 2026-09-17), while GNU as 2.41
+    # assembles the full smstart/fmopa/mova/smstop sequence, so the SME
+    # tests build with GCC (no clang-only constraint). Every test probes
+    # HWCAP2_SME first thing in test_init and returns a clean EXIT_SKIP
+    # when the kernel does not expose SME (e.g. cn23154's 5.10 kernel —
+    # the hardware has SME but the kernel predates the 5.19 exposure).
+    # Built only on aarch64.
+    arm64_sme_lib = static_library(
+        'tests_arm64_sme',
+        files(
+            # SME FMOPA/ZA outer-product chain: 256-step fmopa za0.s
+            # accumulation inside one SMSTART..SMSTOP asm block (operands
+            # staged through memory), row-slice extraction via mova,
+            # byte-exact vs an exact-integer scalar golden, one-step
+            # tile-mapping self-check. First-ever SME coverage in the
+            # suite — runs for real on Neoverse V3-generation silicon.
+            'sme_fmopa_za_arm.cpp',
+        ),
+        build_by_default: false,
+        include_directories: [
+            framework_incdir,
+        ],
+        dependencies: [
+            boost_dep,
+        ],
+        cpp_args: [
+            debug_c_flags,
+            default_cpp_warn,
+            default_cpp_flags,
+            march_generic_flags,
+            '-march=armv9-a+sme',
+        ],
+    )
+
     sandstone_tests += [
         arm64_tests_lib,
         arm64_sve_lib,
         arm64_sve2_lib,
+        arm64_sme_lib,
     ]
 endif

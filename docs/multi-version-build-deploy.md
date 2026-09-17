@@ -432,21 +432,29 @@ exec "$bindir/run-sdcshield.sh" "$@"
 
 ### 6.1 PR CI(角落三 smoke)
 
-`.github/workflows/pr.yaml` 加 `multi-version` job:
+`.github/workflows/pr.yaml` 的 `multi-version` job(已落地):
 - 目标 SP:**20.03-LTS**(最老 toolchain,适配层回归哨兵)、**22.03-LTS-SP3**、**24.03-LTS-SP3**(基准)。
 - 步骤:`podman pull ghcr.io/...:<tag>`(从 Registry,不重建)→ `container-build.sh` → `verify-built-pristine.sh smoke`。
 - polyfill/sed 适配一旦被源码改动带歪,这三个先红。
 
-### 6.2 Nightly / Release CI(全 15 full)
+### 6.2 每日全 15 全量验证(已落地:`.github/workflows/multi-os-verify.yml`)
 
-- 独立 workflow `.github/workflows/multi-version-nightly.yaml`,`schedule: cron`,或 release tag 触发。
-- `build-all.sh --full` 全 15,`--since` 按需。
-- 通过 → `package-release.sh` 全 15 → 上传 GitHub Release。
+独立 workflow,**原生容器执行模式**:作业直接 `container:` 跑在 ghcr.io 构建镜像里(代码由 `actions/checkout` 自动挂载到容器工作目录),配置最简洁、无 docker 嵌套、无 SELinux `:Z` 竞态。`schedule: '0 4 * * *'`(UTC 04:00 = 北京时间 12:00)每日触发,另可 `workflow_dispatch`(可选 `verify_depth: full|smoke`)。
+
+- **矩阵**:`strategy.matrix.include` 展开 15 个 job(三系列 × LTS+SP1~SP4),`fail-fast: false`,互不拖累,全跑完出结论。
+- **runner**:`ubuntu-24.04-arm`(GitHub hosted aarch64,GA,原生支持 `container:` 属性且需 arm64 镜像;本仓镜像即 arm64)。换自建 kunpeng920 runner 改一行 `runs-on`。
+- **镜像拉取**:`container.credentials` 用 `GITHUB_TOKEN` 认证(`packages: read` 权限),公开/私有镜像皆可;`username` 固定 `wangxumarshall`(不可用 `github.actor`——schedule 触发时 actor 为空会致 docker login 失败)。前置:15 镜像先 `build-images.sh <s> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。
+- **每 job 流程**:checkout(`submodules: false`,镜像已烘焙依赖)→ `actions/cache` 缓存 vendored 库构建 → 镜像内 `meson+ninja` 构建 → `scripts/gha/verify-params.py` 全量参数功能测试 → `scripts/gha/benchmark.sh` 采基准 → 上传日志/基准。
+- **全量参数扫描**(`verify-params.py`,纯 stdlib 适配镜像无 PyYAML):`--quality=-1`(PROD+BETA+SKIP)、`-n 1/4/8` 三档并发(多线程档 `--disable` eigen 数值类,规避已知 ULP flakiness)、openblas `mdim` 扫谱、selftests `@positive` + 逐条负面(断言非零退出且非 insn 崩溃)。
+- **基准对比**(`benchmark.sh` + `benchmark-summary.py`):固定 `--max-test-loop-count`(同工作量墙钟)对三系列交集 11 测试采 `benchmark.tsv`,`report` job 汇总成跨 OS 对比表写入 job summary。
+- **已知省略(诚实)**:`sleef`(需 cmake;24.03 镜像 cmake 断链缺 `libuv.so.1`、22.03/20.03 无 cmake → 优雅缺席,与 `container-build.sh` 一致)`sleef_neon`/`sleef_sve`;sleef/isal 因构建工具链差异属 24.03 独占,不进基准主表。
+
+脚本与口径:`scripts/gha/`(README、verify-params.py、benchmark.sh、benchmark.md、benchmark-summary.py)。
 
 ### 6.3 Runner 选型
 
-- self-hosted aarch64 runner(本机或同架构机):原生速度,推荐。
-- 无 self-hosted:GitHub hosted arm64 runner + `podman pull` Registry 镜像(镜像已预构建,CI 只跑构建+验证)。
+- **GitHub hosted arm64**(`ubuntu-24.04-arm`):默认,零维护,原生容器模式直接可用。
+- self-hosted aarch64 runner(kunpeng920 本机/同架构机):原生速度,改 `runs-on` 一行即可;同样走原生容器模式拉 ghcr 镜像。
 
 ---
 

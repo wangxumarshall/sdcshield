@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M2PYKFNAEY9Q1B90D5RDYJAJ",
+  "session_id": "21476f41-613b-4c1f-a15c-8a99abc6eb18",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-17T05:49:37.170672637Z",
+  "branch": "feat/sdc-excitation-enhancement-20260917",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "glm-5.3",
+  "turn_id": "f387efa8e771",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1484590,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 62493760,
+    "output_tokens": 302760,
+    "api_call_count": 234
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-call_07792ad0e05d4e70b4e03004",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f387efa8e771",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 211,
+        "end": 212,
+        "entry_ids": [
+          "5f5cd412-4b39-44d8-a0f2-4c5f9816abd0"
+        ],
+        "tool_use_id": "call_07792ad0e05d4e70b4e03004"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "call_07792ad0e05d4e70b4e03004"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 941,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1597,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cluster_anchored_logs/round1_control.yaml": 41,
+        "cluster_anchored_logs/round1_target.yaml": 41,
+        "docs/superpowers/plans/2026-09-17-sdc-excitation-enhancement.md": 559,
+        "tests/cpu/mesh/mesh_upi_avx512_symm_f64.cpp": 294,
+        "tests/cpu/meson.build": 6
+      }
+    }
+  ]
+}

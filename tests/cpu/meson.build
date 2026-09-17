@@ -271,6 +271,7 @@ if host_machine.cpu_family() == 'aarch64'
         files(
             'arm-0102/arm0102_kreg_mask.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
         )
     )
 endif

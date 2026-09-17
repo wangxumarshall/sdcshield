@@ -61,13 +61,24 @@ CLOUD_DISABLE = ["mesh_upi*", "memcpy_rewr"]
 
 
 def run(cmd, timeout=900):
-    """跑一条命令,返回 (exit_code, stdout_text)。容器内用 --ignore-timeout 规避 cgroup 超时误报。"""
+    """跑一条命令,返回 (exit_code, stdout_text)。容器内用 --ignore-timeout 规避 cgroup 超时误报。
+    用 text=True 拿 str;但部分 selftest(负面崩溃类)会输出原始二进制字节,subprocess 偶发
+    仍给 bytes —— 这里做 bytes→str 兜底(utf-8, errors=replace),保证下游 CRASH_RE 可用。"""
     try:
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            timeout=timeout, text=True)
-        return p.returncode, p.stdout
+        out = p.stdout
     except subprocess.TimeoutExpired as e:
-        return 124, (e.stdout or "")
+        return 124, _to_str(e.stdout)
+    return p.returncode, _to_str(out)
+
+
+def _to_str(b):
+    if b is None:
+        return ""
+    if isinstance(b, str):
+        return b
+    return b.decode("utf-8", errors="replace")
 
 
 def list_tests(bin_path, extra=None):
@@ -79,21 +90,24 @@ def list_tests(bin_path, extra=None):
 
 
 def parse_result_yaml(text):
-    """从 sdcshield YAML 输出里摘 per-test 的 (test, result, runtime),以及崩溃计数。"""
+    """从 sdcshield YAML 输出里摘 per-test 的 (test, result, runtime),以及崩溃计数。
+    text 可以是字符串(小文件)或文件路径(大文件流式读,避免 400MB YAML 全量入内存 OOM)。"""
     tests = []          # list of (name, result, runtime)
     crashes = 0
     cur = None
-    for line in text.splitlines():
+
+    def _feed(line):
+        nonlocal crashes, cur
         m = RESULT_RE.match(line)
         if m:
             if cur is not None:
                 tests.append(cur)
             cur = [m.group(1), "unknown", 0.0]
-            continue
+            return
         if cur is None:
             if CRASH_RE.search(line):
                 crashes += 1
-            continue
+            return
         mv = RESULT_VAL.match(line)
         if mv:
             cur[1] = mv.group(1)
@@ -105,9 +119,25 @@ def parse_result_yaml(text):
                 cur[2] = 0.0
         if CRASH_RE.search(line):
             crashes += 1
+
+    if "\n" in text or text.strip().startswith(("command-line", "version", "os:", "- test", "{")):
+        for line in text.splitlines():
+            _feed(line)
+    else:
+        # 文件路径:流式逐行读,不整文件入内存
+        with open(text, "r") as f:
+            for line in f:
+                _feed(line.rstrip("\n"))
     if cur is not None:
         tests.append(cur)
     return tests, crashes
+
+
+def parse_result_file(path):
+    """流式解析 YAML 文件(不整读入内存),返回 (tests, crashes)。文件不存在返回 ([], 0)。"""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return [], 0
+    return parse_result_yaml(path)
 
 
 def summarize(tests, crashes):
@@ -158,10 +188,14 @@ def main():
     fail_total = 0
     crash_total = 0
 
-    # 通用兜底参数:每测试 60s 超时(--timeout)防互联类挂死 300s;
-    # --max-messages 0 关掉 per-thread 日志(否则 800MB YAML);--ignore-timeout
-    # 让框架把超时当非致命继续,而不是整体 exit: invalid。
-    COMMON = ["--retest-on-failure=0", "--timeout=60s", "--max-messages", "0", "--ignore-timeout"]
+    # 通用兜底参数:
+    #   --max-test-loop-count 3:固定每测试 3 次 main loop(禁用 test fracturing),
+    #      否则框架对每测试多 seed 分片跑,生成数百 MB YAML + 数十分钟,2-CPU runner 会 OOM。
+    #   --timeout=60s:每测试超时防互联类挂死 300s;
+    #   --max-messages 0:关掉 per-thread 日志冗余;
+    #   --ignore-timeout:把超时当非致命继续,而非整体 exit: invalid。
+    COMMON = ["--retest-on-failure=0", "--max-test-loop-count", "3", "--timeout=60s",
+              "--max-messages", "0", "--ignore-timeout"]
     # 云 runner 拓扑缺失:mesh_upi_*/memcpy_rewr 需多 NUMA 真实硅,单 socket VM 挂死 → 排除
     CLOUD_DIS = []
     for pat in CLOUD_DISABLE:
@@ -169,7 +203,7 @@ def main():
 
     # ---- 2) 全质量级跑一遍(单线程基线, 判"能跑"与结果分布) ----
     #   --quality=-1 覆盖 PROD+BETA+SKIP;-n 1 规避 192 核 eigen ULP flakiness;
-    #   -t 5000 每测试目标 5s。mesh_upi* 拓扑类排除。
+    #   -t 5000 只是安全上限(loop 数已由 --max-test-loop-count 限定)。
     stage_tests = []
     if not args.smoke:
         for extra, label in [
@@ -178,7 +212,7 @@ def main():
             y = os.path.join(out_dir, "allquality.yaml")
             cmd = [bin_path] + extra + ["-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_yaml(_read(y) or stdout)
+            tests, crashes = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             stage_tests.append((label, tests, crashes, npass, nskip, nfail, ncrash, nsoft))
 
@@ -197,7 +231,7 @@ def main():
             cmd = [bin_path, "-n", "1", "-t", "3000", "--max-messages", "0",
                    "-e", "zstd19", "-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_yaml(_read(y) or stdout)
+            tests, crashes = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             ok = nfail == 0 and ncrash == 0 and npass >= 1
             if not ok:
@@ -222,7 +256,7 @@ def main():
         disable_args += CLOUD_DIS
         cmd = [bin_path, "-n", str(n), "-t", "1000"] + COMMON + disable_args + ["-o", y]
         _rc, stdout = run(cmd)
-        tests, crashes = parse_result_yaml(_read(y) or stdout)
+        tests, crashes = parse_result_file(y)
         npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
         ok = nfail == 0 and ncrash == 0
         if not ok:
@@ -268,9 +302,10 @@ def main():
         for m in mdim:
             y = os.path.join(out_dir, f"{t}_mdim{m}.yaml")
             cmd = [bin_path, "-O", f"{t}.mdim={m}", "-n", "1", "--retest-on-failure=0",
-                   "-t", "5000", "--max-messages", "0", "--ignore-timeout", "-e", t, "-o", y]
+                   "--max-test-loop-count", "3", "-t", "5000", "--max-messages", "0",
+                   "--ignore-timeout", "-e", t, "-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_yaml(_read(y) or stdout)
+            tests, crashes = parse_result_file(y)
             npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             ok = nfail == 0 and ncrash == 0
             if not ok:
@@ -289,14 +324,6 @@ def main():
     verdict = "PASS" if (fail_total == 0 and crash_total == 0) else "FAIL"
     print(f"RESULT: {verdict} (sections_fail={fail_total} crashes={crash_total})")
     return 0 if verdict == "PASS" else 1
-
-
-def _read(path):
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except OSError:
-        return ""
 
 
 if __name__ == "__main__":

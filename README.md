@@ -40,11 +40,11 @@ sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzs
 # 首次构建前：依次构建 3 个 vendored 依赖库（幂等，install/ 已存在则秒过；
 # pocketfft 无需此步——头文件+源码直接编入测试库）
 ./third-party/openssl/build.sh           # → install/lib/libcrypto.a（SSL 测试默认启用）
-./third-party/openblas/build.sh          # → install/lib/libopenblas.a（openblas_{d,s,z}gemm）
+./third-party/openblas/build.sh          # → install/lib/libopenblas.a（openblas_{d,s,z,c}gemm + openblas_lu）
 ./third-party/sleef/build.sh             # → install/lib/libsleef.a（sleef_neon / sleef_sve）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
-./builddir/sdcshield --list-tests        # 应列出 278 个 PROD 用例（实测于 2026-09-15）
+./builddir/sdcshield --list-tests        # 应列出 282 个 PROD 用例（实测于 2026-09-17）
 ```
 
 > ARM64 要求 Eigen 5.0.0+（系统 Eigen 3.3.x 在 GCC 12+ 下编译失败）。仓库自带 `third-party/eigen5/`，aarch64 构建路径在 `tests/cpu/meson.build` 中直接 `include_directories` 指向它，**无需系统安装 eigen3**；`PKG_CONFIG_PATH` 仅为兼容 x86 路径而保留，带上无害。
@@ -164,9 +164,9 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 
 | 目录 | 内容 | 产出 | 测试 |
 |---|---|---|---|
-| `third-party/openssl/` | OpenSSL 3.5.0 | 静态 `libcrypto.a` | `openssl_sha` + 46 个 `ipsec_*`（默认启用） |
-| `third-party/openblas/` | OpenBLAS 0.3.29（TSV110 内核，单线程 + USE_LOCKING=1） | 静态 `libopenblas.a` | `openblas_dgemm` / `openblas_sgemm` / `openblas_zgemm`（NEON FMA 微内核，每迭代 copy/compute/verify） |
-| `third-party/sleef/` | SLEEF 3.9.0（TLFLOAT=OFF） | 静态 `libsleef.a` | `sleef_neon`（NEON 多项式 FMA 链，sin/cos/exp/log double+float）；`sleef_sve`（SVE 变体，**需 SVE 硬件**——无 SVE 的机器如鲲鹏 920 干净 skip：`CpuNotSupported`） |
+| `third-party/openssl/` | OpenSSL 3.5.0 | 静态 `libcrypto.a` | `openssl_sha`（SHA-2）+ `openssl_sha3`（SHA-3/SHAKE Keccak）+ `openssl_sm3sm4`（国密 SM3 摘要 + SM4-CBC 加解密往返）+ 46 个 `ipsec_*`（默认启用） |
+| `third-party/openblas/` | OpenBLAS 0.3.29（TSV110 内核，单线程 + USE_LOCKING=1） | 静态 `libopenblas.a` | `openblas_dgemm` / `openblas_sgemm` / `openblas_zgemm` / `openblas_cgemm`（NEON FMA 微内核，每迭代 copy/compute/verify）+ `openblas_lu`（LAPACK dgesv 主元分解） |
+| `third-party/sleef/` | SLEEF 3.9.0（TLFLOAT=OFF） | 静态 `libsleef.a` | `sleef_neon`（NEON 多项式 FMA 链：sin/cos/exp/log double+float × u10/u35 双精度档 + asin/atan/cbrt/log10/sinh/tanh/pow 函数族，足迹旋钮 `-O sleef_neon.nelems=N`）；`sleef_sve`（SVE 变体，double+float × u10/u35，**需 SVE 硬件**——无 SVE 的机器如鲲鹏 920 干净 skip：`CpuNotSupported`） |
 | `third-party/pocketfft/` | pocketfft C 版（BSD-3，头文件+源码直接入库，无需 build.sh） | 编入测试库 | `pocketfft_fft`（位反转抽取重排 + 旋转因子 FMA 蝶形链） |
 
 OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁后 128 核（本机全核）30s 压力零错配，见 `docs/cases/allcore-2026-09-15/`），锁只保护缓冲表元数据、不改计算结果。
@@ -181,26 +181,30 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release &&
 ./builddir/sdcshield -e openblas_dgemm,openblas_sgemm,openblas_zgemm,sleef_neon,isal_igzip,pocketfft_fft,openssl_sha -t 30000
 ```
 
-**GEMM 矩阵尺寸扫谱（test knob）**：三个 `openblas_*gemm` 测试的矩阵尺寸**默认 256**（512KB/矩阵，L2 域；不传 knob 时行为与历史版本完全一致），可经 test knob 扫谱：`-O <testid>.mdim=N`，N∈[16,4096]，越界 fail-loudly 报错并提示合法域。**必须带测试 ID 前缀**——框架的 TestKeyWrapper 以 `<testid>.<key>` 查找（`framework/test_knobs.cpp`），裸 `mdim=N` 会被静默忽略、回退默认 256（用 `-v` 可在日志中核对每个 knob 的实际生效值）。
+**GEMM 矩阵尺寸扫谱（test knob）**：四个 `openblas_*gemm` 测试（double/float/complex-double/complex-float）的矩阵尺寸**默认 256**（L2 域；不传 knob 时行为与历史版本完全一致），可经 test knob 扫谱：`-O <testid>.mdim=N`，N∈[16,4096]，越界 fail-loudly 报错并提示合法域。**必须带测试 ID 前缀**——框架的 TestKeyWrapper 以 `<testid>.<key>` 查找（`framework/test_knobs.cpp`），裸 `mdim=N` 会被静默忽略、回退默认 256（用 `-v` 可在日志中核对每个 knob 的实际生效值）。
+
+**GEMM 形态扫谱（test knob）**：`-O <testid>.transab=0..3`（0=NN 默认、1=NT、2=TN、3=TT——TransA/TransB 在 OpenBLAS 内部走不同 packing 例程）+ `-O <testid>.beta_permille=P`（P∈[0,1000000]，β=P/1000，默认 0；β≠0 命中 C 读改写路径，C 以固定非零模式预填保证确定性）。四个 gemm 测试均支持。
 
 **每测试每档工作集足迹（每线程 scratch = 3 矩阵；矩阵字节数 = mdim² × 元素宽度）**：
 
-| 档位 | dgemm (double) | sgemm (float) | zgemm (complex double) | cache 域 |
-|---|---|---|---|---|
-| `mdim=64` | 32KB/矩阵 | 16KB | 64KB | L1D |
-| `mdim=256`（默认） | 512KB | 256KB | 1MB | L2 |
-| `mdim=512` | 2MB | 1MB | 4MB | LLC |
-| `mdim=1024` | 8MB | 4MB | 16MB | DRAM |
-| `mdim=2048` | 32MB | 16MB | 64MB | DRAM/远端 NUMA |
-| `mdim=4096` | 128MB | 64MB | 256MB | 大页/NUMA 交错 |
+| 档位 | dgemm (double) | sgemm (float) | cgemm (complex float) | zgemm (complex double) | cache 域 |
+|---|---|---|---|---|---|
+| `mdim=64` | 32KB/矩阵 | 16KB | 32KB | 64KB | L1D |
+| `mdim=256`（默认） | 512KB | 256KB | 512KB | 1MB | L2 |
+| `mdim=512` | 2MB | 1MB | 2MB | 4MB | LLC |
+| `mdim=1024` | 8MB | 4MB | 8MB | 16MB | DRAM |
+| `mdim=2048` | 32MB | 16MB | 32MB | 64MB | DRAM/远端 NUMA |
+| `mdim=4096` | 128MB | 64MB | 128MB | 256MB | 大页/NUMA 交错 |
+
+（cgemm 元素 = 交错 (re,im) float 对 = 8 字节/元素，与 zgemm 同为 2×float 宽度；矩阵字节数与 dgemm 相同。）
 
 **全核内存预算表（scratch 合计 = 3 矩阵 × 核数；选档前先对照主机内存）**：
 
-| 核数 | dgemm@1024 | dgemm@4096 | sgemm@4096 | zgemm@4096 |
-|---|---|---|---|---|
-| 128 核 | ~3GB | ~49GB | ~25GB | ~98GB |
-| 512 核 | ~13GB | ~197GB | ~98GB | ~393GB |
-| 2048 核 | ~50GB | ~786GB | ~393GB | ~1.6TB |
+| 核数 | dgemm@1024 | dgemm@4096 | sgemm@4096 | cgemm@4096 | zgemm@4096 |
+|---|---|---|---|---|---|
+| 128 核 | ~3GB | ~49GB | ~25GB | ~49GB | ~98GB |
+| 512 核 | ~13GB | ~197GB | ~98GB | ~197GB | ~393GB |
+| 2048 核 | ~50GB | ~786GB | ~393GB | ~786GB | ~1.6TB |
 
 （zgemm 内存紧张时推荐档 **512**；1024 档 128 核实测 ~7.7GB。内存不足时 OOM 走 `report_fail_msg` fail-loudly，不是静默或崩溃。）
 
@@ -220,11 +224,22 @@ done
 ./builddir/sdcshield -O openblas_dgemm.mdim=4096 -e openblas_dgemm -t 2h        # 或 -n 64 限制并发
 ```
 
-模式选择依据：CORE179 探针证明 store→reload 的 cache-domain 与跨线模式是触发判别条件（模式 A 逐层覆盖）；文献共识"负载多样性即检出率"（模式 B，详见 `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`）；大矩阵档把分块 GEMM 的 packing/回写路径推进 DRAM 与 NUMA 远端域（模式 C）。mdim>256 档在固定时间窗内迭代数按 mdim³ 骤减，是计算密度换覆盖广度的交换——统计采样请加长 `-t`。
+**模式 D：全谱战役脚本 `scripts/run/run_sdc_spectrum.sh`**——把模式 A/B/C 与全部 test knob（mdim/transab/beta_permille/nelems/n/level）合并为一条命令的两阶段战役（§7.4 战役协议的可执行化）：
+
+```bash
+bash scripts/run/run_sdc_spectrum.sh                    # 默认：15m/档扫谱 + 2h 深驻留
+SWEEP_TIME=30s DWELL_TIME=1m bash scripts/run/run_sdc_spectrum.sh   # 冒烟（约 10 分钟）
+```
+
+- **阶段 1 谱系广域扫**（每档独立日志，多样性 = 检出率）：1a GEMM 尺寸谱（mdim 64/256/512/1024，四个 gemm 同跑）；1b GEMM 形态谱（transab 0..3 × beta_permille=500）；1c SLEEF 足迹谱（nelems 1024/16384/262144）；1d FFT 因子谱（n 4096/4099/6144/10000 = pow2/Bluestein 质数/混合 radix）；1e 压缩 level 谱（isal_igzip level 0..3）；1f 加密/哈希全家族（openssl_sha/sha3/sm3sm4 + CRC）+ `openblas_lu` + 混合多样性轮（六种负载同跑）。
+- **阶段 2 深驻留**：`--max-test-loop-count=0` 关闭 fracturing，全绿档四负载（dgemm/sleef/pocketfft/isal）固定 seed 持续运行——CORE179 类单模式持续暴露。
+- 时长经 env 旋钮覆盖：`SWEEP_TIME`（默认 15m，阶段 1 每档）、`DWELL_TIME`（默认 2h，阶段 2）。日志按阶段/档位分文件存 `./sdc_spectrum_<时间戳>/`，脚本末尾汇总各日志 pass/fail。
+
+模式选择依据：CORE179 探针证明 store→reload 的 cache-domain 与跨线模式是触发判别条件（模式 A 逐层覆盖）；文献共识"负载多样性即检出率"（模式 B 与模式 D 阶段 1，详见 `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`）；大矩阵档把分块 GEMM 的 packing/回写路径推进 DRAM 与 NUMA 远端域（模式 C）；固定 seed 长驻留提升单模式的统计采样深度（模式 D 阶段 2）。mdim>256 档在固定时间窗内迭代数按 mdim³ 骤减，是计算密度换覆盖广度的交换——统计采样请加长 `-t`。
 
 ## 测试用例与检测能力
 
-当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3，vendored 依赖齐备时）共 **287 个用例**：PROD 278、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3，vendored 依赖齐备时）共 **291 个用例**：PROD 282、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
@@ -235,13 +250,13 @@ done
 | FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values` | FMA 模式与尾数精度穷举、特殊值逐字节 golden 比对 |
 | 算术 / 大整数 | `adcx`、`adox`、`adcxlong`、`adcx_arm`、`bigint_mulx_arm`、`gmp_big*` | 进位/溢出链、GMP 大整数乘加、高汉明距离操作数压满加法器 |
 | CRC / 校验 | `crc32`、`isal_crc{32,64}_*`、`zpclmul*` | `crc32` 指令、isa-l CRC32/CRC64 各标准、zlib PCLMUL 折叠 |
-| 压缩 | `zlib*`、`zstd*`、`zfuzz`、`isal_igzip` | zlib/zstd 压缩-解压往返、各级别、fuzz、isa-l deflate/inflate 往返 |
+| 压缩 | `zlib*`、`zstd*`、`zfuzz`、`isal_igzip` | zlib/zstd 压缩-解压往返、各级别、fuzz、isa-l deflate/inflate 往返（`-O isal_igzip.level=0..3` 扫四套 match-finder 数据结构：静态 Huffman/基础 hash 链/深历史/hash map） |
 | 线性代数（Eigen） | `eigen_gemm_*`、`eigen_sparse`、`eigen_svd*`（含 `_cdouble_sve`） | GEMM、稀疏 Cholesky、SVD（BDCSVD/Jacobi）施压 FMA/向量 |
-| 线性代数（OpenBLAS） | `openblas_dgemm`、`openblas_sgemm`、`openblas_zgemm` | OpenBLAS NEON FMA 微内核 GEMM（double/float/complex-double），每迭代 copy/compute/verify；矩阵尺寸 `-O <testid>.mdim=N`（16..4096，默认 256）可扫 L1D→L2→LLC→DRAM→NUMA 工作集（vendored，见上节） |
-| 超越函数（SLEEF） | `sleef_neon`、`sleef_sve` | sin/cos/exp/log 多项式 FMA 依赖链 × 宽向量，逐字节 golden 比对；`sleef_sve` 需 SVE 硬件（无则干净 skip）（vendored，见上节） |
-| FFT（pocketfft） | `pocketfft_fft` | 复数 FFT：位反转抽取重排（store→load scatter）+ 旋转因子 FMA 蝶形链（vendored，见上节） |
+| 线性代数（OpenBLAS） | `openblas_dgemm`、`openblas_sgemm`、`openblas_zgemm`、`openblas_cgemm`、`openblas_lu` | OpenBLAS NEON FMA 微内核 GEMM（double/float/complex-double/complex-float 四种 lane 组织），每迭代 copy/compute/verify；矩阵尺寸 `-O <testid>.mdim=N`（16..4096，默认 256）可扫 L1D→L2→LLC→DRAM→NUMA 工作集；`-O <testid>.transab=0..3` + `.beta_permille` 扫 packing/读改写相位；`openblas_lu` = LAPACK dgesv 主元分支 + 行交换 store + 三重 golden 比对（vendored，见上节） |
+| 超越函数（SLEEF） | `sleef_neon`、`sleef_sve` | 多项式 FMA 依赖链 × 宽向量，逐字节 golden 比对；u10 + u35 双精度档（两套独立多项式链）+ asin/atan/cbrt/log10/sinh/tanh/pow 函数族；`sleef_neon` 足迹旋钮 `-O sleef_neon.nelems=N`（128..262144，默认 1024，4 的倍数）扫 L1/L2/LLC 工作集；`sleef_sve` 需 SVE 硬件（无则干净 skip）（vendored，见上节） |
+| FFT（pocketfft） | `pocketfft_fft` | 复数 FFT + 实数 rfft 前向 golden 比对：位反转抽取重排（store→load scatter）+ 旋转因子 FMA 蝶形链；`-O pocketfft_fft.n=N` 扫因子谱系（512..16384 pow2 / 4099/8191 质数触发 Bluestein 卷积化 / 6144/10000 混合 radix）（vendored，见上节） |
 | IPSec / 密码 | `ipsec_*`（46） | AES-CBC/CTR/GCM、HMAC-SHA1/2、XCBC/CMAC/3DES-DOCSIS 于 NEON |
-| OpenSSL SHA | `openssl_sha` | SHA-256/384/512 vs golden（默认构建，优先 vendored OpenSSL） |
+| OpenSSL SHA | `openssl_sha`、`openssl_sha3`、`openssl_sm3sm4` | SHA-256/384/512（SHA-2 加法链）、SHA-3-224/256/384/512 + SHAKE128 XOF（Keccak 置换 AND/旋转/χθ 步，与 SHA-2 正交的 FU 混合）、SM3 摘要 + SM4-CBC 加解密往返（国密整数通路）vs golden（默认构建，优先 vendored OpenSSL） |
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
 | ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路 |
@@ -254,8 +269,8 @@ done
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 4 |
-| 2 | PROD（默认）| `quality >= 2` | 278 |
-| | **合计** | | **287** |
+| 2 | PROD（默认）| `quality >= 2` | 282 |
+| | **合计** | | **291** |
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm_crypto`、`ist_sbaf`、`neon_add`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`

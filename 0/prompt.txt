@@ -48,3 +48,15 @@
 ---
 
 20.03（GCC 7.3）/ 22.03（GCC 10.3） 也必须有acl方案
+
+---
+
+查看完整的plan
+
+---
+
+/planning-with-files:plan-goal 执行plan
+
+---
+
+/planning-with-files:plan-goal 执行plan

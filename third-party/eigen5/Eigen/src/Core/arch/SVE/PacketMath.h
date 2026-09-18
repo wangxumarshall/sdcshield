@@ -65,7 +65,7 @@ struct unpacket_traits<PacketXi> {
   typedef PacketXi half;  // Half not yet implemented
   enum {
     size = sve_packet_size_selector<numext::int32_t, EIGEN_ARM64_SVE_VL>::size,
-    alignment = Aligned64,
+    alignment = Aligned16,
     vectorizable = true,
     masked_load_available = false,
     masked_store_available = false
@@ -375,7 +375,7 @@ struct unpacket_traits<PacketXf> {
 
   enum {
     size = sve_packet_size_selector<float, EIGEN_ARM64_SVE_VL>::size,
-    alignment = Aligned64,
+    alignment = Aligned16,
     vectorizable = true,
     masked_load_available = false,
     masked_store_available = false
@@ -713,7 +713,7 @@ struct unpacket_traits<PacketXd> {
 
   enum {
     size = sve_packet_size_selector<double, EIGEN_ARM64_SVE_VL>::size,
-    alignment = Aligned64,
+    alignment = Aligned16,
     vectorizable = true,
     masked_load_available = false,
     masked_store_available = false

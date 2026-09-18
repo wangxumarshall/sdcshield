@@ -65,7 +65,13 @@ struct unpacket_traits<PacketXcd> {
   typedef PacketXd as_real;
   enum {
     size = sve_packet_size_selector<double, EIGEN_ARM64_SVE_VL>::size / 2,
-    alignment = unpacket_traits<PacketXd>::alignment,
+    // One complex<double> = 16 bytes, matching the NEON Packet1cd convention
+    // (neon_unpacket_default alignment = sizeof(packet) = 16). NOT the real
+    // packet's Aligned64: Eigen allocates complex matrices on
+    // EIGEN_MAX_ALIGN_BYTES (16 on this target), so a 64-byte assume_aligned
+    // in pload/pstore would be a false assumption the optimizer can exploit
+    // (observed as intermittent ULP differences under -O3).
+    alignment = Aligned16,
     vectorizable = true,
     masked_load_available = false,
     masked_store_available = false
@@ -247,6 +253,51 @@ EIGEN_MAKE_CONJ_HELPER_CPLX_REAL(PacketXcd, PacketXd)
 template <>
 EIGEN_STRONG_INLINE PacketXcd pdiv<PacketXcd>(const PacketXcd& a, const PacketXcd& b) {
   return pdiv_complex(a, b);
+}
+
+//---------- gather / scatter ----------
+// Strided access at COMPLEX granularity (from[i*stride], matching the NEON
+// Packet1cd/Packet2cf convention). One u64-index gather/scatter over the
+// f64 view: complex i lives at f64 lanes 2*i*stride and 2*i*stride+1.
+// Without these, the generic pgather< complex >(from, stride) silently
+// degrades to ploadu(from) — i.e. it IGNORES the stride and reads the
+// wrong elements (observed as a wrong result in the blocked
+// UpperBidiagonalization complex path, which strides through Ref blocks).
+
+template <>
+EIGEN_DEVICE_FUNC inline PacketXcd pgather<std::complex<double>, PacketXcd>(const std::complex<double>* from,
+                                                                            Index stride) {
+  svuint64_t cidx = svmul_n_u64_x(svptrue_b64(), svindex_u64(0, 1),
+                                   static_cast<uint64_t>(2 * stride));
+  return PacketXcd(svld1_gather_u64index_f64(svptrue_b64(), reinterpret_cast<const double*>(from), cidx));
+}
+
+template <>
+EIGEN_DEVICE_FUNC inline void pscatter<std::complex<double>, PacketXcd>(std::complex<double>* to,
+                                                                        const PacketXcd& from, Index stride) {
+  svuint64_t cidx = svmul_n_u64_x(svptrue_b64(), svindex_u64(0, 1),
+                                   static_cast<uint64_t>(2 * stride));
+  svst1_scatter_u64index_f64(svptrue_b64(), reinterpret_cast<double*>(to), cidx, from.v);
+}
+
+//---------- transpose ----------
+
+// Transpose N complex packets at COMPLEX granularity: result packet q,
+// complex i takes source packet i, complex q (the NEON Packet2cf pattern —
+// NOT an f64-lane transpose, which would split re/im pairs). Needed by the
+// GEBP rhs packing path (GeneralBlockPanelKernel.h) for complex GEMM.
+// N=1 needs no specialization: the generic PacketBlock<Packet,1> no-op in
+// GenericPacketMath.h already covers it (an N=1 instantiation here would be
+// ambiguous with it).
+template <int N, std::enable_if_t<(N > 1), int> = 0>
+EIGEN_DEVICE_FUNC inline void ptranspose(PacketBlock<PacketXcd, N>& kernel) {
+  constexpr int NC = unpacket_traits<PacketXcd>::size;
+  EIGEN_ALIGN_MAX std::complex<double> buf[N][NC];
+  for (int i = 0; i < N; i++) pstoreu<std::complex<double>>(buf[i], kernel.packet[i]);
+  std::complex<double> out[N][NC];
+  for (int q = 0; q < N; q++)
+    for (int i = 0; i < NC; i++) out[q][i] = buf[i][q];
+  for (int i = 0; i < N; i++) kernel.packet[i] = ploadu<PacketXcd>(out[i]);
 }
 
 //---------- reduction ----------

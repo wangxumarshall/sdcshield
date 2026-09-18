@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2SXXF2PB9S5RQTFE6GG8N2Y",
+  "session_id": "5b466196-81cc-4ebf-9ce5-01bc68d3b970",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-18T09:35:16.01788366Z",
+  "branch": "fix/svd-cdouble-sve-mdim-timeout",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/plans/2026-09-18-fix-svd-cdouble-sve-mdim-timeout.md",
+    "tests/cpu/eigen_svd/svd_cdouble_sve.cpp"
+  ],
+  "agent": "Claude Code",
+  "model": "GLM-5.3[1m]",
+  "turn_id": "f5c656b34da9",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 483955,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13790336,
+    "output_tokens": 57826,
+    "api_call_count": 226
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-18T09:35:15.93372234Z",
+    "agent_lines": 118,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 118,
+    "total_lines_changed": 119,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

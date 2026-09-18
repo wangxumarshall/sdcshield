@@ -63,30 +63,14 @@ static int sve_probe_and_init(struct test *test)
                  "eigen_svd_cdouble_sve requires SVE (e.g. Kunpeng 930)");
         return EXIT_SKIP;
     }
-#if EIGEN_VERSION_AT_LEAST(5, 0, 0)
-    /* Eigen 5.0's SVE packet backend (arch/SVE/PacketMath.h) only
-     * specializes int32_t and float — there is no packet_traits<double>
-     * (nor complex<double>), so every Matrix<double> path in this SVE
-     * translation unit silently falls back to scalar loops. Measured on
-     * 2026-09-18 (127-core cortex x3b): a 300x300 double BDCSVD takes
-     * 29 ms on the NEON backend but exceeds 10 minutes on the "SVE"
-     * backend — the Jacobi rotations (apply_rotation_in_the_plane) that
-     * dominate the base case all hit the non-vectorized selector. The
-     * test therefore cannot stress SVE hardware at all and blows past
-     * the framework's 300 s test_timeout() floor at any matrix size
-     * (M_DIM 300 and 2100 both measured as timed out). Report an honest
-     * placeholder skip until the vendored Eigen gains SVE double
-     * packets. */
-    if (EigenSVE::internal::packet_traits<double>::size == 1) {
-        log_skip(TestResourceIssueSkipCategory,
-                 "to be implemented (placeholder): Eigen 5.0 SVE packet "
-                 "backend has no double/complex<double> support (scalar "
-                 "fallback, ~20000x slower than NEON — one 300x300 "
-                 "BDCSVD iteration exceeds the 300 s test timeout); "
-                 "pending SVE double packet support in vendored Eigen");
-        return EXIT_SKIP;
-    }
-#endif
+    /* The vendored Eigen 5.0 now carries SVE double/complex<double>
+     * packets (arch/SVE/PacketMath.h PacketXd, arch/SVE/Complex.h
+     * PacketXcd — feat/eigen-sve-double-packets). The historical
+     * placeholder skip ("Eigen 5.0 SVE backend has no double packets",
+     * added 2026-09-18 when every double path fell back to scalar and a
+     * single 300x300 BDCSVD blew the 300 s test_timeout() floor) is
+     * retired: measured on cortex x3b at the compiled VL=128 the full
+     * test passes in ~0.7 s. */
     return eigen_svd_cdouble_sve_test::init(test);
 }
 

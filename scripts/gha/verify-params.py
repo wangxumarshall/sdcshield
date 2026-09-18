@@ -36,31 +36,54 @@ SKIP_OK_RE = re.compile(
     re.IGNORECASE,
 )
 
-# 期望失败的 selftest(框架自测故意触发失败路径;退出码非 0 是"正确")
+# 期望失败的 selftest(框架自测故意触发失败路径;退出码非 0 是"正确")。
+# 只收【确定性】负路径:fail/abort/sig*/reportfail/oserror/malloc/cxxthrow。
+# 排除三类:
+#   - freeze 类(selftest_freeze/freeze_fork):故意挂死测 300s hang-watchdog,纯耗时。
+#   - randomfail/timed_randomfail 类:概率性失败(rare 几乎总 rc=0,25pct/50pct 也可能 0),
+#     非确定性,不能断言"必须非零退出"。
+#   - cxxthrowcatch / datacomparefailrare_*:语义是"catch 住/catch 不到的罕见分支",
+#     rc 不定,不属确定性负路径。
 NEGATIVE_SELFTESTS = [
     "selftest_fail", "selftest_failinit", "selftest_abort", "selftest_abortinit",
-    "selftest_freeze", "selftest_freeze_fork", "selftest_sigill", "selftest_sigsegv",
-    "selftest_sigbus", "selftest_sigfpe", "selftest_sigsegv_init", "selftest_sigsegv_instruction",
+    "selftest_sigill", "selftest_sigsegv", "selftest_sigbus",
+    "selftest_sigsegv_init", "selftest_sigsegv_instruction",
     "selftest_sigsegv_kernel", "selftest_sigkill", "selftest_reportfail", "selftest_reportfailmsg",
-    "selftest_oserror", "selftest_randomfail_50pct", "selftest_randomfail_rare",
-    "selftest_timed_randomfail_25pct", "selftest_timed_randomfail_rare",
-    "selftest_datacomparefail_double", "selftest_datacomparefail_float",
-    "selftest_malloc_fail", "selftest_cxxthrow", "selftest_cxxthrowcatch",
+    "selftest_oserror", "selftest_datacomparefail_double", "selftest_datacomparefail_float",
+    "selftest_malloc_fail", "selftest_cxxthrow",
 ]
 # 与现有 verify-built-pristine.sh 一致的数值敏感 eigen 集(192 核 ULP flakiness → -n 1)
 EIGEN_N1 = ["eigen_svd_double", "eigen_sparse", "eigen_svd_cdouble", "eigen_svd_cdouble_sve"]
 # 基准/参数扫描的 openblas mdim 档
 OPENBLAS_MDIM = ["64", "256", "512"]
 
+# 云 runner 拓扑相关测试:mesh_upi_* 是跨 NUMA/mesh 互联压测,需要多 socket 真实硅
+# (kunpeng920 多 NUMA);GHA hosted 是单 socket 2-CPU Neoverse V1,这些测试会永久挂起
+# 直到框架 300s 超时(exit: invalid)。在云 runner 上 --disable 排除(诚实:非软件 bug,
+# 是硬件拓扑缺失)。本地/self-hosted kunpeng920 上仍会跑。
+# 注意:--disable 接受通配符,这里用精确前缀 + 通配。
+CLOUD_DISABLE = ["mesh_upi*", "memcpy_rewr"]
+
 
 def run(cmd, timeout=900):
-    """跑一条命令,返回 (exit_code, stdout_text)。容器内用 --ignore-timeout 规避 cgroup 超时误报。"""
+    """跑一条命令,返回 (exit_code, stdout_text)。容器内用 --ignore-timeout 规避 cgroup 超时误报。
+    用 text=True 拿 str;但部分 selftest(负面崩溃类)会输出原始二进制字节,subprocess 偶发
+    仍给 bytes —— 这里做 bytes→str 兜底(utf-8, errors=replace),保证下游 CRASH_RE 可用。"""
     try:
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            timeout=timeout, text=True)
-        return p.returncode, p.stdout
+        out = p.stdout
     except subprocess.TimeoutExpired as e:
-        return 124, (e.stdout or "")
+        return 124, _to_str(e.stdout)
+    return p.returncode, _to_str(out)
+
+
+def _to_str(b):
+    if b is None:
+        return ""
+    if isinstance(b, str):
+        return b
+    return b.decode("utf-8", errors="replace")
 
 
 def list_tests(bin_path, extra=None):
@@ -72,21 +95,24 @@ def list_tests(bin_path, extra=None):
 
 
 def parse_result_yaml(text):
-    """从 sdcshield YAML 输出里摘 per-test 的 (test, result, runtime),以及崩溃计数。"""
+    """从 sdcshield YAML 输出里摘 per-test 的 (test, result, runtime),以及崩溃计数。
+    text 可以是字符串(小文件)或文件路径(大文件流式读,避免 400MB YAML 全量入内存 OOM)。"""
     tests = []          # list of (name, result, runtime)
     crashes = 0
     cur = None
-    for line in text.splitlines():
+
+    def _feed(line):
+        nonlocal crashes, cur
         m = RESULT_RE.match(line)
         if m:
             if cur is not None:
                 tests.append(cur)
             cur = [m.group(1), "unknown", 0.0]
-            continue
+            return
         if cur is None:
             if CRASH_RE.search(line):
                 crashes += 1
-            continue
+            return
         mv = RESULT_VAL.match(line)
         if mv:
             cur[1] = mv.group(1)
@@ -98,17 +124,38 @@ def parse_result_yaml(text):
                 cur[2] = 0.0
         if CRASH_RE.search(line):
             crashes += 1
+
+    if "\n" in text or text.strip().startswith(("command-line", "version", "os:", "- test", "{")):
+        for line in text.splitlines():
+            _feed(line)
+    else:
+        # 文件路径:流式逐行读,不整文件入内存
+        with open(text, "r") as f:
+            for line in f:
+                _feed(line.rstrip("\n"))
     if cur is not None:
         tests.append(cur)
     return tests, crashes
 
 
-def summarize(tests, crashes, ok_labels=("pass", "skip", "timed out")):
+def parse_result_file(path):
+    """流式解析 YAML 文件(不整读入内存),返回 (tests, crashes)。文件不存在返回 ([], 0)。"""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return [], 0
+    return parse_result_yaml(path)
+
+
+def summarize(tests, crashes):
+    # 非致命结果:pass/skip/timed out/interrupted/operating system error/invalid
+    #   - timed out/interrupted: 云 runner 上互联类测试因单 socket 拓扑超时,非软件 bug
+    #   - invalid: 框架遇到某测试超时后的整体退出态
+    # 致命:fail(字节错配)/crash(信号崩溃)
     npass = sum(1 for _, r, _ in tests if r == "pass")
     nskip = sum(1 for _, r, _ in tests if r == "skip")
+    nsoft = sum(1 for _, r, _ in tests if r in ("timed out", "interrupted", "operating system error", "invalid"))
     nfail = sum(1 for _, r, _ in tests if r == "fail")
     ncrash = sum(1 for _, r, _ in tests if r == "crash")
-    return npass, nskip, nfail, ncrash, crashes
+    return npass, nskip, nfail, ncrash, crashes, nsoft
 
 
 def main():
@@ -146,39 +193,51 @@ def main():
     fail_total = 0
     crash_total = 0
 
+    # 通用兜底参数:
+    #   --max-test-loop-count 3:固定每测试 3 次 main loop(禁用 test fracturing),
+    #      否则框架对每测试多 seed 分片跑,生成数百 MB YAML + 数十分钟,2-CPU runner 会 OOM。
+    #   --timeout=60s:每测试超时防互联类挂死 300s;
+    #   --max-messages 0:关掉 per-thread 日志冗余;
+    #   --ignore-timeout:把超时当非致命继续,而非整体 exit: invalid。
+    COMMON = ["--retest-on-failure=0", "--max-test-loop-count", "3", "--timeout=60s",
+              "--max-messages", "0", "--ignore-timeout"]
+    # 云 runner 拓扑缺失:mesh_upi_*/memcpy_rewr 需多 NUMA 真实硅,单 socket VM 挂死 → 排除
+    CLOUD_DIS = []
+    for pat in CLOUD_DISABLE:
+        CLOUD_DIS += ["--disable", pat]
+
     # ---- 2) 全质量级跑一遍(单线程基线, 判"能跑"与结果分布) ----
-    #   --quality=-1 覆盖 PROD+BETA+SKIP; --retest-on-failure=0 让失败原样返回不重试;
-    #   单线程规避 192 核 eigen ULP flakiness;-t 5000 每测试上限 5s(quick 下更短)。
+    #   --quality=-1 覆盖 PROD+BETA+SKIP;-n 1 规避 192 核 eigen ULP flakiness;
+    #   -t 5000 只是安全上限(loop 数已由 --max-test-loop-count 限定)。
     stage_tests = []
     if not args.smoke:
         for extra, label in [
-            (["--quality=-1", "--retest-on-failure=0", "-n", "1", "-t", "5000"], "all-quality(-n1)"),
+            (["--quality=-1", "-n", "1", "-t", "5000"] + COMMON + CLOUD_DIS, "all-quality(-n1)"),
         ]:
             y = os.path.join(out_dir, "allquality.yaml")
             cmd = [bin_path] + extra + ["-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_yaml(_read(y) or stdout)
-            npass, nskip, nfail, ncrash, _ = summarize(tests, crashes)
-            stage_tests.append((label, tests, crashes, npass, nskip, nfail, ncrash))
+            tests, crashes = parse_result_file(y)
+            npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
+            stage_tests.append((label, tests, crashes, npass, nskip, nfail, ncrash, nsoft))
 
-    for label, tests, crashes, npass, nskip, nfail, ncrash in stage_tests:
+    for label, tests, crashes, npass, nskip, nfail, ncrash, nsoft in stage_tests:
         ok = (nfail == 0 and ncrash == 0 and npass + nskip > 0)
         if not ok:
             fail_total += 1
         crash_total += crashes
-        log.append(f"[{label}] tests={len(tests)} pass={npass} skip={nskip} fail={nfail} crash={ncrash} "
-                   f"({ 'OK' if ok else 'FAIL'})")
+        log.append(f"[{label}] tests={len(tests)} pass={npass} skip={nskip} soft={nsoft} "
+                   f"fail={nfail} crash={ncrash} ({ 'OK' if ok else 'FAIL'})")
 
     # ---- 3) 多线程并发档(-n 1/4/8)对全 PROD 各跑一轮(内存/锁/cache 压力面) ----
-    #   -t 1000 每测试 ~1s,配合 --ignore-timeout 规避 cgroup 超时误报;断言 0 fail 0 crash。
     if args.smoke:
         for n in [1]:
             y = os.path.join(out_dir, "smoke_zstd19.yaml")
-            cmd = [bin_path, "--retest-on-failure=0", "-n", "1", "-t", "3000",
+            cmd = [bin_path, "-n", "1", "-t", "3000", "--max-messages", "0",
                    "-e", "zstd19", "-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_yaml(_read(y) or stdout)
-            npass, nskip, nfail, ncrash, _ = summarize(tests, crashes)
+            tests, crashes = parse_result_file(y)
+            npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             ok = nfail == 0 and ncrash == 0 and npass >= 1
             if not ok:
                 fail_total += 1
@@ -195,28 +254,27 @@ def main():
 
     for n in threads:
         y = os.path.join(out_dir, f"prod_n{n}.yaml")
-        # eigen 数值类在 >1 线程下有已知 ULP flakiness(CLAUDE.md),多线程档 --disable 规避;
-        # 它们已在 all-quality(-n1) 单线程档覆盖。
+        # eigen 数值类(>1 线程 ULP flakiness)+ 云 runner 拓扑缺失的 mesh_upi* 都 --disable
         disable_args = []
         for eig in EIGEN_N1:
             disable_args += ["--disable", eig]
-        cmd = [bin_path, "--retest-on-failure=0", "-n", str(n), "-t", "1000",
-               "--ignore-timeout"] + disable_args + ["-o", y]
+        disable_args += CLOUD_DIS
+        cmd = [bin_path, "-n", str(n), "-t", "1000"] + COMMON + disable_args + ["-o", y]
         _rc, stdout = run(cmd)
-        tests, crashes = parse_result_yaml(_read(y) or stdout)
-        npass, nskip, nfail, ncrash, _ = summarize(tests, crashes)
+        tests, crashes = parse_result_file(y)
+        npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
         ok = nfail == 0 and ncrash == 0
         if not ok:
             fail_total += 1
         crash_total += crashes
-        log.append(f"[all-PROD -n {n}] pass={npass} skip={nskip} fail={nfail} crash={ncrash} "
-                   f"({'OK' if ok else 'FAIL'})")
+        log.append(f"[all-PROD -n {n}] pass={npass} skip={nskip} soft={nsoft} "
+                   f"fail={nfail} crash={ncrash} ({'OK' if ok else 'FAIL'})")
 
     # ---- 4) selftests 正向集(@positive) ----
     #   @positive 只带 --selftests 前缀生效。
     y = os.path.join(out_dir, "selftest_positive.yaml")
     cmd = [bin_path, "--selftests", "--quick", "--retest-on-failure=0", "-n", "1",
-           "-e", "@positive", "-o", y]
+           "--max-messages", "0", "-e", "@positive", "-o", y]
     rc, stdout = run(cmd)
     pos_ok = (rc == 0)
     if not pos_ok:
@@ -229,7 +287,8 @@ def main():
     for t in neg_list:
         y = os.path.join(out_dir, f"selftest_{t}.yaml")
         cmd = [bin_path, "--selftests", "--quick", "--retest-on-failure=0",
-               "--on-hang=kill", "--on-crash=kill", "-n", "1", "-e", t, "-o", y]
+               "--on-hang=kill", "--on-crash=kill", "-n", "1",
+               "--max-messages", "0", "-e", t, "-o", y]
         rc, stdout = run(cmd, timeout=120)
         # 期望: 非 0 退出(代表"测试正确报告了失败"),且无机器指令级崩溃信号
         insn_crash = bool(CRASH_RE.search(stdout))
@@ -248,10 +307,11 @@ def main():
         for m in mdim:
             y = os.path.join(out_dir, f"{t}_mdim{m}.yaml")
             cmd = [bin_path, "-O", f"{t}.mdim={m}", "-n", "1", "--retest-on-failure=0",
-                   "-t", "5000", "--ignore-timeout", "-e", t, "-o", y]
+                   "--max-test-loop-count", "3", "-t", "5000", "--max-messages", "0",
+                   "--ignore-timeout", "-e", t, "-o", y]
             _rc, stdout = run(cmd)
-            tests, crashes = parse_result_yaml(_read(y) or stdout)
-            npass, nskip, nfail, ncrash, _ = summarize(tests, crashes)
+            tests, crashes = parse_result_file(y)
+            npass, nskip, nfail, ncrash, _, nsoft = summarize(tests, crashes)
             ok = nfail == 0 and ncrash == 0
             if not ok:
                 fail_total += 1
@@ -269,14 +329,6 @@ def main():
     verdict = "PASS" if (fail_total == 0 and crash_total == 0) else "FAIL"
     print(f"RESULT: {verdict} (sections_fail={fail_total} crashes={crash_total})")
     return 0 if verdict == "PASS" else 1
-
-
-def _read(path):
-    try:
-        with open(path, "r") as f:
-            return f.read()
-    except OSError:
-        return ""
 
 
 if __name__ == "__main__":

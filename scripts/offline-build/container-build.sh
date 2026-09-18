@@ -206,9 +206,16 @@ rebuild_vendored() {
             rm -rf "$dir/openssl-3.5.0"
             mkdir -p "$dir/openssl-3.5.0"
             "$TAR_BIN" xzf "$dir/openssl-3.5.0.tar.gz" -C "$dir/openssl-3.5.0" --strip-components=1
+            # no-asm:openEuler 22.03 LTS 基线镜像的 binutils 2.37-25 汇编 OpenSSL 的
+            # SM4 ARMv8-CE 汇编(vpaes-armv8.pl 生成的 vpsm4 路径)产出错误机器码 —
+            # SM4-CBC 解密自第二块起确定性错位(实测 -s LCG:614153748 100% 复现,
+            # openssl_sm3sm4 roundtrip mismatch @offset16;22.03-SP1..SP4 的 binutils
+            # 2.37-23 与 24.03 host binutils 2.41 均正常;同容器裸 EVP harness 5 万次
+            # 随机 + no-asm 对照组 0 失败)。容器内重建统一 no-asm:SM3/SM4 走纯 C,
+            # 性能略降换正确性(稳定性验证语境优先正确性)。
             ( cd "$dir/openssl-3.5.0" \
               && ./Configure linux-aarch64 --prefix="$dir/install" \
-                   no-shared no-tests no-docs no-apps --release \
+                   no-shared no-tests no-docs no-apps --release no-asm \
               && make -j"${VENDORED_JOBS:-16}" build_sw \
               && (make install_sw 2>/dev/null || make install_dev) )
             ;;
@@ -223,7 +230,9 @@ rebuild_vendored() {
                 ln -sf libopenblas_tsv110-r0.3.29.a "$dir/install/lib/libopenblas.a"
             ;;
     esac
-    echo "$VENDORED_GLIBC" > "$dir/install/.glibc-build-tag"
+    # tag 含 "-noasm" 后缀:asm 时代的 tag(裸 glibc 版本号)不匹配 → 迁移一次重建;
+    # 之后同 glibc + no-asm 的产物复用。
+    echo "$VENDORED_GLIBC-noasm" > "$dir/install/.glibc-build-tag"
 }
 if [ -d "$SRCW/third-party/openssl/install" ]; then
     rebuild_vendored openssl || echo "  WARNING: openssl 容器内重建失败,回退宿主产物" >&2

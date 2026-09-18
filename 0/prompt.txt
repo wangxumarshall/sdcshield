@@ -1,0 +1,62 @@
+/planning-with-files:planning-with-files  理解项目的意图（检测和激发cpu的静默数据损坏sdc），分析所有用例，识别所有不符合sdc压测预期的地方，无法压测sdc的功能，制定完整的方案
+
+---
+
+/planning-with-files:planning-with-files  理解项目的意图（检测和激发cpu的静默数据损坏sdc），分析所有用例，识别所有不符合sdc压测预期的地方，无法压测sdc的功能，制定完整的方案，你要看引入的外围lib库是否正在的被压力压测到了，在检测用例中
+
+---
+
+查看 SDC_LIBRARY_STRESS_COVERAGE_AUDIT_2026-09-18.md
+
+---
+
+详细解释每个点
+
+---
+
+如何解决 ：同源 golden 体系（5 库 20+ 用例）
+
+---
+
+如何解决这两个问题：硬伤 1（高）：ACL 零覆盖
+
+  两层问题叠加：
+
+  1. 构建层：本机没装 libarm_compute，-Denable_acl=auto 探测失败 → acl_gemm.cpp 根本不参与编译。ACL 的 NEON GEMM 压测在这个仓库的默认构建里压根不存在。
+  2. 源码层（即使装了 ACL，链接成功了）：acl_gemm.cpp 的 init（第 59 行）和 run（第 109 行）都是：
+
+  return EXIT_SKIP;   // 无条件跳过，且前面没有 log_skip
+
+  后面所有 GEMM 代码（包括那个还有 1e-3f 容差问题的比较逻辑）全是不可达死码。
+
+  所以 ACL 是"从构建到运行全程零压测"，同时它还违反了仓库的占位诚实规则（跳过要有 log_skip 说明原因，不能裸 return EXIT_SKIP）。修复要么真启用（装库 + 修 fork-safety 的
+  SIGSEGV 问题），要么诚实静态 skip + 补 log_skip。
+   硬伤 3（中）：pocketfft 逆变换死载
+
+  两个选择：
+  1. 加容差校验：逆向 FFT 不是位精确的（舍入 ~3e-11），但可以加能量/相对误差校验——比如 |ifft(fft(x)) - x| < 容差 * |x|。这种校验揪不出 1-ulp
+  的错，但能揪"整段结果崩了"的大错（比如某个 butterfly 完全失效）。
+
+---
+
+/planning-with-files 安装如下策略解决上述问题：acl要引入源码级的vendor，并解决所有acl问题；pocketfft逆变换加容差校验
+
+---
+
+/planning-with-files:planning-with-files 安装如下策略解决上述问题，制定实现方案：acl要引入源码级的vendor，并解决所有acl问题；pocketfft逆变换加容差校验
+
+---
+
+20.03（GCC 7.3）/ 22.03（GCC 10.3） 也必须有acl方案
+
+---
+
+查看完整的plan
+
+---
+
+/planning-with-files:plan-goal 执行plan
+
+---
+
+/planning-with-files:plan-goal 执行plan

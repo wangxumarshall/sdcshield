@@ -23,7 +23,7 @@
 | D11 | crc 家族（13 个） | CRC 指令/CRC 单元 | crc1 与 crc2 用**同一指令同一数据算两遍**再比较；确定性 CRC 单元缺陷两边同错 | **高** | 同源 golden |
 | D1 | fma | FMA 单元 | 1e-6 相对容差；`vfmaq_f32` 与 `fmaf` 均为 IEEE 单舍入 FMA，必须位相等 → 1 位尾数错误（≈1.2e-7）**通过** | **高** | 假通过 |
 | D2 | fma_patterns_avx512_{pd,ps} | FMA 模式压测 | pd 版 1e-12 绝对下限、ps 版 1e-5f 绝对下限 —— 任何单比特尾数错误均小于绝对下限 | **高** | 假通过 |
-| D3 | acl_gemm | ACL NEON GEMM | init/run 双处无条件 `return EXIT_SKIP`（acl_gemm.cpp:59,109），且**无 log_skip**（违反占位诚实规则）；后续 GEMM 代码全部不可达 | 中 | 永久死码 |
+| D3 | acl_gemm | ACL NEON GEMM | **已修复 (2026-09-19)**：原 init/run 双处 `return EXIT_SKIP` + 无 log_skip；真根因是 init 漏赋 `test->data`（run 解引用垃圾指针恒 SIGSEGV，被误归因为 fork-safety）。现 vendored ACL v23.02 + import_memory + long-double golden + 1e-4 绝对容差，NEGEMM 真跑 `exit: pass` | 中 → **已关闭** | 已修复 |
 | D4 | 73 个文件的 reload_buf 模式 | 存储→加载路径 | `memcpy→memcpy→memcmp` 恒真"一致性检查"；编译器可完全消除。多数家族中仅为冗余装饰，但 vmx/crc 家族中它是**唯一**的"验证" | 中 | 空转检查 |
 | D7 | neon_add / arm64_sdc / arm_crypto | NEON 加法 / CRC 数据通路 / AESE | 三个基础 ARM64 用例标为 BETA，默认 `--quality=2` 不运行 → 默认生产运行中该三单元**零覆盖** | 中 | 质量门控空洞 |
 | D9 →并入 D11 | crc32 三兄弟 | CRC32C 指令 | 同 D11 | — | — |

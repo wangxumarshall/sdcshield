@@ -24,9 +24,9 @@
 | sleef | vendored-only（`-l:libsleef.a`） | ✅ advsimd/u10sve | ❌ 同源（u35 是第二独立实现在**同一库里**，仍同源） | 同上 | 可压但不校验正确性 |
 | openssl | vendored-prefer（默认 dynamic 也优先 `libcrypto.a`） | ✅ | ❌ 同源（含 sha/sha3/sm3sm4/ipsec 主体） | 同上 | 可压但不校验正确性 |
 | isa-l | vendored-prefer→系统回退 | ✅ aarch64 pmull + 手写 igzip 汇编 | ✅ igzip 有 inflate 回读（**唯一真正独立交叉校验**）；但 10 个 isal_crc 是 `crc1==crc2` 同源 | igzip 强 / crc 弱（D11） | 压测到位（除 crc） |
-| pocketfft | 编译内嵌（pocketfft.c 直编） | ✅ cfft/rfft butterfly | ❌ 正向同源；**逆变换算了但不比较** | 只检瞬态错 | 可压但不校验正确性 |
+| pocketfft | 编译内嵌（pocketfft.c 直编） | ✅ cfft/rfft butterfly | 正向同源；**逆变换已修复 (2026-09-19)**：round-trip 容差校验（1e-6 相对，全部 8 个 N lineage 档位实测 pass） | 瞬态错 + 逆路径大错 | 已增强 |
 | GMP | system-only（无 vendored，按设计） | ✅ | ❌ 同源（mpz_add init/run） | 同上 | 同上 |
-| ACL | `-Denable_acl` 门控，本机未装 → **未链接**；即便装了 acl_gemm 双处 `return EXIT_SKIP` | — | — | **零压测** | 链接即死（D3） |
+| ACL | **已修复 (2026-09-19)**：vendored 源码构建 `third-party/acl`（v23.02，仅 arm_compute_core NEON 目标，fPIC），三 OS 容器内原生重建（22.03/20.03 需 supplement-cmake.sh） | ✅（历史 SIGSEGV 根因已查明：init 漏了 `test->data` 赋值，与 fork 无关，fisttp_arm.cpp:114 有而本文件无） | ✅ long-double naive 独立参考 + 1e-4 绝对容差（两轮实测校准，抓 cancellation 场景） | **已真压测**：acl_gemm NEGEMM 首跑 `exit: pass`（-n 1/-n 8/fisttp_arm/zstd19/gmp_bignum 全过） | **D3 已关闭** |
 
 ## 逐库证据（file:line）
 

@@ -121,6 +121,7 @@ END_DECLARE_TEST
 - No `cpufreq` on this board → `--vary-frequency`/`--vary-uncore-frequency` print "skipping" and continue (frequency_manager degrades gracefully; it no longer `exit(EX_IOERR)`).
 - No `thermal_zone*` CPU zones (only `cooling_device*`) → thermal throttle is a no-op; on boards that do expose `cpu`/`soc` zones it activates.
 - Eigen numerical tests (`eigen_svd_double`, `eigen_sparse`) fail **sporadically** under full-system multi-threading (192 CPUs) due to ULP-level differences in parallel SVD/sparse-solve ordering vs strict `memcmp` golden comparison — single-threaded (`-n 1`) always passes. This is an Eigen/large-core-count limitation, not a port defect; same workload would show it on x86 at high concurrency.
+- `eigen_svd_cdouble_sve` reports an honest placeholder skip (`TestResourceIssue`) even on SVE hardware: vendored Eigen 5.0's SVE packet backend only specializes int32/float — no `packet_traits<double>` — so `Matrix<double>` code in the SVE TU silently degrades to scalar loops (~4 orders of magnitude slower than NEON; a single 300×300 double BDCSVD exceeds the framework's 300 s `test_timeout()` floor, proven 2026-09-18 by standalone repro: 29 ms NEON vs >10 min "SVE"). It reverts to a real test once the vendored Eigen gains SVE double packets.
 
 ## x86-64 untouched rule
 

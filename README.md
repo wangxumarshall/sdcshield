@@ -103,7 +103,7 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 
 > `run.sh` 部署逻辑：检测本机 OS → 精确匹配 `built-index.tsv`（不跨版本回退）→ 校验 `binary-sha256` → `exec run-sdcshield.sh`（设 `LD_LIBRARY_PATH` 指向随包 `libs/`）。
 >
-> `run-sdcshield.sh full`（首参数 `full`）：两段式全核 eigen 满载——第一段 11 个稳定 eigen 测试不带 `-n`（默认使用系统全部 CPU）；第二段 4 个数值敏感测试（`eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve`）以 `-n 1` 补跑，规避大规模多线程下的 ULP 级偶发假 FAIL（平台已知特性）。默认每测试 60s（可 `-t` 覆盖）；透传的 `-n` 只作用于第一段；`eigen_svd_cdouble_sve` 在无 SVE 的机器上自动 skip。
+> `run-sdcshield.sh full`（首参数 `full`）：两段式全核 eigen 满载——第一段 11 个稳定 eigen 测试不带 `-n`（默认使用系统全部 CPU）；第二段 4 个数值敏感测试（`eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve`）以 `-n 1` 补跑，规避大规模多线程下的 ULP 级偶发假 FAIL（平台已知特性）。默认每测试 60s（可 `-t` 覆盖）；透传的 `-n` 只作用于第一段；`eigen_svd_cdouble_sve` 当前为占位 skip（Eigen 5.0 SVE 后端无 double packet 支持，详见测试注释），无 SVE 的机器上报 `CpuNotSupported`。
 
 #### 一键式全流程：`release-all.sh`（agent/CI 首选入口）
 
@@ -354,7 +354,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv   # 崩溃回溯
 ```
 
-Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 仅 SVE 硬件运行，Kunpeng 920 在 init 阶段干净跳过。
+Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 当前为诚实占位 skip——vendored Eigen 5.0 的 SVE packet 后端只有 int32/float 特化（无 `packet_traits<double>`），double 路径静默退化为标量循环（比 NEON 慢约 4 个数量级，300×300 BDCSVD 一迭代即超 300 s 框架超时），在 SVE double packet 支持补齐前无法真实压测 SVE 硬件；无 SVE 硬件的机器仍先报 `CpuNotSupported` 跳过。
 
 ## 架构支持
 

@@ -53,25 +53,25 @@
 **Interfaces:**
 - 无接口变化。测试仍 built/linked；`test_init` 返回 EXIT_SKIP。
 
-- [ ] **Step 1: 建分支** `git checkout -b fix/svd-cdouble-sve-mdim-timeout`（已完成）
-- [ ] **Step 2: M_DIM 2100→300** + 注释修正（已完成——保留，未来后端补齐即同构可用）
-- [ ] **Step 3: init 增加 Eigen SVE double 后端能力检测 → EXIT_SKIP**（编译期常量判定，运行期 log_skip）
-- [ ] **Step 4: 构建** `ninja -C builddir` 零新警告/错误
-- [ ] **Step 5: 功能验证**:
+- [x] **Step 1: 建分支** `git checkout -b fix/svd-cdouble-sve-mdim-timeout`（已完成）
+- [x] **Step 2: M_DIM 2100→300** + 注释修正（已完成——保留，未来后端补齐即同构可用）
+- [x] **Step 3: init 增加 Eigen SVE double 后端能力检测 → EXIT_SKIP**（编译期常量判定，运行期 log_skip）
+- [x] **Step 4: 构建** `ninja -C builddir` 零新警告/错误
+- [x] **Step 5: 功能验证**:
   - `./builddir/sdcshield --quality=-1 -e eigen_svd_cdouble_sve -n 1` → `result: skip`（理由含 "to be implemented (placeholder)"），整体 `exit: pass`
-- [ ] **Step 6: 回归**:
+- [x] **Step 6: 回归**:
   - `./builddir/sdcshield --quality=-1 -e eigen_svd_cdouble -n 1` → pass（NEON 版）
   - `./builddir/sdcshield -e zstd19 -t 3000 -n 1` → pass
-- [ ] **Step 7: 全量确认**：`./builddir/sdcshield --quality=-1` → 298 测试全有结果（无 timed out、无中止），`exit: pass`
-- [ ] **Step 8: commit + push**
+- [x] **Step 7: 全量确认**：`./builddir/sdcshield --quality=-1` → 298 测试全有结果（无 timed out、无中止），`exit: pass`
+- [x] **Step 8: commit + push**
 
 ### Task 2: 文档同步
 
 **Files:**
 - Modify: `README.md`（L357 附近）、`docs/multi-version-build-deploy-usermanual.md`（L138-142）、`CLAUDE.md`（平台怪癖节）
 
-- [ ] **Step 1: 更新三处描述**：该测试当前为占位 skip（Eigen5 SVE 后端无 double packet），SVE 硬件检测仍在；后端补齐后回退此 skip 即恢复
-- [ ] **Step 2: commit**（与 Task 1 分开）
+- [x] **Step 1: 更新三处描述**：该测试当前为占位 skip（Eigen5 SVE 后端无 double packet），SVE 硬件检测仍在；后端补齐后回退此 skip 即恢复
+- [x] **Step 2: commit**（与 Task 1 分开）
 
 ---
 

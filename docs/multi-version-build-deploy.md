@@ -424,7 +424,7 @@ verify_sha256 "$bindir/sdcshield" "$expected_sha" || { echo "校验失败"; exit
 exec "$bindir/run-sdcshield.sh" "$@"
 ```
 
-`run-sdcshield.sh` 支持 `full` 首参数(2026-09-15 加入):两段式全核 eigen 满载——第一段 11 个稳定 eigen 测试不带 `-n`(默认系统全部 CPU),第二段 4 个数值敏感测试(`eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve`)`-n 1` 补跑(规避大规模多线程 ULP 偶发假 FAIL)。默认每测试 60s(`-t` 覆盖)。详见 `scripts/offline-build/package-built-artifacts.sh` 的 heredoc 与 usermanual 3.5 节。
+`run-sdcshield.sh` 支持 `full` 首参数(2026-09-15 加入):两段式全核 eigen 满载——第一段 11 个稳定 eigen 测试不带 `-n`(默认系统全部 CPU),第二段 4 个数值敏感测试(`eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve`)`-n 1` 补跑(规避大规模多线程 ULP 偶发假 FAIL)。默认每测试 60s(`-t` 覆盖);`eigen_svd_cdouble_sve` 当前为占位 skip(Eigen 5.0 SVE 后端无 double packet,见 usermanual 3.5 节要点)。详见 `scripts/offline-build/package-built-artifacts.sh` 的 heredoc 与 usermanual 3.5 节。
 
 ---
 

@@ -38,4 +38,5 @@ GHA 的 `ubuntu-24.04-arm` 是**共享 aarch64 云实例**（AWS Graviton 系）
 ## 输出
 
 `<outdir>/benchmark.tsv`：`test<TAB>wall_seconds<TAB>loop_count`。
-workflow 的 `report` job 汇总成 `benchmark-summary`，附一条 markdown job summary。
+此基准 tsv 仍上传进 artifact，但不再进最终 report summary（最终 summary 由
+`report-summary.py` 生成「用例 × 版本」结果矩阵，见 `report-summary.py` 注释）。

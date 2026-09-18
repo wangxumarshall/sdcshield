@@ -1,50 +1,50 @@
 #include <sandstone.h>
 #include <cstdio>
 #include <cstdint>
+#include <random>
 #include <atomic>
 #include <cstring>
+#include <ctime>
 
 #ifdef __aarch64__
 #include <arm_neon.h>
 
 static constexpr int LANES = 4;
 
-// 无共享可变状态:test->data 不再持有 rng/mem_buf —— 多线程 worker 并发跑时,
-// 共享一个 std::mt19937 会让多个线程同时推进同一引擎内部状态(UB),共享一个
-// mem_buf 会让 A 线程的 store 被 B 线程读到,store/load 一致性被并发踩踏误报
-// FAIL(与 sve512_gather_scatter_arm 同根因)。随机数改用框架的 per-thread
-// frandomf(),mem_buf 改为 run 内栈上局部。
+struct test_data {
+    std::mt19937 rng;
+    float mem_buf[LANES];
+};
 
 // 初始化
 static int insert_extract_init(struct test *test) {
-    (void)test;
+    auto *data = new test_data;
+    data->rng.seed(static_cast<unsigned>(time(nullptr)) + getpid());
+    test->data = data;
     return EXIT_SUCCESS;
 }
 
 // 运行测试
 static int insert_extract_run(struct test *test, int cpu) {
     (void)cpu;
+    auto *data = static_cast<test_data*>(test->data);
+    std::mt19937 &rng = data->rng;
+    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+
     static std::atomic<uint64_t> iter{0};
 
-    // per-thread 栈上 scratch:store/load 一致性用的中转缓冲,不共享。
-    float mem_buf[LANES];
-
     do {
-        // 1. 生成原始向量(用框架 per-thread RNG,线程安全)。
-        // 显式展开 4 个 lane:vsetq_lane_f32 的 lane 索引必须编译期立即数,
-        // 不能写成 for(i) 靠编译器碰运气展开(原版依赖 -O3 折叠 mt19937 内联链)。
-        float orig_vals[LANES];
-        for (int i = 0; i < LANES; ++i)
-            orig_vals[i] = 200.0f * frandomf() - 100.0f;  // [-100, 100)
+        // 1. 生成原始向量
         float32x4_t orig_vec = vdupq_n_f32(0.0f);
-        orig_vec = vsetq_lane_f32(orig_vals[0], orig_vec, 0);
-        orig_vec = vsetq_lane_f32(orig_vals[1], orig_vec, 1);
-        orig_vec = vsetq_lane_f32(orig_vals[2], orig_vec, 2);
-        orig_vec = vsetq_lane_f32(orig_vals[3], orig_vec, 3);
+        float orig_vals[LANES];
+        for (int i = 0; i < LANES; ++i) {
+            orig_vals[i] = dist(rng);
+            orig_vec = vsetq_lane_f32(orig_vals[i], orig_vec, i);
+        }
 
         // 2. 随机选择 lane 和插入值
-        int lane = static_cast<int>(frandomf() * LANES);  // 0..3
-        float insert_val = 200.0f * frandomf() - 100.0f;
+        int lane = static_cast<int>(dist(rng) * LANES);  // 0..3
+        float insert_val = dist(rng);
 
         // 3. 执行插入和提取，使用 switch 确保 lane 为编译时常量
         float32x4_t new_vec;
@@ -73,8 +73,8 @@ static int insert_extract_run(struct test *test, int cpu) {
         bool insert_extract_ok = (extracted == insert_val);
 
         // 5. Store/Load 一致性测试
-        vst1q_f32(mem_buf, orig_vec);
-        float32x4_t loaded_vec = vld1q_f32(mem_buf);
+        vst1q_f32(data->mem_buf, orig_vec);
+        float32x4_t loaded_vec = vld1q_f32(data->mem_buf);
         uint32x4_t cmp = vceqq_f32(orig_vec, loaded_vec);
         bool store_load_ok = (vgetq_lane_u32(cmp, 0) &&
                               vgetq_lane_u32(cmp, 1) &&
@@ -112,9 +112,11 @@ static int insert_extract_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-// 清理(无共享数据可释放)
+// 清理
 static int insert_extract_finish(struct test *test) {
-    (void)test;
+    auto *data = static_cast<test_data*>(test->data);
+    delete data;
+    test->data = nullptr;
     return EXIT_SUCCESS;
 }
 

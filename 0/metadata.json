@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2SY3S6J5GPEBDXRWMDH5XG0",
+  "session_id": "5b466196-81cc-4ebf-9ce5-01bc68d3b970",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-18T09:38:42.74505499Z",
+  "branch": "fix/svd-cdouble-sve-mdim-timeout",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CLAUDE.md",
+    "README.md",
+    "docs/multi-version-build-deploy-usermanual.md",
+    "docs/multi-version-build-deploy.md"
+  ],
+  "agent": "Claude Code",
+  "model": "GLM-5.3[1m]",
+  "turn_id": "f5c656b34da9",
+  "checkpoint_transcript_start": 1006,
+  "transcript_lines_at_start": 1006,
+  "compact_transcript_start": 235,
+  "token_usage": {
+    "input_tokens": 4322,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1210624,
+    "output_tokens": 2145,
+    "api_call_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-18T09:38:42.64976527Z",
+    "agent_lines": 5,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "total_lines_changed": 9,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

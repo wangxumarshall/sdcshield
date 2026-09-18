@@ -37,7 +37,14 @@ using namespace Eigen;        /* renamed to EigenSVE via -DEigen=EigenSVE */
 typedef Matrix<std::complex<double>, Dynamic, Dynamic> Mat;
 typedef Eigen::BDCSVD<Mat> SVD;
 
-#define M_DIM 2100               // matches eigen_svd_cdouble
+// Matches the NEON counterpart eigen_svd_cdouble (tests/cpu/eigen_svd/
+// svd_cdouble.cpp, M_DIM 300). A larger dimension must stay within the
+// framework's per-test timeout floor (test_timeout(): duration*5+30s,
+// 300s minimum — framework/sandstone.cpp); at M_DIM 2100 one BDCSVD
+// iteration on complex<double> did not complete even after 30 min
+// single-threaded / 60 min all-core (measured 2026-09-18, 127-core
+// cortex x3b), so every default run timed out and aborted the suite.
+#define M_DIM 300
 
 using eigen_svd_cdouble_sve_test = EigenSVDTest<SVD, M_DIM>;
 
@@ -56,6 +63,30 @@ static int sve_probe_and_init(struct test *test)
                  "eigen_svd_cdouble_sve requires SVE (e.g. Kunpeng 930)");
         return EXIT_SKIP;
     }
+#if EIGEN_VERSION_AT_LEAST(5, 0, 0)
+    /* Eigen 5.0's SVE packet backend (arch/SVE/PacketMath.h) only
+     * specializes int32_t and float — there is no packet_traits<double>
+     * (nor complex<double>), so every Matrix<double> path in this SVE
+     * translation unit silently falls back to scalar loops. Measured on
+     * 2026-09-18 (127-core cortex x3b): a 300x300 double BDCSVD takes
+     * 29 ms on the NEON backend but exceeds 10 minutes on the "SVE"
+     * backend — the Jacobi rotations (apply_rotation_in_the_plane) that
+     * dominate the base case all hit the non-vectorized selector. The
+     * test therefore cannot stress SVE hardware at all and blows past
+     * the framework's 300 s test_timeout() floor at any matrix size
+     * (M_DIM 300 and 2100 both measured as timed out). Report an honest
+     * placeholder skip until the vendored Eigen gains SVE double
+     * packets. */
+    if (EigenSVE::internal::packet_traits<double>::size == 1) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "to be implemented (placeholder): Eigen 5.0 SVE packet "
+                 "backend has no double/complex<double> support (scalar "
+                 "fallback, ~20000x slower than NEON — one 300x300 "
+                 "BDCSVD iteration exceeds the 300 s test timeout); "
+                 "pending SVE double packet support in vendored Eigen");
+        return EXIT_SKIP;
+    }
+#endif
     return eigen_svd_cdouble_sve_test::init(test);
 }
 

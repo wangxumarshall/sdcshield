@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2SY51HRF7W3X65P4JPZMVS1",
+  "strategy": "manual-commit",
+  "branch": "fix/svd-cdouble-sve-mdim-timeout",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/plans/2026-09-18-fix-svd-cdouble-sve-mdim-timeout.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 746,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 224640,
+    "output_tokens": 203,
+    "api_call_count": 2
+  }
+}

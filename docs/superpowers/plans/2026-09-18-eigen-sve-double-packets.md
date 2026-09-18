@@ -50,7 +50,7 @@
 **Interfaces:**
 - Produces: 分支 `feat/eigen-sve-double-packets`；目录 `scripts/eigen-sve-double/`（后续 task 的测试程序都放这里，随代码一起 commit，作为可复现的验证资产）。
 
-- [ ] **Step 1: 从 fix 分支切出 feature 分支**
+- [x] **Step 1: 从 fix 分支切出 feature 分支**
 
 ```bash
 cd /home/sdc/root-xupeng/sdcshield
@@ -59,14 +59,14 @@ git checkout -b feat/eigen-sve-double-packets
 mkdir -p scripts/eigen-sve-double
 ```
 
-- [ ] **Step 2: 记录基线（修复占位 skip 在位，全量绿）**
+- [x] **Step 2: 记录基线（修复占位 skip 在位，全量绿）**
 
 ```bash
 ./builddir/sdcshield --quality=-1 -e eigen_svd_cdouble_sve -n 1 2>&1 | grep -E "result|skip-category"
 # 期望: result: skip / skip-category: TestResourceIssue（占位 skip 仍在）
 ```
 
-- [ ] **Step 3: Commit 空目录占位（.gitkeep）**
+- [x] **Step 3: Commit 空目录占位（.gitkeep）**
 
 ```bash
 touch scripts/eigen-sve-double/.gitkeep
@@ -110,7 +110,7 @@ git add scripts/eigen-sve-double && git commit -m "chore: scaffold scripts/eigen
 - `ploaddup`：float 版先 `svindex_u32(0,1)` 再 `svzip1_u32`；double 用 `svindex_u64(0,1)` + `svzip1_u64`，gather 用 `svld1_gather_u64index_f64`。
 - `predux_mul` 的静态断言与减半链照抄 float（`EIGEN_ARM64_SVE_VL % 128 == 0`），`svtbl_f64` + `svindex_u64`。
 
-- [ ] **Step 1: 写失败测试 `scripts/eigen-sve-double/test_packet_xd.cpp`**
+- [x] **Step 1: 写失败测试 `scripts/eigen-sve-double/test_packet_xd.cpp`**
 
 ```cpp
 // Standalone correctness test for Eigen SVE PacketXd (double).
@@ -230,7 +230,7 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: 编译验证测试编译失败（double 特化缺失 → 链接/编译错误或 size=1 假通过）**
+- [x] **Step 2: 编译验证测试编译失败（double 特化缺失 → 链接/编译错误或 size=1 假通过）**
 
 ```bash
 g++ -O2 -std=c++17 -Ithird-party/eigen5 \
@@ -239,7 +239,7 @@ g++ -O2 -std=c++17 -Ithird-party/eigen5 \
 ```
 Expected: **FAIL**（`packet size == VL/64` 打印 size=1，N=1，多数 op 走标量默认实现可能"通过"但 size 检查失败；或编译错误因为 pload<PacketXd> 无特化）。
 
-- [ ] **Step 3: 实现 PacketXd 段落（`arch/SVE/PacketMath.h` float 段落 `}` 后追加）**
+- [x] **Step 3: 实现 PacketXd 段落（`arch/SVE/PacketMath.h` float 段落 `}` 后追加）**
 
 代码骨架——每个 op 都给出（写入 PacketMath.h `/***************************** float64 ************************************/` 注释段；完整代码遵循 float 段落一对一平移，位宽 32→64）：
 
@@ -301,7 +301,7 @@ struct unpacket_traits<PacketXd> {
 
 **`pabsdiff`/`ptrue` 等没在清单里的 op 不实现**（default_packet_traits 里为 0 的能力 Eigen 自动走标量，符合渐进策略）。
 
-- [ ] **Step 4: 256-bit 本机运行测试通过**
+- [x] **Step 4: 256-bit 本机运行测试通过**
 
 ```bash
 g++ -O2 -std=c++17 -Ithird-party/eigen5 \
@@ -310,7 +310,7 @@ g++ -O2 -std=c++17 -Ithird-party/eigen5 \
 ```
 Expected: `ALL PASS (4 lanes)`。
 
-- [ ] **Step 5: 128-bit 编译+本机运行（VL=128 ≤ 硬件 256 可跑）**
+- [x] **Step 5: 128-bit 编译+本机运行（VL=128 ≤ 硬件 256 可跑）**
 
 ```bash
 g++ -O2 -std=c++17 -Ithird-party/eigen5 \
@@ -319,7 +319,7 @@ g++ -O2 -std=c++17 -Ithird-party/eigen5 \
 ```
 Expected: `ALL PASS (2 lanes)`。
 
-- [ ] **Step 6: 512-bit 编译检查（本机不能运行，只验证编译）**
+- [x] **Step 6: 512-bit 编译检查（本机不能运行，只验证编译）**
 
 ```bash
 g++ -O2 -std=c++17 -Ithird-party/eigen5 \
@@ -329,7 +329,7 @@ echo "512-bit compile rc=$? (run deferred to gem5 in Task 6)"
 ```
 Expected: 编译通过（size-specific 代码合法，硬件 VL=256 不够执行）。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add third-party/eigen5/Eigen/src/Core/arch/SVE/PacketMath.h scripts/eigen-sve-double/test_packet_xd.cpp
@@ -385,7 +385,7 @@ gem5 SE in a later task)."
   #include "src/Core/arch/SVE/Complex.h"      // ← 新增行
   ```
 
-- [ ] **Step 1: 写失败测试 `scripts/eigen-sve-double/test_packet_xcd.cpp`**
+- [x] **Step 1: 写失败测试 `scripts/eigen-sve-double/test_packet_xcd.cpp`**
 
 ```cpp
 // Standalone correctness test for Eigen SVE PacketXcd (complex<double>).
@@ -476,7 +476,7 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败（PacketXcd 未定义 → 编译错误）**
+- [x] **Step 2: 跑测试确认失败（PacketXcd 未定义 → 编译错误）**
 
 ```bash
 g++ -O2 -std=c++17 -Ithird-party/eigen5 \
@@ -485,7 +485,7 @@ g++ -O2 -std=c++17 -Ithird-party/eigen5 \
 ```
 Expected: 编译错误（`PacketXcd`/`packet_traits<std::complex<double>>` 在 SVE 下无定义）。
 
-- [ ] **Step 3: 实现 `arch/SVE/Complex.h`**
+- [x] **Step 3: 实现 `arch/SVE/Complex.h`**
 
 文件头 + 完整实现（关键 op 已在 Interfaces 给出代码；其余按 NEON `Complex.h` 的 `Packet1cd` 段一对一平移到 PacketXd 载体）。文件骨架：
 
@@ -562,7 +562,7 @@ struct unpacket_traits<PacketXcd> {
 #endif  // EIGEN_COMPLEX_SVE_H
 ```
 
-- [ ] **Step 4: 256-bit 本机运行测试通过**
+- [x] **Step 4: 256-bit 本机运行测试通过**
 
 ```bash
 g++ -O2 -std=c++17 -Ithird-party/eigen5 \
@@ -571,7 +571,7 @@ g++ -O2 -std=c++17 -Ithird-party/eigen5 \
 ```
 Expected: `ALL PASS (2 complex lanes)`。
 
-- [ ] **Step 5: 128-bit 运行 + 512-bit 编译检查**
+- [x] **Step 5: 128-bit 运行 + 512-bit 编译检查**
 
 ```bash
 g++ -O2 -std=c++17 -Ithird-party/eigen5 -march=armv8.2-a+sve -msve-vector-bits=128 -DEIGEN_ARM64_USE_SVE \
@@ -581,7 +581,7 @@ g++ -O2 -std=c++17 -Ithird-party/eigen5 -march=armv8.2-a+sve -msve-vector-bits=5
 ```
 Expected: 128 运行 `ALL PASS (1 complex lane)`；512 编译通过。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add third-party/eigen5/Eigen/src/Core/arch/SVE/Complex.h third-party/eigen5/Eigen/Core scripts/eigen-sve-double/test_packet_xcd.cpp
@@ -612,7 +612,7 @@ reference at VL=128/256 on cortex x3b."
   - `preinterpret<PacketXd, PacketXi>` / 反向（`svreinterpret_f64_s32`——位宽不同的 reinterpret 在 SVE size-specific 类型下合法：都占满 VL）。
   - **`double` 的 `plog/psin/pcos` 等先不开**（`HasLog` 等保持 0，走标量——YAGNI，SVD 热路径不需要；后续有需要再加）。
 
-- [ ] **Step 1: 写失败测试 `scripts/eigen-sve-double/test_math_xd.cpp`**
+- [x] **Step 1: 写失败测试 `scripts/eigen-sve-double/test_math_xd.cpp`**
 
 ```cpp
 // TypeCasting/MathFunctions correctness for SVE double.
@@ -675,10 +675,10 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: 确认失败（编译错误——pcast/psqrt 无 double 特化）**
-- [ ] **Step 3: 实现 MathFunctions/TypeCasting 特化**（Interfaces 清单；跨宽度 pcast 用标量桥接）
-- [ ] **Step 4: 256 运行通过 / 128 运行通过 / 512 编译通过**（命令模式同 Task 1 Step 4-6）
-- [ ] **Step 5: Commit**
+- [x] **Step 2: 确认失败（编译错误——pcast/psqrt 无 double 特化）**
+- [x] **Step 3: 实现 MathFunctions/TypeCasting 特化**（Interfaces 清单；跨宽度 pcast 用标量桥接）
+- [x] **Step 4: 256 运行通过 / 128 运行通过 / 512 编译通过**（命令模式同 Task 1 Step 4-6）
+- [x] **Step 5: Commit**
 
 ```bash
 git add third-party/eigen5/Eigen/src/Core/arch/SVE/MathFunctions.h third-party/eigen5/Eigen/src/Core/arch/SVE/TypeCasting.h scripts/eigen-sve-double/test_math_xd.cpp
@@ -696,7 +696,7 @@ git commit -m "eigen(SVE): double MathFunctions + TypeCasting (sqrt/rint, d32<->
 - Consumes: Task 1-3 全部。
 - Produces: 端到端正确性 + 性能证据（本计划的核心验收）。
 
-- [ ] **Step 1: 写 e2e 测试（真实 Eigen 表达式层，不是 packet 层）**
+- [x] **Step 1: 写 e2e 测试（真实 Eigen 表达式层，不是 packet 层）**
 
 ```cpp
 // End-to-end: real Eigen expression layer on SVE double backend.
@@ -807,7 +807,7 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: 256-bit 运行（核心验收）**
+- [x] **Step 2: 256-bit 运行（核心验收）**
 
 ```bash
 g++ -O3 -std=c++17 -Ithird-party/eigen5 \
@@ -816,7 +816,7 @@ g++ -O3 -std=c++17 -Ithird-party/eigen5 \
 ```
 Expected: 全部 PASS，BDCSVD 时间从 ">10 min 超时" 降到 **秒级**（NEON 29ms 是参考；SVE 256-bit 4-lane 理论上应与 NEON 2-lane 相当或更好，60s 闸门极宽松——真到 60s 说明还有标量残留）。
 
-- [ ] **Step 3: 128-bit 运行（SDCShield 当前编译用的 VL）**
+- [x] **Step 3: 128-bit 运行（SDCShield 当前编译用的 VL）**
 
 ```bash
 g++ -O3 -std=c++17 -Ithird-party/eigen5 -march=armv8.2-a+sve -msve-vector-bits=128 -DEIGEN_ARM64_USE_SVE \
@@ -824,7 +824,7 @@ g++ -O3 -std=c++17 -Ithird-party/eigen5 -march=armv8.2-a+sve -msve-vector-bits=1
 ```
 Expected: PASS（这是 SDCShield `tests/cpu/meson.build:916` 实际使用的 VL——**必须过**）。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/eigen-sve-double/test_e2e_xd.cpp
@@ -843,9 +843,9 @@ git commit -m "eigen(SVE): e2e double/complex validation — GEMM/rotation/BDCSV
 - Consumes: Task 1-4 的 Eigen 后端（通过 `-DEIGEN_ARM64_USE_SVE` TU 编译自动获得）。
 - Produces: `eigen_svd_cdouble_sve` 从占位 skip 变为真实 pass（SVE 硬件上）。
 
-- [ ] **Step 1: 删除占位 skip 块**（`svd_cdouble_sve.cpp` 中 Task 前置修复加的 `#if EIGEN_VERSION_AT_LEAST(5,0,0) ... #endif` 整块删除，恢复直接 `return eigen_svd_cdouble_sve_test::init(test);`）
+- [x] **Step 1: 删除占位 skip 块**（`svd_cdouble_sve.cpp` 中 Task 前置修复加的 `#if EIGEN_VERSION_AT_LEAST(5,0,0) ... #endif` 整块删除，恢复直接 `return eigen_svd_cdouble_sve_test::init(test);`）
 
-- [ ] **Step 2: 重构 + 单线程验证**
+- [x] **Step 2: 重构 + 单线程验证**
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -854,7 +854,7 @@ ninja -C builddir 2>&1 | tail -2   # 期望 clean
 ```
 Expected: `result: pass`（在 300s 内完成，预期 < 60s）。
 
-- [ ] **Step 3: 全核验证 + 回归**
+- [x] **Step 3: 全核验证 + 回归**
 
 ```bash
 ./builddir/sdcshield --quality=-1 -e eigen_svd_cdouble_sve 2>&1 | tail -2   # 全核 127 线程
@@ -864,7 +864,7 @@ Expected: `result: pass`（在 300s 内完成，预期 < 60s）。
 ```
 Expected: 前三个 pass；全量 `EXIT: 0`（298 测试，skip 数从 10 降回 9）。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/cpu/eigen_svd/svd_cdouble_sve.cpp
@@ -895,7 +895,7 @@ and all-core pass at M_DIM=300, within the framework timeout."
 - 512-bit 二进制在 gem5 里能跑的原因：gem5 的 SVE 实现按 `sve_vl_se` 配置模拟任意 VL（128-2048），size-specific 指令流照常解码执行。
 - **static binary**：gem5 SE 模式跑裸 ELF 最稳——编译测试时加 `-static`（progress.md 先例 `gcc -static`）避免 SE syscall 层的动态加载器问题。
 
-- [ ] **Step 1: 安装 scons + 构建 gem5.opt（后台，1-2h）**
+- [x] **Step 1: 安装 scons + 构建 gem5.opt（后台，1-2h）**
 
 ```bash
 pip3 install --user -i https://mirrors.aliyun.com/pypi/simple/ scons kconfig
@@ -904,7 +904,7 @@ cd /home/sdc/wangxu/gem5-fi-fuzz && scons -C CHAOS/gem5 build/ARM/gem5.opt -j32 
 ls -la build/ARM/gem5.opt   # 产物在仓库根 build/（progress.md 实测路径陷阱）
 ```
 
-- [ ] **Step 2: 冒烟——gem5 跑通一个最小 SVE-512 程序**
+- [x] **Step 2: 冒烟——gem5 跑通一个最小 SVE-512 程序**
 
 ```bash
 # 最小探针：打印 svcntd()（512-bit VL 应输出 8）
@@ -919,7 +919,7 @@ g++ -O2 -static -march=armv8-a+sve -msve-vector-bits=512 /tmp/sve_probe/vl512.cp
 ```
 Expected: stdout 含 `VL=512 bits, 8 f64 lanes`；正常 `Simulated exit code 0`。**若 `-P` isa 路径报错**，改写 20 行自定义 config（`scripts/eigen-sve-double/gem5/se_sve.py`，`ArmISA(sve_vl_se=4)` 直接构造）。
 
-- [ ] **Step 3: 512-bit packet 测试全集仿真**
+- [x] **Step 3: 512-bit packet 测试全集仿真**
 
 ```bash
 for VL in 2 4; do   # 2=256bit 4=512bit（256 在 gem5 交叉验证本机结果）
@@ -934,7 +934,7 @@ done
 ```
 Expected: 每组合输出 `ALL PASS` + `exit code 0`（512-bit=4qw 是本机无法执行、只能在这里验证的场景；256-bit=2qw 在 gem5 与本机结果交叉印证）。
 
-- [ ] **Step 4: 512-bit e2e（BDCSVD）仿真——缩小规模防仿真时间爆炸**
+- [x] **Step 4: 512-bit e2e（BDCSVD）仿真——缩小规模防仿真时间爆炸**
 
 gem5 atomic CPU 慢 3-4 个数量级；300×300 BDCSVD（真机秒级）在 gem5 可能要小时级。策略：e2e 测试加一个 `--mini` 参数（矩阵缩到 48×48，验证同一代码路径）：
 
@@ -954,11 +954,11 @@ g++ -O2 -static -std=c++17 -Ithird-party/eigen5 \
 ```
 Expected: `E2E ALL PASS`（48×48 走完整 packet 路径；性能闸门在 gem5 上不适用——只验功能）。
 
-- [ ] **Step 5: 写操作手册 `scripts/eigen-sve-double/gem5/README.md` + run_sve.sh 沉淀 Step 2-4 命令**
+- [x] **Step 5: 写操作手册 `scripts/eigen-sve-double/gem5/README.md` + run_sve.sh 沉淀 Step 2-4 命令**
 
 README 内容：gem5.opt 构建步骤（含 -j OOM 教训与产物路径陷阱）、sve_vl_se 设置方法、512-bit 验证矩阵（3 个 packet 测试 + e2e-mini）、期望输出。run_sve.sh 把 Step 3 的循环参数化（`./run_sve.sh <test> <vl_quadwords>`）。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/eigen-sve-double/gem5/ scripts/eigen-sve-double/test_e2e_xd.cpp
@@ -984,9 +984,9 @@ mini (48x48) ALL PASS. VL=256 cross-checked vs hardware results."
 - Consumes: Task 5/6 的验证结果。
 - Produces: 文档与代码状态一致；最终 PR。
 
-- [ ] **Step 1: 决定 VL 编译值**：若 Task 4 实测 256-bit 比 128-bit 快 >10%（同一 e2e 二进制对跑），改 meson `-msve-vector-bits=256` 并重跑 Task 5 Step 3 全套验证；否则保持 128（本机硬件 256 能向下兼容执行 128 编译的 size-specific 代码）。**决策记录进 commit message。**
-- [ ] **Step 2: 四处文档同步**（把"占位 skip / Eigen5 SVE 无 double"的描述全部改为"已支持，SVE-256 本机验证 + SVE-512 gem5 验证"）。
-- [ ] **Step 3: 全量最终回归**
+- [x] **Step 1: 决定 VL 编译值**：若 Task 4 实测 256-bit 比 128-bit 快 >10%（同一 e2e 二进制对跑），改 meson `-msve-vector-bits=256` 并重跑 Task 5 Step 3 全套验证；否则保持 128（本机硬件 256 能向下兼容执行 128 编译的 size-specific 代码）。**决策记录进 commit message。**
+- [x] **Step 2: 四处文档同步**（把"占位 skip / Eigen5 SVE 无 double"的描述全部改为"已支持，SVE-256 本机验证 + SVE-512 gem5 验证"）。
+- [x] **Step 3: 全量最终回归**
 
 ```bash
 ./builddir/sdcshield --quality=-1 > /tmp/final_full.log 2>&1; echo "EXIT: $?"
@@ -994,7 +994,7 @@ grep -c "result: pass" /tmp/final_full.log
 ```
 Expected: `EXIT: 0`，pass 数 = 290（289 + eigen_svd_cdouble_sve 转正）。
 
-- [ ] **Step 4: Commit + push + PR**
+- [x] **Step 4: Commit + push + PR**
 
 ```bash
 git add -A && git commit -m "docs+build: sync SVE double packet landing (README/CLAUDE/usermanual/plan links)"

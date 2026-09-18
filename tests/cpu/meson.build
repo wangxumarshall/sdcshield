@@ -427,6 +427,7 @@ if host_machine.cpu_family() == 'aarch64'
     tests_set_sve.add(
         files(
             'sve/sve_rot_ldr_at_top.cpp',
+            'sve/sve_rot_ldr_at_top_rowmajor.cpp',
         )
     )
 endif

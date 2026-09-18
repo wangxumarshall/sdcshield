@@ -34,7 +34,7 @@
 
 ---
 
-### Task 1: vendor ACL 源码 + build.sh + meson install/-probe 改写 ✅ pending
+### Task 1: vendor ACL 源码 + build.sh + meson install/-probe 改写 ✅ done (2026-09-19)
 
 **一个 commit**。产出 `third-party/acl/{ComputeLibrary-*.tar.gz, build.sh}` + `tests/cpu/arithmetic_arm/meson.build` 改写。
 
@@ -57,7 +57,7 @@
 
 ---
 
-### Task 2: 修 acl_gemm fork-safety + 去除 EXIT_SKIP + 收窄容差 ✅ pending
+### Task 2: 修 acl_gemm fork-safety + 去除 EXIT_SKIP + 收窄容差 ✅ done (2026-09-19)
 
 **一个 commit**。只改 `tests/cpu/arithmetic_arm/acl_gemm.cpp`。
 
@@ -76,7 +76,7 @@
 
 ---
 
-### Task 3: 容器内 ACL 原生编译 + 去掉 sed/挂载 hack + 补 cmake ✅ pending
+### Task 3: 容器内 ACL 原生编译 + 去掉 sed/挂载 hack + 补 cmake ✅ done (2026-09-19)
 
 **一个 commit**。改 `scripts/offline-build/`（container-build.sh + supplement-20.03-gcc10.sh + download-deps.sh）。
 
@@ -94,12 +94,12 @@
    - **20.03/22.03/24.03 三容器各一次 ACL 原生编译冒烟**（若本机 podman 可用），`--list-tests | grep acl_gemm` 三处都命中（引用实测输出）。
 - [x] bash -n 通过
 - [x] ACL hack grep 清零
-- [x] 三 OS 容器 acl_gemm 编译+列出(引用输出)
+- [x] 三 OS 容器: 本机无 podman — supplement-cmake.sh 真实下载 5 RPM + 免 root 解包实测 cmake 3.22.0 可运行可 configure; 容器端到端冒烟留待有 podman 的环境(commit 9a51d4ee 记录)
 - [x] host ninja 零新错误
 
 ---
 
-### Task 4: pocketfft 逆变换加 round-trip 容差校验 ✅ pending
+### Task 4: pocketfft 逆变换加 round-trip 容差校验 ✅ done (2026-09-19)
 
 **一个 commit**。只改 `tests/cpu/pocketfft/fft.cpp`。
 
@@ -116,7 +116,7 @@
 
 ---
 
-### Task 5: 文档同步 ✅ pending
+### Task 5: 文档同步 ✅ done (2026-09-19)
 
 **一个 commit**。CLAUDE.md vendored-lib 清单加 ACL 条目 + README 第三方库节 + `docs/SDC_LIBRARY_STRESS_COVERAGE_AUDIT_2026-09-18.md` 的 ACL/pocketfft 两行结论更新为"已修复"。
 

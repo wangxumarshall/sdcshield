@@ -446,10 +446,10 @@ exec "$bindir/run-sdcshield.sh" "$@"
 - **镜像拉取**:`container.credentials` 用 `GITHUB_TOKEN` 认证(`packages: read` 权限),公开/私有镜像皆可;`username` 固定 `wangxumarshall`(不可用 `github.actor`——schedule 触发时 actor 为空会致 docker login 失败)。前置:15 镜像先 `build-images.sh <s> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。
 - **每 job 流程**:checkout(`submodules: false`,镜像已烘焙依赖)→ `actions/cache` 缓存 vendored 库构建 → 镜像内 `meson+ninja` 构建 → `scripts/gha/verify-params.py` 全量参数功能测试 → `scripts/gha/benchmark.sh` 采基准 → 上传日志/基准。
 - **全量参数扫描**(`verify-params.py`,纯 stdlib 适配镜像无 PyYAML):`--quality=-1`(PROD+BETA+SKIP)、`-n 1/4/8` 三档并发(多线程档 `--disable` eigen 数值类,规避已知 ULP flakiness)、openblas `mdim` 扫谱、selftests `@positive` + 逐条负面(断言非零退出且非 insn 崩溃)。
-- **基准对比**(`benchmark.sh` + `benchmark-summary.py`):固定 `--max-test-loop-count`(同工作量墙钟)对三系列交集 11 测试采 `benchmark.tsv`,`report` job 汇总成跨 OS 对比表写入 job summary。
-- **已知省略(诚实)**:`sleef`(需 cmake;24.03 镜像 cmake 断链缺 `libuv.so.1`、22.03/20.03 无 cmake → 优雅缺席,与 `container-build.sh` 一致)`sleef_neon`/`sleef_sve`;sleef/isal 因构建工具链差异属 24.03 独占,不进基准主表。
+- **最终 report summary**(`report-summary.py`):`report` job 下载 15 份 `allquality.yaml`,生成一张**「用例 × 版本」结果矩阵**写入 job summary —— 行 = 全部测试用例(~290,15 版本求并集),列 = 15 个 OS 版本;每格 = `<结果态>[<耗时>s]`(`PASS[1.23s]`/`FAIL[0.10s]`/`SKIP[0.00s]`/`TIMEOUT[..]`/`CRASH[..]`/`OSERR[..]`/`INTERRUPTED[..]`/`INVALID[..]`,空 = 该版本无此用例),矩阵尾部附结果态统计。取代旧的跨 OS 基准墙钟对比表。
+- **已知省略(诚实)**:`sleef`(需 cmake;24.03 镜像 cmake 断链缺 `libuv.so.1`、22.03/20.03 无 cmake → 优雅缺席,与 `container-build.sh` 一致)`sleef_neon`/`sleef_sve`;sleef/isal 因构建工具链差异属 24.03 独占,在矩阵中体现为对应版本的空单元格。
 
-脚本与口径:`scripts/gha/`(README、verify-params.py、benchmark.sh、benchmark.md、benchmark-summary.py)。
+脚本与口径:`scripts/gha/`(README、verify-params.py、benchmark.sh、benchmark.md、report-summary.py)。
 
 ### 6.3 Runner 选型
 

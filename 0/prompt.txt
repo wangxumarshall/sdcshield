@@ -1,0 +1,10 @@
+当前cpu支持sve，为什么2100维度时，还不能执行完成，300维度也不能执行完成：fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm di
+                          t uscat ilrcpc flagm ssbs sb dcpodp flagm2 frint svei8mm svef32mm svef64mm svebf16 i8mm bf16 dgh rng ecv
+
+---
+
+/superpowers:writing-plans 修改eigen源码，支持sve-256bit、sve-512bit、<double> / complex<double>，在本机验证。如果不支持的场景，要求在gem5仿真器中验证。
+
+---
+
+1

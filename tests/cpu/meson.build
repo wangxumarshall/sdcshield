@@ -428,6 +428,7 @@ if host_machine.cpu_family() == 'aarch64'
         files(
             'sve/sve_rot_ldr_at_top.cpp',
             'sve/sve_rot_ldr_at_top_rowmajor.cpp',
+            'sve/sve_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
         )
     )
 endif

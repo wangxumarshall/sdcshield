@@ -203,16 +203,17 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (for scripts/gha/benchmark-summary.py)
+      - name: Checkout (for scripts/gha/report-summary.py)
         uses: actions/checkout@v6
       - name: Download all artifacts (keep per-image dirs)
         uses: actions/download-artifact@v4
         with:
           path: all-results
           pattern: verify-*
-      # 不 merge:15 个 benchmark.tsv 各占一名。汇总成一张跨 OS 对比表。
-      - name: Build cross-OS benchmark summary
+      # 不 merge:15 份 allquality.yaml 各占一名。汇总成「用例 × 版本」结果矩阵
+      # (PASS[耗时]/FAIL[耗时]/SKIP[耗时]/TIMEOUT[耗时]/CRASH[耗时]/OSERR[耗时],空=无此用例)。
+      - name: Build full test-result matrix summary
         run: |
           set +e
-          python3 scripts/gha/benchmark-summary.py >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/gha/report-summary.py >> "$GITHUB_STEP_SUMMARY"
           echo "report done"

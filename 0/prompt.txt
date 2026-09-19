@@ -73,3 +73,7 @@ ipsec覆盖访存路径
 ---
 
 ipsec覆盖访存路径
+
+---
+
+更新到readme的konb相关章节

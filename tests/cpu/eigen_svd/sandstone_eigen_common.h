@@ -3,7 +3,6 @@
  *
  * @copyright
  * Copyright 2022 Intel Corporation.
- * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef SANDSTONE_EIGEN_COMMON_H
@@ -20,10 +19,20 @@
 #include <Eigen/Eigenvalues>
 
 namespace {
+/* EigenSVDTest<SVD, Dim>: golden-value SVD test template.
+ *
+ * Dim > 0        — compile-time dimension (all historical tests).
+ * Dim == Dynamic — runtime dimension mode: the test's init sets d->dim
+ *                  (e.g. from a knob or from available memory) and all
+ *                  matrix allocations/comparisons follow it. Used by
+ *                  eigen_svd_cdouble_sve, which sizes the matrix from
+ *                  per-worker RAM at init time (min 300). */
 template <typename SVD, int Dim> struct EigenSVDTest
 {
     using Mat = typename SVD::MatrixType;
+    static constexpr bool kRuntimeDim = (Dim == Eigen::Dynamic);
     struct eigen_test_data {
+        int dim = kRuntimeDim ? 0 : Dim;   /* matrix dimension */
         Mat orig_matrix;
         Mat u_matrix;
         Mat v_matrix;
@@ -37,24 +46,31 @@ template <typename SVD, int Dim> struct EigenSVDTest
     }
 
     template <typename FP> static inline std::enable_if_t<boost::is_complex<FP>::value>
-    compare_or_fail(const FP *actual, const FP *expected, const char *name)
+    compare_or_fail(const FP *actual, const FP *expected, int dim, const char *name)
     {
         memcmp_or_fail(reinterpret_cast<const typename FP::value_type *>(actual),
                        reinterpret_cast<const typename FP::value_type *>(expected),
-                       2 * Dim * Dim, name);
+                       2 * dim * dim, name);
     }
 
     template <typename FP> static inline std::enable_if_t<!boost::is_complex<FP>::value>
-    compare_or_fail(const FP *actual, const FP *expected, const char *name)
+    compare_or_fail(const FP *actual, const FP *expected, int dim, const char *name)
     {
-        memcmp_or_fail(actual, expected, Dim * Dim, name);
+        memcmp_or_fail(actual, expected, dim * dim, name);
     }
 
     static int init(struct test *test)
     {
         auto d = new eigen_test_data;
-        d->orig_matrix = Mat::Random(Dim, Dim);
-        calculate_once(d->orig_matrix, d->u_matrix, d->v_matrix);
+        if constexpr (!kRuntimeDim) {
+            d->orig_matrix = Mat::Random(Dim, Dim);
+            calculate_once(d->orig_matrix, d->u_matrix, d->v_matrix);
+        }
+        /* kRuntimeDim: the enclosing test's own init wrapper has already
+         * set d->dim (and typically allocates below); the template's init
+         * only runs if the wrapper calls it, which it does NOT — see
+         * svd_cdouble_sve.cpp. This branch exists so misuse fails loudly
+         * instead of allocating a 0x0 matrix. */
         test->data = d;
         return EXIT_SUCCESS;
     }
@@ -72,8 +88,8 @@ template <typename SVD, int Dim> struct EigenSVDTest
             Mat u, v;
             calculate_once(d->orig_matrix, u, v);
 
-            compare_or_fail(u.data(), d->u_matrix.data(), "Matrix U");
-            compare_or_fail(v.data(), d->v_matrix.data(), "Matrix V");
+            compare_or_fail<typename Mat::Scalar>(u.data(), d->u_matrix.data(), d->dim, "Matrix U");
+            compare_or_fail<typename Mat::Scalar>(v.data(), d->v_matrix.data(), d->dim, "Matrix V");
         } while (test_time_condition(test));
         return EXIT_SUCCESS;
     }

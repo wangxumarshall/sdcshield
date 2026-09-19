@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2WKB1VF908C1S7VQY78B2GD",
+  "session_id": "5b466196-81cc-4ebf-9ce5-01bc68d3b970",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-19T10:28:11.53762935Z",
+  "branch": "feat/eigen-sve-double-packets",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "GLM-5.3[1m]",
+  "turn_id": "da69e9cb6e5f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 7737039,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 326675072,
+    "output_tokens": 373380,
+    "api_call_count": 910
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-superpowers:writing-plans-2026-09-18T10:21:05.02157407Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "f1462b84d32d",
+      "timestamp": "2026-09-18T10:21:05.02157407Z",
+      "native": {
+        "command": "/superpowers:writing-plans"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-superpowers:writing-plans-2026-09-18T17:23:02.78673874Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "070f8dd86418",
+      "timestamp": "2026-09-18T17:23:02.78673874Z",
+      "native": {
+        "command": "/superpowers:writing-plans"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 13
+  }
+}

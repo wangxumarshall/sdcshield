@@ -35,6 +35,7 @@ ninja -C builddir
 ./third-party/openblas/build.sh     # → install/lib/libopenblas.a (openblas_{d,s,z}gemm)
 ./third-party/sleef/build.sh        # → install/lib/libsleef.a (sleef_neon + sleef_sve)
 ./third-party/isa-l/build.sh        # → install/lib/libisal.a (isal_igzip + isal_crc*)
+./third-party/acl/build.sh           # → install/lib/libarm_compute-core.a (acl_gemm NEGEMM + fisttp_arm)
 # OpenSSL fallback: if the install dir is absent, meson falls back to system
 # libcrypto (or disables SSL tests with a message).
 # isa-l fallback: same two-tier gate — vendored install/ first, system libisal
@@ -59,6 +60,7 @@ Each directory keeps the upstream tarball for provenance plus a `build.sh` that 
 - `openblas/` — OpenBLAS 0.3.29, `build.sh` → static `libopenblas.a` (TARGET=TSV110, single-threaded `USE_THREAD=0` + `USE_LOCKING=1` so per-core worker threads can call cblas concurrently without corrupting the packing-buffer pool); powers `openblas_{d,s,z}gemm`.
 - `sleef/` — SLEEF 3.9.0, `build.sh` → static `libsleef.a` (TLFLOAT=OFF); powers `sleef_neon` (runs on any NEON host) and `sleef_sve` (needs SVE hardware; clean-skips elsewhere).
 - `isa-l/` — Intel isa-l 2.32.1, `build.sh` → static `libisal.a` (Makefile.unx path — no autoconf/nasm on aarch64; the .so and igzip CLI that `make install` also produces are deleted, only the archive + headers are kept); powers `isal_igzip` + the 10 `isal_crc*` tests. Meson prefers this install/ (openssl-style two-tier gate) and falls back to system libisal.
+- `acl/` — Arm Compute Library v23.02 (first official pure-CMake release; gcc ≥ 10.2 — satisfied by 24.03's gcc 12.3, 22.03's 10.3, and 20.03's gcc-toolset-10), `build.sh` builds ONLY the `arm_compute_core` target (NEON runtime: NEGEMM/NECast/Tensor) → static `libarm_compute-core.a` (fPIC — sdcshield links -pie; OPENMP=OFF — the framework provides its own per-core threads; sve/sve2/graph targets are neither built nor linked so no SVE machine code enters the binary). v23.02 ships no CMake install rules, so build.sh hand-assembles the install tree (archive + arm_compute/ + support/ + half/ header closure). Powers `acl_gemm` (real NEGEMM run against a long-double naive golden, 1e-4 absolute tolerance) and `fisttp_arm` (NECast FCVTZS). Container builds rebuild it natively per OS (glibc-tag pattern, same as openssl/openblas); 22.03/20.03 need `scripts/offline-build/supplement-cmake.sh` run once on a networked machine first.
 - `pocketfft/` — pocketfft C edition, header + `.c` committed directly (BSD-3, no build.sh — compiled straight into the test library); powers `pocketfft_fft`.
 - `meson/` — vendored meson 0.59.4 for the openEuler 20.03 container build path.
 - `rpms/` — three git submodules of prebuilt per-OS-version binaries (see README quick start).

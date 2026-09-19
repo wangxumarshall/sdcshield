@@ -37,12 +37,13 @@ cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 ```bash
 # openEuler 24.03（基准平台）依赖；Ubuntu/Fedora 见 docs/offline-build-dependencies.md
 sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel libisa-l-devel gtest-devel
-# 首次构建前：依次构建 3 个 vendored 依赖库（幂等，install/ 已存在则秒过；
+# 首次构建前：依次构建 5 个 vendored 依赖库（幂等，install/ 已存在则秒过；
 # pocketfft 无需此步——头文件+源码直接编入测试库）
 ./third-party/openssl/build.sh           # → install/lib/libcrypto.a（SSL 测试默认启用）
 ./third-party/openblas/build.sh          # → install/lib/libopenblas.a（openblas_{d,s,z,c}gemm + openblas_lu）
 ./third-party/sleef/build.sh             # → install/lib/libsleef.a（sleef_neon / sleef_sve）
 ./third-party/isa-l/build.sh             # → install/lib/libisal.a（isal_igzip + isal_crc*；缺省回退系统 libisal）
+./third-party/acl/build.sh               # → install/lib/libarm_compute-core.a（acl_gemm NEGEMM + fisttp_arm；NEON runtime core 目标，v23.02）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
 ./builddir/sdcshield --list-tests        # 应列出 282 个 PROD 用例（实测于 2026-09-17）

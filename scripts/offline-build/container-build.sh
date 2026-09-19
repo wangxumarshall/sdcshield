@@ -17,7 +17,7 @@
 #       -DOPENEULER_22.03 (或 OPENEULER_20.03)
 #       -include /src/framework/compat/cpp23_polyfill.h   # polyfill,不改既有源码
 #       (meson 的 -Dcpp_std=gnu++20 命令行覆盖,不改 meson.build)
-#       -Denable_acl=disabled (22.03/20.03 ACL ABI 不兼容,见 meson_options.txt)
+#       vendored ACL 容器内原生重建(third-party/acl, 22.03/20.03 需 supplement-cmake.sh)
 #   - meson_version:源码已声明 >=0.56(22.03 0.59 与 20.03 vendored 0.59.4 均满足),
 #     无需 sed 放宽。
 #   - 产物拷出到 host: build-out/openEuler-XX.03LTS_SPx/ (bin + log + ldd清单)。
@@ -280,15 +280,29 @@ fi
 # 可移植的 .find()==npos 比较(C++17, GCC10/12 通用)。无需再 sed-patch。
 # 注: std::map::contains (C++20) GCC10 已支持, 不在涉及范围内。
 
-# ACL (Arm Compute Library) 收敛:用 meson option -Denable_acl 替代 sed 改源码。
-# 22.03/20.03 的 ACL 原生库是 v20.02 (GCC10 libstdc++), 与 host 头 (v22.11,
-# GCC12) ABI 不兼容, fisttp_arm 链接失败 (undefined GLIBCXX_3.4.29/3.4.30)。
-# 故 22.03/20.03 传 -Denable_acl=disabled (meson.build 里 acl_sources=[] 空库,
-# 不链 -larm_compute, 跳过 2 ACL 测试)。24.03 不传 = auto (host 有 ACL 则构建)。
+# ACL (Arm Compute Library): vendored 源码构建(third-party/acl, v23.02),
+# 与 openssl/openblas/sleef 同一模式: install/ 的 glibc-build-tag 与本容器
+# 不同则容器内原生重建(ACL CMakeLists 要求 gcc>=10.2: 24.03 系统 gcc 12.3,
+# 22.03 系统 gcc 10.3, 20.03 用已激活的 gcc-toolset-10, 三者均满足)。
+# ACL 需要 cmake>=3.13: 24.03 镜像自带;22.03/20.03 镜像无 cmake 时尝试
+# /rpms 树里的 cmake RPM(supplement-cmake.sh 预下);仍无则删除宿主 install/
+# 让 meson 优雅缺席 2 个 ACL 测试(与 sleef 无 cmake 时同模式)。
 ACL_OPT=""
-if [ -n "${OPENEULER_MACRO:-}" ]; then
-    ACL_OPT="-Denable_acl=disabled"
-    echo "  ACL: -Denable_acl=disabled (22.03/20.03 跳过 2 ACL 测试)"
+if [ -d "$SRCW/third-party/acl/install" ]; then
+    acl_tag=$(cat "$SRCW/third-party/acl/install/.glibc-build-tag" 2>/dev/null || echo host-unknown)
+    if [ "$acl_tag" = "$VENDORED_GLIBC" ] && [ -d "$SRCW/third-party/acl/install/lib" ]; then
+        echo "  vendored ACL: install/ 是本容器 glibc $VENDORED_GLIBC 产物,复用"
+    elif command -v cmake >/dev/null 2>&1; then
+        echo "  vendored ACL: install/ 构建于 glibc $acl_tag != $VENDORED_GLIBC,容器内重建..."
+        rm -rf "$SRCW/third-party/acl/install" "$SRCW/third-party/acl/build"
+        ( cd "$SRCW/third-party/acl" \
+          && "$TAR_BIN" xzf ComputeLibrary-23.02.tar.gz \
+          && bash build.sh )
+        echo "$VENDORED_GLIBC" > "$SRCW/third-party/acl/install/.glibc-build-tag"
+    else
+        echo "  vendored ACL: 容器无 cmake(22.03/20.03 需先在有网机跑 supplement-cmake.sh 下 RPM 到 rpms 树顶层),移除宿主产物(ACL 测试本镜像缺席)"
+        rm -rf "$SRCW/third-party/acl/install"
+    fi
 fi
 
 # CXXFLAGS 注入 polyfill 头 + 版本宏 + compat/ 系统头路径 (只对 22.03/20.03;24.03 不注入)
@@ -349,22 +363,11 @@ esac
 
 # extra meson args (数组转空格串)
 echo "==> 启动 podman 容器构建..."
-# ACL(arithmetic_arm 测试)的 host 路径(bind 挂到同名位置, meson 用 -Dacl_incdir 找):
-#   - 头: /home/sdc/root/arm64-sdc-fuzzing/third_party/arm-opt-install/include
-#   - 库: /usr/lib64/libarm_compute.so
-#   - clang-rt builtins: /usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/libclang_rt.builtins.a
-# 仅当 host 上存在时挂载(24.03 容器镜像 == host 同 SP, 这些路径有效)。
-# 24.03 传 -Dacl_incdir=<host path> 让 meson auto 找到 ACL 头;22.03/20.03 容器内
-# 传 -Denable_acl=disabled(见 inner-build.sh)。
-ACL_HDR="/home/sdc/root/arm64-sdc-fuzzing/third_party/arm-opt-install/include"
-ACL_LIB="/usr/lib64"
+# ACL 已 vendor 到 third-party/acl(随 /src 挂载进容器, 容器内原生重建,
+# 见 inner 脚本的 vendored ACL 段)。不再挂载 host 的 arm-opt-install 头树或
+# /usr/lib64/libarm_compute.so, 也不再传 -Dacl_incdir。
+# clang-rt builtins: host 路径(bind 挂到同名位置; 24.03 容器镜像==host 同 SP 有效)。
 CLANG_RT="/usr/lib/clang/17"
-# ACL 头/incdir 仅 24.03 系列(容器镜像==host 同 SP,路径有效);22.03/20.03 传
-# -Denable_acl=disabled(inner 脚本),不需要 ACL 头 — 挂载反而引入多系列并行时
-# 对同一 host 目录的并发 :Z relabel 竞态。
-if [ "$SERIES" = "24.03" ] && [ -d "$ACL_HDR" ]; then
-    EXTRA_MESON+=("-Dacl_incdir=$ACL_HDR")
-fi
 EXTRA_MESON_STR="${EXTRA_MESON[*]:-}"
 # :Z 让 podman 给挂载点打 SELinux 私有标签(容器可 exec 挂载的脚本/二进制),
 # 否则 SELinux enforcing 系统会 "Permission denied"(与 verify-built-pristine.sh 一致)。
@@ -373,11 +376,10 @@ MOUNTS=(-v "$SDCSRC_ROOT:/src:ro,Z" -v "$RPMDIR_HOST:/rpms:ro,Z" -v "$OUTDIR_HOS
 # 源码包入仓 third-party/meson/meson-0.59.4(11M, 纯源码, 可复现)。
 [ "$SERIES" = "20.03" ] && [ -d "$SDCSRC_ROOT/third-party/meson/meson-0.59.4" ] && \
     MOUNTS+=(-v "$SDCSRC_ROOT/third-party/meson/meson-0.59.4:/meson-src:ro")
-if [ "$SERIES" = "24.03" ] && [ -d "$ACL_HDR" ]; then
-    MOUNTS+=(-v "$ACL_HDR:$ACL_HDR:ro,Z")
-    [ -d "$ACL_LIB" ] && MOUNTS+=(-v "$ACL_LIB/libarm_compute.so:$ACL_LIB/libarm_compute.so:ro" -v "$ACL_LIB/libarm_compute_graph.so:$ACL_LIB/libarm_compute_graph.so:ro")
-    [ -d "$CLANG_RT" ] && MOUNTS+=(-v "$CLANG_RT:$CLANG_RT:ro")
-fi
+# ACL: 无 host 挂载(third-party/acl 随 /src 进容器, 容器内重建)。
+# 22.03/20.03 的 cmake RPM 由 supplement-cmake.sh 预下到 rpms 树顶层(容器内
+# 自愈安装);rpms 树整体已挂载为 /rpms, 无需单独挂载。
+[ "$SERIES" = "24.03" ] && [ -d "$CLANG_RT" ] && MOUNTS+=(-v "$CLANG_RT:$CLANG_RT:ro")
 
 timeout 1200 podman run --rm --user=0 \
     "${MOUNTS[@]}" \

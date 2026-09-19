@@ -46,9 +46,12 @@
  * structure: the real-input packing halves the stored spectrum and
  * walks the radf* butterflies with different data layouts). Its
  * spectrum is likewise byte-compared against an init-time golden.
- * The inverse transforms (cfft_backward AND rfft_backward) run as
- * pure load only and are never compared — neither round trip is
- * bit-exact under FFT rounding.
+ * The inverse transforms (cfft_backward AND rfft_backward) are verified
+ * with a tolerance round-trip check: neither round trip is bit-exact under
+ * FFT rounding (measured max rel err ~3e-11), so their outputs are compared
+ * against the original inputs at 1e-6 relative — catching gross inverse-path
+ * corruption (dead butterfly, corrupted twiddle table) without false
+ * positives on healthy silicon.
  * @endparblock
  */
 
@@ -62,6 +65,7 @@ extern "C" {
 
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 namespace {
 struct fft_test_data {
@@ -251,12 +255,28 @@ static int pocketfft_fft_run(struct test *test, int cpu)
             report_fail_msg("cfft_forward failed on cpu %d", cpu);
         memcmp_or_fail(work, d->golden_spec, 2 * d->n, "golden spectrum");
 
-        /* inverse with 1/N scaling: pure load. The round trip is not
-         * bit-exact under FFT rounding (measured max rel err ~3e-11 on
-         * this payload) so its result is deliberately NOT compared —
-         * comparing it would make the test fail on healthy silicon. */
+        /* inverse with 1/N scaling. The round trip is not bit-exact under
+         * FFT rounding (measured max rel err ~3e-11 on this payload), so it
+         * is checked against a TOLERANCE instead of byte-compared: the
+         * backward input is the just-verified golden spectrum, so its output
+         * must approximate the original input to within that rounding gap.
+         * tol = 1e-6 * max(|x|, 1e-9): >4 orders of headroom over the healthy
+         * ~3e-11 gap (no false positives on healthy silicon) while a real
+         * inverse-path SDC — a dead butterfly stage, a corrupted twiddle
+         * table — produces O(1)-magnitude deviations, orders above it. This
+         * turns the inverse from dead load into a real verification. */
         if (cfft_backward(d->plan, work, 1.0 / d->n) != 0)
             report_fail_msg("cfft_backward failed on cpu %d", cpu);
+        for (int i = 0; i < 2 * d->n; ++i) {
+            double x = d->input[i];
+            double diff = fabs(work[i] - x);
+            double tol = 1e-6 * fmax(fabs(x), 1e-9);
+            if (diff > tol) {
+                report_fail_msg("cfft round-trip mismatch at element %d: %g vs "
+                                "input %g (diff %g, tol %g)", i, work[i], x,
+                                diff, tol);
+            }
+        }
 
         /* real-FFT segment: same copy->forward->byte-compare structure
          * on the rfft plan (halfcomplex packed spectrum, n doubles). */
@@ -265,10 +285,20 @@ static int pocketfft_fft_run(struct test *test, int cpu)
             report_fail_msg("rfft_forward failed on cpu %d", cpu);
         memcmp_or_fail(rwork, d->rgolden, d->n, "rfft golden spectrum");
 
-        /* rfft_backward mirrors cfft_backward above: pure load, never
-         * compared (the real round trip is not bit-exact either). */
+        /* rfft_backward mirrors cfft_backward above: checked against a
+         * tolerance (same calibration rationale) instead of being dead load. */
         if (rfft_backward(d->rplan, rwork, 1.0 / d->n) != 0)
             report_fail_msg("rfft_backward failed on cpu %d", cpu);
+        for (int i = 0; i < d->n; ++i) {
+            double x = d->rinput[i];
+            double diff = fabs(rwork[i] - x);
+            double tol = 1e-6 * fmax(fabs(x), 1e-9);
+            if (diff > tol) {
+                report_fail_msg("rfft round-trip mismatch at element %d: %g vs "
+                                "input %g (diff %g, tol %g)", i, rwork[i], x,
+                                diff, tol);
+            }
+        }
     }
     return EXIT_SUCCESS;
 }

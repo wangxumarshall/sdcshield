@@ -250,9 +250,10 @@ done
 ./builddir/sdcshield -O openblas_dgemm.mdim=4096 -e openblas_dgemm -t 2h        # 或 -n 64 限制并发
 
 # 模式 E：单命令 knob 全谱（一条命令同时挂多个 -O，每个 -O 只作用于它前缀的测试，
-#         无前缀匹配的测试按默认参数跑——多样性轮 + 参数扫谱二合一）
+#         无前缀匹配的测试按默认参数跑——多样性轮 + 参数扫谱二合一；9 个测试 12 个 knob）
 ./builddir/sdcshield \
-    -e openblas_dgemm,openblas_sgemm,openblas_zgemm,openblas_lu,sleef_neon,pocketfft_fft,isal_igzip,eigen_svd_cdouble_sve \
+    -e openblas_dgemm,openblas_sgemm,openblas_zgemm,openblas_lu,sleef_neon,pocketfft_fft,isal_igzip,eigen_svd_cdouble_sve,ipsec_aes128_cbc_hmac_sha1_sse \
+    -O ipsec_aes128_cbc_hmac_sha1_sse.datasize=4194304 \
     -O openblas_dgemm.mdim=1024 -O openblas_sgemm.mdim=1024 -O openblas_zgemm.mdim=1024 \
     -O openblas_dgemm.transab=1 -O openblas_sgemm.transab=2 -O openblas_zgemm.transab=3 \
     -O openblas_dgemm.beta_permille=500 \
@@ -378,6 +379,9 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 # 形态扫谱：转置组合 + β 读改写路径
 ./builddir/sdcshield -e openblas_zgemm -O openblas_zgemm.transab=3 -O openblas_zgemm.beta_permille=500 -t 15m
 
+# ipsec 载荷 1024B→16MB：AES/3DES/SHA 数据路径从 L1 压到 DRAM（全部 46 个 ipsec 用例同款参数名）
+./builddir/sdcshield -e ipsec_aes128_cbc_hmac_sha1_sse -O ipsec_aes128_cbc_hmac_sha1_sse.datasize=16777216 -t 5000
+
 # SLEEF 足迹扩到 6MB（默认 1024 元素 ≈ 128KB）
 ./builddir/sdcshield -e sleef_neon -O sleef_neon.nelems=262144 -t 30m
 
@@ -403,7 +407,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `ipsec_*`（全部 46 个） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM——AES/3DES/SHA 数据路径全谱扫（2026-09-19；默认 1024 与历史逐字节一致） |
 | `memcpy_rewr` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
 
-无 knob 的测试（ipsec×46、eigen NEON 家族、isal_crc、openssl×3 等）参数为编译期常量——这是当前参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态。
+仍无 knob 的测试（eigen NEON 家族、isal_crc×10、openssl×3 等）参数为编译期常量——参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态；ipsec×46 已于 2026-09-19 补齐 `datasize`。
 
 Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑在 SVE 向量后端（vendored Eigen 5.0 已补 `PacketXd`/`PacketXcd` double 与 complex<double> packet——svcmla 复数乘法、ptranspose 复数转置、gather/scatter 等全套，2026-09-19）。本机（VL=256）实测 300×300 复数 BDCSVD ~0.7 s（标量回退时代 >10 分钟）；VL=512 场景在 gem5 SE 模式功能验证（`scripts/eigen-sve-double/gem5/`）。注意：size-specific SVE 代码要求运行时向量长度等于编译期 `-msve-vector-bits`（128），本机 256 硬件上独立运行该测试需 prctl 固定任务 VL。
 

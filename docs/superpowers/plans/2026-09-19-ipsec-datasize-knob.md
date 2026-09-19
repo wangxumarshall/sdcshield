@@ -70,25 +70,25 @@ TEST_LOOP 语义（sandstone.h:140——N 是时间检查粒度非总量）；AE
   - struct：数组→指针 + `size_t datasize;`
   - init/cleanup/run 的 8 处替换（见 Architecture）
 
-- [ ] **Step 1: 逐文件手工改造 3 个代表**（cbc→ctr→gcm，gcm 注意 tag 参数签名）
-- [ ] **Step 2: 构建** `ninja -C builddir` 零新警告
-- [ ] **Step 3: 默认档回归**：3 用例 `-t 3000 -n 1` pass + `-v` 确认 knob 默认值日志
-- [ ] **Step 4: knob 档验证**：3 用例 `datasize=65536`（64KB，L1→L2 边界）与 `datasize=16777216`（16MB，DRAM）pass
-- [ ] **Step 5: 越界报错实测**：`datasize=1000`（非16倍数）与 `datasize=1023`（<1024）→ fail-loudly 消息含合法域
-- [ ] **Step 6: commit**（3 文件 + 计划文件）
+- [x] **Step 1: 逐文件手工改造 3 个代表**（cbc→ctr→gcm，gcm 注意 tag 参数签名）
+- [x] **Step 2: 构建** `ninja -C builddir` 零新警告
+- [x] **Step 3: 默认档回归**：3 用例 `-t 3000 -n 1` pass + `-v` 确认 knob 默认值日志
+- [x] **Step 4: knob 档验证**：3 用例 `datasize=65536`（64KB，L1→L2 边界）与 `datasize=16777216`（16MB，DRAM）pass
+- [x] **Step 5: 越界报错实测**：`datasize=1000`（非16倍数）与 `datasize=1023`（<1024）→ fail-loudly 消息含合法域
+- [x] **Step 6: commit**（3 文件 + 计划文件）
 
 ### Task 2: 批量套用（其余 43 文件）
 
 **Files:**
 - Modify: 其余 43 个 `tests/cpu/ipsec/**/*.cpp`（同一变换，脚本辅助 + 逐一 diff 核对）
 
-- [ ] **Step 1: 脚本化变换**（python 正则替换 8 处模式 + 每文件 diff 人工核对——46 文件结构已验证统一，但 xcbc/3des 函数名不同，替换按模式不按名字）
-- [ ] **Step 2: 构建** 零警告
-- [ ] **Step 3: 全量 ipsec 回归**：`-e ipsec_* 全 46`（默认档）pass
-- [ ] **Step 4: 抽样 knob 档**：3 个未手改的代表（3des/avx512/xcbc）`datasize=4194304` pass
-- [ ] **Step 5: 全量套件回归**：zstd19 + eigen_svd_cdouble pass
-- [ ] **Step 6: README knob 表更新**（ipsec 行加入 §Test knob 表）
-- [ ] **Step 7: commit + push**
+- [x] **Step 1: 脚本化变换**（python 正则替换 8 处模式 + 每文件 diff 人工核对——46 文件结构已验证统一，但 xcbc/3des 函数名不同，替换按模式不按名字）
+- [x] **Step 2: 构建** 零警告
+- [x] **Step 3: 全量 ipsec 回归**：`-e ipsec_* 全 46`（默认档）pass
+- [x] **Step 4: 抽样 knob 档**：3 个未手改的代表（3des/avx512/xcbc）`datasize=4194304` pass
+- [x] **Step 5: 全量套件回归**：zstd19 + eigen_svd_cdouble pass
+- [x] **Step 6: README knob 表更新**（ipsec 行加入 §Test knob 表）
+- [x] **Step 7: commit + push**
 
 ### 验证命令汇总
 

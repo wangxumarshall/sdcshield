@@ -400,6 +400,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `isal_igzip` | `.level` | 0..3 | 1 | deflate 级别（不同匹配查找器；2/3 有独立 level_buf） |
 | `zstd` / `zstd1` / `zstd19` / `zfuzz` | `.level` / `.maxbuffersize` | 1..22 / 4096.. | 按变体 | 压缩级别 / 每迭代缓冲上限 |
 | `eigen_svd_cdouble_sve` | `.mdim` | 300..6000 | **按内存自适应** | 强制矩阵维度（覆盖自适应选择） |
+| `ipsec_*`（全部 46 个） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM——AES/3DES/SHA 数据路径全谱扫（2026-09-19；默认 1024 与历史逐字节一致） |
 | `memcpy_rewr` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
 
 无 knob 的测试（ipsec×46、eigen NEON 家族、isal_crc、openssl×3 等）参数为编译期常量——这是当前参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态。

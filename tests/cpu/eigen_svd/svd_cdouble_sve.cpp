@@ -109,6 +109,41 @@ static int size_matrix(struct test *test, int *out_nthreads, double *out_gb_per_
     return n < MDIM_MIN ? MDIM_MIN : n;
 }
 
+/* Chosen dimension, decided ONCE in the preinit (parent process, before
+ * the framework computes test durations) so that both the matrix size and
+ * the test timing follow it. Forked children inherit it. */
+static int g_dim = MDIM_MIN;
+
+/*
+ * preinit (runs once in the PARENT, before run_one_test computes
+ * test_duration() — so writing test->desired_duration here is effective
+ * for the very first run, unlike in test_init; same pattern as
+ * ist_skip_preinit setting test->minimum_duration).
+ *
+ * Scales the framework's timing with the chosen dimension so neither the
+ * run loop nor the ±25% overall-time check misfires:
+ * - desired_duration = expected single-iteration time minus 5%: the
+ *   do-while time condition is then already expired when iteration #1
+ *   finishes -> exactly one iteration at EVERY dimension (a fixed value
+ *   would make small dimensions loop for the whole budget and large ones
+ *   start an un-budgeted second iteration).
+ * - the derived timeout (test_timeout(): 5*duration+30s, 300s floor)
+ *   scales along, covering the init's golden decomposition too.
+ * Model (measured, cortex x3b VL=128; plan 2026-09-19-...md):
+ * t(N) ~= 243.4s * (N/4400)^3 + 1s fixed overhead — within ±2% of the
+ * measured points at N>=2400 and conservative (over-estimates) below.
+ */
+static int size_matrix_preinit(struct test *test)
+{
+    int nthreads = 1;
+    double gb_per_worker = 0.0;
+    g_dim = size_matrix(test, &nthreads, &gb_per_worker);
+
+    double iter_s = 243.4 * std::pow((double)g_dim / 4400.0, 3.0) + 1.0;
+    test->desired_duration = (int)(iter_s * 950.0);   /* ms, -5% margin */
+    return EXIT_SUCCESS;
+}
+
 /*
  * Probe SVE availability using only the vDSO / getauxval, which executes no
  * SVE instructions itself. We must not let any SVE-instrumented Eigen code
@@ -124,19 +159,18 @@ static int sve_probe_and_init(struct test *test)
                  "eigen_svd_cdouble_sve requires SVE (e.g. Kunpeng 930)");
         return EXIT_SKIP;
     }
-    int nthreads = 1;
-    double gb_per_worker = 0.0;
-    int dim = size_matrix(test, &nthreads, &gb_per_worker);
-
-    log_info("M_DIM %d (memory %.2f GB/worker / %d threads; cap %d, floor %d; "
-             "override with -O eigen_svd_cdouble_sve.mdim=N)",
-             dim, gb_per_worker, nthreads, MDIM_TIME_CAP, MDIM_MIN);
+    log_info("M_DIM %d (sized in preinit from memory; expected iteration "
+             "%.1f s, desired_duration %d ms; override with -O "
+             "eigen_svd_cdouble_sve.mdim=N)",
+             g_dim,
+             243.4 * std::pow((double)g_dim / 4400.0, 3.0) + 1.0,
+             test->desired_duration);
 
     /* Allocate the test data and run the golden BDCSVD here (the runtime-
      * dimension template does not do it in its own init). */
     auto d = new eigen_svd_cdouble_sve_test::eigen_test_data;
-    d->dim = dim;
-    d->orig_matrix = Mat::Random(dim, dim);
+    d->dim = g_dim;
+    d->orig_matrix = Mat::Random(g_dim, g_dim);
     eigen_svd_cdouble_sve_test::calculate_once(d->orig_matrix, d->u_matrix, d->v_matrix);
     test->data = d;
     return EXIT_SUCCESS;
@@ -144,22 +178,18 @@ static int sve_probe_and_init(struct test *test)
 
 DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend, dimension sized from available memory); counterpart of eigen_svd_cdouble")
   .groups = DECLARE_TEST_GROUPS(&group_math),
+  .test_preinit = size_matrix_preinit,
   .test_init = sve_probe_and_init,
   .test_run = eigen_svd_cdouble_sve_test::run,
   .test_cleanup = eigen_svd_cdouble_sve_test::cleanup,
   .minimum_cpu = 0,
-  /* One test_run BDCSVD iteration takes up to ~243 s (measured at the
-   * memory/time cap of 4400; smaller auto-sized dimensions are proportion-
-   * ally faster). desired_duration of 240 s sits just below the cap's
-   * single-iteration time, so the do-while time condition is already
-   * exhausted when the first iteration finishes: exactly one iteration
-   * runs at every auto-sized dimension, and the derived timeout
-   * (test_timeout(): 5*240 s + 30 s = 1230 s) covers init+run at the cap
-   * with headroom. (desired_duration = -1 would fall back to the 1 s
-   * default and the resulting 300 s timeout floor would kill the run.)
-   * A knob-forced 6000 will exceed this duration and run a second
-   * iteration — acceptable for an explicit opt-in experiment. */
-  .desired_duration = 240000,
+  /* desired_duration is written by test_preinit (parent, before the
+   * framework computes test_duration for the first run): expected single-
+   * iteration time from the measured t(N) ~ 243.4s*(N/4400)^3 + 1s model,
+   * minus 5%, so exactly one run iteration executes at every auto-sized
+   * dimension and the derived timeout (5*duration+30s, 300s floor) scales
+   * with the dimension — no under/overtime misreports at small dims. */
+  .desired_duration = 0,
   .fracture_loop_count = 5,
   .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

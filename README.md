@@ -137,6 +137,8 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
 | ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器 |
+| core-179 归因探针（NEON） | `neon_rot_ldr_at_top`（父）+ `*_rowmajor`、`*_k5inter_rand`、`*_k7pattern`（4 cell）、`*_k3res` | 3x ldr + 背靠背 2x str 的 SDC 触发配方，按扫描顺序/源布局/数据模式/缓存驻留四轴归因；`tests/cpu/misc/` |
+| core-179 归因探针（SVE） | `sve_rot_ldr_at_top`（父）+ 同名 4 变体（8 测试） | NEON 家族的 SVE VLA 移植（z 寄存器 3x ldr + 背靠背 2x str，`svadd/sveor/svand/svorr`），真 VLA 按 `svcntb()` 适配；仅 SVE 硬件运行；`tests/cpu/sve/` |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
 
 ### 用例质量分级
@@ -177,7 +179,7 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv   # 崩溃回溯
 ```
 
-Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 仅 SVE 硬件运行，Kunpeng 920 在 init 阶段干净跳过。
+Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 仅 SVE 硬件运行，Kunpeng 920 在 init 阶段干净跳过。SVE 探针族（`sve_rot_ldr_at_top*`，`tests/cpu/sve/`）同理：编译进 `tests_sve` 库（`-march=armv8.2-a+sve`、真 VLA），无 SVE 硬件上由框架按 `compiler_minimum_device` 自动跳过（`test compiled with sve`）。
 
 ## 架构支持
 

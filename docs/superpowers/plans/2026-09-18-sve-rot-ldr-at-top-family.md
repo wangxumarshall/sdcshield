@@ -92,14 +92,14 @@ ALU 用内建(SVE 内联汇编写 ALU 需要手写谓词寄存器,内建更可�
 
 ## Task 0:meson 基础设施(sve/ 目录接入 tests_set_sve)
 
-- [ ] 创建 `tests/cpu/sve/` 目录
-- [ ] `tests/cpu/meson.build`:在 `tests_set_sve.add(...)` 处新增
+- [x] 创建 `tests/cpu/sve/` 目录
+- [x] `tests/cpu/meson.build`:在 `tests_set_sve.add(...)` 处新增
       aarch64-only 块,加入 5 个文件(随各任务逐步加入;本 task 先建块并
       加入第一个文件占位结构,后续 task 各加一行)
       - 实际操作:每个文件任务里往 `tests_set_sve` 的 files() 列表追加一行,
         Task 0 只创建目录 + 空 meson 块(带注释),不引入文件
-- [ ] 验证:`ninja -C builddir` 无错误;`--list-tests` 无变化(无新测试)
-- [ ] commit: `build: scaffold tests/cpu/sve for SVE rot_ldr_at_top family`
+- [x] 验证:`ninja -C builddir` 无错误;`--list-tests` 无变化(无新测试)
+- [x] commit: `build: scaffold tests/cpu/sve for SVE rot_ldr_at_top family`
 
 **注意**:现有 `tests_set_sve` 块依赖 `eigen3_dep`(when 条件)。新 SVE 探针
 不依赖 Eigen。方案:在现有块后面加一个**独立的** `tests_set_sve.add(files(...))`
@@ -149,7 +149,7 @@ SVE 文件不 include Eigen,即使 eigen 依赖变化,文件本身照常编译�
 
 ## Task 1:sve_rot_ldr_at_top(父测试)
 
-- [ ] 创建 `tests/cpu/sve/sve_rot_ldr_at_top.cpp`
+- [x] 创建 `tests/cpu/sve/sve_rot_ldr_at_top.cpp`
   - 结构镜像 `tests/cpu/misc/neon_rot_ldr_at_top.cpp`
   - `#include <arm_sve.h>`(在 `#if defined(__aarch64__)` 内)
   - VL 运行时适配:`vl_slots = 1024` 固定槽数;init 时 `vl_bytes = svcntb()`
@@ -159,48 +159,48 @@ SVE 文件不 include Eigen,即使 eigen 依赖变化,文件本身照常编译�
   - DECLARE_TEST id:`sve_rot_ldr_at_top`;description 注明是 NEON 版的
     SVE VLA 移植
   - `.quality_level = TEST_QUALITY_PROD`;无 `.groups`(与 NEON 版一致)
-- [ ] meson 加入 `'sve/sve_rot_ldr_at_top.cpp'`
-- [ ] 验证:
+- [x] meson 加入 `'sve/sve_rot_ldr_at_top.cpp'`
+- [x] 验证:
   - `ninja -C builddir` 零新告警(新文件必须零告警)
   - `--list-tests | grep sve_rot` 出现 `sve_rot_ldr_at_top`
   - `-e sve_rot_ldr_at_top -t 3000 -v`:本机(无 SVE)必须
     `result: skip, skip-reason: 'test compiled with sve'`(框架自动门控)
   - 回归:`-e zstd19 -t 3000` pass
-- [ ] commit: `test: add sve_rot_ldr_at_top — SVE VLA port of the NEON position probe`
+- [x] commit: `test: add sve_rot_ldr_at_top — SVE VLA port of the NEON position probe`
 
 ## Task 2:sve_rot_ldr_at_top_rowmajor(顺序变体)
 
-- [ ] 创建 `tests/cpu/sve/sve_rot_ldr_at_top_rowmajor.cpp`(镜像 misc/
+- [x] 创建 `tests/cpu/sve/sve_rot_ldr_at_top_rowmajor.cpp`(镜像 misc/
   neon_rot_ldr_at_top_rowmajor.cpp:升降交替扫描;真 VLA)
-- [ ] meson 追加一行
-- [ ] 验证同 Task 1(编译零告警、list、本机 skip、zstd19 回归)
-- [ ] commit: `test: add sve_rot_ldr_at_top_rowmajor order variant (SVE)`
+- [x] meson 追加一行
+- [x] 验证同 Task 1(编译零告警、list、本机 skip、zstd19 回归)
+- [x] commit: `test: add sve_rot_ldr_at_top_rowmajor order variant (SVE)`
 
 ## Task 3:sve_rot_ldr_at_top_rowmajor_k5inter_rand(K5 布局控制)
 
-- [ ] 镜像 misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp:
+- [x] 镜像 misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp:
   - 交错布局 `src[2i]/src[2i+1]`(SVE 槽单位)
   - memset_random 填充
   - dump 到 `movbe_log/gps_rowmajor/`,文件名 `svek5ir_fail_...bin`
   - golden/比对与 dump 结构同 NEON 版
-- [ ] meson 追加;验证同上
-- [ ] commit: `test: add sve_rot_ldr_at_top_rowmajor_k5inter_rand K5 layout control (SVE)`
+- [x] meson 追加;验证同上
+- [x] commit: `test: add sve_rot_ldr_at_top_rowmajor_k5inter_rand K5 layout control (SVE)`
 
 ## Task 4:sve_rot_ldr_at_top_rowmajor_k7pattern(K7 模式电池 ×4)
 
-- [ ] 镜像 misc/neon_rot_ldr_at_top_rowmajor_k7pattern.cpp:
+- [x] 镜像 misc/neon_rot_ldr_at_top_rowmajor_k7pattern.cpp:
   - `pattern_word` 逐字节构造(P_ZERO/P_ONE/P_RAND_GPS/P_HIHAM)不变 —
     纯标量 C,零移植成本
   - 槽填充:`i*vl_bytes + lane*8` 的 byte_off;256b VL 时 byte_off 最大
     1023*32+24=32760 < 65535,tag 字段安全
   - 四个 DECLARE_TEST:k7p_zero/one/rand/hiham(前缀 sve_)
   - dump 文件名 `svek7p_<cell>_fail_...bin`
-- [ ] meson 追加;验证同上(四个 cell 都要 list 出来 + 本机全 skip)
-- [ ] commit: `test: add sve_rot_ldr_at_top_rowmajor_k7pattern battery (SVE)`
+- [x] meson 追加;验证同上(四个 cell 都要 list 出来 + 本机全 skip)
+- [x] commit: `test: add sve_rot_ldr_at_top_rowmajor_k7pattern battery (SVE)`
 
 ## Task 5:sve_rot_ldr_at_top_rowmajor_k3res(K3 驻留,4x 足迹)
 
-- [ ] 镜像 misc/neon_rot_ldr_at_top_rowmajor_k3res.cpp:
+- [x] 镜像 misc/neon_rot_ldr_at_top_rowmajor_k3res.cpp:
   - `K3RES_SLOTS = 4096` 槽;footprint 随 VL 缩放(128b: 64KiB/缓冲,
     与 NEON 版同;256b: 128KiB/缓冲,超出 L1D 更多 — 文档注释注明)
   - GPS tag byte_off 最大 4095*32+24=131064 **> 65535 溢出 16b 字段!**
@@ -209,14 +209,14 @@ SVE 文件不 include Eigen,即使 eigen 依赖变化,文件本身照常编译�
     槽索引不进 tag(K3 的归因维度是足迹驻留性,不是位置分类;dump 里有
     完整缓冲,offline 可恢复位置)。文件头注释明确记录此差异。
   - dump 文件名 `svek3res_fail_...bin`
-- [ ] meson 追加;验证同上
-- [ ] commit: `test: add sve_rot_ldr_at_top_rowmajor_k3res K3 residency cell (SVE)`
+- [x] meson 追加;验证同上
+- [x] commit: `test: add sve_rot_ldr_at_top_rowmajor_k3res K3 residency cell (SVE)`
 
 ## Task 6:文档更新
 
-- [ ] `README.md` 测试目录说明(若有 tests 目录清单)
-- [ ] `docs/writing_tests.md` 若有 NEON 家族提及则补 SVE 版
-- [ ] commit: `docs: note the SVE port of the rot_ldr_at_top family`
+- [x] `README.md` 测试目录说明(若有 tests 目录清单)
+- [x] `docs/writing_tests.md` 若有 NEON 家族提及则补 SVE 版
+- [x] commit: `docs: note the SVE port of the rot_ldr_at_top family`
 
 ## 全局验证清单(每 task 必须全部通过才 commit)
 

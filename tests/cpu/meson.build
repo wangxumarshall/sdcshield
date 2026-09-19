@@ -430,6 +430,7 @@ if host_machine.cpu_family() == 'aarch64'
             'sve/sve_rot_ldr_at_top_rowmajor.cpp',
             'sve/sve_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
             'sve/sve_rot_ldr_at_top_rowmajor_k7pattern.cpp',
+            'sve/sve_rot_ldr_at_top_rowmajor_k3res.cpp',
         )
     )
 endif

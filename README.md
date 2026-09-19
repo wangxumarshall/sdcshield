@@ -104,7 +104,7 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 
 > `run.sh` 部署逻辑：检测本机 OS → 精确匹配 `built-index.tsv`（不跨版本回退）→ 校验 `binary-sha256` → `exec run-sdcshield.sh`（设 `LD_LIBRARY_PATH` 指向随包 `libs/`）。
 >
-> `run-sdcshield.sh full`（首参数 `full`）：两段式全核 eigen 满载——第一段 11 个稳定 eigen 测试不带 `-n`（默认使用系统全部 CPU）；第二段 4 个数值敏感测试（`eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve`）以 `-n 1` 补跑，规避大规模多线程下的 ULP 级偶发假 FAIL（平台已知特性）。默认每测试 60s（可 `-t` 覆盖）；透传的 `-n` 只作用于第一段；`eigen_svd_cdouble_sve` 当前为占位 skip（Eigen 5.0 SVE 后端无 double packet 支持，详见测试注释），无 SVE 的机器上报 `CpuNotSupported`。
+> `run-sdcshield.sh full`（首参数 `full`）：两段式全核 eigen 满载——第一段 11 个稳定 eigen 测试不带 `-n`（默认使用系统全部 CPU）；第二段 4 个数值敏感测试（`eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve`）以 `-n 1` 补跑，规避大规模多线程下的 ULP 级偶发假 FAIL（平台已知特性）。默认每测试 60s（可 `-t` 覆盖）；透传的 `-n` 只作用于第一段；`eigen_svd_cdouble_sve` 自 2026-09-19 起为真实 SVE 向量化压测（vendored Eigen 已补 `double`/`complex<double>` packet，本机 VL=256 上 300×300 复数 BDCSVD ~0.7 s），无 SVE 的机器上报 `CpuNotSupported`。
 
 #### 一键式全流程：`release-all.sh`（agent/CI 首选入口）
 
@@ -355,7 +355,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv   # 崩溃回溯
 ```
 
-Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 当前为诚实占位 skip——vendored Eigen 5.0 的 SVE packet 后端只有 int32/float 特化（无 `packet_traits<double>`），double 路径静默退化为标量循环（比 NEON 慢约 4 个数量级，300×300 BDCSVD 一迭代即超 300 s 框架超时），在 SVE double packet 支持补齐前无法真实压测 SVE 硬件；无 SVE 硬件的机器仍先报 `CpuNotSupported` 跳过。
+Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑在 SVE 向量后端（vendored Eigen 5.0 已补 `PacketXd`/`PacketXcd` double 与 complex<double> packet——svcmla 复数乘法、ptranspose 复数转置、gather/scatter 等全套，2026-09-19）。本机（VL=256）实测 300×300 复数 BDCSVD ~0.7 s（标量回退时代 >10 分钟）；VL=512 场景在 gem5 SE 模式功能验证（`scripts/eigen-sve-double/gem5/`）。注意：size-specific SVE 代码要求运行时向量长度等于编译期 `-msve-vector-bits`（128），本机 256 硬件上独立运行该测试需 prctl 固定任务 VL。
 
 ## 架构支持
 

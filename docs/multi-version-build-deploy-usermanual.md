@@ -139,7 +139,7 @@ tar xzf sdcshield-openEuler-24.03LTS_SP3-*.tar.gz
 
 要点:
 - 每测试默认 60s,透传 `-t <time>`(或 `--test-time=`)覆盖;透传的 `-n` 只作用于第一段,第二段恒为 1 线程。
-- `eigen_svd_cdouble_sve` 在无 SVE 的机器上自动 skip(`CpuNotSupported`),属预期;在 SVE 机器上当前也报占位 skip(`TestResourceIssue`)——vendored Eigen 5.0 的 SVE packet 后端无 `packet_traits<double>` 特化,double 运算静默退化为标量循环(比 NEON 慢约 4 个数量级,单次 300×300 BDCSVD 即超 300 s 超时),待 SVE double packet 补齐后恢复真实压测(2026-09-18,详见 `tests/cpu/eigen_svd/svd_cdouble_sve.cpp` 注释)。
+- `eigen_svd_cdouble_sve` 在无 SVE 的机器上自动 skip(`CpuNotSupported`),属预期;在 SVE 机器上自 2026-09-19 起为真实向量化压测——vendored Eigen 5.0 已补 `double`/`complex<double>` SVE packet(单次 300×300 复数 BDCSVD 约 0.7 s,原标量回退需 >10 分钟)。注意 size-specific SVE 代码要求运行时 VL 等于编译期 `-msve-vector-bits=128`,在 VL≠128 的 SVE 主机上独立运行需先固定任务 VL(prctl `PR_SVE_SET_VL`)。
 - 脚本退出码 = 两段退出码之或;两段相互独立完成(第一段失败不阻断第二段)。
 
 ### 3.6 镜像推 ghcr.io(跨机/CI 共享)

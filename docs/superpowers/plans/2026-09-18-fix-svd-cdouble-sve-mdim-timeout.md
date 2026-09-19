@@ -84,3 +84,9 @@ ninja -C builddir
 ./builddir/sdcshield -e zstd19 -t 3000 -n 1                        # expect: pass
 ./builddir/sdcshield --quality=-1                                   # expect: 298 tests, exit pass
 ```
+
+---
+
+## 后续（2026-09-19）
+
+本计划的占位 skip 已由 `feat/eigen-sve-double-packets` 分支解决：vendored Eigen 5.0 补齐了 SVE `double`/`complex<double>` packet 后端（PacketXd/PacketXcd，svcmla 复数乘法等），`eigen_svd_cdouble_sve` 恢复真实 SVE 压测。实施计划见 `2026-09-18-eigen-sve-double-packets.md`。

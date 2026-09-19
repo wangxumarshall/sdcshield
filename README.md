@@ -248,6 +248,19 @@ done
 
 # 模式 C：大矩阵深压（大内存主机；4096 档单迭代分钟级，需长窗口，必要时 -n 限并发控内存）
 ./builddir/sdcshield -O openblas_dgemm.mdim=4096 -e openblas_dgemm -t 2h        # 或 -n 64 限制并发
+
+# 模式 E：单命令 knob 全谱（一条命令同时挂多个 -O，每个 -O 只作用于它前缀的测试，
+#         无前缀匹配的测试按默认参数跑——多样性轮 + 参数扫谱二合一）
+./builddir/sdcshield \
+    -e openblas_dgemm,openblas_sgemm,openblas_zgemm,openblas_lu,sleef_neon,pocketfft_fft,isal_igzip,eigen_svd_cdouble_sve \
+    -O openblas_dgemm.mdim=1024 -O openblas_sgemm.mdim=1024 -O openblas_zgemm.mdim=1024 \
+    -O openblas_dgemm.transab=1 -O openblas_sgemm.transab=2 -O openblas_zgemm.transab=3 \
+    -O openblas_dgemm.beta_permille=500 \
+    -O openblas_lu.n=1024 \
+    -O sleef_neon.nelems=16384 \
+    -O pocketfft_fft.n=6144 \
+    -O isal_igzip.level=2 \
+    -t 30m
 ```
 
 **模式 D：全谱战役脚本 `scripts/run/run_sdc_spectrum.sh`**——把模式 A/B/C 与全部 test knob（mdim/transab/beta_permille/nelems/n/level）合并为一条命令的两阶段战役（§7.4 战役协议的可执行化）：
@@ -353,6 +366,43 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 ./builddir/sdcshield --dump-cpu-info                     # CPU + 特性 + 拓扑
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv   # 崩溃回溯
 ```
+
+### Test knob（`-O`，运行期测试参数）
+
+部分测试支持**运行期参数旋钮**——不重编译即可改变矩阵尺寸、工作集大小、压缩级别等压力参数，参数值写入 YAML 日志（可复现）。语法：`-O <测试ID>.<参数名>=<值>`（可重复传多个）。
+
+```console
+# 默认 256 档（L2 域）→ 4096 档（806MB 工作集，压到 DRAM/NUMA 远端域）
+./builddir/sdcshield -e openblas_dgemm -O openblas_dgemm.mdim=4096 -t 30m
+
+# 形态扫谱：转置组合 + β 读改写路径
+./builddir/sdcshield -e openblas_zgemm -O openblas_zgemm.transab=3 -O openblas_zgemm.beta_permille=500 -t 15m
+
+# SLEEF 足迹扩到 6MB（默认 1024 元素 ≈ 128KB）
+./builddir/sdcshield -e sleef_neon -O sleef_neon.nelems=262144 -t 30m
+
+# FFT 走 Bluestein 质数路径（默认 4096 是纯 radix-4/2）
+./builddir/sdcshield -e pocketfft_fft -O pocketfft_fft.n=4099 -t 15m
+```
+
+**两个易错点**：① 必须带测试 ID 前缀——框架以 `<测试ID>.<参数名>` 为查找键（`framework/test_knobs.cpp`），裸 `-O mdim=4096` 会被**静默忽略**并回退默认值（`-v` 可核对每个 knob 的实际生效值）；② 越界值 fail-loudly 报错（不静默钳制），报错信息含合法范围。
+
+当前支持 knob 的测试全集：
+
+| 测试 | 参数 | 合法域 | 默认 | 作用（档位→压力域） |
+|---|---|---|---|---|
+| `openblas_{d,s,z,c}gemm` | `.mdim` | 16..4096 | 256 | 矩阵尺寸：64→L1 / 256→L2 / 1024→L3 / 2048+→DRAM |
+| `openblas_{d,s,z,c}gemm` | `.transab` | 0..3 | 0 | NN/NT/TN/TT（OpenBLAS 不同 packing 例程） |
+| `openblas_{d,s,z,c}gemm` | `.beta_permille` | 0..10⁶ | 0 | β=P/1000；β≠0 命中 C 读改写路径 |
+| `openblas_lu` | `.n` | 16..2048 | 256 | LU 分解矩阵尺寸（64→32KB … 2048→32MB） |
+| `sleef_neon` | `.nelems` | 128..262144（4 的倍数） | 1024 | 每函数族元素数（工作集 128KB→6MB） |
+| `pocketfft_fft` | `.n` | 512..16384（pow2）/ 4099 / 6144 / 10000 | 4096 | FFT 点数与因数结构（pow2=radix-4/2，4099=Bluestein 质数） |
+| `isal_igzip` | `.level` | 0..3 | 1 | deflate 级别（不同匹配查找器；2/3 有独立 level_buf） |
+| `zstd` / `zstd1` / `zstd19` / `zfuzz` | `.level` / `.maxbuffersize` | 1..22 / 4096.. | 按变体 | 压缩级别 / 每迭代缓冲上限 |
+| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000 | **按内存自适应** | 强制矩阵维度（覆盖自适应选择） |
+| `memcpy_rewr` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
+
+无 knob 的测试（ipsec×46、eigen NEON 家族、isal_crc、openssl×3 等）参数为编译期常量——这是当前参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态。
 
 Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑在 SVE 向量后端（vendored Eigen 5.0 已补 `PacketXd`/`PacketXcd` double 与 complex<double> packet——svcmla 复数乘法、ptranspose 复数转置、gather/scatter 等全套，2026-09-19）。本机（VL=256）实测 300×300 复数 BDCSVD ~0.7 s（标量回退时代 >10 分钟）；VL=512 场景在 gem5 SE 模式功能验证（`scripts/eigen-sve-double/gem5/`）。注意：size-specific SVE 代码要求运行时向量长度等于编译期 `-msve-vector-bits`（128），本机 256 硬件上独立运行该测试需 prctl 固定任务 VL。
 

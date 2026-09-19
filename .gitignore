@@ -17,6 +17,8 @@ dist/
 /scripts/offline-build/built-index.tsv
 # ctags
 tags
+# clangd background-index cache
+/.cache/
 /.vscode/
 # Claude Code local artifacts (session state, agent memory)
 /.claude/

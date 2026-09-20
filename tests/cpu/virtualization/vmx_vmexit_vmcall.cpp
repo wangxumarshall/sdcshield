@@ -4,12 +4,28 @@
 #include <cstring>
 
 static int vmx_vmexit_vmcall_init(struct test *test) {
+#ifdef __aarch64__
+    // ARM64 has no VT-x/VMX virtualization — the previous "simulated" path
+    // (single constant store+reload, no TEST_LOOP) passed vacuously while
+    // stressing nothing. Honest skip per the placeholder-honesty rule.
     (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): no VT-x/VMX virtualization on ARM64");
+    return EXIT_SKIP;
+#else
     return EXIT_SUCCESS;
+#endif
 }
 
 static int vmx_vmexit_vmcall_run(struct test *test, int cpu) {
-    (void)cpu;
+#ifdef __aarch64__
+    // Unreachable on ARM64: init already returned EXIT_SKIP. Kept honest
+    // (no vacuous EXIT_SUCCESS) in case init is ever bypassed.
+    (void)test; (void)cpu;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): no VT-x/VMX virtualization on ARM64");
+    return EXIT_SKIP;
+#else
 
     // 在 ARM64 上无法执行 VMCALL，因此模拟 hypercall 操作：
     // 向内存写入一个值并立即读回，验证一致性，同时进行存储一致性检查。
@@ -40,6 +56,7 @@ static int vmx_vmexit_vmcall_run(struct test *test, int cpu) {
 
     fprintf(stderr, "\033[32mvmx_vmexit_vmcall PASS on CPU %d (simulated)\033[0m\n", cpu);
     return EXIT_SUCCESS;
+#endif
 }
 
 static int vmx_vmexit_vmcall_finish(struct test *test) {

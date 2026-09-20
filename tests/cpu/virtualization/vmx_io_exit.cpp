@@ -4,30 +4,23 @@
 #include <cstring>
 
 #ifdef __aarch64__
-// ARM64 平台：直接跳过测试，因为不支持端口 I/O
+// ARM64 平台：诚实跳过 —— 无端口 I/O，原先的"模拟"路径（单个常量存取即
+// EXIT_SUCCESS）不压测任何单元却报 pass，违反 placeholder-honesty 规则。
 static int vmx_io_exit_init(struct test *test) {
     (void)test;
-    fprintf(stderr, "vmx_io_exit: ARM64 platform does not support I/O port instructions, skipping.\n");
-    return EXIT_SUCCESS;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): no I/O port instructions on ARM64");
+    return EXIT_SKIP;
 }
 
 static int vmx_io_exit_run(struct test *test, int cpu) {
     (void)cpu;
     (void)test;
-    // 跳过实际测试，仅返回成功（与原 x86 非虚拟化环境跳过行为一致）
-    // 仍进行简单的存储一致性测试以保留部分验证
-    uint64_t test_val = 0xDEADBEEFCAFEBABEULL;
-    uint64_t store_buf = test_val;
-    uint64_t reload_buf;
-    memcpy(&reload_buf, &store_buf, sizeof(store_buf));
-    bool consistent = (reload_buf == test_val);
-    if (!consistent) {
-        fprintf(stderr, "\n[vmx_io_exit] FAIL on CPU %d (consistency)\n", cpu);
-        report_fail_msg("vmx_io_exit: consistency failure");
-        return EXIT_FAILURE;
-    }
-    fprintf(stderr, "\033[32mvmx_io_exit PASS on CPU %d (skipped on ARM64)\033[0m\n", cpu);
-    return EXIT_SUCCESS;
+    // Unreachable on ARM64: init already returned EXIT_SKIP. Kept honest
+    // (no vacuous EXIT_SUCCESS) in case init is ever bypassed.
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): no I/O port instructions on ARM64");
+    return EXIT_SKIP;
 }
 
 #else
@@ -80,13 +73,17 @@ static int vmx_io_exit_run(struct test *test, int cpu) {
 
     memcpy(&reload_buf, &store_buf, sizeof(store_buf));
     consistent = (reload_buf == test_val);
-    passed = consistent;
+    // Port 0x80 is the POST diagnostic port: a write followed by a read
+    // must return the same byte on a healthy bus. Verify it (the previous
+    // version read read_data but never compared it).
+    bool io_roundtrip = (read_data == io_data);
+    passed = consistent && io_roundtrip;
 
     if (!passed) {
         fprintf(stderr, "\n[vmx_io_exit] FAIL on CPU %d\n", cpu);
         fprintf(stderr, "  test_val = 0x%016lX, reload_buf = 0x%016lX\n", test_val, reload_buf);
         fprintf(stderr, "  io_data written = 0x%02X, read_data = 0x%02X\n", io_data, read_data);
-        fprintf(stderr, "  consistent = %d\n", consistent);
+        fprintf(stderr, "  consistent = %d, io_roundtrip = %d\n", consistent, io_roundtrip);
         report_fail_msg("vmx_io_exit: I/O execution or consistency failure");
         return EXIT_FAILURE;
     }

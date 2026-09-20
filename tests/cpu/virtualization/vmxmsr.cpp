@@ -25,6 +25,15 @@ static bool read_midr_el1(int cpu, uint64_t *val) {
 }
 
 static int vmxmsr_init(struct test *test) {
+#ifdef __aarch64__
+    // ARM64 has no VT-x/VMX virtualization — the previous "simulated" path
+    // (single constant store+reload, no TEST_LOOP) passed vacuously while
+    // stressing nothing. Honest skip per the placeholder-honesty rule.
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): no VT-x/VMX virtualization on ARM64");
+    return EXIT_SKIP;
+#else
     auto *data = new TestData;
     if (!data) return EXIT_FAILURE;
     test->data = data;
@@ -82,9 +91,18 @@ static int vmxmsr_init(struct test *test) {
     }
 
     return EXIT_SUCCESS;
+#endif
 }
 
 static int vmxmsr_run(struct test *test, int cpu) {
+#ifdef __aarch64__
+    // Unreachable on ARM64: init already returned EXIT_SKIP. Kept honest
+    // (no vacuous EXIT_SUCCESS) in case init is ever bypassed.
+    (void)test; (void)cpu;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): no VT-x/VMX virtualization on ARM64");
+    return EXIT_SKIP;
+#else
     auto *data = static_cast<TestData*>(test->data);
     if (!data) {
         fprintf(stderr, "vmxmsr: No test data, skipping.\n");
@@ -121,6 +139,7 @@ static int vmxmsr_run(struct test *test, int cpu) {
 
     // 只执行一次检查（不需要循环）
     return EXIT_SUCCESS;
+#endif
 }
 
 static int vmxmsr_finish(struct test *test) {

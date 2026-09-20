@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <atomic>
 #include <cstring>
-#include <random>
 #include <vector>
 #include <ctime>
 #include <unistd.h>
@@ -77,13 +76,18 @@ static int atomic_simd_512_run(struct test *test, int cpu) {
     size_t channel_idx = my_id % ctx->channels.size();
     auto &my_chan = ctx->channels[channel_idx];
 
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + cpu + my_id);
-    std::uniform_int_distribution<int> dist(0, 1);
-
     do {
         // ==================== 1. 本地通道写者阶段 ====================
-        uint64_t pattern = dist(rng);
-        uint8x16_t val0 = pattern ? vdupq_n_u8(0xFF) : vdupq_n_u8(0x00);
+        /* randomization hardening H10': each channel has exactly ONE
+         * writer (this thread), so the payload can be a fresh random
+         * 64-bit pattern per iteration (framework RNG) duplicated into
+         * all four 128-bit blocks — every bit position varies per run,
+         * and a flip in ANY block is detectable (was all-0/all-1). */
+        uint64_t pattern = random64();
+        uint64_t words[8];
+        for (int i = 0; i < 8; ++i)
+            words[i] = pattern;
+        uint8x16_t val0 = vld1q_u8((const uint8_t*)&words[0]);
 
         uint64_t curr_seq = my_chan.seq.load(std::memory_order_relaxed);
         
@@ -133,12 +137,14 @@ static int atomic_simd_512_run(struct test *test, int cpu) {
         vst1q_u8(bytes + 32, read2);
         vst1q_u8(bytes + 48, read3);
 
-        bool all_zero = true, all_one = true;
+        /* 撕裂/位翻转检测：64 字节必须逐位等于本次写入的随机模式 */
+        bool data_ok = true;
         for (int i = 0; i < 64; ++i) {
-            if (bytes[i] != 0x00) all_zero = false;
-            if (bytes[i] != 0xFF) all_one = false;
+            if (bytes[i] != ((const uint8_t*)&pattern)[i % 8]) {
+                data_ok = false;
+                break;
+            }
         }
-        bool data_ok = all_zero || all_one;
 
         // Store-to-Load 深度一致性校验
         alignas(64) uint8_t store_buf[64];

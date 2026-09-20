@@ -63,7 +63,8 @@ struct sha3_elem
 struct sha3_test
 {
     uint8_t *arena;
-    uint8_t arena_size;
+    size_t arena_size;   /* was uint8_t — truncated every value > 255
+                          * (randomization hardening H7') */
     sha3_elem golden_elements[SHA3_GOLDEN_ELEMS];
 };
 
@@ -181,23 +182,42 @@ static int ssl_sha3_init(struct test* test)
     }
 }
 
+/* Per-thread MB-scale work arena with guaranteed-disjoint halves (see
+ * openssl_sha.cpp): each thread re-rolls ITS OWN golden elem every
+ * iteration — fresh plaintext + digests recomputed through the EVP
+ * path — then recomputes the same plaintext at a different random
+ * address and compares. No shared state is written after init
+ * (randomization hardening H7'). */
+#define SHA3_WORK_ARENA_SIZE    (4UL << 20)
+
 static int ssl_sha3_run(struct test* test, int cpu)
 {
-    sha3_test *sha3_test_ptr = (sha3_test *) test->data;
-    sha3_elem *golden_elements = &sha3_test_ptr->golden_elements[0];
-
-    const size_t our_arena_size = SHA3_MAX_OFFSET + sizeof(sha3_elem);
+    const size_t our_arena_size = SHA3_WORK_ARENA_SIZE;
     uint8_t *our_arena = (uint8_t *) mmap(NULL, our_arena_size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+    if (our_arena == MAP_FAILED) {
+        log_skip(TestResourceIssueSkipCategory, "ssl_sha3: work-arena mmap failed");
+        return EXIT_SKIP;
+    }
 
     TEST_LOOP(test, 128) {
-        const size_t our_offset = (random64() & 0x1ff) | 1;
-        const size_t golden_idx = random64() & (SHA3_GOLDEN_ELEMS - 1);
-        sha3_elem *golden_elem = &golden_elements[golden_idx];
+        const size_t elem_sz = sizeof(sha3_elem);
+        const size_t half = (our_arena_size - 2 * elem_sz) / 2;
+        const size_t golden_offset = (random64() % half) + 1;
+        const size_t our_offset = half + elem_sz + (random64() % half) + 1;
 
+        sha3_elem *golden_elem = (sha3_elem *) (&our_arena[golden_offset]);
         sha3_elem *our_elem = (sha3_elem *) (&our_arena[our_offset]);
-        memcpy(&our_elem->plain_text, &golden_elem->plain_text[0], PLAINTEXT_SIZE);
 
-        /* Calculate sha3/shake checksums */
+        /* Re-roll this thread's golden elem (same-iteration golden) */
+        memset_random(&golden_elem->plain_text[0], PLAINTEXT_SIZE);
+        ssl_sha3_224(golden_elem);
+        ssl_sha3_256(golden_elem);
+        ssl_sha3_384(golden_elem);
+        ssl_sha3_512(golden_elem);
+        ssl_shake128(golden_elem);
+
+        /* Same plaintext at a DIFFERENT random address */
+        memcpy(&our_elem->plain_text, &golden_elem->plain_text[0], PLAINTEXT_SIZE);
         ssl_sha3_224(our_elem);
         ssl_sha3_256(our_elem);
         ssl_sha3_384(our_elem);
@@ -216,6 +236,8 @@ static int ssl_sha3_run(struct test* test, int cpu)
         memcmp_or_fail(&our_elem->shake128sum[0], &golden_elem->shake128sum[0], SHAKE128_OUT_LENGTH,
                 "shake128sum values does not match.");
     }
+
+    munmap(our_arena, our_arena_size);
     return EXIT_SUCCESS;
 }
 

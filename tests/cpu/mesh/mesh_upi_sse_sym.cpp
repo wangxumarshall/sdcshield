@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -85,8 +84,9 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1000.0f, 1000.0f);
+    /* randomization hardening H14' (P17): framework RNG */
+    /* randomization hardening H14' (P17): framework RNG, [-1000, 1000) */
+    auto dist = []() { return frandomf_scale(2000.0f) - 1000.0f; };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -116,7 +116,7 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
             float vals[VECTOR_SIZE];
             double local_sum = 0.0;
             for (int j = 0; j < VECTOR_SIZE; ++j) {
-                vals[j] = dist(rng);
+                vals[j] = dist();
                 local_sum += (double)vals[j];
             }
             float32x4_t v = vld1q_f32(vals);

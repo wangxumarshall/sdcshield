@@ -30,11 +30,12 @@ static int mesh_upi_avx512_asymm_read_L3_int_init(struct test *test) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening H14' (P17): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
     uint64_t sum = 0;
     for (size_t i = 0; i < ARRAY_ELEMS; ++i) {
-        td->data[i] = dist(rng);
+        td->data[i] = dist();
         sum += (uint64_t)td->data[i];
     }
     td->golden_sum = sum;

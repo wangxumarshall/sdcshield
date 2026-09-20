@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -62,8 +61,9 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     uint32_t total = td->total_threads;
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1000.0f, 1000.0f);
+    /* randomization hardening H14' (P17): framework RNG */
+    /* randomization hardening H14' (P17): framework RNG, [-1000, 1000) */
+    auto dist = []() { return frandomf_scale(2000.0f) - 1000.0f; };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -79,7 +79,7 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
             float vals[BLOCK_SIZE];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_SIZE; ++j) {
-                vals[j] = dist(rng);
+                vals[j] = dist();
                 local_sum += (double)vals[j];
             }
             // 使用 4 个 NEON 向量存储 16 个 float

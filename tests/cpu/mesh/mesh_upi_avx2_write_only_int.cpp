@@ -36,8 +36,9 @@ static int mesh_upi_avx2_write_only_int_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening H14' (P17): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -52,7 +53,7 @@ static int mesh_upi_avx2_write_only_int_run(struct test *test, int cpu) {
             // 生成 VECTOR_SIZE 个随机数
             int32_t vals[VECTOR_SIZE];
             for (int j = 0; j < VECTOR_SIZE; ++j) {
-                vals[j] = dist(rng);
+                vals[j] = dist();
                 if (i == 0) first_vals[j] = vals[j]; // 保存前几个用于输出
             }
 

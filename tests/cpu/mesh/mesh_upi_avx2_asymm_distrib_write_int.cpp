@@ -54,8 +54,9 @@ static int mesh_upi_avx2_asymm_distrib_write_int_run(struct test *test, int cpu)
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_reader = (id == 0);
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening H14' (P17): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -71,7 +72,7 @@ static int mesh_upi_avx2_asymm_distrib_write_int_run(struct test *test, int cpu)
                     int32_t vals[TOTAL_ELEMENTS];
                     uint64_t local_sum = 0;
                     for (int j = 0; j < TOTAL_ELEMENTS; ++j) {
-                        vals[j] = dist(rng);
+                        vals[j] = dist();
                         local_sum += (uint64_t)vals[j];
                     }
                     // 分两个 NEON 向量存储

@@ -14,20 +14,19 @@ static int kreg8_init(struct test *test) {
 
 static int kreg8_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<int> type_dist(0, 3);
+    auto type_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((3) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        int type = type_dist(rng);
+        int type = type_dist();
         bool passed = false;
         bool consistent = true;
         char type_name[16] = "UNKNOWN";
 
         switch (type) {
             case 0: { // VPMOVM2B (8-bit, 64 elements)
-                std::uniform_int_distribution<uint64_t> mask_dist(0, 0xFFFFFFFFFFFFFFFFULL);
-                uint64_t mask_val = mask_dist(rng);
+                /* H9'/P12: framework RNG */
+                uint64_t mask_val = random64();
 
                 // 软件模拟（同时也是“硬件”实现）
                 uint8_t hw_vals[64];
@@ -66,8 +65,8 @@ static int kreg8_run(struct test *test, int cpu) {
                 break;
             }
             case 1: { // VPMOVM2W (16-bit, 32 elements)
-                std::uniform_int_distribution<uint32_t> mask_dist(0, 0xFFFFFFFF);
-                uint32_t mask_val = mask_dist(rng);
+                /* H9'/P12: framework RNG */
+                uint32_t mask_val = random32();
 
                 uint16_t hw_vals[32];
                 uint16_t sw_vals[32];
@@ -101,8 +100,8 @@ static int kreg8_run(struct test *test, int cpu) {
                 break;
             }
             case 2: { // VPMOVM2D (32-bit, 16 elements)
-                std::uniform_int_distribution<uint16_t> mask_dist(0, 0xFFFF);
-                uint16_t mask_val = mask_dist(rng);
+                /* H9'/P12: framework RNG */
+                uint16_t mask_val = (uint16_t)(random32() & 0xFFFF);
 
                 uint32_t hw_vals[16];
                 uint32_t sw_vals[16];
@@ -137,7 +136,7 @@ static int kreg8_run(struct test *test, int cpu) {
             }
             case 3: { // VPMOVM2Q (64-bit, 8 elements)
                 std::uniform_int_distribution<uint8_t> mask_dist(0, 0xFF);
-                uint8_t mask_val = mask_dist(rng);
+                uint8_t mask_val = (uint8_t)(random32() & 0xFF);
 
                 uint64_t hw_vals[8];
                 uint64_t sw_vals[8];

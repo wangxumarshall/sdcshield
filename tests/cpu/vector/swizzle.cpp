@@ -10,10 +10,10 @@
 
 static constexpr size_t NUM_ELEMENTS = 8;
 
-static void fill_random_float(float *arr, size_t n, std::mt19937 &rng) {
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+static void fill_random_float(float *arr, size_t n) {
+    auto dist = []() { return frandomf_scale((float)(100.0f) - (float)(-100.0f)) + (float)(-100.0f); };
     for (size_t i = 0; i < n; ++i) {
-        arr[i] = dist(rng);
+        arr[i] = dist();
     }
 }
 
@@ -32,7 +32,6 @@ static int swizzle_init(struct test *test) {
 static int swizzle_run(struct test *test, int cpu) {
     (void)cpu;
 
-    std::mt19937 rng(std::random_device{}());
     // 置换模式：交换每对相邻元素 (0↔1, 2↔3, 4↔5, 6↔7)
     //int perm[8] = {0, 2, 1, 3, 4, 6, 5, 7};
     int perm[8] = {1, 0, 3, 2, 5, 4, 7, 6};
@@ -44,7 +43,7 @@ static int swizzle_run(struct test *test, int cpu) {
     static std::atomic<uint64_t> iter{0};  // 全局迭代计数（多线程共享）
 
     do {
-        fill_random_float(src, 8, rng);
+        fill_random_float(src, 8);
         swizzle_reference(src, dst_ref, perm);
 
         // === ARM NEON 实现：vrev64q_f32 交换每对相邻单精度 ===

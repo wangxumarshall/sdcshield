@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -16,16 +15,15 @@ static int kreg1_init(struct test *test) {
 
 static int kreg1_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+    auto dist = []() { return frandomf_scale((float)(100.0f) - (float)(-100.0f)) + (float)(-100.0f); };
     static std::atomic<uint64_t> iter{0};
 
     do {
         // 1. 生成两个随机 128 位向量（4 个 float）
         float a_arr[4], b_arr[4];
         for (int i = 0; i < 4; ++i) {
-            a_arr[i] = dist(rng);
-            b_arr[i] = dist(rng);
+            a_arr[i] = dist();
+            b_arr[i] = dist();
         }
         float32x4_t vec_a = vld1q_f32(a_arr);
         float32x4_t vec_b = vld1q_f32(b_arr);

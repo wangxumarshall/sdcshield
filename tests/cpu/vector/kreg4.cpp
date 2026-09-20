@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -17,16 +16,15 @@ static int kreg4_init(struct test *test) {
 
 static int kreg4_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<uint32_t> val_dist(0, 0xFFFFFFFF);
+    auto val_dist = []() { return random32(); };  /* full [0, 2^32) */
     static std::atomic<uint64_t> iter{0};
 
     do {
         // 1. 生成随机 16 个 32 位整数
         uint32_t a_vals[16], b_vals[16];
         for (int i = 0; i < 16; ++i) {
-            a_vals[i] = val_dist(rng);
-            b_vals[i] = val_dist(rng);
+            a_vals[i] = val_dist();
+            b_vals[i] = val_dist();
         }
 
         // 2. 使用 NEON 生成掩码（模拟 VPTESTM 和 VPTESTNM）

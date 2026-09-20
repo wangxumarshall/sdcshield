@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -14,13 +13,12 @@ static int kreg5_init(struct test *test) {
 
 static int kreg5_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<uint16_t> mask16_dist(0, 0xFFFF);
+    auto mask16_dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((0xFFFF) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        uint16_t a_val = mask16_dist(rng);
-        uint16_t b_val = mask16_dist(rng);
+        uint16_t a_val = mask16_dist();
+        uint16_t b_val = mask16_dist();
 
         // ---- 模拟 KUNPCK：低16位 = a_val，高16位 = b_val ----
         uint32_t hw_c = (uint32_t)a_val | ((uint32_t)b_val << 16);

@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -14,19 +13,18 @@ static int kreg9_init(struct test *test) {
 
 static int kreg9_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<int> type_dist(0, 3);
+    auto type_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((3) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        int type = type_dist(rng);
+        int type = type_dist();
         bool passed = false;
         bool consistent = true;
         char type_name[16] = "UNKNOWN";
 
         switch (type) {
             case 0: { // KMOVB (8-bit)
-                uint8_t orig = static_cast<uint8_t>(rng() & 0xFF);
+                uint8_t orig = static_cast<uint8_t>(random32() & 0xFF);
                 uint8_t gpr = orig;                    // 模拟 KMOVB
                 bool equal = (gpr == orig);
                 uint8_t store = gpr;
@@ -41,7 +39,7 @@ static int kreg9_run(struct test *test, int cpu) {
                 break;
             }
             case 1: { // KMOVW (16-bit)
-                uint16_t orig = static_cast<uint16_t>(rng() & 0xFFFF);
+                uint16_t orig = static_cast<uint16_t>(random32() & 0xFFFF);
                 uint16_t gpr = orig;                    // 模拟 KMOVW
                 bool equal = (gpr == orig);
                 uint16_t store = gpr;
@@ -56,7 +54,7 @@ static int kreg9_run(struct test *test, int cpu) {
                 break;
             }
             case 2: { // KMOVD (32-bit)
-                uint32_t orig = rng();
+                uint32_t orig = random32();
                 uint32_t gpr = orig;                    // 模拟 KMOVD
                 bool equal = (gpr == orig);
                 uint32_t store = gpr;
@@ -71,7 +69,7 @@ static int kreg9_run(struct test *test, int cpu) {
                 break;
             }
             case 3: { // KMOVQ (64-bit)
-                uint64_t orig = (static_cast<uint64_t>(rng()) << 32) | rng();
+                uint64_t orig = ((uint64_t)random32() << 32) | random32();
                 uint64_t gpr = orig;                    // 模拟 KMOVQ
                 bool equal = (gpr == orig);
                 uint64_t store = gpr;

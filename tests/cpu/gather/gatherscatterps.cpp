@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstring>
-#include <random>
 
 static constexpr int VECTOR_SIZE = 16;          // 16 个单精度浮点数
 static constexpr int DATA_SIZE = 1024;          // 源/目标数据大小
@@ -18,24 +17,23 @@ static int gatherscatterps_run(struct test *test, int cpu) {
     alignas(16) float dst[DATA_SIZE];
     int32_t indices[VECTOR_SIZE];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> float_dist(-1000.0f, 1000.0f);
-    std::uniform_int_distribution<int> idx_dist(0, DATA_SIZE - 1);
-    std::uniform_int_distribution<uint16_t> mask_dist(0, 0xFFFF);
+    auto float_dist = []() { return frandomf_scale((float)(1000.0f) - (float)(-1000.0f)) + (float)(-1000.0f); };
+    auto idx_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((DATA_SIZE - 1) - (0) + 1))); };
+    auto mask_dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((0xFFFF) - (0) + 1))); };
 
     do {
         // 生成随机源数据
         for (int i = 0; i < DATA_SIZE; ++i) {
-            src[i] = float_dist(rng);
+            src[i] = float_dist();
         }
         // 清空目标数组
         memset(dst, 0, sizeof(dst));
         // 生成随机索引（16个）
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            indices[i] = idx_dist(rng);
+            indices[i] = idx_dist();
         }
         // 生成随机掩码（16位）
-        uint16_t mask = mask_dist(rng);
+        uint16_t mask = mask_dist();
 
         // ---- 硬件执行（标量模拟带掩码的 gather + scatter） ----
         float gathered[VECTOR_SIZE];

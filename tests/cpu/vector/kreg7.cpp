@@ -11,21 +11,21 @@
 #include <arm_neon.h>
 
 // -------------------- 辅助函数：生成随机数据 --------------------
-static void fill_random_byte(uint8_t *buf, size_t n, std::mt19937 &rng) {
-    std::uniform_int_distribution<uint8_t> dist(0, 255);
-    for (size_t i = 0; i < n; ++i) buf[i] = dist(rng);
+static void fill_random_byte(uint8_t *buf, size_t n) {
+    auto dist = []() { return (uint8_t)((0) + (int64_t)(random64() % (uint64_t)((255) - (0) + 1))); };
+    for (size_t i = 0; i < n; ++i) buf[i] = dist();
 }
-static void fill_random_word(uint16_t *buf, size_t n, std::mt19937 &rng) {
-    std::uniform_int_distribution<uint16_t> dist(0, 0xFFFF);
-    for (size_t i = 0; i < n; ++i) buf[i] = dist(rng);
+static void fill_random_word(uint16_t *buf, size_t n) {
+    auto dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((0xFFFF) - (0) + 1))); };
+    for (size_t i = 0; i < n; ++i) buf[i] = dist();
 }
-static void fill_random_dword(uint32_t *buf, size_t n, std::mt19937 &rng) {
-    std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFF);
-    for (size_t i = 0; i < n; ++i) buf[i] = dist(rng);
+static void fill_random_dword(uint32_t *buf, size_t n) {
+    auto dist = []() { return random32();  /* full [0, 2^32) */ };
+    for (size_t i = 0; i < n; ++i) buf[i] = dist();
 }
-static void fill_random_qword(uint64_t *buf, size_t n, std::mt19937 &rng) {
-    std::uniform_int_distribution<uint64_t> dist(0, 0xFFFFFFFFFFFFFFFFULL);
-    for (size_t i = 0; i < n; ++i) buf[i] = dist(rng);
+static void fill_random_qword(uint64_t *buf, size_t n) {
+    auto dist = []() { return random64();  /* full [0, 2^64) */ };
+    for (size_t i = 0; i < n; ++i) buf[i] = dist();
 }
 
 // -------------------- 软件参考掩码提取 --------------------
@@ -127,12 +127,11 @@ static int kreg7_init(struct test *test) {
 
 static int kreg7_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<int> type_dist(0, 3);
+    auto type_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((3) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        int type = type_dist(rng);
+        int type = type_dist();
         bool passed = false;
         bool consistent = true;
         uint64_t sw_mask = 0, hw_mask = 0;
@@ -141,7 +140,7 @@ static int kreg7_run(struct test *test, int cpu) {
         switch (type) {
             case 0: { // VPMOVB2M (8-bit)
                 alignas(16) uint8_t data[64];
-                fill_random_byte(data, 64, rng);
+                fill_random_byte(data, 64);
                 uint64_t hw = neon_movepi8_mask(data);
                 uint64_t sw = sw_movepi8_mask(data);
                 sw_mask = sw;
@@ -163,7 +162,7 @@ static int kreg7_run(struct test *test, int cpu) {
             }
             case 1: { // VPMOVW2M (16-bit)
                 alignas(16) uint16_t data[32];
-                fill_random_word(data, 32, rng);
+                fill_random_word(data, 32);
                 uint32_t hw = neon_movepi16_mask(data);
                 uint32_t sw = sw_movepi16_mask(data);
                 sw_mask = sw;
@@ -184,7 +183,7 @@ static int kreg7_run(struct test *test, int cpu) {
             }
             case 2: { // VPMOVD2M (32-bit)
                 alignas(16) uint32_t data[16];
-                fill_random_dword(data, 16, rng);
+                fill_random_dword(data, 16);
                 uint16_t hw = neon_movepi32_mask(data);
                 uint16_t sw = sw_movepi32_mask(data);
                 sw_mask = sw;
@@ -205,7 +204,7 @@ static int kreg7_run(struct test *test, int cpu) {
             }
             case 3: { // VPMOVQ2M (64-bit)
                 alignas(16) uint64_t data[8];
-                fill_random_qword(data, 8, rng);
+                fill_random_qword(data, 8);
                 uint8_t hw = neon_movepi64_mask(data);
                 uint8_t sw = sw_movepi64_mask(data);
                 sw_mask = sw;

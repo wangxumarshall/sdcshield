@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -23,14 +22,13 @@ static int kreg2_init(struct test *test) {
 
 static int kreg2_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<uint16_t> mask_dist(0, 0xFFFF);
-    std::uniform_int_distribution<int> shift_dist(0, 15);
+    auto mask_dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((0xFFFF) - (0) + 1))); };
+    auto shift_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((15) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        uint16_t src_mask_val = mask_dist(rng);
-        int shift_amount = shift_dist(rng);
+        uint16_t src_mask_val = mask_dist();
+        int shift_amount = shift_dist();
 
         // 硬件执行移位（在 ARM64 上，这里就是普通整数移位指令）
         uint16_t left_shifted  = kshiftl(src_mask_val, shift_amount);

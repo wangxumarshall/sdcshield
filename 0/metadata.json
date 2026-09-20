@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2ZNJDZ9KV885K0KYK6Y3D2Y",
+  "session_id": "7e534c5e-d8e7-4029-98ba-8feed368a002",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-20T15:04:52.58760492Z",
+  "branch": "feat/sdc-randomization-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "glm-5.3",
+  "turn_id": "0bffe8d0362f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1255424,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 89472448,
+    "output_tokens": 147158,
+    "api_call_count": 551
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 950,
+      "user_lines_removed": 187,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/.active_plan": 1,
+        ".planning/2026-09-18-sdc-test-case-audit-weak-coverage-defect/findings.md": 186,
+        ".planning/2026-09-18-sdc-test-case-audit-weak-coverage-defect/progress.md": 132,
+        ".planning/2026-09-18-sdc-test-case-audit-weak-coverage-defect/task_plan.md": 62,
+        ".planning/2026-09-20-sdc-randomization-hardening/findings.md": 177,
+        ".planning/2026-09-20-sdc-randomization-hardening/progress.md": 61,
+        ".planning/2026-09-20-sdc-randomization-hardening/task_plan.md": 98,
+        "docs/superpowers/plans/2026-09-19-sdc-randomization-hardening.md": 124,
+        "tests/cpu/atomic/atomic_simd_128.cpp": 25,
+        "tests/cpu/atomic/atomic_simd_128_unaligned.cpp": 20,
+        "tests/cpu/atomic/atomic_simd_256.cpp": 28,
+        "tests/cpu/atomic/atomic_simd_256_unaligned.cpp": 20,
+        "tests/cpu/atomic/atomic_simd_512.cpp": 16
+      },
+      "user_removed_per_file": {
+        "tests/cpu/atomic/atomic_simd_128.cpp": 36,
+        "tests/cpu/atomic/atomic_simd_128_unaligned.cpp": 39,
+        "tests/cpu/atomic/atomic_simd_256.cpp": 52,
+        "tests/cpu/atomic/atomic_simd_256_unaligned.cpp": 50,
+        "tests/cpu/atomic/atomic_simd_512.cpp": 10
+      }
+    }
+  ]
+}

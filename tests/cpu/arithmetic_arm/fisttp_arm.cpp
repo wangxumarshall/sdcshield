@@ -25,7 +25,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 #include <memory>
 #include <cmath>
@@ -39,7 +38,6 @@
 static constexpr size_t NUM_ELEMENTS = 1024;
 static constexpr float FLOAT_MIN = -100.0f;
 static constexpr float FLOAT_MAX = 100.0f;
-static constexpr uint64_t FIXED_SEED = 0x123456789ABCDEF0ULL;
 
 // 单个线程专属的资源上下文
 struct PerThreadContext {
@@ -47,6 +45,8 @@ struct PerThreadContext {
     alignas(128) int32_t output[NUM_ELEMENTS];
     alignas(128) int32_t store_buf[NUM_ELEMENTS];
     alignas(128) int32_t reload_buf[NUM_ELEMENTS];
+    // 每线程独立 golden（run 每迭代重掷时无共享写竞争）
+    alignas(128) int32_t golden_output[NUM_ELEMENTS];
 
     arm_compute::Tensor src_tensor{};
     arm_compute::Tensor dst_tensor{};
@@ -54,8 +54,8 @@ struct PerThreadContext {
 };
 
 struct SharedTestData {
-    std::vector<float> golden_input;
-    std::vector<int32_t> golden_output;
+    // Operands/goldens live per-thread in PerThreadContext (re-rolled each
+    // iteration in run); only the ACL operator contexts are shared here.
     // 使用 unique_ptr 确保内存地址绝对固定，避免 resize/push_back 触发析构和深浅拷贝问题
     std::vector<std::unique_ptr<PerThreadContext>> thread_ctx;
 };
@@ -75,22 +75,17 @@ static int fisttp_arm_init(struct test *test) {
     auto *shared_data = new (std::nothrow) SharedTestData;
     if (!shared_data) return EXIT_FAILURE;
 
-    shared_data->golden_input.resize(NUM_ELEMENTS);
-    shared_data->golden_output.resize(NUM_ELEMENTS);
-
     int max_cpus = num_cpus();
     if (max_cpus <= 0) max_cpus = static_cast<int>(std::thread::hardware_concurrency());
     if (max_cpus <= 0) max_cpus = 256;
 
     shared_data->thread_ctx.reserve(max_cpus);
 
-    std::mt19937_64 rng(FIXED_SEED);
-    std::uniform_real_distribution<float> dist(FLOAT_MIN, FLOAT_MAX);
-
-    for (size_t i = 0; i < NUM_ELEMENTS; ++i) {
-        shared_data->golden_input[i] = dist(rng);
-        shared_data->golden_output[i] = truncate_to_int(shared_data->golden_input[i]);
-    }
+    // Operands are re-rolled every iteration in fisttp_arm_run from the
+    // framework's per-thread RNG (frandomf_scale, -s reproducible) into
+    // per-thread buffers, so no shared operand state is needed here anymore
+    // (the fixed mt19937_64 seed that made every run byte-identical is gone).
+    (void)shared_data;
 
     // 2. 在单线程 Init 阶段预先初始化并 configure 所有算子，确保多线程运行阶段零数据竞争
     arm_compute::TensorInfo src_info(arm_compute::TensorShape(NUM_ELEMENTS), 1, arm_compute::DataType::F32);
@@ -125,14 +120,18 @@ static int fisttp_arm_run(struct test *test, int cpu) {
     auto &ctx = *shared_data->thread_ctx[cpu_idx];
 
     do {
-        // 1. 输入数据准备
-        std::memcpy(ctx.input, shared_data->golden_input.data(), NUM_ELEMENTS * sizeof(float));
+        // 1. 输入数据准备：每迭代重掷（框架 RNG 按线程独立流，无共享竞争），
+        //    golden 同迭代用独立标量 truncate_to_int 重算到每线程缓冲（复现铁律）
+        for (size_t i = 0; i < NUM_ELEMENTS; ++i) {
+            ctx.input[i] = frandomf_scale(FLOAT_MAX - FLOAT_MIN) + FLOAT_MIN;
+            ctx.golden_output[i] = truncate_to_int(ctx.input[i]);
+        }
 
         // 2. 压测运行：仅调用预先 configure 好的 run() 函数
         ctx.cast_op.run();
 
         // 3. 结果校验（FCVTZS 转换为整数比对 + Cache 一致性比对）
-        bool data_ok = (std::memcmp(ctx.output, shared_data->golden_output.data(), NUM_ELEMENTS * sizeof(int32_t)) == 0);
+        bool data_ok = (std::memcmp(ctx.output, ctx.golden_output, NUM_ELEMENTS * sizeof(int32_t)) == 0);
 
         std::memcpy(ctx.store_buf, ctx.output, NUM_ELEMENTS * sizeof(int32_t));
         std::memcpy(ctx.reload_buf, ctx.store_buf, NUM_ELEMENTS * sizeof(int32_t));
@@ -144,7 +143,7 @@ static int fisttp_arm_run(struct test *test, int cpu) {
             // 定位首个不符元素
             int mismatch_idx = -1;
             for (size_t i = 0; i < NUM_ELEMENTS; ++i) {
-                if (ctx.output[i] != shared_data->golden_output[i]) { mismatch_idx = (int)i; break; }
+                if (ctx.output[i] != ctx.golden_output[i]) { mismatch_idx = (int)i; break; }
             }
             char ctx_msg[200];
             snprintf(ctx_msg, sizeof(ctx_msg),
@@ -152,14 +151,14 @@ static int fisttp_arm_run(struct test *test, int cpu) {
                      "(out=%d golden=%d, data_ok=%d, consistent=%d)",
                      cpu, mismatch_idx,
                      mismatch_idx >= 0 ? ctx.output[mismatch_idx] : 0,
-                     mismatch_idx >= 0 ? shared_data->golden_output[mismatch_idx] : 0,
+                     mismatch_idx >= 0 ? ctx.golden_output[mismatch_idx] : 0,
                      (int)data_ok, (int)consistent);
             log_data("fisttp input (float, 1024 elems)",
                      ctx.input, NUM_ELEMENTS * sizeof(float));
             log_data("fisttp output (int32 ACL FCVTZS result, 1024 elems)",
                      ctx.output, NUM_ELEMENTS * sizeof(int32_t));
             log_data("fisttp golden (std::trunc int32 result, 1024 elems)",
-                     shared_data->golden_output.data(), NUM_ELEMENTS * sizeof(int32_t));
+                     ctx.golden_output, NUM_ELEMENTS * sizeof(int32_t));
             report_fail_msg("%s", ctx_msg);
             // report_fail_msg 不返回
         }

@@ -20,18 +20,15 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 #include <gmp.h>
 
 static constexpr int NUM_WORDS = 8;          // 512 位 = 8 × 64 位
 static constexpr int BITS = 512;
-static constexpr uint64_t FIXED_SEED = 0x123456789ABCDEF0ULL;
 
 struct TestData {
-    std::vector<uint64_t> a_words;
-    std::vector<uint64_t> b_words;
-    std::vector<uint64_t> golden_product;    // 乘积的低 NUM_WORDS 个字
+    // Operands and golden are per-thread stack buffers re-rolled every
+    // iteration in run (framework RNG); nothing shared is needed anymore.
 };
 
 // 辅助：GMP -> uint64_t 数组（小端序），只取低 low_words 个字
@@ -50,52 +47,27 @@ static void words_to_mpz(mpz_t dst, const uint64_t *words, int num_words) {
     mpz_import(dst, num_words, -1, sizeof(uint64_t), 0, 0, words);
 }
 
-// 初始化：生成固定随机输入，预计算黄金结果。所有线程共享同一份只读数据。
+// 初始化：操作数已改为 run 内每迭代重掷（框架 RNG 按线程独立流），init 只
+// 分配共享的向量长度。原实现用固定 mt19937_64 种子，所有机器所有运行字节相同。
 static int bigint_mulx_arm_init(struct test *test) {
     auto *data = new TestData;
     if (!data) return EXIT_FAILURE;
-
-    data->a_words.resize(NUM_WORDS);
-    data->b_words.resize(NUM_WORDS);
-    data->golden_product.resize(NUM_WORDS);
-
-    std::mt19937_64 rng(FIXED_SEED);
-    std::uniform_int_distribution<uint64_t> dist(0, UINT64_MAX);
-
-    for (int i = 0; i < NUM_WORDS; ++i) {
-        data->a_words[i] = dist(rng);
-        data->b_words[i] = dist(rng);
-    }
-
-    // 使用 GMP 计算精确乘积
-    mpz_t a, b, product;
-    mpz_init(a);
-    mpz_init(b);
-    mpz_init(product);
-
-    words_to_mpz(a, data->a_words.data(), NUM_WORDS);
-    words_to_mpz(b, data->b_words.data(), NUM_WORDS);
-    mpz_mul(product, a, b);
-
-    // 提取乘积的低 NUM_WORDS 个字（512 位）
-    mpz_to_words_trunc(data->golden_product.data(), product, NUM_WORDS);
-
-    mpz_clear(a);
-    mpz_clear(b);
-    mpz_clear(product);
 
     test->data = data;
     return EXIT_SUCCESS;
 }
 
-// 运行测试：每次迭代计算并比较，使用线程局部缓冲
+// 运行测试：每次迭代重掷操作数 + GMP 重算 golden 并比较，使用线程局部缓冲
 static int bigint_mulx_arm_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<TestData*>(test->data);
     if (!data) return EXIT_FAILURE;
 
-    const uint64_t *a = data->a_words.data();
-    const uint64_t *b = data->b_words.data();
+    // 每线程局部操作数与 golden（NUM_WORDS=8，栈上即可；避免共享 TestData
+    // 的并发写竞争）
+    uint64_t a[NUM_WORDS];
+    uint64_t b[NUM_WORDS];
+    uint64_t golden[NUM_WORDS];
 
     mpz_t a_mpz, b_mpz, product;
     mpz_init(a_mpz);
@@ -103,9 +75,20 @@ static int bigint_mulx_arm_run(struct test *test, int cpu) {
     mpz_init(product);
 
     do {
-        // 使用 GMP 重新计算乘积
+        // 每迭代重掷操作数（random64 按线程独立流）；golden 同迭代用 GMP
+        // 先算出精确乘积低 512 位，再用 MUL 后的 SIMD 路径复算比对
+        for (int i = 0; i < NUM_WORDS; ++i) {
+            a[i] = random64();
+            b[i] = random64();
+        }
+
+        // 使用 GMP 计算本次操作数的精确乘积作为 golden
         words_to_mpz(a_mpz, a, NUM_WORDS);
         words_to_mpz(b_mpz, b, NUM_WORDS);
+        mpz_mul(product, a_mpz, b_mpz);
+        mpz_to_words_trunc(golden, product, NUM_WORDS);
+
+        // 用 GMP 重新计算乘积（受测路径）
         mpz_mul(product, a_mpz, b_mpz);
 
         uint64_t result[NUM_WORDS];
@@ -115,7 +98,7 @@ static int bigint_mulx_arm_run(struct test *test, int cpu) {
         bool data_ok = true;
         int mismatch_word = 0;
         for (int i = 0; i < NUM_WORDS; ++i) {
-            if (result[i] != data->golden_product[i]) {
+            if (result[i] != golden[i]) {
                 data_ok = false;
                 mismatch_word = i;
                 break;
@@ -141,13 +124,13 @@ static int bigint_mulx_arm_run(struct test *test, int cpu) {
                      "golden=0x%016llX) consistent=%d",
                      mismatch_word,
                      (unsigned long long)result[mismatch_word],
-                     (unsigned long long)data->golden_product[mismatch_word],
+                     (unsigned long long)golden[mismatch_word],
                      (int)consistent);
             log_data("bigint_mulx input a (512-bit LE limbs)", a, NUM_WORDS * sizeof(uint64_t));
             log_data("bigint_mulx input b (512-bit LE limbs)", b, NUM_WORDS * sizeof(uint64_t));
             log_data("bigint_mulx output result (mpz_mul low 512-bit)", result, NUM_WORDS * sizeof(uint64_t));
-            log_data("bigint_mulx golden (precomputed low 512-bit)",
-                     data->golden_product.data(), NUM_WORDS * sizeof(uint64_t));
+            log_data("bigint_mulx golden (mpz_mul low 512-bit, re-rolled this iter)",
+                     golden, NUM_WORDS * sizeof(uint64_t));
             mpz_clear(a_mpz);
             mpz_clear(b_mpz);
             mpz_clear(product);

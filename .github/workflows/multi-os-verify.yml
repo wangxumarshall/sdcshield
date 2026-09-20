@@ -235,7 +235,7 @@ jobs:
       # ---- 上传结果(成功与否都传,便于诊断) ----
       - name: Upload logs & benchmark
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verify-${{ matrix.series }}-${{ matrix.sp }}
           retention-days: 7
@@ -252,7 +252,7 @@ jobs:
       # if: always() 保失败现场;if-no-files-found: error 让打包缺失显式红。----
       - name: Upload built/ tarball
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: built-${{ matrix.series }}-${{ matrix.sp }}
           retention-days: 90
@@ -268,7 +268,7 @@ jobs:
       - name: Checkout (for scripts/gha/report-summary.py)
         uses: actions/checkout@v6
       - name: Download all artifacts (keep per-image dirs)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: all-results
           pattern: verify-*
@@ -292,7 +292,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download built/ tarballs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: built-*
@@ -303,9 +303,14 @@ jobs:
         run: |
           set -euo pipefail
           ls -la dist/
+          # tarball 在 dist/<OS_TAG>/ 子目录(upload-artifact 保留最小公共祖先
+          # 下的目录层级,merge-multiple 只合并不平铺)— glob 深一层匹配
           TAG="build-$(date +%Y%m%d)-${GITHUB_SHA::8}"
           echo "release tag: $TAG"
-          gh release create "$TAG" dist/*.tar.gz \
+          # --repo 显式指定:本 job 无 checkout 步骤,gh 无法从 .git 推断仓库
+          # (run 35513299740 现场: fatal: not a git repository)
+          gh release create "$TAG" dist/*/sdcshield-*.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
             --title "sdcshield build $(date +%Y-%m-%d)" \
             --notes "Multi-OS Verify 构建产物(15 个 openEuler SP 自包含包)。
           源 commit: ${GITHUB_SHA}

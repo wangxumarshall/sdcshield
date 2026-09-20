@@ -72,6 +72,15 @@ if host_machine.cpu_family() == 'aarch64'
         'mesh/mesh_upi_sve_wide_asymm_read_only_int.cpp',
         'mesh/mesh_upi_sve_wide_asymm_read_L3_int.cpp',
         'mesh/mesh_upi_sve_wide_asymm_write_only_int.cpp',
+        # Eigen domain (1): SVD-family workload without the Eigen library.
+        # The SVE-backend sibling eigen_svd_cdouble_sve currently crashes
+        # (vendored Eigen5 SVE double packet SIGSEGV on the BDCSVD
+        # workload), so this port is a self-written deterministic
+        # Householder bidiagonalization — the same FMA-dense SVD first
+        # phase — with SVE-vectorized inner loops and the EigenSVDTest
+        # golden pattern (init computes once, run recomputes and
+        # byte-compares). n=128 calibrated at ~0.92ms/iter.
+        'eigen/eigen_svd_bidiag_sve.cpp',
     )
 
     tests_sve_avx53_lib = static_library(

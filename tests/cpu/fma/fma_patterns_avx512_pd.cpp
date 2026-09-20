@@ -70,16 +70,12 @@ static int fma_patterns_avx512_pd_run(struct test *test, int cpu) {
             sw_ref[i] = fma(a[i], b[i], c[i]);
         }
 
-        // ---- 比较硬件结果与参考（允许 1e-15 相对误差或 1e-12 绝对误差） ----
-        bool data_ok = true;
-        for (int i = 0; i < VECTOR_SIZE; ++i) {
-            double diff = fabs(hw_result[i] - sw_ref[i]);
-            double tol = 1e-15 * fmax(fabs(hw_result[i]), fabs(sw_ref[i]));
-            if (diff > tol && diff > 1e-12) {
-                data_ok = false;
-                break;
-            }
-        }
+        // ---- 比较硬件结果与参考：字节精确 ----
+        // vfmaq_f64（硬件单次舍入 FMA）与 libm fma（同为 IEEE-754 单次舍入）
+        // 必须位一致；原 1e-15 相对 + 1e-12 绝对容差吞掉任意 ≤1e-12 的
+        // 尾数位翻转（double 的 1-ULP 在 1.0 附近仅 2.2e-16），这正是本
+        // 测试声称要抓的 SDC。
+        bool data_ok = (memcmp(hw_result, sw_ref, VECTOR_SIZE * sizeof(double)) == 0);
 
         // ---- 一致性测试：存储硬件结果到内存再加载比较 ----
         double store_buf[VECTOR_SIZE];

@@ -17,16 +17,12 @@ static void software_fma(const float *a, const float *b, const float *c, float *
     }
 }
 
-// 比较两个浮点数数组是否近似相等（允许 1e-6 相对误差）
-static bool approx_equal(const float *x, const float *y) {
-    for (int i = 0; i < VECTOR_SIZE; ++i) {
-        float diff = fabsf(x[i] - y[i]);
-        float tol = 1e-6f * fmaxf(fabsf(x[i]), fabsf(y[i]));
-        if (diff > tol && diff > 1e-7f) {
-            return false;
-        }
-    }
-    return true;
+// 字节精确比较：vfmaq_f32（硬件单次舍入 FMA）与 libm fmaf（同为 IEEE-754
+// 单次舍入 FMA）必须位一致 —— fmatail_*/fsu_byteexact 兄弟测试已验证此模式
+// 可行。原先的 1e-6/1e-7 容差会吞掉 1-ULP 的尾数位翻转（这正是本测试要
+// 抓的 SDC）。
+static bool byte_exact_equal(const float *x, const float *y) {
+    return memcmp(x, y, VECTOR_SIZE * sizeof(float)) == 0;
 }
 
 struct TestData {};
@@ -77,8 +73,8 @@ static int fma_run(struct test *test, int cpu) {
         float ref[VECTOR_SIZE];
         software_fma(a, b, c, ref);
 
-        // 比较硬件结果与参考
-        bool data_ok = approx_equal(result, ref);
+        // 比较硬件结果与参考（字节精确）
+        bool data_ok = byte_exact_equal(result, ref);
 
         // 一致性测试：存储硬件结果到内存再加载比较
         float store_buf[VECTOR_SIZE];

@@ -70,16 +70,10 @@ static int fma_patterns_avx512_ps_run(struct test *test, int cpu) {
             sw_ref[i] = fmaf(a[i], b[i], c[i]);
         }
 
-        // ---- 比较硬件结果与参考（允许 1e-6 相对误差或 1e-5 绝对误差） ----
-        bool data_ok = true;
-        for (int i = 0; i < VECTOR_SIZE; ++i) {
-            float diff = fabsf(hw_result[i] - sw_ref[i]);
-            float tol = 1e-6f * fmaxf(fabsf(hw_result[i]), fabsf(sw_ref[i]));
-            if (diff > tol && diff > 1e-5f) {
-                data_ok = false;
-                break;
-            }
-        }
+        // ---- 比较硬件结果与参考：字节精确 ----
+        // vfmaq_f32 与 libm fmaf 同为 IEEE-754 单次舍入 FMA，必须位一致；
+        // 原 1e-6 相对 + 1e-5f 绝对容差吞掉约 5 个数量级的单比特误差。
+        bool data_ok = (memcmp(hw_result, sw_ref, VECTOR_SIZE * sizeof(float)) == 0);
 
         // ---- 一致性测试：存储硬件结果到内存再加载比较 ----
         float store_buf[VECTOR_SIZE];

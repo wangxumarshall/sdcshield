@@ -83,6 +83,67 @@ if host_machine.cpu_family() == 'aarch64'
         'eigen/eigen_svd_bidiag_sve.cpp',
     )
 
+    # IPSec domain (24 ports). Two tiers:
+    # - HMAC/SHA family (17): encryption stays on OpenSSL EVP, the MAC runs
+    #   on the multi-stream SVE HMAC layer (tests/cpu/sve/ipsec/sve_hmac.h
+    #   over sve_sha_kernels.h — both verified bit-for-bit against OpenSSL,
+    #   5200+1360 vectors, see scripts/sve-sha-verify). NSTREAM lanes: lane 0
+    #   carries the original ciphertext message (MAC semantics identical to
+    #   the avx-named original), lanes 1..N-1 carry deterministic key-stream
+    #   variant messages that fill the remaining SVE lanes; goldens for all
+    #   lanes precomputed in init.
+    # - EVP-only family (7: GCM x2, CMAC/XCBC x5): the workload has no SHA
+    #   component to move to SVE (CMAC/XCBC are AES-CBC-MAC chains inside
+    #   OpenSSL; upstream has no SVE AES path), so these are faithful
+    #   compute-preserving ports with honest descriptions.
+    if framework_config.get('SANDSTONE_SSL_BUILD') == 1
+        tests_sve_avx53_ipsec = static_library(
+            'tests_sve_avx53_ipsec',
+            sources: files(
+                'ipsec/ipsec_3des_docsis_hmac_sha1_sve_wide.cpp',
+                'ipsec/ipsec_3des_docsis_hmac_sha224_sve_wide.cpp',
+                'ipsec/ipsec_3des_docsis_hmac_sha256_sve_wide.cpp',
+                'ipsec/ipsec_3des_docsis_hmac_sha384_sve_wide.cpp',
+                'ipsec/ipsec_3des_docsis_hmac_sha512_sve_wide.cpp',
+                'ipsec/ipsec_aes128_cbc_hmac_sha1_sve.cpp',
+                'ipsec/ipsec_aes192_ctr_hmac_sha1_sve.cpp',
+                'ipsec/ipsec_aes192_ctr_hmac_sha224_sve.cpp',
+                'ipsec/ipsec_aes192_ctr_hmac_sha256_sve.cpp',
+                'ipsec/ipsec_aes192_ctr_hmac_sha384_sve.cpp',
+                'ipsec/ipsec_aes192_ctr_hmac_sha512_sve.cpp',
+                'ipsec/ipsec_aes256_cbc_hmac_sha1_sve.cpp',
+                'ipsec/ipsec_aes128_cbc_sha2_224_sve.cpp',
+                'ipsec/ipsec_aes192_cbc_sha2_384_sve.cpp',
+                'ipsec/ipsec_aes192_cbc_sha2_512_sve.cpp',
+                'ipsec/ipsec_aes256_cbc_sha2_224_sve.cpp',
+                'ipsec/ipsec_aes256_cbc_sha2_256_sve.cpp',
+                'ipsec/ipsec_aes192_gcm_sve.cpp',
+                'ipsec/ipsec_aes192_gcm_sve_wide.cpp',
+                'ipsec/ipsec_3des_docsis_aes_cmac_sve_wide.cpp',
+                'ipsec/ipsec_3des_docsis_aes_xcbc_sve_wide.cpp',
+                'ipsec/ipsec_aes128_cbc_aes_cmac_sve.cpp',
+                'ipsec/ipsec_aes192_cbc_xcbc_96_sve.cpp',
+                'ipsec/ipsec_aes192_ctr_xcbc_sve.cpp',
+            ),
+            build_by_default: false,
+            include_directories: [
+                framework_incdir,
+            ],
+            dependencies: [
+                boost_dep,
+                crypto_dep,
+            ],
+            cpp_args: [
+                debug_c_flags,
+                default_cpp_warn,
+                default_cpp_flags,
+                march_generic_flags,
+                '-march=armv8.2-a+sve',
+            ],
+        )
+        sandstone_tests += [tests_sve_avx53_ipsec]
+    endif
+
     tests_sve_avx53_lib = static_library(
         'tests_sve_avx53',
         sources: sve_avx53_sources,

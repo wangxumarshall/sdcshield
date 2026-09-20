@@ -41,15 +41,17 @@ static int fma_run(struct test *test, int cpu) {
     alignas(16) float c[VECTOR_SIZE];
     alignas(16) float result[VECTOR_SIZE];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+    /* randomization hardening H9'/P12: framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; range [-100.0f, 100.0f) mapped
+     * from frandom's [0,1). */
+    auto dist = []() { return frandomf_scale((float)(100.0f) - (float)(-100.0f)) + (float)(-100.0f); };
 
     do {
         // 生成随机向量 a, b, c
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            a[i] = dist(rng);
-            b[i] = dist(rng);
-            c[i] = dist(rng);
+            a[i] = dist();
+            b[i] = dist();
+            c[i] = dist();
         }
 
         // ---- 硬件 FMA 计算 (NEON) ----

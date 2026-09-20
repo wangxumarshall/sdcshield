@@ -20,9 +20,10 @@ static int fmatail_avx2_init(struct test *test) {
 #ifdef __aarch64__
 static int fmatail_avx2_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(std::random_device{}());
-    // 使用更大范围的随机数，并包含一些特殊值
-    std::uniform_real_distribution<double> dist(-1e10, 1e10);
+    /* randomization hardening H9'/P12: framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; range [-1e10, 1e10) mapped
+     * from frandom's [0,1). */
+    auto dist = []() { return frandom_scale((double)(1e10) - (double)(-1e10)) + (double)(-1e10); };
     static std::atomic<uint64_t> iter{0};
 
     do {
@@ -34,9 +35,9 @@ static int fmatail_avx2_run(struct test *test, int cpu) {
         double sw_ref[VECTOR_SIZE];
 
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            a[i] = dist(rng);
-            b[i] = dist(rng);
-            c[i] = dist(rng);
+            a[i] = dist();
+            b[i] = dist();
+            c[i] = dist();
             // 随机加入一些特殊值（0, 1, -1）
             if (i % 4 == 0) {
                 switch (i % 3) {
@@ -82,25 +83,22 @@ static int fmatail_avx2_run(struct test *test, int cpu) {
         bool passed = data_ok && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        // ---- 输出日志（与 x86 版本完全一致） ----
-        fprintf(stderr, "fmatail_avx2: Iter %lu, a[0..3]=%.12e %.12e %.12e %.12e\n",
-                iteration, a[0], a[1], a[2], a[3]);
-        fprintf(stderr, "              b[0..3]=%.12e %.12e %.12e %.12e\n",
-                b[0], b[1], b[2], b[3]);
-        fprintf(stderr, "              c[0..3]=%.12e %.12e %.12e %.12e\n",
-                c[0], c[1], c[2], c[3]);
-        fprintf(stderr, "  hw_result[0..3]=%.12e %.12e %.12e %.12e\n",
-                hw_result[0], hw_result[1], hw_result[2], hw_result[3]);
-        fprintf(stderr, "  sw_ref[0..3]=%.12e %.12e %.12e %.12e\n",
-                sw_ref[0], sw_ref[1], sw_ref[2], sw_ref[3]);
-        fprintf(stderr, "  data_ok=%d, consistent=%d, result=%s%s\033[0m\n",
-                data_ok, consistent, color, result_str);
-        fflush(stderr);
-
         if (!passed) {
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "fmatail_avx2: Iter %lu, a[0..3]=%.12e %.12e %.12e %.12e\n",
+                    iteration, a[0], a[1], a[2], a[3]);
+            fprintf(stderr, "              b[0..3]=%.12e %.12e %.12e %.12e\n",
+                    b[0], b[1], b[2], b[3]);
+            fprintf(stderr, "              c[0..3]=%.12e %.12e %.12e %.12e\n",
+                    c[0], c[1], c[2], c[3]);
+            fprintf(stderr, "  hw_result[0..3]=%.12e %.12e %.12e %.12e\n",
+                    hw_result[0], hw_result[1], hw_result[2], hw_result[3]);
+            fprintf(stderr, "  sw_ref[0..3]=%.12e %.12e %.12e %.12e\n",
+                    sw_ref[0], sw_ref[1], sw_ref[2], sw_ref[3]);
+            fprintf(stderr, "  data_ok=%d, consistent=%d, result=%s%s\033[0m\n",
+                    data_ok, consistent, color, result_str);
+            fflush(stderr);
             report_fail_msg("fmatail_avx2: FMA tail precision mismatch or consistency failure");
             return EXIT_FAILURE;
         }

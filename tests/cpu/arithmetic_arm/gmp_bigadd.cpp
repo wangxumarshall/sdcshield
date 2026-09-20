@@ -74,29 +74,46 @@ static int gmp_bigadd_init(struct test *test)
 static int gmp_bigadd_run(struct test *test, int cpu)
 {
     auto data = CAST(test->data);
-    mpz_t result;
+
+    /* randomization hardening H13': per-thread operands re-rolled EVERY
+     * iteration and the golden recomputed the same iteration (see
+     * gmp_bignum.cpp for the rationale). */
+    mpz_t a, b, golden, result;
+    mpz_init(a);
+    mpz_init(b);
+    mpz_init(golden);
     mpz_init(result);
+    uint8_t buf[GMP_BYTELEN];
 
     do {
-        mpz_add(result, data->a, data->b);
+        fill_random_bytes(buf, GMP_BYTELEN);
+        mpz_import(a, GMP_BYTELEN, 1, 1, 1, 0, buf);
+        fill_random_bytes(buf, GMP_BYTELEN);
+        mpz_import(b, GMP_BYTELEN, 1, 1, 1, 0, buf);
+
+        mpz_add(golden, a, b);
+        const size_t gsize = mpz_size(golden);
+
+        mpz_add(result, a, b);
         size_t rsize = mpz_size(result);
-        if (rsize != data->golden_size) {
-            mpz_clear(result);
+        if (rsize != gsize) {
+            mpz_clears(a, b, golden, result, NULL);
             report_fail_msg("GMP add produced unexpected size %zu vs %zu",
-                            rsize, data->golden_size);
+                            rsize, gsize);
         }
         for (size_t i = 0; i < rsize; ++i) {
             mp_limb_t got = mpz_getlimbn(result, i);
-            if (got != data->golden_buf[i]) {
-                mpz_clear(result);
+            mp_limb_t want = mpz_getlimbn(golden, i);
+            if (got != want) {
+                mpz_clears(a, b, golden, result, NULL);
                 report_fail_msg("GMP big-add limb %zu mismatch: 0x%llx vs 0x%llx",
                                 i, (unsigned long long)got,
-                                (unsigned long long)data->golden_buf[i]);
+                                (unsigned long long)want);
             }
         }
     } while (test_time_condition(test));
 
-    mpz_clear(result);
+    mpz_clears(a, b, golden, result, NULL);
     return EXIT_SUCCESS;
 }
 

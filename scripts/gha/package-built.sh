@@ -41,6 +41,12 @@ OUTDIR="${2:?usage: $0 <builddir> <outdir> <series> <sp>}"
 SERIES="${3:?usage: $0 <builddir> <outdir> <series> <sp>}"
 SP="${4:?usage: $0 <builddir> <outdir> <series> <sp>}"
 
+# SP 归一化:workflow 矩阵传镜像 tag 后缀完整形式(如 "LTS-SP3"),CLI 惯例
+# 是裸 "SP3";两者都接受,统一成裸形式再走 case。LTS 本体两种形式同形。
+if [ "$SP" != "LTS" ]; then
+    SP="${SP#LTS-}"
+fi
+
 case "$SP" in
     LTS)   SP_DIR="LTS";    SP_LABEL="LTS" ;;
     SP[1-4]) SP_DIR="LTS_$SP"; SP_LABEL="LTS-$SP" ;;

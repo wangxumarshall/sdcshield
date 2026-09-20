@@ -20,7 +20,9 @@
 #include "sandstone_ssl.h"
 #include <string.h>
 
-#define DATA_SIZE             (1024u)
+/* Data size is runtime-configurable via the test knob
+ * "-O ipsec_3des_docsis_hmac_sha256_x86_64.datasize=N" (1024..64MB, multiple of 16, default 1024). */
+#define DATA_SIZE_DEFAULT (1024u)
 #define DES3_KEY_SIZE         (24)
 #define DES3_IV_SIZE          (8)
 #define SHA256_KEY_SIZE       (32)
@@ -30,8 +32,9 @@ struct hmac_sha256_x86_64_data {
     uint8_t des3_key[DES3_KEY_SIZE];
     uint8_t des3_iv[DES3_IV_SIZE];
     uint8_t hmac_key[SHA256_KEY_SIZE];
-    uint8_t plaintext[DATA_SIZE];
-    uint8_t golden_ciphertext[DATA_SIZE];
+    size_t datasize;                       /* payload bytes, from the datasize knob */
+    uint8_t *plaintext;                    /* datasize bytes, malloc'd in init */
+    uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_mac[SHA256_DIGEST_SIZE];
 };
 
@@ -67,19 +70,29 @@ static void des3_decrypt(const uint8_t *key, const uint8_t *iv, const uint8_t *i
 }
 
 static void hmac_sha256_x86_64_compute_golden(struct hmac_sha256_x86_64_data *d) {
-    des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, d->golden_ciphertext, DATA_SIZE);
-    hmac_sha256(d->hmac_key, d->golden_ciphertext, DATA_SIZE, d->golden_mac);
+    des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, d->golden_ciphertext, d->datasize);
+    hmac_sha256(d->hmac_key, d->golden_ciphertext, d->datasize, d->golden_mac);
 }
 
 static int hmac_sha256_x86_64_init(struct test *test) {
     if (s_EVP_CIPHER_CTX_new && s_EVP_EncryptInit_ex && s_EVP_DecryptInit_ex && s_EVP_des_ede3_cbc && s_HMAC_CTX_new && s_EVP_sha256) {
         struct hmac_sha256_x86_64_data *d = (struct hmac_sha256_x86_64_data *)malloc(sizeof(*d));
         if (!d) return EXIT_SKIP;
+        int64_t knob = get_testspecific_knob_value_int(test, "datasize", DATA_SIZE_DEFAULT);
+        if (knob < DATA_SIZE_DEFAULT || knob > 64 * 1024 * 1024 || (knob % 16) != 0) {
+            report_fail_msg("datasize knob invalid: %ld (valid 1024..67108864, multiple of 16, default 1024)", (long)knob);
+        }
+        d->datasize = (size_t)knob;
+        d->plaintext = (uint8_t *)malloc(d->datasize);
+        d->golden_ciphertext = (uint8_t *)malloc(d->datasize);
+        if (!d->plaintext || !d->golden_ciphertext) {
+            report_fail_msg("OOM allocating %zu bytes of plaintext/golden", 2 * d->datasize);
+        }
 
         memset_random(d->des3_key, DES3_KEY_SIZE);
         memset_random(d->des3_iv, DES3_IV_SIZE);
         memset_random(d->hmac_key, SHA256_KEY_SIZE);
-        memset_random(d->plaintext, DATA_SIZE);
+        memset_random(d->plaintext, d->datasize);
 
         hmac_sha256_x86_64_compute_golden(d);
 
@@ -94,18 +107,18 @@ static int hmac_sha256_x86_64_init(struct test *test) {
 static int hmac_sha256_x86_64_run(struct test *test, int cpu) {
     struct hmac_sha256_x86_64_data *d = (struct hmac_sha256_x86_64_data *)test->data;
 
-    uint8_t *ciphertext = (uint8_t *)malloc(DATA_SIZE);
-    uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
+    uint8_t *ciphertext = (uint8_t *)malloc(d->datasize);
+    uint8_t *decrypted = (uint8_t *)malloc(d->datasize);
     uint8_t *mac = (uint8_t *)malloc(SHA256_DIGEST_SIZE);
 
     TEST_LOOP(test, 256) {
-        des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "3DES-DOCSIS ciphertext mismatch");
+        des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, ciphertext, d->datasize);
+        memcmp_or_fail(ciphertext, d->golden_ciphertext, d->datasize, "3DES-DOCSIS ciphertext mismatch");
 
-        des3_decrypt(d->des3_key, d->des3_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "3DES-DOCSIS decryption mismatch");
+        des3_decrypt(d->des3_key, d->des3_iv, ciphertext, decrypted, d->datasize);
+        memcmp_or_fail(decrypted, d->plaintext, d->datasize, "3DES-DOCSIS decryption mismatch");
 
-        hmac_sha256(d->hmac_key, ciphertext, DATA_SIZE, mac);
+        hmac_sha256(d->hmac_key, ciphertext, d->datasize, mac);
         memcmp_or_fail(mac, d->golden_mac, SHA256_DIGEST_SIZE, "HMAC-SHA256 digest mismatch");
     }
 
@@ -116,7 +129,10 @@ static int hmac_sha256_x86_64_run(struct test *test, int cpu) {
 }
 
 static int hmac_sha256_x86_64_cleanup(struct test *test) {
-    free(test->data);
+    struct hmac_sha256_x86_64_data *d = (hmac_sha256_x86_64_data *)test->data;
+    free(d->plaintext);
+    free(d->golden_ciphertext);
+    free(d);
     return EXIT_SUCCESS;
 }
 

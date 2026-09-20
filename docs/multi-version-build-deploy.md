@@ -449,7 +449,68 @@ exec "$bindir/run-sdcshield.sh" "$@"
 - **最终 report summary**(`report-summary.py`):`report` job 下载 15 份 `allquality.yaml`,生成一张**「用例 × 版本」结果矩阵**写入 job summary —— 行 = 全部测试用例(~290,15 版本求并集),列 = 15 个 OS 版本;每格 = `<结果态>[<耗时>s]`(`PASS[1.23s]`/`FAIL[0.10s]`/`SKIP[0.00s]`/`TIMEOUT[..]`/`CRASH[..]`/`OSERR[..]`/`INTERRUPTED[..]`/`INVALID[..]`,空 = 该版本无此用例),矩阵尾部附结果态统计。取代旧的跨 OS 基准墙钟对比表。
 - **已知省略(诚实)**:`sleef`(需 cmake;24.03 镜像 cmake 断链缺 `libuv.so.1`、22.03/20.03 无 cmake → 优雅缺席,与 `container-build.sh` 一致)`sleef_neon`/`sleef_sve`;sleef/isal 因构建工具链差异属 24.03 独占,在矩阵中体现为对应版本的空单元格。
 
-脚本与口径:`scripts/gha/`(README、verify-params.py、benchmark.sh、benchmark.md、report-summary.py)。
+脚本与口径:`scripts/gha/`(README、verify-params.py、benchmark.sh、benchmark.md、report-summary.py、package-built.sh)。
+
+### 6.2.1 下载 CI 预构建产物(built/ tarball)
+
+每次 Multi-OS Verify 运行(cron 每日 + 手动 dispatch)都会为 15 个 SP 各产出一个
+**自包含 tarball**,结构与本地 podman 链路的 `third-party/rpms/.../built/` 一致:
+
+```
+sdcshield-openEuler-<series><LTS_SPx>-<git-sha8>.tar.gz   (~4-8MB)
+├── sdcshield            (stripped 二进制)
+├── libs/                (非系统自带运行时 .so,详见 scripts/gha/README.md)
+├── run-sdcshield.sh     (设 LD_LIBRARY_PATH=libs 后 exec; full 子命令两段式 eigen)
+├── MANIFEST.tsv         (文件 sha256 + 体积清单)
+├── VERSION              (git sha / series / cpp_std / binary-sha256 / build-hash)
+└── BUILD-HASH           (与 build-all.sh compute_build_hash 公式一致)
+```
+
+**获取方式**(网页):仓库 → Actions → 任意一次 Multi-OS Verify 运行 → 页面底部
+Artifacts 区 → `built-<series>-<sp>`(15 个,各含一个 tar.gz),点击下载 zip(解
+压得 tar.gz)。保留期 90 天(公开仓默认),滚动覆盖。
+
+**命令行**(需 `gh auth login`):
+
+```bash
+gh run list --workflow=multi-os-verify.yml --limit 5        # 找 run id
+gh run download <run-id> --name built-24.03-SP3 -D ./pkg    # 下载单个
+# 或一次全部:
+gh run download <run-id> -p 'built-*' -D ./all-pkgs
+```
+
+**使用**(目标机为对应 openEuler 版本):
+
+```bash
+tar -xzf sdcshield-openEuler-24.03LTS_SP3-<sha8>.tar.gz -C sdcshield-pkg
+cd sdcshield-pkg/openEuler-24.03LTS_SP3
+./run-sdcshield.sh --list-tests          # 常规用法,参数原样透传
+./run-sdcshield.sh -e zstd19 -t 5000     # 跑单个测试
+./run-sdcshield.sh full                  # 全核满载 eigen(两段式,见脚本头注释)
+```
+
+**产物闸门**:workflow 的 `Package smoke-verify` step 在上传前解开 tarball、只设
+`LD_LIBRARY_PATH=libs` 实跑(list-tests >100 + zstd19 `exit:pass` 双断言),失败即
+红 —— 打出来的包保证能独立运行,不静默降级。
+
+**与本地 built/ 的关系**:同 commit 时 BUILD-HASH 相等(公式与
+`build-all.sh compute_build_hash` 完全一致,双向实测验证)—— GHA 产物与本地
+podman 链路产物是同输入配置的等价物。binary-sha256 不保证 bit 级一致(构建路径
+细节差异)。长期版本沉淀仍走本地 `package-release.sh` 的 dist/ tarball 路线
+(RPM submodule built/ + git 追溯),CI artifact 是按 run 滚动的"最新版"获取通道。
+
+**永久保存(Release,人工选择)**:artifact 90 天过期,不是版本库。需要钉住某个
+版本时,workflow_dispatch 勾选 **`publish_release`** 触发——该次 run 末尾的
+`release` job 把 15 个 tarball 作为 Release 资产上传(tag 形如
+`build-YYYYMMDD-<sha8>`),**永久保留**(除非手动删),网页 Releases 页面或:
+
+```bash
+gh release list                        # 列出钉住的版本
+gh release download build-20260920-abc12345 -D ./rel  # 取回 tarball
+```
+
+发布语义:里程碑式手动钉版(重要合入后);nightly 由 90 天滚动 artifact 天然
+承担,不当 nightly 用。cron 触发时 `publish_release` 恒为否,行为不变。
 
 ### 6.3 Runner 选型
 

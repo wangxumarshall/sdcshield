@@ -1,0 +1,22 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2ZV626B43D1A5F6T0KG876N",
+  "session_id": "7e534c5e-d8e7-4029-98ba-8feed368a002",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-20T16:42:57.6104379Z",
+  "branch": "feat/sdc-randomization-hardening",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "glm-5.3",
+  "turn_id": "0bffe8d0362f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1370070,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 165735616,
+    "output_tokens": 203077,
+    "api_call_count": 772
+  }
+}

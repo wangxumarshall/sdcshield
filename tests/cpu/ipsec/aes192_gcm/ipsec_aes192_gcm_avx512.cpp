@@ -104,20 +104,43 @@ static int aes_gcm_avx512_run(struct test *test, int cpu) {
     uint8_t *decrypted = (uint8_t *)malloc(d->datasize);
     uint8_t *tag = (uint8_t *)malloc(GCM_TAG_SIZE);
 
-    TEST_LOOP(test, 256) {
-        aes_gcm_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, tag, d->datasize);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, d->datasize, "AES-192-GCM ciphertext mismatch (AVX-512)");
-        memcmp_or_fail(tag, d->golden_tag, GCM_TAG_SIZE, "AES-192-GCM tag mismatch (AVX-512)");
 
-        int ret = aes_gcm_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, tag, d->datasize);
+    /* randomization hardening H6': per-thread plaintext + golden, re-rolled
+     * every iteration (thread-safe: shared d is only read; the shallow
+     * struct copy points plaintext/golden_ciphertext at thread-local
+     * buffers, and compute_golden writes only into the copy). */
+    struct aes_gcm_avx512_data local_d;
+    uint8_t *plain = (uint8_t *)malloc(d->datasize);
+    uint8_t *gold = (uint8_t *)malloc(d->datasize);
+    if (!plain || !gold) {
+        free(ciphertext); free(decrypted); free(tag);
+        free(plain); free(gold);
+        return EXIT_FAILURE;
+    }
+    memcpy(&local_d, d, sizeof(local_d));
+    local_d.plaintext = plain;
+    local_d.golden_ciphertext = gold;
+    TEST_LOOP(test, 256) {
+
+        /* re-roll: fresh plaintext + same-iteration golden (independent
+         * EVP path recomputed for this thread's data) */
+        memset_random(local_d.plaintext, d->datasize);
+        aes_gcm_avx512_compute_golden(&local_d);
+        aes_gcm_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, tag, local_d.datasize);
+        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, local_d.datasize, "AES-192-GCM ciphertext mismatch (AVX-512)");
+        memcmp_or_fail(tag, local_d.golden_tag, GCM_TAG_SIZE, "AES-192-GCM tag mismatch (AVX-512)");
+
+        int ret = aes_gcm_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, tag, local_d.datasize);
         if (ret != 1) {
             report_fail_msg("AES-192-GCM decryption failed (tag verification failed) (AVX-512)");
         }
-        memcmp_or_fail(decrypted, d->plaintext, d->datasize, "AES-192-GCM decryption mismatch (AVX-512)");
+        memcmp_or_fail(decrypted, local_d.plaintext, local_d.datasize, "AES-192-GCM decryption mismatch (AVX-512)");
     }
     free(ciphertext);
     free(decrypted);
     free(tag);
+    free(plain);
+    free(gold);
     return EXIT_SUCCESS;
 }
 

@@ -157,6 +157,16 @@ Commit message must not end with:
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
+### Signed-off-by is mandatory (DCO)
+
+Every commit **must** carry a `Signed-off-by: <name> <email>` trailer — the repo's CI enforces DCO and rejects any commit without it (`git commit --amend --signoff` to fix an existing one). Always commit with `git commit -s` (or add `--signoff` when amending). The trailer uses the configured `user.name`/`user.email`. Combined with the rule above, a compliant commit ends with:
+
+```
+Signed-off-by: wangxumarshall <wangxumarshall@qq.com>
+```
+
+and nothing after it (no Co-Authored-By).
+
 ### Plan-driven workflow (mandatory for every non-trivial change)
 
 All non-trivial work — feature development, porting, refactors, multi-step fixes, anything beyond a single obvious line — **must** be executed via a written plan using the `superpowers:writing-plans` skill, not ad-hoc. "Trivial" means a typo or a one-line obvious fix the change itself describes completely.

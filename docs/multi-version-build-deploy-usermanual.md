@@ -124,9 +124,23 @@ tar xzf sdcshield-openEuler-24.03LTS_SP3-*.tar.gz
 ./run.sh -e zstd19 -t 2000 -n 1      # 或任意 sdcshield 参数
 ./run.sh --list-tests
 ./run.sh                              # 全量 PROD 用例
+./run.sh full                         # 全核满载 eigen 运算(每测试默认 60s)
+./run.sh full -t 120s                 # 同上,每测试 120s
 ```
 
 `run.sh` 流程:`/etc/os-release` 检测 OS → 精确匹配 `built-index.tsv`(不回退)→ 校验 `binary-sha256`(防损坏)→ `exec run-sdcshield.sh`(设 `LD_LIBRARY_PATH`)。不匹配→硬停并指路 `build-all.sh <tag> --full` 重构建。
+
+#### `full` 选项:全核满载 eigen 运算
+
+`run-sdcshield.sh` 首参数为 `full` 时进入两段式 eigen 满载模式(其余参数原样透传):
+
+1. **第一段(全核)**:11 个稳定 eigen 测试(`-e 'eigen*'` 排除下面 4 个),**不带 `-n`**——框架默认使用系统全部 CPU(实测 128 核机 128/128 CPU 100% 满载)。
+2. **第二段(单线程补跑)**:4 个数值敏感测试 `eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve` 以 `-n 1` 运行——大规模多线程下并行 SVD/sparse 求解顺序的 ULP 级差异会对严格 `memcmp` golden 比较产生偶发假 FAIL(平台已知特性,CLAUDE.md),单线程规避。
+
+要点:
+- 每测试默认 60s,透传 `-t <time>`(或 `--test-time=`)覆盖;透传的 `-n` 只作用于第一段,第二段恒为 1 线程。
+- `eigen_svd_cdouble_sve` 在无 SVE 的机器上自动 skip(`CpuNotSupported`),属预期;在 SVE 机器上自 2026-09-19 起为真实向量化压测——vendored Eigen 5.0 已补 `double`/`complex<double>` SVE packet(单次 300×300 复数 BDCSVD 约 0.7 s,原标量回退需 >10 分钟)。注意 size-specific SVE 代码要求运行时 VL 等于编译期 `-msve-vector-bits=128`,在 VL≠128 的 SVE 主机上独立运行需先固定任务 VL(prctl `PR_SVE_SET_VL`)。
+- 脚本退出码 = 两段退出码之或;两段相互独立完成(第一段失败不阻断第二段)。
 
 ### 3.6 镜像推 ghcr.io(跨机/CI 共享)
 

@@ -12,8 +12,9 @@
 #
 # Dependency availability on this host (verified):
 #   * GMP  .................. system package (/usr/include/gmp.h, /usr/lib64/libgmp.so)
-#   * Arm Compute Library ... libarm_compute.so at /usr/lib64; headers under the
-#                             third-party arm-opt-install tree (no /usr/include/arm_compute).
+#   * Arm Compute Library ... vendored source build, third-party/acl (v23.02,
+#                             build.sh → install/lib/libarm_compute-core.a); no
+#                             host libarm_compute.so is used or required.
 #   * compiler-rt builtins .. /usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/
 #                             libclang_rt.builtins.a (soft-float __addsf3 et al.)
 #
@@ -46,53 +47,70 @@ if not gmp_dep.found()
 endif
 
 # ---------------------------------------------------------------------------
-# Arm Compute Library: libarm_compute.so lives in /usr/lib64 (default linker
-# search path); the C++ tensor/operator headers ship only under a third-party
-# tree on the build host. Configured via -Denable_acl=auto|enabled|disabled and
-# -Dacl_incdir=/path (the header tree; empty = system default).
-# On 22.03/20.03 the ACL runtime is built against a newer libstdc++ (GLIBCXX_3.4.29+)
-# and won't link in the older toolchain; pass -Denable_acl=disabled there (the
-# container-build.sh driver does this via -D, no source sed needed).
-# When disabled (or auto + not found), acl_sources is empty and acl_dep is a
-# no-op declare_dependency(), so acl_tests_lib is an empty static lib that pulls
-# no ACL symbols — the 2 ACL tests simply aren't built.
+# Arm Compute Library: VENDORED source build (third-party/acl, Arm Compute
+# Library v23.02 built by its build.sh — first official pure-CMake release;
+# requires gcc >= 10.2 which 24.03 (12.3), 22.03 (10.3) and 20.03
+# (gcc-toolset-10 via supplement-20.03-gcc10.sh) all satisfy). This replaces
+# the old scheme of linking the host's /usr/lib64/libarm_compute.so against a
+# separate header tree via -Dacl_incdir, which was ABI-broken on 22.03/20.03
+# (v20.02 runtime vs v22.11 headers, GLIBCXX mismatch) and disabled there.
+# The vendored build produces ONLY the arm_compute_core target (NEON runtime:
+# NEGEMM/NECast/Tensor — src/CMakeLists.txt:879/904/960); the sve/sve2/graph
+# targets are neither built nor linked, so no SVE machine code enters the
+# binary and non-SVE target machines stay safe.
+# Probe pattern identical to openssl/openblas/sleef: prefer
+# third-party/acl/install (built by build.sh); when absent under enable_acl=auto
+# the 2 ACL tests are simply not built (acl_sources empty, acl_dep a no-op
+# declare_dependency()); enable_acl=enabled makes a missing install/ a hard
+# error instead of a silent degrade.
 # ---------------------------------------------------------------------------
 acl_enable = get_option('enable_acl')
-acl_incdir_opt = get_option('acl_incdir')
-acl_lib = cc.find_library('arm_compute', dirs : ['/usr/lib64'], required : (acl_enable == 'enabled'))
-
-# auto: found iff the library is present AND headers are reachable (either a
-# user-specified -Dacl_incdir, or arm_compute/ in the system include path).
-acl_found = acl_lib.found()
-if acl_found and acl_incdir_opt == ''
-  acl_found = cc.has_header('arm_compute/arm.h', required : false)
-endif
-
-acl_incdir = acl_incdir_opt != '' ? acl_incdir_opt : '/usr/include'
+acl_install = meson.current_source_dir() / '../../../third-party/acl/install'
 acl_sources = []
 acl_dep = declare_dependency()
-if acl_enable != 'disabled' and acl_found
-  acl_dep = declare_dependency(
-      compile_args : acl_incdir_opt != '' ? ['-isystem', acl_incdir] : [],
-      link_args    : ['-L/usr/lib64', '-larm_compute'],
-  )
-  acl_sources = files(
-      'acl_gemm.cpp',
-      'fisttp_arm.cpp',
-  )
+if acl_enable != 'disabled'
+  if run_command('test', '-f', acl_install / 'lib' / 'libarm_compute-core.a', check : false).returncode() == 0
+    acl_dep = declare_dependency(
+        include_directories : include_directories('../../../third-party/acl/install/include', is_system : true),
+        link_args : ['-L' + acl_install / 'lib', '-l:libarm_compute-core.a'],
+    )
+    message('Using vendored ACL (third-party/acl/install)')
+    acl_sources = files(
+        'acl_gemm.cpp',
+        'fisttp_arm.cpp',
+    )
+  elif acl_enable == 'enabled'
+    error('enable_acl=enabled but third-party/acl/install/lib/libarm_compute-core.a not found — run third-party/acl/build.sh first')
+  else
+    message('ACL install/ not found under third-party/acl — run its build.sh to enable the 2 ACL tests.')
+  endif
 endif
 
 # ---------------------------------------------------------------------------
 # compiler-rt builtins: static soft-float integer implementation (__addsf3,
 # __subsf3, __mulsf3, __divsf3 ...). -Wl,--whole-archive prevents the linker
 # from dropping the soft-float symbols as "unused".
+# Probe-gated: the archive only exists where clang-rt is installed (this
+# openEuler 24.03 host). In the 22.03/20.03 offline build containers the path
+# does not exist and the unconditional link_args broke the final link
+# ("c++: error: .../libclang_rt.builtins.a: No such file or directory").
+# When absent, crt_sources is empty and crt_tests_lib is an empty static lib
+# (same graceful-degrade pattern as acl_sources/openblas/sleef).
 # ---------------------------------------------------------------------------
 crt_builtins_path = '/usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/libclang_rt.builtins.a'
-crt_builtins_lib = declare_dependency(
-    link_args : ['-Wl,--whole-archive',
-                  crt_builtins_path,
-                  '-Wl,--no-whole-archive'],
-)
+if run_command('test', '-f', crt_builtins_path, check: false).returncode() == 0
+    crt_builtins_lib = declare_dependency(
+        link_args : ['-Wl,--whole-archive',
+                      crt_builtins_path,
+                      '-Wl,--no-whole-archive'],
+    )
+    crt_sources = files('crt_builtins.cpp',)
+else
+    crt_builtins_lib = declare_dependency()
+    crt_sources = []
+    message('libclang_rt.builtins.a not found at ' + crt_builtins_path +
+            ' — the crt_builtins test is not built on this host.')
+endif
 
 # ---------------------------------------------------------------------------
 # Source grouping. The 10 dep-available tests (7 GMP + 2 ACL + 1 compiler-rt)
@@ -118,17 +136,16 @@ gmp_sources = files(
     'operand_space_arm.cpp',
 )
 
-# 2 ACL-backed tests: acl_gemm (NEON GEMM), fisttp_arm (FCVTZS cast).
-# NOTE: acl_gemm currently returns EXIT_SKIP from init/run — ACL's NEGEMM
-# crashes (SIGSEGV @0x518) under sandstone's fork-per-iteration model until
-# fork-safety is fixed; the test is built and linked so the symbol is present
-# and reports a clean skip. fisttp_arm is a real ACL-backed test.
+# 2 ACL-backed tests: acl_gemm (NEON GEMM), fisttp_arm (FCVTZS cast). Both are
+# REAL tests: the historical acl_gemm SIGSEGV was root-caused to a missing
+# `test->data = data` assignment in init (never a fork-safety issue); it is
+# fixed and acl_gemm runs NEGEMM against a long-double naive golden with a
+# tight relative tolerance.
 # acl_sources is set above (empty when -Denable_acl=disabled or ACL not found).
 
 # 1 compiler-rt test: soft-float __addsf3/__mulsf3/__divsf3 vs golden.
-crt_sources = files(
-    'crt_builtins.cpp',
-)
+# (crt_sources is set in the probe-gated block above — empty when the
+# clang-rt archive is absent on this build host.)
 
 # Excluded — AOR libmathlib.a / libstringlib.a static archives are not present
 # on this host, so these 3 tests would fail to link:

@@ -59,7 +59,7 @@ else
 fi
 # 可选包（默认构建不需要, 按需启用: 传 --optional 或取消下面注释）
 OPTIONAL=(
-    openssl-devel     # -Dssl_link_type=dynamic 时需要
+    openssl-devel     # third-party/openssl/install 缺失、回退系统 libcrypto 时需要
     gtest-devel       # 构建 unittests 目标时需要
 )
 

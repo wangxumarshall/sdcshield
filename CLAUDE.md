@@ -26,11 +26,44 @@ ninja -C builddir
 ./builddir/sdcshield -s help                 # list RNG engines (Constant/LCG/AES)
 ./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv  # crash backtrace dump
 
-# OpenSSL SHA test is opt-in (default ssl_link_type=none → not built):
-PKG_CONFIG_PATH=./third-party/eigen5 meson setup --reconfigure builddir \
-    --buildtype=release -Dssl_link_type=dynamic
-ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
+# Vendored compute libraries (third-party/, see list below): on a fresh clone
+# run each build.sh once BEFORE first meson setup — openssl, openblas, sleef,
+# isa-l (pocketfft needs no prebuild: its header+source are compiled directly).
+# Missing install/ dirs degrade gracefully: meson prints a message and the
+# corresponding tests are simply not built (isa-l falls back to system libisal).
+./third-party/openssl/build.sh      # → install/lib/libcrypto.a (SSL tests default-on)
+./third-party/openblas/build.sh     # → install/lib/libopenblas.a (openblas_{d,s,z}gemm)
+./third-party/sleef/build.sh        # → install/lib/libsleef.a (sleef_neon + sleef_sve)
+./third-party/isa-l/build.sh        # → install/lib/libisal.a (isal_igzip + isal_crc*)
+./third-party/acl/build.sh           # → install/lib/libarm_compute-core.a (acl_gemm NEGEMM + fisttp_arm)
+# OpenSSL fallback: if the install dir is absent, meson falls back to system
+# libcrypto (or disables SSL tests with a message).
+# isa-l fallback: same two-tier gate — vendored install/ first, system libisal
+# second, message + no isal_* tests if neither.
+# SSL tests (openssl_sha + ipsec suite) are on by default (ssl_link_type=dynamic):
+./builddir/sdcshield --list-tests | grep -c ipsec     # 46 ipsec tests
+./builddir/sdcshield -e openssl_sha -t 3000 -n 1      # linked statically — no libcrypto.so runtime dep
+# Vendored-library tests (PROD quality, 278 total tests at default quality):
+./builddir/sdcshield -e openblas_dgemm -t 5000 -n 1   # OpenBLAS NEON FMA GEMM
+./builddir/sdcshield -e sleef_neon -t 5000 -n 1       # SLEEF NEON transcendentals
+./builddir/sdcshield -e sleef_sve -t 2000  # SVE variant: clean skip (CpuNotSupported) on non-SVE hosts
+./builddir/sdcshield -e pocketfft_fft -t 5000 -n 1   # pocketfft complex FFT
+./builddir/sdcshield -e isal_igzip -t 5000 -n 1      # isa-l deflate/inflate (vendored third-party/isa-l, static)
 ```
+
+## Vendored third-party libraries (`third-party/`)
+
+Each directory keeps the upstream tarball for provenance plus a `build.sh` that builds and installs a static archive into `install/` (gitignored; the meson build probes `install/` and degrades with a message if absent — never a hard error, never a disabler). Library selection rationale is documented in `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md` (31-paper SDC literature synthesis: vector-FMA GEMM > hash/crypto > compression > SVE transcendentals).
+
+- `eigen5/` — Eigen 5.0.0 (header-only, committed directly; system Eigen 3.3.x breaks on GCC 12+).
+- `openssl/` — OpenSSL 3.5.0, `build.sh` → static `libcrypto.a`; default-enables the SSL tests (`openssl_sha` + 46 `ipsec_*`) with no runtime .so dependency.
+- `openblas/` — OpenBLAS 0.3.29, `build.sh` → static `libopenblas.a` (TARGET=TSV110, single-threaded `USE_THREAD=0` + `USE_LOCKING=1` so per-core worker threads can call cblas concurrently without corrupting the packing-buffer pool); powers `openblas_{d,s,z}gemm`.
+- `sleef/` — SLEEF 3.9.0, `build.sh` → static `libsleef.a` (TLFLOAT=OFF); powers `sleef_neon` (runs on any NEON host) and `sleef_sve` (needs SVE hardware; clean-skips elsewhere).
+- `isa-l/` — Intel isa-l 2.32.1, `build.sh` → static `libisal.a` (Makefile.unx path — no autoconf/nasm on aarch64; the .so and igzip CLI that `make install` also produces are deleted, only the archive + headers are kept); powers `isal_igzip` + the 10 `isal_crc*` tests. Meson prefers this install/ (openssl-style two-tier gate) and falls back to system libisal.
+- `acl/` — Arm Compute Library v23.02 (first official pure-CMake release; gcc ≥ 10.2 — satisfied by 24.03's gcc 12.3, 22.03's 10.3, and 20.03's gcc-toolset-10), `build.sh` builds ONLY the `arm_compute_core` target (NEON runtime: NEGEMM/NECast/Tensor) → static `libarm_compute-core.a` (fPIC — sdcshield links -pie; OPENMP=OFF — the framework provides its own per-core threads; sve/sve2/graph targets are neither built nor linked so no SVE machine code enters the binary). v23.02 ships no CMake install rules, so build.sh hand-assembles the install tree (archive + arm_compute/ + support/ + half/ header closure). Powers `acl_gemm` (real NEGEMM run against a long-double naive golden, 1e-4 absolute tolerance) and `fisttp_arm` (NECast FCVTZS). Container builds rebuild it natively per OS (glibc-tag pattern, same as openssl/openblas); 22.03/20.03 need `scripts/offline-build/supplement-cmake.sh` run once on a networked machine first.
+- `pocketfft/` — pocketfft C edition, header + `.c` committed directly (BSD-3, no build.sh — compiled straight into the test library); powers `pocketfft_fft`.
+- `meson/` — vendored meson 0.59.4 for the openEuler 20.03 container build path.
+- `rpms/` — three git submodules of prebuilt per-OS-version binaries (see README quick start).
 
 After changing meson sources/options: `meson setup --reconfigure builddir ...` then `ninja` (plain ninja won't pick up config changes).
 
@@ -60,7 +93,7 @@ The x86-64 implementation is the reference; ARM64 is a parallel port. Many piece
 `framework/interrupt_monitor.hpp` + `sysdeps/linux/interrupt_monitor.cpp`. `InterruptMonitorWorks` is `true` on linux x86-64+aarch64. x86 counts MCE/TRM lines from `/proc/interrupts`; aarch64 counts EDAC `ce_count`+`ue_count` (controller-wide, placed at index 0). `count_smi_events()` uses `read_msr` (x86-only MSR 0x34 — no ARM equivalent, returns nullopt). `mce_check` is a special always-inserted test.
 
 ### Tests directory layout
-`tests/common/` (arch-agnostic: mce_check, smi_count), `tests/cpu/` (eigen_*, zlib, zstd, ifs, ist, openssl), `tests/{gpu,idxd}/` (only built for `-Ddevice_type=gpu/idxd`), `tests/examples/` (never built — reference only). `tests/cpu/meson.build` uses meson **sourceset** mechanism: `tests_set_base` (all arches), `tests_set_hsw`/`tests_set_skx` (x86 AVX2/AVX512, compiled with `-DEigen=EigenAVX2`/`EigenAVX512` namespace rename so multiple SIMD backends link without symbol clash), `tests_set_sve` (aarch64 SVE, `-DEigen=EigenSVE`).
+`tests/common/` (arch-agnostic: mce_check, smi_count), `tests/cpu/` (eigen_*, zlib, zstd, ifs, ist, openssl, openblas_gemm, sleef, pocketfft, isa-l), `tests/{gpu,idxd}/` (only built for `-Ddevice_type=gpu/idxd`), `tests/examples/` (never built — reference only). `tests/cpu/meson.build` uses meson **sourceset** mechanism: `tests_set_base` (all arches), `tests_set_hsw`/`tests_set_skx` (x86 AVX2/AVX512, compiled with `-DEigen=EigenAVX2`/`EigenAVX512` namespace rename so multiple SIMD backends link without symbol clash), `tests_set_sve` (aarch64 SVE, `-DEigen=EigenSVE`).
 
 ### RNG
 `framework/random.cpp`. Engines: Constant, LCG, AES (the default auto-picks AES when `haveAes()`). AES engine uses `#pragma GCC target` per-arch: x86 `_mm_aesenc_si128`, aarch64 `vaesmcq_u8(vaeseq_u8(...))` via `+crypto`. RNG state is per-thread (`thread_rng` union, 64-byte aligned). The framework **overrides libc `rand`/`random`/`srand`** (they abort for the seed functions).
@@ -90,6 +123,7 @@ END_DECLARE_TEST
 - No `cpufreq` on this board → `--vary-frequency`/`--vary-uncore-frequency` print "skipping" and continue (frequency_manager degrades gracefully; it no longer `exit(EX_IOERR)`).
 - No `thermal_zone*` CPU zones (only `cooling_device*`) → thermal throttle is a no-op; on boards that do expose `cpu`/`soc` zones it activates.
 - Eigen numerical tests (`eigen_svd_double`, `eigen_sparse`) fail **sporadically** under full-system multi-threading (192 CPUs) due to ULP-level differences in parallel SVD/sparse-solve ordering vs strict `memcmp` golden comparison — single-threaded (`-n 1`) always passes. This is an Eigen/large-core-count limitation, not a port defect; same workload would show it on x86 at high concurrency.
+- The vendored Eigen 5.0 SVE packet backend now carries `double`/`complex<double>` packets (`PacketXd` in `arch/SVE/PacketMath.h`, `PacketXcd` + `arch/SVE/Complex.h`, feat/eigen-sve-double-packets, 2026-09-19): `eigen_svd_cdouble_sve` runs real vectorized SVD (~0.7 s at M_DIM 300 vs >10 min scalar). Verified at compile-VL 128/256 on hardware (cortex x3b) and at VL=512 in gem5 SE mode (`scripts/eigen-sve-double/gem5/`). **Runtime-VL rule**: size-specific SVE code requires the process vector length to equal the compile-time `-msve-vector-bits`; this host is VL=256 while `tests_sve` compiles at 128, so running the SVD SVE test standalone requires pinning the task VL (`prctl(PR_SVE_SET_VL, 16)` launcher — see `scripts/eigen-sve-double/`); `sleef_sve` still compiles at 128 by design.
 
 ## x86-64 untouched rule
 

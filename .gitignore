@@ -6,6 +6,8 @@
 # forever-patrol loop artifacts (test loop run artifacts, not source)
 /run-all-forever.log
 /run-pid.txt
+# spectrum campaign log directories (run_sdc_spectrum.sh 产物)
+/sdc_spectrum_*/
 # typical names for meson build directories
 /build*/
 # offline-build runtime artifacts (generated, not source):
@@ -15,6 +17,8 @@ dist/
 /scripts/offline-build/built-index.tsv
 # ctags
 tags
+# clangd background-index cache
+/.cache/
 /.vscode/
 # Claude Code local artifacts (session state, agent memory)
 /.claude/

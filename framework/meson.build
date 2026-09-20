@@ -209,12 +209,35 @@ framework_files += files(
     'test_knobs.cpp',
 )
 
+# SSL deps (vendored or system libcrypto) for the framework's own sources;
+# populated in the SANDSTONE_SSL_BUILD block below and consumed by framework_a.
+framework_ssl_deps = []
+
 if framework_config.get('SANDSTONE_SSL_BUILD') == 1
-  # Look for libcrypto
-  crypto_dep = dependency('libcrypto',
-                        version: '>= 3.0',
-                        required: false,
-                        static: get_option('ssl_link_type') == 'static')
+  # Prefer the vendored static libcrypto under third-party/openssl/install
+  # (built by third-party/openssl/build.sh); fall back to the system package.
+  # Note: include_directories() must use a source-tree-relative path (meson
+  # rejects absolute paths into the source tree), so the include dir is given
+  # relative to this framework/ subdir while the archive probe and link args
+  # use the joined absolute path.
+  openssl_install = meson.current_source_dir() / '..' / 'third-party' / 'openssl' / 'install'
+  if run_command('test', '-f', openssl_install / 'lib' / 'libcrypto.a', check: false).returncode() == 0
+    crypto_dep = declare_dependency(
+        include_directories: include_directories('../third-party/openssl/install/include', is_system: true),
+        link_args: ['-L' + openssl_install / 'lib', '-l:libcrypto.a'],
+    )
+    message('Using vendored OpenSSL (third-party/openssl/install)')
+  else
+    crypto_dep = dependency('libcrypto',
+                          version: '>= 3.0',
+                          required: false,
+                          static: get_option('ssl_link_type') == 'static')
+    if not crypto_dep.found()
+        # If we cannot find libcrypto, disable SSL build
+        framework_config.set10('SANDSTONE_SSL_BUILD', 0)
+        message('No vendored or system libcrypto found; SSL tests disabled. Run third-party/openssl/build.sh to enable.')
+    endif
+  endif
   if crypto_dep.found()
       framework_files += ['sandstone_ssl.cpp', 'sandstone_ssl_rand.cpp']
 
@@ -227,10 +250,17 @@ if framework_config.get('SANDSTONE_SSL_BUILD') == 1
                 links: false,
             )
         endif
-    else
-        # If we cannot find libcrypto, disable SSL build
-        framework_config.set10('SANDSTONE_SSL_BUILD', 0)
-    endif
+        # The framework's own SSL sources (logging.cpp -> sandstone_ssl.h,
+        # sandstone_ssl.cpp, sandstone_ssl_rand.cpp) include <openssl/*.h>.
+        # crypto_dep carries the vendored include path (or the system
+        # libcrypto cflags); without it on framework_lib the includes only
+        # resolved via the *system* /usr/include/openssl headers — which
+        # silently worked where the system OpenSSL is >= 3.0 (e.g. openEuler
+        # 24.03) and failed to compile against OpenSSL 1.1.1 (22.03/20.03:
+        # openssl/core_names.h: No such file or directory) even though the
+        # vendored 3.5.0 headers were right there under third-party/.
+        framework_ssl_deps += crypto_dep
+  endif
 endif
 
 if get_option('selftests')
@@ -317,6 +347,7 @@ framework_a = static_library(
     objects: extra_objects,
     dependencies: [
         boost_dep,
+        framework_ssl_deps,
     ],
     c_args: [
         debug_c_flags,

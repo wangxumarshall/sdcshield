@@ -71,6 +71,54 @@ if host_machine.cpu_family() == 'aarch64'
         # a high-Hamming dependent FMA chain, all compared bit-exact against
         # libm. Built only on aarch64.
         'fsu_byteexact_arm.cpp',
+        # AGU throughput stress: 2 source loads + data-ALU + store/reload/
+        # store chain (3 ldr + 2 str per element), maximizing address-
+        # generation pressure. Rotation uses {add,eor,and,orr} — a different
+        # composition than mrn_nuke_2src_alu's {add,sub,eor,and} — to test
+        # rotation-composition robustness of the core-179 trigger recipe.
+        # Dual-arch inline asm (x86 movq / aarch64 str-ldr), placed in the
+        # ARM64 suite per the arm64 classification. Built only on aarch64.
+        'agu_stress_2src.cpp',
+        # NEON/vector-datapath port of the core-179 trigger recipe: 2 source
+        # vector loads + rotating vector ALU {add,eor,and,orr} (uint64x2) +
+        # back-to-back vector store/reload/store. The asm-guaranteed str q ->
+        # ldr q pair (the compiler eliminates the intrinsic reload) makes it
+        # discriminate whether the trigger recipe is bound to the scalar
+        # ALU/L1D path or also fires on the SIMD datapath. Uses uint64x2_t
+        # unconditionally, so it can only be built on aarch64.
+        'neon_rot_2src.cpp',
+        # movbe byte-swap SDC series (moved from tests/cpu/misc): the core-179
+        # research testbed of the byte-swap round-trip trigger. movbe is the
+        # baseline (bswap + store + bswap-back + compare), movbe_dump adds the
+        # full dump on failure, and the 11 movbe_dump_probe_* variants remove
+        # or vary one ingredient at a time (no-store, reload position, ...)
+        # to localize the trigger. All portable __builtin_bswap32 (no arch
+        # guards), classified ARM64-only with the rest of the core-179 probes.
+        'movbe.cpp',
+        'movbe_dump.cpp',
+        'movbe_dump_probe_a.cpp',
+        'movbe_dump_probe_b.cpp',
+        'movbe_dump_probe_c.cpp',
+        'movbe_dump_probe_d.cpp',
+        'movbe_dump_probe_e.cpp',
+        'movbe_dump_probe_f.cpp',
+        'movbe_dump_probe_g1.cpp',
+        'movbe_dump_probe_g2.cpp',
+        'movbe_dump_probe_h.cpp',
+        'movbe_dump_probe_x.cpp',
+        'movbe_dump_probe_xn.cpp',
+        # Scan-order variant of neon_rot_ldr_at_top (core-179 attribution):
+        # even outer iterations sweep indices ascending, odd descending, so
+        # the touch pattern at the corruption-concentrated first indices
+        # (idx 0/1 of the 55-record dump campaign) differs from the parent's
+        # fixed order. Strong idx-0/1 signal here too -> the signature
+        # follows the buffer slots (address-local, e.g. same L1D set/way);
+        # signature moves to the sweep seam / disappears -> it follows the
+        # forward-progress position. Same 3rd-ldr-at-top + 2-src loads +
+        # rotating vector ALU {add,eor,and,orr} + back-to-back str/str
+        # skeleton otherwise. uint64x2_t / aarch64 inline asm only — built
+        # only on aarch64.
+        'neon_rot_ldr_at_top_rowmajor.cpp',
     )
 
     arm64_tests_lib = static_library(
@@ -92,7 +140,94 @@ if host_machine.cpu_family() == 'aarch64'
         ],
     )
 
+    # SVE full-vector-length (sve512_fma family) SDC stress tests. Compiled
+    # in their own static library because <arm_sve.h> intrinsics require the
+    # +sve target, while the tests_arm64 baseline stays armv8.1-a+crc+crypto:
+    # enabling +sve for the whole library could let GCC auto-vectorize the
+    # NEON tests into SVE instructions, which would SIGILL on SVE-less CPUs
+    # such as this Kunpeng 920. Every test probes HWCAP_SVE first thing in
+    # test_init and returns a clean EXIT_SKIP on SVE-less CPUs, so their SVE
+    # codegen only ever executes on SVE-capable hardware. Built only on
+    # aarch64.
+    arm64_sve_lib = static_library(
+        'tests_arm64_sve',
+        files(
+            # workload 4: gather/FMA/scatter round-trip over a permuted
+            # index table, byte-exact vs a scalar golden indexing through
+            # the SAME indirection.
+            'sve512_gather_scatter_arm.cpp',
+            # workload 1: 512-step serial svmla_f64_x dependency chain over
+            # high-Hamming finite operands (|x| <= 2, so the chain can never
+            # overflow to Inf/NaN), byte-exact vs a scalar fma() golden
+            # recomputed with the identical operation order.
+            'sve512_f64_chain_arm.cpp',
+            # workload 2: same serial FMLA chain over the IEEE-754 special
+            # table (NaN/sNaN/Inf/+-0/+-1), compared by category per
+            # fsu_byteexact_arm precedent — a category change is always a
+            # failure; NaN payloads are not byte-compared because IEEE 754
+            # does not require deterministic NaN payload propagation.
+            'sve512_f64_special_arm.cpp',
+            # workload 3: the same serial FMLA chain structure at f32 width
+            # (svmla_f32_x), exercising the 16-lane f32 FMA/predicate
+            # datapath at full 512-bit width, byte-exact vs a scalar
+            # fmaf() golden recomputed with the identical operation order.
+            'sve512_f32_chain_arm.cpp',
+            # SVD-format variant of workload 1: same serial svmla_f64_x
+            # chain, but the operand streams are walked through a 16x16
+            # nested block traversal (BDCSVD-style block-of-matrix access)
+            # over an SVD-scale allocation (300*300*512*VL elements per
+            # stream, ~2.7 GiB each at a 512-bit VL). The per-iteration
+            # touched set (~24 MB, 5.76 MB step stride) overflows L2 and
+            # pressures L3/TLB — the first of eigen_svd_cdouble_sve's
+            # SVD-only trigger paths (working set beyond L2).
+            'sve512_f64_chain_svd.cpp',
+            # SVD-format variant of workload 2: the same SVD-scale block
+            # traversal over the IEEE-754 special-value table (64-step
+            # chain), compared per lane by category (fsu_byteexact_arm
+            # precedent). Allocation: 300*300*64*VL per stream (~360 MB
+            # each at a 512-bit VL).
+            'sve512_f64_special_svd.cpp',
+            # SVD-format variant of workload 3: the same SVD-scale block
+            # traversal at f32 width (svmla_f32_x, 16-lane f32 datapath),
+            # byte-exact vs a scalar fmaf() golden. Allocation:
+            # 300*300*512*VL f32 elements per stream (~2.7 GiB each at a
+            # 512-bit VL).
+            'sve512_f32_chain_svd.cpp',
+            # SVD-format variant of workload 4: gather/FMA/scatter
+            # round-trip over a 2-D 16x16 block-permuted index table
+            # (90000 f64 elements, ~2.9 MB working set across src/dst),
+            # byte-exact vs a scalar golden indexing through the SAME
+            # indirection.
+            'sve512_gather_scatter_svd.cpp',
+            # SCF/stencil axis-kernel SDC trigger replicator — verbatim
+            # port of the cn23154 NUMA3 field reproducer (example.cpp):
+            # svdup_f64(coeff[r]) coefficient loads (ld1rd replicate-load
+            # codegen under clang), dual-vector svmla_x chain, full unroll,
+            # memory-resident loop counter, per-iteration VA[63:48] canary.
+            # One deliberate semantic fix vs the standalone, per the field
+            # diagnosis (5 bit-identical reruns): the expected value is
+            # 1.5*iterations*(j+1) (RADIUS=6), the stale RADIUS=4 formula
+            # iterations*(j+1) was a software false positive.
+            'sve512_stencil_axis_arm.cpp',
+        ),
+        build_by_default: false,
+        include_directories: [
+            framework_incdir,
+        ],
+        dependencies: [
+            boost_dep,
+        ],
+        cpp_args: [
+            debug_c_flags,
+            default_cpp_warn,
+            default_cpp_flags,
+            march_generic_flags,
+            '-march=armv8.2-a+sve',
+        ],
+    )
+
     sandstone_tests += [
         arm64_tests_lib,
+        arm64_sve_lib,
     ]
 endif

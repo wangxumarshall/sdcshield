@@ -21,7 +21,9 @@
 #include "sandstone_ssl.h"
 #include <string.h>
 
-#define DATA_SIZE              (1024u)
+/* Data size is runtime-configurable via the test knob
+ * "-O ipsec_3des_docsis_aes_xcbc_avx512.datasize=N" (1024..64MB, multiple of 16, default 1024). */
+#define DATA_SIZE_DEFAULT (1024u)
 #define DES3_KEY_SIZE          (24)
 #define DES3_IV_SIZE           (8)
 #define AES_KEY_SIZE           (16)
@@ -32,8 +34,9 @@ struct xcbc_avx512_data {
     uint8_t des3_key[DES3_KEY_SIZE];
     uint8_t des3_iv[DES3_IV_SIZE];
     uint8_t aes_key[AES_KEY_SIZE];
-    uint8_t plaintext[DATA_SIZE];
-    uint8_t golden_ciphertext[DATA_SIZE];
+    size_t datasize;                       /* payload bytes, from the datasize knob */
+    uint8_t *plaintext;                    /* datasize bytes, malloc'd in init */
+    uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_mac[XCBC96_DIGEST_SIZE];
 };
 
@@ -112,9 +115,9 @@ static void aes_xcbc_96(const uint8_t *key, const uint8_t *msg, size_t len, uint
 }
 
 static void xcbc_avx512_compute_golden(struct xcbc_avx512_data *d) {
-    des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, d->golden_ciphertext, DATA_SIZE);
+    des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, d->golden_ciphertext, d->datasize);
     uint8_t full_mac[XCBC_FULL_DIGEST_SIZE];
-    aes_xcbc_96(d->aes_key, d->golden_ciphertext, DATA_SIZE, full_mac);
+    aes_xcbc_96(d->aes_key, d->golden_ciphertext, d->datasize, full_mac);
     memcpy(d->golden_mac, full_mac, XCBC96_DIGEST_SIZE);
 }
 
@@ -122,11 +125,21 @@ static int xcbc_avx512_init(struct test *test) {
     if (s_EVP_CIPHER_CTX_new && s_EVP_EncryptInit_ex && s_EVP_DecryptInit_ex && s_EVP_des_ede3_cbc && s_EVP_aes_128_ecb) {
         struct xcbc_avx512_data *d = (struct xcbc_avx512_data *)malloc(sizeof(*d));
         if (!d) return EXIT_SKIP;
+        int64_t knob = get_testspecific_knob_value_int(test, "datasize", DATA_SIZE_DEFAULT);
+        if (knob < DATA_SIZE_DEFAULT || knob > 64 * 1024 * 1024 || (knob % 16) != 0) {
+            report_fail_msg("datasize knob invalid: %ld (valid 1024..67108864, multiple of 16, default 1024)", (long)knob);
+        }
+        d->datasize = (size_t)knob;
+        d->plaintext = (uint8_t *)malloc(d->datasize);
+        d->golden_ciphertext = (uint8_t *)malloc(d->datasize);
+        if (!d->plaintext || !d->golden_ciphertext) {
+            report_fail_msg("OOM allocating %zu bytes of plaintext/golden", 2 * d->datasize);
+        }
 
         memset_random(d->des3_key, DES3_KEY_SIZE);
         memset_random(d->des3_iv, DES3_IV_SIZE);
         memset_random(d->aes_key, AES_KEY_SIZE);
-        memset_random(d->plaintext, DATA_SIZE);
+        memset_random(d->plaintext, d->datasize);
 
         xcbc_avx512_compute_golden(d);
 
@@ -141,18 +154,18 @@ static int xcbc_avx512_init(struct test *test) {
 static int xcbc_avx512_run(struct test *test, int cpu) {
     struct xcbc_avx512_data *d = (struct xcbc_avx512_data *)test->data;
 
-    uint8_t *ciphertext = (uint8_t *)malloc(DATA_SIZE);
-    uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
+    uint8_t *ciphertext = (uint8_t *)malloc(d->datasize);
+    uint8_t *decrypted = (uint8_t *)malloc(d->datasize);
     uint8_t *full_mac = (uint8_t *)malloc(XCBC_FULL_DIGEST_SIZE);
 
     TEST_LOOP(test, 256) {
-        des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "3DES-DOCSIS ciphertext mismatch (AVX-512)");
+        des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, ciphertext, d->datasize);
+        memcmp_or_fail(ciphertext, d->golden_ciphertext, d->datasize, "3DES-DOCSIS ciphertext mismatch (AVX-512)");
 
-        des3_decrypt(d->des3_key, d->des3_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "3DES-DOCSIS decryption mismatch (AVX-512)");
+        des3_decrypt(d->des3_key, d->des3_iv, ciphertext, decrypted, d->datasize);
+        memcmp_or_fail(decrypted, d->plaintext, d->datasize, "3DES-DOCSIS decryption mismatch (AVX-512)");
 
-        aes_xcbc_96(d->aes_key, ciphertext, DATA_SIZE, full_mac);
+        aes_xcbc_96(d->aes_key, ciphertext, d->datasize, full_mac);
         memcmp_or_fail(full_mac, d->golden_mac, XCBC96_DIGEST_SIZE, "AES-XCBC-96 digest mismatch (AVX-512)");
     }
 
@@ -163,7 +176,10 @@ static int xcbc_avx512_run(struct test *test, int cpu) {
 }
 
 static int xcbc_avx512_cleanup(struct test *test) {
-    free(test->data);
+    struct xcbc_avx512_data *d = (xcbc_avx512_data *)test->data;
+    free(d->plaintext);
+    free(d->golden_ciphertext);
+    free(d);
     return EXIT_SUCCESS;
 }
 

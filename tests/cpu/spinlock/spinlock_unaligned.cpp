@@ -64,12 +64,13 @@ static int spinlock_unaligned_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> dist(1, 1000);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
     uint64_t local_sum = 0;
 
     do {
-        uint64_t inc = dist(rng);
+        uint64_t inc = dist();
 
         spin_lock(td->lock);
         td->counter += inc;

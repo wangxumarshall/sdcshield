@@ -64,9 +64,10 @@ static int spinlock_array_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> inc_dist(1, 1000);
-    std::uniform_int_distribution<int> lock_dist(0, NUM_LOCKS - 1);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto inc_dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
+    auto lock_dist = []() { return (0) + (int)(random64() % (uint64_t)((NUM_LOCKS - 1) - (0) + 1)); };
     uint64_t local_sum = 0;
 
     #define GREEN "\033[32m"
@@ -74,8 +75,8 @@ static int spinlock_array_run(struct test *test, int cpu) {
     #define RESET "\033[0m"
 
     do {
-        uint64_t inc = inc_dist(rng);
-        int lock_idx = lock_dist(rng);   // 随机选择一个锁
+        uint64_t inc = inc_dist();
+        int lock_idx = lock_dist();   // 随机选择一个锁
 
         spin_lock(sd->slots[lock_idx].lock);
         sd->slots[lock_idx].counter += inc;
@@ -83,10 +84,6 @@ static int spinlock_array_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        // 每次迭代输出输入（线程 ID、锁索引、增量）和结果
-        fprintf(stderr, "spinlock_array: Thread %d, lock_idx=%d, inc=%lu, result=%sPASS%s\n",
-                id, lock_idx, inc, GREEN, RESET);
-        fflush(stderr);
 
     } while (test_time_condition(test));
 

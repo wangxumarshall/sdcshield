@@ -47,8 +47,9 @@ static int lockless_cmpxchg16b_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> dist(1, 1000);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
     uint64_t local_sum = 0;
 
     #define GREEN "\033[32m"
@@ -56,7 +57,7 @@ static int lockless_cmpxchg16b_run(struct test *test, int cpu) {
     #define RESET "\033[0m"
 
     do {
-        uint64_t inc = dist(rng);   // 本次的输入
+        uint64_t inc = dist();   // 本次的输入
 
         // CAS 循环更新 16 字节数据
         uint64_t old_counter, old_version, new_counter, new_version;

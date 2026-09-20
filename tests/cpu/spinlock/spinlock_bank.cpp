@@ -73,10 +73,11 @@ static int spinlock_bank_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> inc_dist(1, 1000);
-    std::uniform_int_distribution<int> bank_dist(0, NUM_BANKS - 1);
-    std::uniform_int_distribution<int> lock_dist(0, LOCKS_PER_BANK - 1);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto inc_dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
+    auto bank_dist = []() { return (0) + (int)(random64() % (uint64_t)((NUM_BANKS - 1) - (0) + 1)); };
+    auto lock_dist = []() { return (0) + (int)(random64() % (uint64_t)((LOCKS_PER_BANK - 1) - (0) + 1)); };
     uint64_t local_sum = 0;
 
     #define GREEN "\033[32m"
@@ -84,9 +85,9 @@ static int spinlock_bank_run(struct test *test, int cpu) {
     #define RESET "\033[0m"
 
     do {
-        uint64_t inc = inc_dist(rng);
-        int bank_idx = bank_dist(rng);
-        int lock_idx = lock_dist(rng);
+        uint64_t inc = inc_dist();
+        int bank_idx = bank_dist();
+        int lock_idx = lock_dist();
 
         // 获取对应的锁引用
         std::atomic<uint64_t> &lock = sd->banks[bank_idx].slots[lock_idx].lock;
@@ -97,10 +98,6 @@ static int spinlock_bank_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        // 每次迭代输出输入（线程 ID、银行索引、锁索引、增量）和结果
-        fprintf(stderr, "spinlock_bank: Thread %d, bank=%d, lock=%d, inc=%lu, result=%sPASS%s\n",
-                id, bank_idx, lock_idx, inc, GREEN, RESET);
-        fflush(stderr);
 
     } while (test_time_condition(test));
 

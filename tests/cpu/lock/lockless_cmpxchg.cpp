@@ -34,8 +34,9 @@ static int lockless_cmpxchg_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> dist(1, 1000);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
     uint64_t local_sum = 0;
 
     #define GREEN "\033[32m"
@@ -43,7 +44,7 @@ static int lockless_cmpxchg_run(struct test *test, int cpu) {
     #define RESET "\033[0m"
 
     do {
-        uint64_t inc = dist(rng);   // 本次的输入
+        uint64_t inc = dist();   // 本次的输入
 
         // 使用 std::atomic 的 compare_exchange_strong 循环更新计数器
         auto &counter = sd->counter;
@@ -57,10 +58,6 @@ static int lockless_cmpxchg_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        // 每次迭代输出输入和结果（CAS 成功，PASS）
-        fprintf(stderr, "lockless_cmpxchg: Thread %d, inc=%lu, result=%sPASS%s\n",
-                id, inc, GREEN, RESET);
-        fflush(stderr);
 
     } while (test_time_condition(test));
 

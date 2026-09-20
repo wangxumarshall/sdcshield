@@ -42,9 +42,10 @@ static int lockgen_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> inc_dist(1, 1000);
-    std::uniform_int_distribution<size_t> idx_dist(0, ARRAY_SIZE - 1);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto inc_dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
+    auto idx_dist = []() { return (size_t)random64() % ARRAY_SIZE; };
     uint64_t local_sum = 0;
 
     #define GREEN "\033[32m"
@@ -52,8 +53,8 @@ static int lockgen_run(struct test *test, int cpu) {
     #define RESET "\033[0m"
 
     do {
-        uint64_t inc = inc_dist(rng);
-        size_t idx = idx_dist(rng);   // 随机索引，产生 TLB 和缓存压力
+        uint64_t inc = inc_dist();
+        size_t idx = idx_dist();   // 随机索引，产生 TLB 和缓存压力
 
         // 使用 std::atomic 的 compare_exchange_strong 循环直到成功
         auto &cell = sd->array[idx];

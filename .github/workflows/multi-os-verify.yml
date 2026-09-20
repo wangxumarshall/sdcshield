@@ -20,9 +20,14 @@ on:
         default: 'full'
         type: choice
         options: [full, smoke]
+      publish_release:
+        description: '把本次 15 个 built/ tarball 发布为 GitHub Release(永久保存;默认否,artifact 90 天滚动)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: read
+  contents: write                # Release 创建/上传需要(release job);verify 作业仍只读用法
   packages: read                 # 从 ghcr.io 拉私有镜像必需(公开镜像也可留)
 
 # 并行度上限:GHA 免费版同仓并发 20 job,15 个镜像 job + 1 个 report 无压力;
@@ -260,3 +265,37 @@ jobs:
           set +e
           python3 scripts/gha/report-summary.py >> "$GITHUB_STEP_SUMMARY"
           echo "report done"
+
+  # ---- Release 永久保存(人工选择):workflow_dispatch 勾选 publish_release 时,
+  # 把本次 15 个 built/ tarball 从 artifact 下载后作为 Release 资产上传。
+  # Release 资产永久保留(除非手动删),公开仓免费,单资产上限 2GB。
+  # cron 触发时 inputs.publish_release 不存在 → 恒 false,行为不变。
+  # 用法语义:里程碑式手动钉版(重要合入后);nightly 由 90 天滚动 artifact 承担。----
+  release:
+    name: release (permanent)
+    needs: [verify, report]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built/ tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: built-*
+          merge-multiple: true     # 15 个 artifact 的 tar.gz 合并到 dist/ 平铺
+      - name: Create release with 15 tarballs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -la dist/
+          TAG="build-$(date +%Y%m%d)-${GITHUB_SHA::8}"
+          echo "release tag: $TAG"
+          gh release create "$TAG" dist/*.tar.gz \
+            --title "sdcshield build $(date +%Y-%m-%d)" \
+            --notes "Multi-OS Verify 构建产物(15 个 openEuler SP 自包含包)。
+          源 commit: ${GITHUB_SHA}
+          验证 run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          每个包含 stripped 二进制 + libs/ + run-sdcshield.sh + MANIFEST.tsv + VERSION + BUILD-HASH。
+          保留策略:Release 资产永久;同源 artifact 另有 90 天滚动副本。"
+          echo "==> release created: $TAG"

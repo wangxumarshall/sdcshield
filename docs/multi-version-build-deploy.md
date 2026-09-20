@@ -499,6 +499,19 @@ podman 链路产物是同输入配置的等价物。binary-sha256 不保证 bit 
 细节差异)。长期版本沉淀仍走本地 `package-release.sh` 的 dist/ tarball 路线
 (RPM submodule built/ + git 追溯),CI artifact 是按 run 滚动的"最新版"获取通道。
 
+**永久保存(Release,人工选择)**:artifact 90 天过期,不是版本库。需要钉住某个
+版本时,workflow_dispatch 勾选 **`publish_release`** 触发——该次 run 末尾的
+`release` job 把 15 个 tarball 作为 Release 资产上传(tag 形如
+`build-YYYYMMDD-<sha8>`),**永久保留**(除非手动删),网页 Releases 页面或:
+
+```bash
+gh release list                        # 列出钉住的版本
+gh release download build-20260920-abc12345 -D ./rel  # 取回 tarball
+```
+
+发布语义:里程碑式手动钉版(重要合入后);nightly 由 90 天滚动 artifact 天然
+承担,不当 nightly 用。cron 触发时 `publish_release` 恒为否,行为不变。
+
 ### 6.3 Runner 选型
 
 - **GitHub hosted arm64**(`ubuntu-24.04-arm`):默认,零维护,原生容器模式直接可用。

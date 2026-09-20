@@ -135,10 +135,13 @@ static int sve512_f64_special_svd_init(struct test *test)
     try {
         auto data = std::make_unique<SveF64SpecialSvdData>();
         data->vl_d = svcntd();
+        /* randomization hardening H12': seeds from the framework RNG;
+         * the special VALUE table stays by design, but which special each
+         * step draws is now a random index. */
         data->seeds_f64.resize(data->vl_d);
         for (size_t lane = 0; lane < data->vl_d; ++lane) {
             data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+                (random64() & 0x000FFFFFFFFFFFFFULL);
         }
         // Block-major streams: 361 blocks x SPECIAL_CHAIN_STEPS x VL
         // (~1.44 MB per stream at a 512-bit VL — the intended SVD-scale
@@ -150,8 +153,8 @@ static int sve512_f64_special_svd_init(struct test *test)
         data->sm_f64.resize(total);
         data->sa_f64.resize(total);
         for (size_t i = 0; i < total; ++i) {
-            data->sm_f64[i] = F64_SPECIAL[(i * 3 + 1) % F64_SPECIAL_SIZE];
-            data->sa_f64[i] = F64_SPECIAL[(i * 5 + 2) % F64_SPECIAL_SIZE];
+            data->sm_f64[i] = F64_SPECIAL[random32() % F64_SPECIAL_SIZE];
+            data->sa_f64[i] = F64_SPECIAL[random32() % F64_SPECIAL_SIZE];
         }
         test->data = data.release();
         return EXIT_SUCCESS;

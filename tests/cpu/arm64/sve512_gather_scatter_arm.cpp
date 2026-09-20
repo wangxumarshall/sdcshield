@@ -108,10 +108,12 @@ static int sve512_gather_scatter_arm_init(struct test *test)
         auto data = std::make_unique<SveGatherScatterData>();
         data->vl_d = svcntd();
 
+        /* randomization hardening H12': seeds from the framework RNG
+         * (per-run fresh, -s reproducible) instead of fixed splitmix. */
         data->seeds_f64.resize(data->vl_d);
         for (size_t lane = 0; lane < data->vl_d; ++lane) {
             data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+                (random64() & 0x000FFFFFFFFFFFFFULL);
         }
 
         const size_t gn = 64 * data->vl_d;
@@ -121,8 +123,10 @@ static int sve512_gather_scatter_arm_init(struct test *test)
             data->gather_src[i] = data->seeds_f64[i % data->vl_d];
             data->gather_idx[i] = i;
         }
+        /* Fisher-Yates shuffle driven by the framework RNG (per-run
+         * fresh permutation; was a fixed splitmix permutation). */
         for (size_t i = gn - 1; i > 0; --i) {
-            size_t j = (size_t)(splitmix64(0xBEEF0000ULL + i) % (i + 1));
+            size_t j = (size_t)(random64() % (i + 1));
             uint64_t t = data->gather_idx[i];
             data->gather_idx[i] = data->gather_idx[j];
             data->gather_idx[j] = t;

@@ -157,6 +157,36 @@ Upload 部分新增独立 step（原 verify logs 上传不动）：
       ./run-sdcshield.sh --list-tests = 325 → -e zstd19 -t 2000 -n 1 =
       exit: pass）；`gh` 命令标注"需 gh auth login"。
 
+### Task 4（2026-09-20 追加）: Release 永久保存开关
+
+需求：artifact 90 天滚动过期，不是版本库；需要人工选择性把某次构建的 15 个
+tarball 钉进 GitHub Release（永久保存、公开仓免费、单资产上限 2GB）。
+
+设计：
+- `workflow_dispatch` 新增输入 `publish_release`（boolean，默认 false）；
+  cron 触发时该输入不存在 → 恒 false，行为不变。
+- 新增 `release` job：`needs: verify` + `if: inputs.publish_release == true`，
+  download-artifact(pattern: built-*, merge-multiple) → `gh release create`
+  上传 15 个 tar.gz，tag 形如 `build-YYYYMMDD-<sha8>`。
+- `permissions` 从 `contents: read` 提升为 `contents: write`（Release 创建/
+  上传需要；只影响本 workflow 的 GITHUB_TOKEN，不影响其他 workflow）。
+- 发布频率语义：里程碑式手动钉版（重要合入后）；nightly 由 90 天滚动
+  artifact 天然承担，不当 nightly 用。
+
+验证：
+- [x] YAML safe_load 通过（jobs: verify/report/release；inputs 含
+      publish_release）；
+- [x] release job 命令串本地干跑：模拟 download-artifact merge-multiple 的
+      dist/ 平铺布局 + TAG 生成（`build-20260920-edb8633d` 形如预期）+
+      `dist/*.tar.gz` glob 展开验证；
+- [ ] 端到端：dispatch（勾选 publish_release + smoke 档）→ verify 16 job
+      全绿 + release job 绿 → Releases 页面出现 build-* tag 与 15 资产 →
+      `gh release download`（或网页）取回一个 tarball，在对应
+      localhost/openeuler-offline 容器 pristine 实跑 zstd19 通过。
+- [x] 文档：docs/multi-version-build-deploy.md §6.2.1 补 Release 小节
+      （永久 vs 90 天的分工、发布操作、下载方式）；README 快速开始段补一句。
+
+
 ## 边界与诚实声明（写入文档）
 
 - GHA tarball 的测试覆盖 = 本地 podman 链路同级（sleef/acl 因镜像 cmake

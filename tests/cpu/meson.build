@@ -75,6 +75,11 @@ tests_set_base.add(
         # out under #ifdef __aarch64__ and returns a clean EXIT_SKIP on
         # non-aarch64 (x86-64 untouched).
         'memory/mmu_stress_arm.cpp',
+        # Random-access sweep over a large mmap: random offset + log-uniform
+        # block length (64B..2MB) + NEON RMW transform with same-iteration
+        # scalar golden (randomization hardening H5'). aarch64 NEON under
+        # #ifdef, clean EXIT_SKIP elsewhere (x86-64 untouched).
+        'memory/random_access_sweep.cpp',
         # Cache coherency / stress tests. cachebounce is portable (std::atomic);
         # cache_stress_aggressor uses ARM NEON under #ifdef __aarch64__ guards and
         # returns a clean EXIT_SKIP on non-aarch64 (x86-64 untouched).

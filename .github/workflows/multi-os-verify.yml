@@ -161,7 +161,14 @@ jobs:
         run: |
           set -uo pipefail
           OS_TAG="openEuler-${SERIES}$(case "$SP" in LTS) echo LTS;; SP*) echo LTS_$SP;; esac)"
-          bash scripts/gha/package-built.sh builddir "dist/$OS_TAG" "$SERIES" "$SP"
+          # 自诊断:失败时日志里直接有环境现场(uid/工具/目录),不再盲猜
+          echo "pkg-debug: uid=$(id -u) tar=$(command -v tar || echo MISSING) bsdtar=$(command -v bsdtar || echo MISSING) strip=$(command -v strip || echo MISSING) ldd=$(command -v ldd || echo MISSING) git=$(command -v git || echo MISSING) readlink=$(command -v readlink || echo MISSING)"
+          echo "pkg-debug: builddir/sdcshield: $(ls -la builddir/sdcshield 2>&1)"
+          bash -x scripts/gha/package-built.sh builddir "dist/$OS_TAG" "$SERIES" "$SP" 2>&1 | tee /tmp/pkg-trace.log
+          rc=${PIPESTATUS[0]}
+          echo "pkg-debug: exit=$rc; dist 树:"
+          find dist -maxdepth 3 2>/dev/null || true
+          exit $rc
 
       # ---- 产物闸门:解开刚打的 tarball,只设 LD_LIBRARY_PATH=libs 运行
       # (容器内形态的 verify-built-pristine.sh smoke)。失败即红 ——
@@ -171,7 +178,8 @@ jobs:
         run: |
           set -uo pipefail
           OS_TAG="openEuler-${SERIES}$(case "$SP" in LTS) echo LTS;; SP*) echo LTS_$SP;; esac)"
-          TARBALL=$(ls dist/$OS_TAG/sdcshield-$OS_TAG-*.tar.gz | head -1)
+          TARBALL=$(ls dist/$OS_TAG/sdcshield-$OS_TAG-*.tar.gz 2>/dev/null | sed -n 1p)
+          [ -n "$TARBALL" ] || { echo "::error::no tarball in dist/$OS_TAG (package step output above)"; exit 1; }
           rm -rf /tmp/pristine && mkdir -p /tmp/pristine
           tar -xzf "$TARBALL" -C /tmp/pristine 2>/dev/null || bsdtar -xzf "$TARBALL" -C /tmp/pristine
           PKG="/tmp/pristine/$OS_TAG"

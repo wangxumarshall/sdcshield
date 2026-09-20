@@ -25,6 +25,11 @@
 
 ## 进度日志
 
+- **2026-09-20（会话 10，Task 7 收尾）**：**全部 53 个 SVE 测试完成并推送（分支 feat/sve-port-avx53，8 个 commit）**。
+  **最终验证**：53 个全量同跑（全核，10s/测试）= **16909 pass / 0 fail / exit: pass**；总测试数 342 = 289 原有 + 53 新增（精确匹配，无破坏）；README 测试表新增 SVE avx53 套件行；计划文件 35 个勾选框全部完成。
+  **任务总结**：53 个 avx 命名 NEON 测试 → SVE1 移植（负载环境不变）。分域：FMA 10（纯指令替换）、Mesh 18（两框架协议保真）、eigen 1（自写双对角化）、ipsec 17（EVP+多流 SVE HMAC，内核 OpenSSL 比对 5200+1360 全对）+ 7（EVP-only 如实标注）。SVE SHA/HMAC 内核成为仓库新资产。
+  **两阶段纪律战果**：全程抓住我 9 个逻辑缺陷（mesh 重置竞态、共享 work、static 数组共享、SHA 维度反转、ROTR/ROTL、GCC 12 intrinsic 缺失、HMAC 外层长度×2、3DES padding）——每一个都是在 60s 干净基线或 OpenSSL 比对阶段暴露的，没有一个带病提交。
+  **122 狩猎数据点汇总（60s 窗口，5 类负载全不触发）**：①短向量 SVE FMA 逐位比对 ②mesh 多核互联协同 ③4MB 内存带宽扫描 ④SVD 式密集 SVE FMA ⑤EVP 加密+多流 SVE HMAC。**待研究**：122 的 SDC 需要什么条件触发？（候选方向：更长时窗、特定数据模式、温度/电压边界、更底层通路如 LSE 原子/SVE2 专属指令、或跨核一致性特定序列）
 - **2026-09-20（会话 9）**：**Task 6 完成并推送 → 53/53 全部完成**。
   **ipsec 域 24 个**两层实现：① HMAC/SHA 系 17 个 = 加密保持 OpenSSL EVP + MAC 换多流 SVE HMAC（sve_hmac.h，OpenSSL 验证 1360/1360；lane0=原密文语义不变 + 1..N-1 变体消息填 lane，golden 全预计算，SHA1-96 保持 12 字节截断）；② EVP-only 系 7 个（GCM×2/CMAC/XCBC×5）= 无 SHA 可 SVE 化（上游 libcrypto 无 SVE AES 路径，反汇编 1012 对象实证只有 ChaCha20 有），负载保真移植+描述如实。
   **HMAC 层多修 2 个 bug**：SHA-224/384 外层消息长度错（截断摘要应为 92B/176B 不是 96B/192B——RFC 4231 向量抓出）；3DES-CBC 缺 set_padding(0) → 解密尾部块错（阶段1 前快验抓出）。

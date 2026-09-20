@@ -175,7 +175,12 @@ chmod +x "$STAGE/run-sdcshield.sh"
 
 # ── 4) BUILD-HASH(公式与 build-all.sh compute_build_hash 完全一致) ──
 # 源码树哈希 + container-build.sh 哈希 + cpp_std/macro + 镜像 input-hash + tag
-# 注:各命令的 stderr 透传(不吞),CI 失败时日志里能看到是哪条 git/grep 炸了。
+# GHA 容器内 root 跑 git 于 runner 属主(uid 1001)的 checkout 树会
+# "fatal: detected dubious ownership"(exit 128,CI 实测)。actions/checkout
+# 自身在 runner 侧配置了 safe.directory,容器内看不到 → 此处自行声明。
+# (本地 podman 链路 cp 到容器内属主为 root,不受影响;多声明无害。)
+git config --global --add safe.directory "$SRC_ROOT" 2>/dev/null || true
+
 src_hash=$(git -C "$SRC_ROOT" ls-tree -r HEAD -- framework tests meson.build meson_options.txt 2>&1 | sha256sum | awk '{print $1}')
 cb_hash=$(sha256sum "$SRC_ROOT/scripts/offline-build/container-build.sh" | awk '{print $1}')
 img_hash=$(grep -P "^${SERIES}-${SP_LABEL}\t" "$SRC_ROOT/scripts/offline-build/images/image-manifest.tsv" 2>/dev/null | awk -F'\t' '{print $2}')

@@ -160,6 +160,9 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          # SP 归一化:矩阵值是完整形式(LTS-SP3),case 认裸形式(SP3)/LTS 本体。
+          # 与 package-built.sh 的归一化同语义(非 LTS 时剥 LTS- 前缀)。
+          [ "$SP" != "LTS" ] && SP="${SP#LTS-}"
           OS_TAG="openEuler-${SERIES}$(case "$SP" in LTS) echo LTS;; SP*) echo LTS_$SP;; esac)"
           # 自诊断:失败时日志里直接有环境现场(uid/工具/目录),不再盲猜
           echo "pkg-debug: uid=$(id -u) tar=$(command -v tar || echo MISSING) bsdtar=$(command -v bsdtar || echo MISSING) strip=$(command -v strip || echo MISSING) ldd=$(command -v ldd || echo MISSING) git=$(command -v git || echo MISSING) readlink=$(command -v readlink || echo MISSING)"
@@ -177,6 +180,9 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          # SP 归一化:矩阵值是完整形式(LTS-SP3),case 认裸形式(SP3)/LTS 本体。
+          # 与 package-built.sh 的归一化同语义(非 LTS 时剥 LTS- 前缀)。
+          [ "$SP" != "LTS" ] && SP="${SP#LTS-}"
           OS_TAG="openEuler-${SERIES}$(case "$SP" in LTS) echo LTS;; SP*) echo LTS_$SP;; esac)"
           TARBALL=$(ls dist/$OS_TAG/sdcshield-$OS_TAG-*.tar.gz 2>/dev/null | sed -n 1p)
           [ -n "$TARBALL" ] || { echo "::error::no tarball in dist/$OS_TAG (package step output above)"; exit 1; }

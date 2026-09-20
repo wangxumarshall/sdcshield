@@ -2,9 +2,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 #include <isa-l/crc.h>
+#include <isa-l/crc64.h>
 
 extern "C" {
     uint64_t crc64_iso_refl(uint64_t init, const unsigned char *buf, uint64_t len);
@@ -20,12 +20,11 @@ static int isal_crc64_iso_refl_init(struct test *test) {
 static int isal_crc64_iso_refl_run(struct test *test, int cpu) {
     (void)cpu;
     std::vector<uint8_t> local_data(BLOCK_SIZE);
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
+    /* randomization hardening P15: framework RNG (per-thread, -s reproducible) */
 
     do {
         for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            local_data[i] = byte_dist(rng);
+            local_data[i] = (uint8_t)random32();
         }
 
         uint64_t crc1 = crc64_iso_refl(0, local_data.data(), BLOCK_SIZE);
@@ -33,7 +32,7 @@ static int isal_crc64_iso_refl_run(struct test *test, int cpu) {
         // ARM64 兼容的内存屏障
         __sync_synchronize();
 
-        uint64_t crc2 = crc64_iso_refl(0, local_data.data(), BLOCK_SIZE);
+        uint64_t crc2 = crc64_iso_refl_base(0, local_data.data(), BLOCK_SIZE);
 
         bool data_ok = (crc1 == crc2);
 

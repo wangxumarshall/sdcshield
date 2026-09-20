@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 
 #ifdef __aarch64__
@@ -10,6 +9,23 @@
 #endif
 
 static constexpr size_t BLOCK_SIZE = 1024;
+
+
+/* randomization hardening H15' (P15): independent software CRC-32
+ * reference (bit-by-bit, IEEE 802.3 poly reflected 0xEDB88320, init
+ * 0xFFFFFFFF, final xorout) — matches the ARMv8 __crc32b instruction
+ * (probe-verified: __crc32b('123456789') chain = 0xCBF43926, the zlib
+ * CRC-32, NOT CRC32C). Replaces the previous hw-vs-hw duplicate compute
+ * that a deterministic CRC-unit defect would pass. */
+static uint32_t crc32c_software(const uint8_t *buf, size_t len) {
+    uint32_t crc = 0xFFFFFFFF;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= buf[i];
+        for (int j = 0; j < 8; ++j)
+            crc = (crc & 1) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
+    }
+    return ~crc;
+}
 
 static int crc32_fixed_shuffled_init(struct test *test) {
     (void)test;
@@ -20,24 +36,30 @@ static int crc32_fixed_shuffled_init(struct test *test) {
 static int crc32_fixed_shuffled_run(struct test *test, int cpu) {
     (void)cpu;
     std::vector<uint8_t> local_data(BLOCK_SIZE);
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
-    std::uniform_int_distribution<int> step_dist(0, 2);  // 0:1字节, 1:2字节, 2:4字节
+    /* randomization hardening P15: framework RNG */
+    auto step_dist = []() { return (int)(random32() % 3); };  /* 0:1字节, 1:2字节, 2:4字节 */
 
     do {
         for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            local_data[i] = byte_dist(rng);
+            local_data[i] = (uint8_t)random32();
         }
 
         // 生成随机步长序列（保证两次计算使用相同序列）
+        /* boundary fix (H15'): when the tail is 3 bytes, the old code
+         * clamped step to 3 but still ran the 4-byte __crc32w path —
+         * reading 1 byte past the buffer (latent OOB, previously
+         * harmless because BOTH computes made the same OOB read; now
+         * that crc2 is an in-bounds software reference it exposes the
+         * bug). Clamp to whole steps and finish the tail with bytes. */
         std::vector<int> steps;
         size_t pos = 0;
         while (pos < BLOCK_SIZE) {
-            int step = step_dist(rng);
+            int step = step_dist();
             if (step == 0) step = 1;
             else if (step == 1) step = 2;
             else step = 4;
-            if (pos + step > BLOCK_SIZE) step = BLOCK_SIZE - pos;
+            if (pos + step > BLOCK_SIZE)
+                step = 1;   /* tail: byte steps only */
             steps.push_back(step);
             pos += step;
         }
@@ -65,23 +87,7 @@ static int crc32_fixed_shuffled_run(struct test *test, int cpu) {
         __sync_synchronize();
 
         // 第二次硬件 CRC 计算（重用相同步长序列）
-        uint32_t crc2 = 0xFFFFFFFF;
-        pos = 0;
-        for (int step : steps) {
-            if (step == 1) {
-                crc2 = __crc32b(crc2, local_data[pos]);
-            } else if (step == 2) {
-                uint16_t val;
-                memcpy(&val, &local_data[pos], 2);
-                crc2 = __crc32h(crc2, val);
-            } else { // step == 4
-                uint32_t val;
-                memcpy(&val, &local_data[pos], 4);
-                crc2 = __crc32w(crc2, val);
-            }
-            pos += step;
-        }
-        crc2 = ~crc2;
+        uint32_t crc2 = crc32c_software(local_data.data(), BLOCK_SIZE);
 
         bool data_ok = (crc1 == crc2);
 

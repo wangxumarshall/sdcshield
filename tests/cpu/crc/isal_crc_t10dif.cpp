@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 #include <isa-l/crc.h>
 
@@ -22,12 +21,11 @@ static int isal_crc_t10dif_init(struct test *test) {
 static int isal_crc_t10dif_run(struct test *test, int cpu) {
     (void)cpu;
     std::vector<uint8_t> local_data(BLOCK_SIZE);
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
+    /* randomization hardening P15: framework RNG (per-thread, -s reproducible) */
 
     do {
         for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            local_data[i] = byte_dist(rng);
+            local_data[i] = (uint8_t)random32();
         }
 
         // 第一次 CRC 计算（初始值 0）
@@ -37,7 +35,7 @@ static int isal_crc_t10dif_run(struct test *test, int cpu) {
         __sync_synchronize();
 
         // 第二次 CRC 计算
-        uint16_t crc2 = crc16_t10dif(0, local_data.data(), BLOCK_SIZE);
+        uint16_t crc2 = crc16_t10dif_base(0, local_data.data(), BLOCK_SIZE);
 
         bool data_ok = (crc1 == crc2);
 

@@ -21,7 +21,9 @@
 #include "sandstone_ssl.h"
 #include <string.h>
 
-#define DATA_SIZE (1024u)
+/* Data size is runtime-configurable via the test knob
+ * "-O ipsec_aes192_cbc_xcbc_96_sse.datasize=N" (1024..64MB, multiple of 16, default 1024). */
+#define DATA_SIZE_DEFAULT (1024u)
 #define AES_KEY_SIZE (24)
 #define AES_IV_SIZE (16)
 #define XCBC_KEY_SIZE (16)
@@ -32,8 +34,9 @@ struct aes_xcbc_sse_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
     uint8_t xcbc_key[XCBC_KEY_SIZE];
-    uint8_t plaintext[DATA_SIZE];
-    uint8_t golden_ciphertext[DATA_SIZE];
+    size_t datasize;                       /* payload bytes, from the datasize knob */
+    uint8_t *plaintext;                    /* datasize bytes, malloc'd in init */
+    uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_mac[XCBC_96_DIGEST_SIZE];
 };
 
@@ -121,9 +124,9 @@ static void aes_decrypt(const uint8_t *key, const uint8_t *iv, const uint8_t *in
 }
 
 static void aes_xcbc_sse_compute_golden(struct aes_xcbc_sse_data *d) {
-    aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, DATA_SIZE);
+    aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, d->datasize);
     uint8_t full_mac[XCBC_FULL_DIGEST_SIZE];
-    aes_xcbc_96(d->xcbc_key, d->golden_ciphertext, DATA_SIZE, full_mac);
+    aes_xcbc_96(d->xcbc_key, d->golden_ciphertext, d->datasize, full_mac);
     memcpy(d->golden_mac, full_mac, XCBC_96_DIGEST_SIZE);
 }
 
@@ -132,10 +135,20 @@ static int aes_xcbc_sse_init(struct test *test) {
         s_EVP_aes_192_cbc() && s_EVP_aes_128_ecb()) {
         struct aes_xcbc_sse_data *d = (struct aes_xcbc_sse_data *)malloc(sizeof(*d));
         if (!d) return EXIT_SKIP;
+        int64_t knob = get_testspecific_knob_value_int(test, "datasize", DATA_SIZE_DEFAULT);
+        if (knob < DATA_SIZE_DEFAULT || knob > 64 * 1024 * 1024 || (knob % 16) != 0) {
+            report_fail_msg("datasize knob invalid: %ld (valid 1024..67108864, multiple of 16, default 1024)", (long)knob);
+        }
+        d->datasize = (size_t)knob;
+        d->plaintext = (uint8_t *)malloc(d->datasize);
+        d->golden_ciphertext = (uint8_t *)malloc(d->datasize);
+        if (!d->plaintext || !d->golden_ciphertext) {
+            report_fail_msg("OOM allocating %zu bytes of plaintext/golden", 2 * d->datasize);
+        }
         memset_random(d->aes_key, AES_KEY_SIZE);
         memset_random(d->aes_iv, AES_IV_SIZE);
         memset_random(d->xcbc_key, XCBC_KEY_SIZE);
-        memset_random(d->plaintext, DATA_SIZE);
+        memset_random(d->plaintext, d->datasize);
         aes_xcbc_sse_compute_golden(d);
         test->data = d;
         return EXIT_SUCCESS;
@@ -147,18 +160,18 @@ static int aes_xcbc_sse_init(struct test *test) {
 
 static int aes_xcbc_sse_run(struct test *test, int cpu) {
     struct aes_xcbc_sse_data *d = (struct aes_xcbc_sse_data *)test->data;
-    uint8_t *ciphertext = (uint8_t *)malloc(DATA_SIZE);
-    uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
+    uint8_t *ciphertext = (uint8_t *)malloc(d->datasize);
+    uint8_t *decrypted = (uint8_t *)malloc(d->datasize);
     uint8_t *full_mac = (uint8_t *)malloc(XCBC_FULL_DIGEST_SIZE);
 
     TEST_LOOP(test, 256) {
-        aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "AES-192-CBC ciphertext mismatch (SSE)");
+        aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, d->datasize);
+        memcmp_or_fail(ciphertext, d->golden_ciphertext, d->datasize, "AES-192-CBC ciphertext mismatch (SSE)");
         
-        aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "AES-192-CBC decryption mismatch (SSE)");
+        aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, d->datasize);
+        memcmp_or_fail(decrypted, d->plaintext, d->datasize, "AES-192-CBC decryption mismatch (SSE)");
         
-        aes_xcbc_96(d->xcbc_key, ciphertext, DATA_SIZE, full_mac);
+        aes_xcbc_96(d->xcbc_key, ciphertext, d->datasize, full_mac);
         memcmp_or_fail(full_mac, d->golden_mac, XCBC_96_DIGEST_SIZE, "XCBC-96 digest mismatch (SSE)");
     }
     free(ciphertext);
@@ -168,7 +181,10 @@ static int aes_xcbc_sse_run(struct test *test, int cpu) {
 }
 
 static int aes_xcbc_sse_cleanup(struct test *test) {
-    free(test->data);
+    struct aes_xcbc_sse_data *d = (aes_xcbc_sse_data *)test->data;
+    free(d->plaintext);
+    free(d->golden_ciphertext);
+    free(d);
     return EXIT_SUCCESS;
 }
 

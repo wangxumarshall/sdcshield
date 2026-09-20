@@ -20,7 +20,9 @@
 #include "sandstone_ssl.h"
 #include <string.h>
 
-#define DATA_SIZE             (1024u)
+/* Data size is runtime-configurable via the test knob
+ * "-O ipsec_aes128_cbc_aes_cmac_avx.datasize=N" (1024..64MB, multiple of 16, default 1024). */
+#define DATA_SIZE_DEFAULT (1024u)
 #define AES_KEY_SIZE          (16)
 #define AES_IV_SIZE           (16)
 #define CMAC_KEY_SIZE         (16)
@@ -31,8 +33,9 @@ struct aes_cmac_avx_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
     uint8_t cmac_key[CMAC_KEY_SIZE];
-    uint8_t plaintext[DATA_SIZE];
-    uint8_t golden_ciphertext[DATA_SIZE];
+    size_t datasize;                       /* payload bytes, from the datasize knob */
+    uint8_t *plaintext;                    /* datasize bytes, malloc'd in init */
+    uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_mac[CMAC_96_DIGEST_SIZE];
 };
 
@@ -70,19 +73,29 @@ static void aes_decrypt(const uint8_t *key, const uint8_t *iv, const uint8_t *in
 }
 
 static void aes_cmac_avx_compute_golden(struct aes_cmac_avx_data *d) {
-    aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, DATA_SIZE);
-    aes_cmac_96(d->cmac_key, d->golden_ciphertext, DATA_SIZE, d->golden_mac);
+    aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, d->golden_ciphertext, d->datasize);
+    aes_cmac_96(d->cmac_key, d->golden_ciphertext, d->datasize, d->golden_mac);
 }
 
 static int aes_cmac_avx_init(struct test *test) {
     if (s_EVP_CIPHER_CTX_new && s_EVP_EncryptInit_ex && s_EVP_DecryptInit_ex && s_EVP_aes_128_cbc() && s_CMAC_CTX_new) {
         struct aes_cmac_avx_data *d = (struct aes_cmac_avx_data *)malloc(sizeof(*d));
         if (!d) return EXIT_SKIP;
+        int64_t knob = get_testspecific_knob_value_int(test, "datasize", DATA_SIZE_DEFAULT);
+        if (knob < DATA_SIZE_DEFAULT || knob > 64 * 1024 * 1024 || (knob % 16) != 0) {
+            report_fail_msg("datasize knob invalid: %ld (valid 1024..67108864, multiple of 16, default 1024)", (long)knob);
+        }
+        d->datasize = (size_t)knob;
+        d->plaintext = (uint8_t *)malloc(d->datasize);
+        d->golden_ciphertext = (uint8_t *)malloc(d->datasize);
+        if (!d->plaintext || !d->golden_ciphertext) {
+            report_fail_msg("OOM allocating %zu bytes of plaintext/golden", 2 * d->datasize);
+        }
 
         memset_random(d->aes_key, AES_KEY_SIZE);
         memset_random(d->aes_iv, AES_IV_SIZE);
         memset_random(d->cmac_key, CMAC_KEY_SIZE);
-        memset_random(d->plaintext, DATA_SIZE);
+        memset_random(d->plaintext, d->datasize);
 
         aes_cmac_avx_compute_golden(d);
 
@@ -97,18 +110,18 @@ static int aes_cmac_avx_init(struct test *test) {
 static int aes_cmac_avx_run(struct test *test, int cpu) {
     struct aes_cmac_avx_data *d = (struct aes_cmac_avx_data *)test->data;
 
-    uint8_t *ciphertext = (uint8_t *)malloc(DATA_SIZE);
-    uint8_t *decrypted = (uint8_t *)malloc(DATA_SIZE);
+    uint8_t *ciphertext = (uint8_t *)malloc(d->datasize);
+    uint8_t *decrypted = (uint8_t *)malloc(d->datasize);
     uint8_t *mac = (uint8_t *)malloc(CMAC_96_DIGEST_SIZE);
 
     TEST_LOOP(test, 256) {
-        aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, DATA_SIZE, "AES-128-CBC ciphertext mismatch (AVX)");
+        aes_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, d->datasize);
+        memcmp_or_fail(ciphertext, d->golden_ciphertext, d->datasize, "AES-128-CBC ciphertext mismatch (AVX)");
 
-        aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, DATA_SIZE, "AES-128-CBC decryption mismatch (AVX)");
+        aes_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, d->datasize);
+        memcmp_or_fail(decrypted, d->plaintext, d->datasize, "AES-128-CBC decryption mismatch (AVX)");
 
-        aes_cmac_96(d->cmac_key, ciphertext, DATA_SIZE, mac);
+        aes_cmac_96(d->cmac_key, ciphertext, d->datasize, mac);
         memcmp_or_fail(mac, d->golden_mac, CMAC_96_DIGEST_SIZE, "AES-CMAC-96 digest mismatch (AVX)");
     }
 
@@ -119,7 +132,10 @@ static int aes_cmac_avx_run(struct test *test, int cpu) {
 }
 
 static int aes_cmac_avx_cleanup(struct test *test) {
-    free(test->data);
+    struct aes_cmac_avx_data *d = (aes_cmac_avx_data *)test->data;
+    free(d->plaintext);
+    free(d->golden_ciphertext);
+    free(d);
     return EXIT_SUCCESS;
 }
 

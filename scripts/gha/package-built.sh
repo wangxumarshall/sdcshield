@@ -41,6 +41,12 @@ OUTDIR="${2:?usage: $0 <builddir> <outdir> <series> <sp>}"
 SERIES="${3:?usage: $0 <builddir> <outdir> <series> <sp>}"
 SP="${4:?usage: $0 <builddir> <outdir> <series> <sp>}"
 
+# SP 归一化:workflow 矩阵传镜像 tag 后缀完整形式(如 "LTS-SP3"),CLI 惯例
+# 是裸 "SP3";两者都接受,统一成裸形式再走 case。LTS 本体两种形式同形。
+if [ "$SP" != "LTS" ]; then
+    SP="${SP#LTS-}"
+fi
+
 case "$SP" in
     LTS)   SP_DIR="LTS";    SP_LABEL="LTS" ;;
     SP[1-4]) SP_DIR="LTS_$SP"; SP_LABEL="LTS-$SP" ;;
@@ -74,27 +80,28 @@ mkdir -p "$STAGE/libs"
 # ── 1) stripped 二进制 ──
 echo "==> $OS_TAG: 拷贝 + strip 二进制"
 cp "$BIN" "$STAGE/sdcshield"
-strip --strip-debug --strip-unneeded "$STAGE/sdcshield" 2>/dev/null || true
+# strip 失败不致命(保留未 strip 二进制也能跑),但 stderr 透传便于诊断
+if ! strip --strip-debug --strip-unneeded "$STAGE/sdcshield" 2>&1; then
+    echo "    ⚠ strip 失败(保留未 strip 二进制继续)" >&2
+fi
 chmod +x "$STAGE/sdcshield"
 
 # ── 2) libs 收集(ldd 直跑;容器==构建容器,RPATH 可解析) ──
 echo "==> $OS_TAG: 收集运行时依赖库"
 rm -f "$STAGE/libs/"*.so*
 copy_lib() {
-    # 拷一个库文件:soname 与 real file 两个名字都落盘(cp -L 解引用)
+    # 拷一个库文件:传入名 + real file 名都落盘(cp -L 解引用成硬拷贝)。
+    # 例:传入 soname libatomic.so.1(symlink)→ real file
+    # libatomic.so.1.2.0;两份都拷,目标机无论按哪个名字找都在。
     local path="$1"
     [ -f "$path" ] || return 0
-    cp -L "$path" "$STAGE/libs/$(basename "$path")" 2>/dev/null || true
-    # 若传入的是 real file(如 libatomic.so.1.2.0),DT_NEEDED 的 soname
-    # (libatomic.so.1)也补一份;反之亦然。readlink 拿 real file 的全部名字。
-    local real soname_dir
+    cp -L "$path" "$STAGE/libs/$(basename "$path")" || return 0
+    local real
     real="$(readlink -f "$path" 2>/dev/null || echo "$path")"
-    soname_dir="$(dirname "$real")"
-    for alt in "$soname_dir"/$(basename "$real").* "$soname_dir"/lib*.so.*; do
-        [ -e "$alt" ] || continue
-        [ "$(readlink -f "$alt" 2>/dev/null)" = "$real" ] || continue
-        cp -L "$alt" "$STAGE/libs/$(basename "$alt")" 2>/dev/null || true
-    done
+    # real file 与传入名不同才补第二份(同文件两个名字,磁盘双份硬拷贝)
+    if [ "$real" != "$path" ] && [ -f "$real" ]; then
+        cp -L "$real" "$STAGE/libs/$(basename "$real")" || true
+    fi
     return 0
 }
 
@@ -168,9 +175,16 @@ chmod +x "$STAGE/run-sdcshield.sh"
 
 # ── 4) BUILD-HASH(公式与 build-all.sh compute_build_hash 完全一致) ──
 # 源码树哈希 + container-build.sh 哈希 + cpp_std/macro + 镜像 input-hash + tag
-src_hash=$(git -C "$SRC_ROOT" ls-tree -r HEAD -- framework tests meson.build meson_options.txt 2>/dev/null | sha256sum | awk '{print $1}')
+# GHA 容器内 root 跑 git 于 runner 属主(uid 1001)的 checkout 树会
+# "fatal: detected dubious ownership"(exit 128,CI 实测)。actions/checkout
+# 自身在 runner 侧配置了 safe.directory,容器内看不到 → 此处自行声明。
+# (本地 podman 链路 cp 到容器内属主为 root,不受影响;多声明无害。)
+git config --global --add safe.directory "$SRC_ROOT" 2>/dev/null || true
+
+src_hash=$(git -C "$SRC_ROOT" ls-tree -r HEAD -- framework tests meson.build meson_options.txt 2>&1 | sha256sum | awk '{print $1}')
 cb_hash=$(sha256sum "$SRC_ROOT/scripts/offline-build/container-build.sh" | awk '{print $1}')
-img_hash=$(grep -P "^${SERIES}-${SP_LABEL}\t" "$SRC_ROOT/scripts/offline-build/images/image-manifest.tsv" 2>/dev/null | awk -F'\t' '{print $2}' || echo "no-image")
+img_hash=$(grep -P "^${SERIES}-${SP_LABEL}\t" "$SRC_ROOT/scripts/offline-build/images/image-manifest.tsv" 2>/dev/null | awk -F'\t' '{print $2}')
+img_hash="${img_hash:-no-image}"
 build_hash=$(printf '%s|%s|%s|%s|%s|%s-%s\n' "$src_hash" "$cb_hash" "$CPPSTD" "${MACRO:-none}" "$img_hash" "$SERIES" "$SP_LABEL" | sha256sum | awk '{print $1}')
 echo "$build_hash" > "$STAGE/BUILD-HASH"
 
@@ -189,10 +203,11 @@ echo "$build_hash" > "$STAGE/BUILD-HASH"
 
 git_sha=$(git -C "$SRC_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 bin_sha=$(sha256sum "$STAGE/sdcshield" | awk '{print $1}')
+built_date=$(git -C "$SRC_ROOT" log -1 --format=%ci HEAD 2>/dev/null | cut -d' ' -f1)
 cat > "$STAGE/VERSION" <<VERSION_EOF
 sdcshield $OS_TAG
 git: $git_sha
-built: $(git -C "$SRC_ROOT" log -1 --format=%ci HEAD 2>/dev/null | cut -d' ' -f1 || echo unknown)
+built: ${built_date:-unknown}
 series: $SERIES  sp: $SP
 cpp_std: $CPPSTD  macro: ${MACRO:-none}
 image: ghcr.io/wangxumarshall/sdcshield-offline:${SERIES}-${SP_LABEL}
@@ -203,7 +218,11 @@ VERSION_EOF
 
 # ── 6) tar.gz ──
 TARBALL="$OUTDIR/sdcshield-${OS_TAG}-${git_sha}.tar.gz"
-"$TAR_BIN" -czf "$TARBALL" -C "$OUTDIR" "$OS_TAG"
+if ! "$TAR_BIN" -czf "$TARBALL" -C "$OUTDIR" "$OS_TAG"; then
+    echo "ERROR: tar 打包失败 ($TAR_BIN -czf $TARBALL)" >&2
+    exit 1
+fi
 echo "==> 产出自包含 tarball: $TARBALL ($(du -h "$TARBALL" | awk '{print $1}'))"
 echo "    含: sdcshield libs/ run-sdcshield.sh MANIFEST.tsv VERSION BUILD-HASH"
-"$TAR_BIN" -tzf "$TARBALL" | head -12
+# 列内容仅作展示;head 提前关管道在 pipefail 下会 SIGPIPE 误杀,改用 sed 限量
+"$TAR_BIN" -tzf "$TARBALL" 2>/dev/null | sed -n '1,12p' || true

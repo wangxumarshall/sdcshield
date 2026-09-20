@@ -260,6 +260,10 @@ if host_machine.cpu_family() == 'aarch64'
         files(
             'arm-0102/arm0102_kreg_mask.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_k7pattern.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_k3res.cpp',
         )
     )
 endif
@@ -409,6 +413,25 @@ tests_set_sve.add(
         'eigen_svd/svd_cdouble_sve.cpp',
     )
 )
+
+# ARM64-only SVE SDC probes: SVE/SVE2 ports of the core-179 NEON attribution
+# family (tests/cpu/misc/neon_rot_ldr_at_top*.cpp). These compile in the
+# tests_sve static library (-march=armv8.2-a+sve, true VLA — no
+# -msve-vector-bits), so the framework auto-skips them on non-SVE hardware
+# via compiler_minimum_device (see framework/sandstone_run.cpp). The Eigen
+# namespace-rename macros on that library are inert for these files (they
+# never include Eigen). x86-64 untouched.
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_sve.add(
+        files(
+            'sve/sve_rot_ldr_at_top.cpp',
+            'sve/sve_rot_ldr_at_top_rowmajor.cpp',
+            'sve/sve_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
+            'sve/sve_rot_ldr_at_top_rowmajor_k7pattern.cpp',
+            'sve/sve_rot_ldr_at_top_rowmajor_k3res.cpp',
+        )
+    )
+endif
 
 zstd_dep = dependency('libzstd', static : dep_static)
 tests_set_base.add(

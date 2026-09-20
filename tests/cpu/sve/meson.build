@@ -61,6 +61,17 @@ if host_machine.cpu_family() == 'aarch64'
         'mesh/mesh_upi_sve_wide_asymm_write_int.cpp',
         'mesh/mesh_upi_sve_wide_asymm_distrib_int.cpp',
         'mesh/mesh_upi_sve_wide_asymm_distrib_write_int.cpp',
+        # Mesh domain framework B (6 ports): avx2 trio = per-thread 4MB
+        # sweep (read_only/read_L3 golden-sum scan, write_only
+        # write-and-readback); avx512 trio = 16-element-block variants
+        # (read_only/read_L3 init-golden scans, write_only cooperative
+        # writer/reader protocol matching its original).
+        'mesh/mesh_upi_sve_read_only_int.cpp',
+        'mesh/mesh_upi_sve_read_L3_int.cpp',
+        'mesh/mesh_upi_sve_write_only_int.cpp',
+        'mesh/mesh_upi_sve_wide_asymm_read_only_int.cpp',
+        'mesh/mesh_upi_sve_wide_asymm_read_L3_int.cpp',
+        'mesh/mesh_upi_sve_wide_asymm_write_only_int.cpp',
     )
 
     tests_sve_avx53_lib = static_library(

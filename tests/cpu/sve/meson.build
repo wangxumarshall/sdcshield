@@ -22,9 +22,28 @@
 # EXIT_SKIP on SVE-less CPUs (sleef_sve.cpp precedent).
 
 if host_machine.cpu_family() == 'aarch64'
+    sve_avx53_sources = files(
+        # FMA domain (10 ports of tests/cpu/fma/*avx*): same workload
+        # environments (VECTOR_SIZE, random ranges, special-value injection
+        # patterns, INNER_ITERATIONS, byte-exact memcmp + store/reload
+        # consistency) with the SIMD engine swapped to SVE1. VL-agnostic:
+        # loads/stores go through svwhilelt predicates in svcntd()/svcntw()
+        # batches, so the tests run on any SVE vector length.
+        'fma/fma_tail_sve.cpp',
+        'fma/fma_tail_sve_wide.cpp',
+        'fma/fmatail_sve.cpp',
+        'fma/fmatail_sve_wide.cpp',
+        'fma/fmatail_nested_sve.cpp',
+        'fma/fmatail_nested_sve_wide.cpp',
+        'fma/fmatail_double_nested_sve.cpp',
+        'fma/fmatail_double_nested_sve_wide.cpp',
+        'fma/fma_patterns_sve_wide_ps.cpp',
+        'fma/fma_patterns_sve_wide_pd.cpp',
+    )
+
     tests_sve_avx53_lib = static_library(
         'tests_sve_avx53',
-        sources: [],
+        sources: sve_avx53_sources,
         build_by_default: false,
         include_directories: [
             framework_incdir,

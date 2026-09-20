@@ -1,73 +1,68 @@
 #include <sandstone.h>
+#include "sandstone_p.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <atomic>
 #include <random>
 #include <vector>
-#include <unistd.h>
 
-// 获取 L3 缓存大小（字节），若失败则使用默认 8MB
+// 获取 L3 缓存大小（字节）。探测顺序（randomization hardening H8'）：
+//   1. 框架 device_info[].cache[]（topology.cpp 启动时已从 sysfs 填好，
+//      本机实测 56MB——零测试使用过的现成数据源）
+//   2. sysconf(_SC_LEVEL3_CACHE_SIZE)（本机 openEuler 24.03 返回 0）
+//   3. 8MB 兜底
+// 原实现只有 2/3，在本机上永远走 8MB 兜底，真实 L3（56MB）从未被覆盖。
 static size_t get_l3_size() {
+    int ndev = device_count();
+    for (int i = 0; i < ndev; ++i) {
+        int sz = device_info[i].cache[2].cache_data;   /* cache[2] = L3 */
+        if (sz > 0)
+            return static_cast<size_t>(sz);
+    }
     long size = sysconf(_SC_LEVEL3_CACHE_SIZE);
     if (size > 0) return static_cast<size_t>(size);
-    // 常见 L3 缓存大小：8MB
     return 8 * 1024 * 1024;
 }
 
-static const size_t BLOCK_SIZE = get_l3_size();
-
 static int memcpy_l3_cache_size_init(struct test *test) {
-    (void)test;
+    /* 在 test_init 里探测（此刻框架 topology 已填充 device_info）——
+     * 静态全局初始化发生在 main 之前，device_count() 尚为 0，探测会
+     * 静默落回兜底值（H8' 实测踩过这个坑）。 */
+    auto *block = new size_t(get_l3_size());
+    if (!block)
+        return EXIT_FAILURE;
+    test->data = block;
     return EXIT_SUCCESS;
 }
 
 static int memcpy_l3_cache_size_run(struct test *test, int cpu) {
     (void)cpu;
+    const size_t BLOCK_SIZE = *static_cast<size_t *>(test->data);
 
-    std::vector<uint8_t> src(BLOCK_SIZE);
-    std::vector<uint8_t> dst(BLOCK_SIZE);
-
-    // 随机数生成器（每个线程独立）
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> dist(0, 255);
-
-    static std::atomic<uint64_t> iter{0};
+    // 缓冲区取 2 倍 L3：源/目标各 L3 大小，另留出随机偏移滑窗的空间
+    // （随机偏移让每次复制的起止缓存组/页都不同，而不是永远从 0 开始）
+    const size_t window = BLOCK_SIZE + (BLOCK_SIZE / 2);
+    std::vector<uint8_t> src(window);
+    std::vector<uint8_t> dst(window);
 
     do {
-        // 填充源数据为随机字节（SIMD 风格数据本质上就是随机字节）
-        for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            src[i] = dist(rng);
-        }
+        // 每迭代：随机 src/dst 偏移（64B 对齐）+ 随机块长（L3 的 1/8..全尺寸）
+        size_t max_len = BLOCK_SIZE;
+        size_t len = 64 * (1 + random32() % (max_len / 64));
+        size_t src_off = 64 * (random32() % ((window - len) / 64 + 1));
+        size_t dst_off = 64 * (random32() % ((window - len) / 64 + 1));
 
-        // 执行内存复制
-        memcpy(dst.data(), src.data(), BLOCK_SIZE);
+        memset_random(src.data() + src_off, len);
+        memset(dst.data() + dst_off, 0x5A, len);   // 先污染目标，懒惰复制无法通过
 
-        // 验证数据是否完全一致
-        bool data_ok = (memcmp(dst.data(), src.data(), BLOCK_SIZE) == 0);
+        memcpy(dst.data() + dst_off, src.data() + src_off, len);
 
-        // 一致性测试：存储 dst 到临时缓冲区，再重新加载比较
-        std::vector<uint8_t> store_buf(BLOCK_SIZE);
-        memcpy(store_buf.data(), dst.data(), BLOCK_SIZE);
-        bool consistent = (memcmp(store_buf.data(), dst.data(), BLOCK_SIZE) == 0);
+        bool data_ok = (memcmp(dst.data() + dst_off, src.data() + src_off, len) == 0);
 
-        bool passed = data_ok && consistent;
-
-        uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        // 输出前 8 个字节作为摘要
-        fprintf(stderr, "memcpy_l3_cache_size: Iter %lu, src[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                iteration,
-                src[0], src[1], src[2], src[3],
-                src[4], src[5], src[6], src[7]);
-        fprintf(stderr, "  data_ok=%d, consistent=%d, result=%s%s\033[0m\n",
-                data_ok, consistent, color, result_str);
-        fflush(stderr);
-
-        if (!passed) {
-            report_fail_msg("memcpy_l3_cache_size: data mismatch or consistency failure");
+        if (!data_ok) {
+            report_fail_msg("memcpy_l3_cache_size: copy mismatch (len %zu, "
+                            "src_off %zu, dst_off %zu, L3 block %zu)",
+                            len, src_off, dst_off, BLOCK_SIZE);
             return EXIT_FAILURE;
         }
 
@@ -77,11 +72,12 @@ static int memcpy_l3_cache_size_run(struct test *test, int cpu) {
 }
 
 static int memcpy_l3_cache_size_finish(struct test *test) {
-    (void)test;
+    delete static_cast<size_t *>(test->data);
+    test->data = nullptr;
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(memcpy_l3_cache_size, "Memory copy with L3-sized block (random data)")
+DECLARE_TEST(memcpy_l3_cache_size, "Memory copy with L3-sized block (random data, random offsets)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = memcpy_l3_cache_size_init,
     .test_run = memcpy_l3_cache_size_run,

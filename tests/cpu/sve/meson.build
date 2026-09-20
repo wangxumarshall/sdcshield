@@ -39,6 +39,28 @@ if host_machine.cpu_family() == 'aarch64'
         'fma/fmatail_double_nested_sve_wide.cpp',
         'fma/fma_patterns_sve_wide_ps.cpp',
         'fma/fma_patterns_sve_wide_pd.cpp',
+        # Mesh domain framework A (12 ports of tests/cpu/mesh/*avx*): the
+        # multi-core cooperative write/barrier/read-verify/round-flip
+        # protocols and block structures (8/16-element blocks, atomic
+        # synchronization, sum + store/reload consistency checks) are
+        # preserved from the NEON originals; only the block data movement
+        # goes through SVE predicated ld/st. Note: the asymm variants fix a
+        # stack-overread UB in the originals (reader loop ran to
+        # TOTAL_ELEMENTS over an 8-element stack buffer); the SVE ports sum
+        # exactly the BLOCK_ELEMENTS that are written, which matches the
+        # described intent.
+        'mesh/mesh_upi_sve_sym.cpp',
+        'mesh/mesh_upi_sve_symm_int.cpp',
+        'mesh/mesh_upi_sve_asymm_int.cpp',
+        'mesh/mesh_upi_sve_asymm_write_int.cpp',
+        'mesh/mesh_upi_sve_asymm_distrib_int.cpp',
+        'mesh/mesh_upi_sve_asymm_distrib_write_int.cpp',
+        'mesh/mesh_upi_sve_wide_sym.cpp',
+        'mesh/mesh_upi_sve_wide_symm_int.cpp',
+        'mesh/mesh_upi_sve_wide_asymm_int.cpp',
+        'mesh/mesh_upi_sve_wide_asymm_write_int.cpp',
+        'mesh/mesh_upi_sve_wide_asymm_distrib_int.cpp',
+        'mesh/mesh_upi_sve_wide_asymm_distrib_write_int.cpp',
     )
 
     tests_sve_avx53_lib = static_library(

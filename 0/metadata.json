@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2Z5S32NFGCNWGTPVW8AN5KF",
+  "session_id": "7e534c5e-d8e7-4029-98ba-8feed368a002",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-20T10:28:53.56622163Z",
+  "branch": "feat/sdc-randomization-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/cpu/arm64/meson.build"
+  ],
+  "agent": "Claude Code",
+  "model": "GLM-5.3[1m]",
+  "turn_id": "856d7b92404a",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 232948,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 20566912,
+    "output_tokens": 58120,
+    "api_call_count": 211
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-planning-with-files-2026-09-20T08:27:14.21784061Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "planning-with-files"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "856d7b92404a",
+      "timestamp": "2026-09-20T08:27:14.21784061Z",
+      "native": {
+        "command": "/planning-with-files"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/planning-with-files",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-09-20T10:28:53.46694105Z",
+    "agent_lines": 7,
+    "agent_removed": 12,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 163,
+    "agent_percentage": 11.65644171779141,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 381,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".planning/.active_plan": 1,
+        ".planning/2026-09-18-sdc-test-case-audit-weak-coverage-defect/findings.md": 186,
+        ".planning/2026-09-18-sdc-test-case-audit-weak-coverage-defect/progress.md": 132,
+        ".planning/2026-09-18-sdc-test-case-audit-weak-coverage-defect/task_plan.md": 62
+      }
+    }
+  ]
+}

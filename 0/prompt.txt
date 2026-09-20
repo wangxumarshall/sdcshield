@@ -1,0 +1,5 @@
+装 clangd + 生成 compile_commands.json，零配置自动生效 lsp
+
+---
+
+装 clangd + 生成 compile_commands.json，零配置自动生效 lsp

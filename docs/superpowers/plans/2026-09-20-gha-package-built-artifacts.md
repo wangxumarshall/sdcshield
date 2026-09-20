@@ -131,28 +131,31 @@ Upload 部分新增独立 step（原 verify logs 上传不动）：
 保失败现场。`pr.yaml` 不动——PR 角落三哨兵保持快。）
 
 **验证**：
-- [ ] `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/multi-os-verify.yml'))"`
-      语法通过（host 有 PyYAML 则用，无则 actionlint/`python3 -c` 缩进探测）；
-- [ ] YAML 内 shell 片段在本地 24.03 容器逐条实跑通过（Task 1 canary 已覆盖
-      主体，此处验证 workflow 拼的命令串）；
-- [ ] 端到端：push `feat/gha-package-built` → 用户在 GitHub Actions 页面
-      workflow_dispatch（smoke 档，省时）→ 16 job 全绿 → Actions 页面确认
-      15 个 `built-*` artifact 存在 → 本地下载 1 个，在对应
-      `localhost/openeuler-offline` 容器里解开 pristine 实跑 zstd19 通过。
+- [x] `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/multi-os-verify.yml'))"`
+      语法通过；
+- [x] smoke-verify 命令串在本地 24.03-SP3 容器按 GHA 目录布局 replay 实跑
+      （pristine list-tests 325 + zstd19 exit: pass）；tar/bsdtar 兜底在
+      20.03-LTS / 22.03-LTS / 24.03-SP3 三镜像探测确认；
+- [ ] 端到端：push `feat/gha-package-built`（已推）→ workflow_dispatch
+      （smoke 档）→ 16 job 全绿 → Actions 页面确认 15 个 `built-*`
+      artifact 存在 → 本地下载 1 个 pristine 实跑 zstd19 通过。
+      （待用户 dispatch；注意 main 的重复测试 ID bug 已在本分支修复
+      —— bea8d2b，dispatch 必须选本分支或等修复合入 main）
 
 ### Task 3: 文档同步
 
-- [ ] `scripts/gha/README.md`：新增 package-built.sh 条目（表格 + 产物结构 +
-      libs 收集规则说明 + 与本地 package-built-artifacts.sh 的分工：
-      GHA 版无 podman、ldd 直跑、BUILD-HASH 公式对齐）；
-- [ ] `docs/multi-version-build-deploy.md` §6（GHA 章节）：新增"下载 CI 预构建
-      产物"小节——网页 Actions → run → Artifacts 路径 + `gh run download` /
-      `gh api` 命令示例 + 保留期 90 天说明 + tarball 使用方法（tar -xzf →
-      ./run-sdcshield.sh）；
-- [ ] `README.md`：快速开始区补"从 CI 下载预构建二进制（15 个 openEuler SP
-      的自包含包）"入口段，指向 docs 详细文档；
-- [ ] 验证：文档中的本地命令（tar -xzf / run-sdcshield.sh）用 Task 1 canary
-      产物真实跑一遍；`gh` 命令标注"需 gh auth login"。
+- [x] `scripts/gha/README.md`：新增 package-built.sh 条目（表格 + 用法 + 产物
+      结构 + libs 收集规则 + BUILD-HASH 等价锚点 + 与本地
+      package-built-artifacts.sh 的分工）；
+- [x] `docs/multi-version-build-deploy.md` §6.2.1：新增"下载 CI 预构建产物"
+      小节——网页路径 + `gh run download` 命令 + 保留期 90 天 + tarball 使用
+      方法 + 产物闸门 + 与本地 built/ 的关系（BUILD-HASH 等价、binary 不保证
+      bit 级一致、长期沉淀仍走 package-release.sh）；
+- [x] `README.md`：快速开始区补"从 CI 下载预构建二进制"入口段（指向
+      docs §6.2.1）；
+- [x] 验证：文档命令用 canary 产物真实跑通（tar -xzf → cd →
+      ./run-sdcshield.sh --list-tests = 325 → -e zstd19 -t 2000 -n 1 =
+      exit: pass）；`gh` 命令标注"需 gh auth login"。
 
 ## 边界与诚实声明（写入文档）
 

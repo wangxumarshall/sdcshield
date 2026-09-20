@@ -11,6 +11,7 @@
 | `benchmark.sh` | 固定 `--max-test-loop-count` 采集跨 OS 基准 → `benchmark.tsv` |
 | `benchmark.md` | 基准口径说明（为何固定 loop 数、诚实边界） |
 | `report-summary.py` | `report` job 汇总 15 份 `allquality.yaml` 成「用例 × 版本」结果矩阵 |
+| `package-built.sh` | 把 CI 构建的二进制打成自包含 built/ tarball（bin+libs+脚本+元数据），上传为 artifact |
 
 ## report-summary.py（最终 report 输出）
 
@@ -60,3 +61,38 @@ bash scripts/gha/benchmark.sh "$(pwd)/builddir/sdcshield" "$(pwd)/benchmark"
 ```
 
 固定 `--max-test-loop-count`（同工作量墙钟对比），只取三系列交集测试。口径与边界见 `benchmark.md`。
+## package-built.sh（每次 CI 构建后的自包含产物）
+
+workflow 的 `Package built/` step 调用：把刚构建的 `builddir/sdcshield` 打成与本地
+podman 链路 `third-party/rpms/.../built/` 结构一致的 tarball，上传为 artifact
+`built-<series>-<sp>`（保留 90 天）。随后 `Package smoke-verify` step 解开 tarball、
+只设 `LD_LIBRARY_PATH=libs` 实跑（list-tests >100 + zstd19 exit:pass 双断言）——
+容器内形态的 `verify-built-pristine.sh smoke`，产物闸门不静默降级。
+
+```bash
+# 容器内（原生 container 模式，ldd/strip 直跑，无需 podman）
+bash scripts/gha/package-built.sh builddir dist/openEuler-24.03LTS_SP3 24.03 SP3
+# → dist/openEuler-24.03LTS_SP3/sdcshield-openEuler-24.03LTS_SP3-<sha8>.tar.gz (~4MB)
+```
+
+产物结构：`sdcshield`（stripped）+ `libs/` + `run-sdcshield.sh` + `MANIFEST.tsv` +
+`VERSION` + `BUILD-HASH`。
+
+**libs 收集规则**（与本地 `package-built-artifacts.sh` 判定对齐）：
+- 20.03：ldd 输出的 `/opt/openEuler/*` toolset 库全拷（`cp -L` 解引用，soname 与
+  real file 双名字落盘）；
+- 22.03/24.03：恒拷 `libatomic.so.1`（最小 KIWI 目标容器缺，镜像 `/usr/lib64/` 有，
+  与本地从 LTS RPM 提取同源同效）；
+- 其余（libc/libm/libz/libzstd/libgmp/系统 libstdc++）视为目标机自带不拷；
+- ACL 已改 vendored 静态链接（`-l:libarm_compute-core.a`），二进制 ldd 不依赖
+  `libarm_compute.so` —— 本地 built/libs 里该文件是老方案遗留死重，本脚本不拷。
+
+**BUILD-HASH 等价锚点**：公式与 `build-all.sh compute_build_hash` 完全一致（源码树
+`git ls-tree` 哈希 + `container-build.sh` 哈希 + cpp_std/macro + 镜像 input-hash +
+series-sp 拼串 sha256）。同 commit 时 GHA 产物与本地 built/ 的 BUILD-HASH 相等——
+两条链路等价的机器可查证明（已实测双向验证）。
+
+**与本地 `package-built-artifacts.sh` 的分工**：本地版跑在构建宿主上，需要 podman
+包装进目标镜像做 ldd 探测、从 RPM 树提取 libatomic；GHA 版跑在镜像**内部**（原生
+container 模式），ldd/strip 直跑、libatomic 从镜像文件系统直拷，无需 podman 与
+RPM 树（GHA 不 checkout rpms 子模块）。产物结构与元数据格式一致。

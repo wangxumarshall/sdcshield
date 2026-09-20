@@ -307,7 +307,10 @@ jobs:
           # 下的目录层级,merge-multiple 只合并不平铺)— glob 深一层匹配
           TAG="build-$(date +%Y%m%d)-${GITHUB_SHA::8}"
           echo "release tag: $TAG"
+          # --repo 显式指定:本 job 无 checkout 步骤,gh 无法从 .git 推断仓库
+          # (run 35513299740 现场: fatal: not a git repository)
           gh release create "$TAG" dist/*/sdcshield-*.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
             --title "sdcshield build $(date +%Y-%m-%d)" \
             --notes "Multi-OS Verify 构建产物(15 个 openEuler SP 自包含包)。
           源 commit: ${GITHUB_SHA}

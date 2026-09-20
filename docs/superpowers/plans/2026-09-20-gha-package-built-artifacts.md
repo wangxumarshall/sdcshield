@@ -79,16 +79,21 @@ CLI：`package-built.sh <builddir> <outdir> <series> <sp>`
    名 `sdcshield-<OS_TAG>-<git-sha8>.tar.gz`。
 
 **验证（本地 podman，同镜像 canary）**：
-- [ ] `bash -n scripts/gha/package-built.sh` 语法通过；
-- [ ] 24.03-LTS-SP3 canary：`podman run` 挂 build-out 旧二进制 + 仓树进
-      `localhost/openeuler-offline:24.03-LTS-SP3`，跑脚本 → 产出
-      tar.gz，解开结构 = sdcshield + libs/(libatomic) + 脚本 + 元数据；
-- [ ] pristine 实跑：同容器只设 `LD_LIBRARY_PATH=<pkg>/libs` 跑
-      `--list-tests`（断言 >100）+ `-e zstd19 -t 2000 -n 1`（断言 exit: pass）；
-- [ ] 20.03-LTS canary：同上（覆盖 tar→bsdtar 兜底路径 + toolset libs 收集，
-      断言 libs/ 含 libstdc++.so.6/libgcc_s.so.1/libatomic.so.1）；
-- [ ] BUILD-HASH 与本地 built/（同 commit 时）相等——本地重算
-      `compute_build_hash` 公式比对（或明确记录差异原因）。
+- [x] `bash -n scripts/gha/package-built.sh` 语法通过；
+- [x] 24.03-LTS-SP3 canary：当前 main 代码在容器内重建（325 测试，271MB→
+      strip 后 8.8MB），跑脚本 → tar.gz 3.8MB，结构 = sdcshield +
+      libs/(libatomic.so.1 + .so.1.2.0) + 脚本 + 元数据；新二进制 ldd 无
+      libarm_compute（vendored 静态链接生效，验证了不拷 ACL .so 的判断）；
+- [x] pristine 实跑：list-tests 325（>100 ✓）+ `-e zstd19 -t 2000 -n 1`
+      → `exit: pass`；run-sdcshield.sh 透传 → `exit: pass`；
+- [x] 20.03-LTS-SP4 canary（旧二进制，验证 libs 收集 + bsdtar 兜底）：
+      libs/ = libstdc++.so.6+.so.6.0.28 / libgcc_s.so.1+libgcc_s-10.so.1 /
+      libatomic.so.1+.so.1.2.0（toolset 三库双名字全收集）；bsdtar 兜底
+      生效（20.03-LTS 无 GNU tar）；pristine list-tests 287 + zstd19
+      `exit: pass`；
+- [x] BUILD-HASH 双向验证：① 用本地 built/ 的源 commit 08c37be3 重算公式 =
+      本地 built/BUILD-HASH（92263cea... 相等）；② 24.03 canary 包的
+      BUILD-HASH（876c5826...）= 宿主重算同 commit edb8633 公式（相等）。
 
 ### Task 2: workflow 集成（`multi-os-verify.yml`）
 

@@ -27,6 +27,8 @@
 
 ## 进度日志
 
+- **2026-09-21（会话 12，批次 2 完成）**：**批次 2 完成并推送**（13 个 NEON 直换，比计划 12 多出 insert_extract）。FMA/FPU/misc/vector 四域：neon_add/fma/fpu_special_values/power_virus_dit/movdq2q/movq2dq/movmskpspd/fsu_byteexact + kreg1/4/7 + swizzle(svtbl 字节表置换)+insert_extract。**4 个 bug 被纪律抓住**：①浮点符号比较漏 -0.0（-0.0<+0.0 为 false）→整数符号位比较；②谓词极性反了（svcmplt 选的是符号位=0 的 lane）→svcmpge；③kreg7 掩码承载类型太窄（64 元素 u8 装进 uint16 截断）→按元素数定宽；④`mov x, z.d[0]` 汇编器不收 → svlastb 向量→标量通道。**两阶段**：阶段1（!122, 30s）=30882/0；阶段2 首轮 29755/1——**1 个未复现 fail 且我删日志太早丢了 cpu-mask 归因证据**（操作失误如实记录），4 轮复跑共 ~10 万结果 0 fail，122 每轮参与未触发（数据点 #7）。教训：阶段2 出 fail **必须先提取 cpu-mask 再删日志**。剩余 44 个（批次 3-7）。
+
 - **2026-09-21（会话 11，批次 1 完成）**：**64 转换计划批次 1 完成并推送**（kreg 7 个：软件仿真 → SVE 谓词真指令）。映射全部独立探针验证后落地：KSHIFTL/R→svlsl/svlsr、KORTEST/KTEST→svptest_any、KUNPCK→svzip1、掩码展开→svsel、KMOV→谓词 lane+svcntp、arm0102 配方→ldr z/str z+谓词比较扩展。**核心价值升级**：原版 sw==hw 同义反复 → SVE 版独立标量 golden（谓词指令真算错才 fail）。**两个 bug 被纪律抓住**：kreg9 谓词 lane 数硬编码 16（VL=256 实际 8）→svcnt* 动态；arm0102 store 用 svptrue 8-lane 写 4 元素子块 → 越界 16B/迭代砸堆元数据（851 次后 double free）→4-lane whilelt。**两阶段**：阶段1=7954/0（另短窗复核 exit pass）；阶段2=7359/0（**数据点 #6：谓词指令负载不触发 122**）。教训：kreg 系 stderr 每迭代多行 fprintf × 126 核 × 60s 会打 9.4GB 日志——后续批次对高频 fprintf 测试改用 -t 短窗或考虑框架日志限流。剩余 57 个待转（批次 2-7）。
 
 - **2026-09-20（会话 10，Task 7 收尾）**：**全部 53 个 SVE 测试完成并推送（分支 feat/sve-port-avx53，8 个 commit）**。

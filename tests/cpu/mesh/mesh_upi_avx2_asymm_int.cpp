@@ -22,10 +22,13 @@ struct TestData {
     std::atomic<uint64_t> global_sum;
     std::atomic<uint32_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
-    std::atomic<uint32_t> round_done;
-    std::atomic<uint64_t> iter;
-    std::atomic<uint32_t> num_threads;
-    std::atomic<uint32_t> ready;
+    /* sense-reversal barrier (G2'/G3' fix): the original iter/round_done
+     * protocol deadlocked from round 1 (the writer waited for
+     * iter != current_iter, but iter only advanced after a completed
+     * round), so the readers' verification never executed and the test
+     * passed vacuously. Pre-existing since the 098d4aa port. */
+    std::atomic<uint32_t> arrived;
+    std::atomic<uint32_t> epoch;
 };
 
 static int mesh_upi_avx2_asymm_int_init(struct test *test) {
@@ -45,10 +48,8 @@ static int mesh_upi_avx2_asymm_int_init(struct test *test) {
     td->global_sum.store(0, std::memory_order_relaxed);
     td->allocated_blocks.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->round_done.store(0, std::memory_order_relaxed);
-    td->iter.store(0, std::memory_order_relaxed);
-    td->num_threads.store(0, std::memory_order_relaxed);
-    td->ready.store(0, std::memory_order_relaxed);
+    td->arrived.store(0, std::memory_order_relaxed);
+    td->epoch.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -58,26 +59,17 @@ static int mesh_upi_avx2_asymm_int_run(struct test *test, int cpu) {
     (void)cpu;
     auto *td = static_cast<TestData*>(test->data);
 
-    // 分配唯一线程 ID
+    // 分配唯一线程 ID（用于每轮输出与 asymm 写者轮转）
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
 
-    // 线程 0 负责确定总线程数
-    if (id == 0) {
-        while (td->thread_idx.load(std::memory_order_acquire) < 1) __asm__ volatile("yield");
-        uint32_t prev = 0, stable = 0;
-        while (stable < 3) {
-            uint32_t cur = td->thread_idx.load(std::memory_order_acquire);
-            if (cur == prev && cur > 1) stable++;
-            else { stable = 0; prev = cur; }
-            __asm__ volatile("yield");
-        }
-        td->num_threads.store(prev, std::memory_order_release);
-        td->ready.store(1, std::memory_order_release);
-    } else {
-        while (td->ready.load(std::memory_order_acquire) == 0) __asm__ volatile("yield");
-    }
-
-    uint32_t total_threads = td->num_threads.load(std::memory_order_acquire);
+    /* 线程总数取框架权威值 thread_count()（自动尊重 --cpuset、
+     * test.max_threads 与 OS 亲和性限制，每个线程取值一致）。
+     * 原运行时“3 次稳定读数”启发式是 098d4aa 移植引入的缺陷：大规模
+     * 并发下严重欠计（191 线程实测检出 2，甚至读出垃圾值），屏障参与
+     * 者数目随之错误 → 轮次隔离崩溃 → 误报 sum mismatch；此前的死锁
+     * 屏障恰好掩盖了它。另注：该启发式在 -n 1 下会永久自旋挂死，
+     * thread_count() 则给出确定性结果。 */
+    uint32_t total_threads = thread_count();
     if (total_threads < 2) {
         report_fail_msg("Requires at least 2 threads");
         return EXIT_FAILURE;
@@ -91,27 +83,14 @@ static int mesh_upi_avx2_asymm_int_run(struct test *test, int cpu) {
     #define RED   "\033[31m"
     #define RESET "\033[0m"
 
+    uint32_t my_epoch = 0;
     do {
-        uint64_t current_iter = td->iter.load(std::memory_order_acquire);
-        int writer_id = current_iter % total_threads;
+        int writer_id = my_epoch % total_threads;
 
         if (id == writer_id) {
-            // ---------- 写者：等待上一轮完全结束 ----------
-            while ((td->allocated_blocks.load(std::memory_order_seq_cst) != 0 ||
-                    td->round_done.load(std::memory_order_seq_cst) != 0 ||
-                    td->iter.load(std::memory_order_acquire) == current_iter) &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
-            }
-            if (!test_time_condition(test)) break;
-
-            // 重置状态
-            td->global_sum.store(0, std::memory_order_seq_cst);
-            td->next_block.store(0, std::memory_order_seq_cst);
-            td->allocated_blocks.store(0, std::memory_order_seq_cst);
-            td->round_done.store(0, std::memory_order_seq_cst);
-
-            // 写入所有块
+            // ---------- 写者：写入所有块 ----------
+            // （本轮状态已由上一轮 sense-reversal 屏障的最后到达线程重置；
+            //   第一轮的状态由 init 重置）
             for (uint32_t block = 0; block < NUM_BLOCKS; ++block) {
                 size_t offset = block * BLOCK_ELEMENTS;
                 int32_t vals[BLOCK_ELEMENTS];
@@ -143,11 +122,20 @@ static int mesh_upi_avx2_asymm_int_run(struct test *test, int cpu) {
 
         } else {
             // ---------- 读者：等待所有块分配完成 ----------
-            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
+            /* test_time_condition() 每次调用都会消耗 auto-fracture 的
+             * inner_loop_count 预算（默认 40）：写者串行填充 NUM_BLOCKS
+             * 需要数十微秒，若每次自旋都检查预算，读者会在写者完成前
+             * 耗尽 40 次预算而提前 break（校验又被跳过）。每 1024 次
+             * 自旋检查一次 —— inner_loop_count 语义是“轮次”而非
+             * “自旋”，这是框架认可的用法（其余 mesh 文件同理）。 */
+            uint32_t spin = 0;
+            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
+                if ((++spin & 1023u) == 0) {
+                    if (!test_time_condition(test)) goto out_of_budget;
+                } else {
+                    __asm__ volatile("yield");
+                }
             }
-            if (!test_time_condition(test)) break;
 
             __sync_synchronize();  // 确保写者的所有存储可见
 
@@ -201,25 +189,39 @@ static int mesh_upi_avx2_asymm_int_run(struct test *test, int cpu) {
                 return EXIT_FAILURE;
             }
 
-            // ---------- 最后一个读者执行重置 ----------
-            uint32_t done = td->round_done.fetch_add(1, std::memory_order_seq_cst) + 1;
-            uint32_t total_readers = total_threads - 1;
-            if (done == total_readers) {
+            // ---------- 读者到达 sense-reversal 屏障，等待写者与全部读者 ----------
+        }
+
+        // ---------- 阶段 3：sense-reversal 屏障进入下一轮（写者也到达） ----------
+        // 最后到达的线程在此重置下一轮状态（global_sum/next_block/
+        // allocated_blocks）：fetch_add(acq_rel) 的到达顺序保证所有线程
+        // （写者 + 全部读者）都已离开本轮流量的生产/消费，epoch 的
+        // release 存储保证重置先于任何线程的下一轮访问可见 —— 这正是
+        // 原协议想做而没做对的轮次隔离。writer 随 my_epoch 轮转。
+        // （自旋同样按 1024 次一档节流预算检查，理由同读者的等待。）
+        {
+            uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (done == total_threads) {
                 td->global_sum.store(0, std::memory_order_seq_cst);
                 td->next_block.store(0, std::memory_order_seq_cst);
                 td->allocated_blocks.store(0, std::memory_order_seq_cst);
-                td->round_done.store(0, std::memory_order_seq_cst);
-                td->iter.fetch_add(1, std::memory_order_release);
+                td->arrived.store(0, std::memory_order_relaxed);
+                td->epoch.store(my_epoch + 1, std::memory_order_release);
             } else {
-                while (td->round_done.load(std::memory_order_seq_cst) != 0 &&
-                       test_time_condition(test)) {
-                    __asm__ volatile("yield");
+                uint32_t spin = 0;
+                while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
+                    if ((++spin & 1023u) == 0) {
+                        if (!test_time_condition(test)) goto out_of_budget;
+                    } else {
+                        __asm__ volatile("yield");
+                    }
                 }
-                if (!test_time_condition(test)) break;
             }
         }
+        ++my_epoch;
     } while (test_time_condition(test));
 
+out_of_budget:
     return EXIT_SUCCESS;
 
     #undef GREEN

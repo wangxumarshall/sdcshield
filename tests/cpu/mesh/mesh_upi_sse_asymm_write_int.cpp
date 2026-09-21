@@ -148,17 +148,16 @@ static int mesh_upi_sse_asymm_write_int_run(struct test *test, int cpu) {
             bool sum_ok = (read_sum == expected_sum);
             bool passed = sum_ok && consistent;
 
-            // 输出结果（每个读者只输出一次）
-            fprintf(stderr, "mesh_upi_sse_asymm_write_int: Thread %d (reader), data[0..3]=(%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
-                    id,
-                    td->data[0], td->data[1], td->data[2], td->data[3],
-                    read_sum, expected_sum, consistent,
-                    passed ? GREEN : RED,
-                    passed ? "PASS" : "FAIL",
-                    RESET);
-            fflush(stderr);
-
             if (!passed) {
+                // 首次失败证据（原先每轮都从读核心打印 PASS 行）
+                fprintf(stderr, "mesh_upi_sse_asymm_write_int: Thread %d (reader), data[0..3]=(%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
+                        id,
+                        td->data[0], td->data[1], td->data[2], td->data[3],
+                        read_sum, expected_sum, consistent,
+                        passed ? GREEN : RED,
+                        passed ? "PASS" : "FAIL",
+                        RESET);
+                fflush(stderr);
                 report_fail_msg("mesh_upi_sse_asymm_write_int: Sum mismatch or consistency failure");
                 return EXIT_FAILURE;
             }

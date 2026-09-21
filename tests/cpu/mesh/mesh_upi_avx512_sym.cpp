@@ -148,8 +148,8 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
 
         bool passed = consistent;
 
-        // 输出结果（仅线程0输出）
-        if (id == 0) {
+        if (!passed) {
+            // 首次失败证据（原先每个工作迭代都从线程 0 打印 PASS 行）
             fprintf(stderr, "mesh_upi_avx512_sym: Thread %d, data[0..15]=(%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f), consistent=%d, result=%s%s%s\n",
                     id,
                     td->data[0], td->data[1], td->data[2], td->data[3],
@@ -161,9 +161,6 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
                     passed ? "PASS" : "FAIL",
                     RESET);
             fflush(stderr);
-        }
-
-        if (!passed) {
             report_fail_msg("mesh_upi_avx512_sym: Consistency failure");
             return EXIT_FAILURE;
         }

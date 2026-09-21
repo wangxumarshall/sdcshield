@@ -74,16 +74,15 @@ static int mesh_upi_avx2_write_only_int_run(struct test *test, int cpu) {
             if (!passed) break;
         }
 
-        // 输出本次的输入（前 VECTOR_SIZE 个随机数）和结果
-        fprintf(stderr, "mesh_upi_avx2_write_only_int: Thread %d, input[0..3]=(%d,%d,%d,%d), result=%s%s%s\n",
-                id,
-                first_vals[0], first_vals[1], first_vals[2], first_vals[3],
-                passed ? GREEN : RED,
-                passed ? "PASS" : "FAIL",
-                RESET);
-        fflush(stderr);
-
         if (!passed) {
+            // 首次失败证据（原先每个工作迭代都打印 PASS 行）
+            fprintf(stderr, "mesh_upi_avx2_write_only_int: Thread %d, input[0..3]=(%d,%d,%d,%d), result=%s%s%s\n",
+                    id,
+                    first_vals[0], first_vals[1], first_vals[2], first_vals[3],
+                    passed ? GREEN : RED,
+                    passed ? "PASS" : "FAIL",
+                    RESET);
+            fflush(stderr);
             report_fail_msg("mesh_upi_avx2_write_only_int: Data mismatch");
             free(buf);
             return EXIT_FAILURE;

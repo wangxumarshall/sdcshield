@@ -152,20 +152,19 @@ static int mesh_upi_avx512_asymm_distrib_write_int_run(struct test *test, int cp
             bool sum_ok = (read_sum == expected_sum);
             bool passed = sum_ok && consistent;
 
-            // 输出结果
-            fprintf(stderr, "mesh_upi_avx512_asymm_distrib_write_int: Thread %d (reader), data[0..15]=(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
-                    id,
-                    td->data[0], td->data[1], td->data[2], td->data[3],
-                    td->data[4], td->data[5], td->data[6], td->data[7],
-                    td->data[8], td->data[9], td->data[10], td->data[11],
-                    td->data[12], td->data[13], td->data[14], td->data[15],
-                    read_sum, expected_sum, consistent,
-                    passed ? GREEN : RED,
-                    passed ? "PASS" : "FAIL",
-                    RESET);
-            fflush(stderr);
-
             if (!passed) {
+                // 首次失败证据（原先每轮都从读核心打印 PASS 行）
+                fprintf(stderr, "mesh_upi_avx512_asymm_distrib_write_int: Thread %d (reader), data[0..15]=(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
+                        id,
+                        td->data[0], td->data[1], td->data[2], td->data[3],
+                        td->data[4], td->data[5], td->data[6], td->data[7],
+                        td->data[8], td->data[9], td->data[10], td->data[11],
+                        td->data[12], td->data[13], td->data[14], td->data[15],
+                        read_sum, expected_sum, consistent,
+                        passed ? GREEN : RED,
+                        passed ? "PASS" : "FAIL",
+                        RESET);
+                fflush(stderr);
                 report_fail_msg("mesh_upi_avx512_asymm_distrib_write_int: Sum mismatch or consistency failure");
                 return EXIT_FAILURE;
             }

@@ -129,8 +129,8 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
                 uint64_t expected_sum = td->global_sum.load(std::memory_order_seq_cst);
                 bool passed = (read_sum == expected_sum);
 
-                // 输出结果（仅第一个读核心输出以节省日志）
-                if (id == 1) {
+                if (!passed) {
+                    // 首次失败证据（原先每个读迭代都从读核心 1 打印 PASS 行）
                     fprintf(stderr, "mesh_upi_avx2_asymm_distrib_int: Thread %d (reader), data[0..7]=(%d,%d,%d,%d,%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, result=%s%s%s\n",
                             id,
                             td->data[0], td->data[1], td->data[2], td->data[3],
@@ -140,9 +140,6 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
                             passed ? "PASS" : "FAIL",
                             RESET);
                     fflush(stderr);
-                }
-
-                if (!passed) {
                     report_fail_msg("mesh_upi_avx2_asymm_distrib_int: Sum mismatch");
                     return EXIT_FAILURE;
                 }

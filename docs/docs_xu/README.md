@@ -29,6 +29,8 @@
 
 ## 进度日志
 
+- **2026-09-21（会话 13，批次 3+4 完成）**：**批次 3+4 完成并推送**（12 个：换算类 2 + 进位链/大数 10）。fisttp_sve=svcvt 真截断语义（1.9→1/-2.9→-2 实证）；iex_operand_combo_sve=svclz 真指令 + svtbl 字节反转组合 rbit/rev（2 万随机向量 vs 软件参考 0 差异）；adcx 系 8 个=svadd 批内向量加 + 串行进位折叠；operand_space_sve=svadd 链+svmul+原版 asm slf 探针；bigint_mulx_sve=svmul 部分积 512-bit 乘（svmulh 是 SVE2 本机无 → 高半 __int128 折叠，init 时与 golden 交叉核对）。**1 个系统性 bug 被纪律抓住**：生成器推导的进位公式 `carry=(vsum+c)>>64` 丢了 a+b 自身溢出 → 9 个进位测试全部 word[2] 差 1；正确公式 `carry=(vsum<lhs)+((vsum+c)>>64)`；探针版本公式本来就对（__int128(a+b+c)），生成器重推导时引入错误——教训：模板生成必须逐字核对与验证过的探针公式一致。**两阶段**：阶段1=76253/0；阶段2=75479/0（数据点 #8：进位链/svcvt 负载不触发 122）。**环境注记**：fisttp_arm 原版因 ACL vendored 未构建不在当前二进制（环境 gate 非回归）；fisttp_sve 无 ACL 依赖因此更可用。**进度 32/64**。剩余批次 5（core-179 向量版 21）+ 6（访存 7）+ 7（库 4）。
+
 - **2026-09-21（用户指示固化）**：建立 **[122 候选名单](2026-09-21-cpu122-fail-candidates.md)**——SDC 有偶然性，阶段 2 短窗（30-60s）未复现 fail 不能排除负载可触发 122。当前头号线索：**批次 2 首轮的 1 次未归因 fail**（全核 29755/1；同负载排除 122 时 30882/0 零 fail——但日志被过早删除丢失 cpu-mask 证据）。此后规则：阶段 2 出现任何 fail → 立即提取 测试名/cpu-mask/miscompare 详情 → 记入名单 → 全部 64 个写完后对候选做小时级长测 + 126 核对照轮交叉锁定 122。
 
 - **2026-09-21（会话 12，批次 2 完成）**：**批次 2 完成并推送**（13 个 NEON 直换，比计划 12 多出 insert_extract）。FMA/FPU/misc/vector 四域：neon_add/fma/fpu_special_values/power_virus_dit/movdq2q/movq2dq/movmskpspd/fsu_byteexact + kreg1/4/7 + swizzle(svtbl 字节表置换)+insert_extract。**4 个 bug 被纪律抓住**：①浮点符号比较漏 -0.0（-0.0<+0.0 为 false）→整数符号位比较；②谓词极性反了（svcmplt 选的是符号位=0 的 lane）→svcmpge；③kreg7 掩码承载类型太窄（64 元素 u8 装进 uint16 截断）→按元素数定宽；④`mov x, z.d[0]` 汇编器不收 → svlastb 向量→标量通道。**两阶段**：阶段1（!122, 30s）=30882/0；阶段2 首轮 29755/1——**1 个未复现 fail 且我删日志太早丢了 cpu-mask 归因证据**（操作失误如实记录），4 轮复跑共 ~10 万结果 0 fail，122 每轮参与未触发（数据点 #7）。教训：阶段2 出 fail **必须先提取 cpu-mask 再删日志**。剩余 44 个（批次 3-7）。

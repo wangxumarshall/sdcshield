@@ -29,6 +29,11 @@
 
 ## 进度日志
 
+- **2026-09-21（会话 14，批次 5 + 批次 6 前半完成）**：
+  **批次 5 完成**（core-179 数据流向量版 21 个：movbe_sve + movbe_dump_sve + 11 个 probe 变体（A 无store/B 16nops/C SLF 私有副本+屏障+迭代重置/D 常量全局/E NUMA 如实简化/F 单行窗口/G1 单set 16槽/G2 16行/H env 扫描/X 语义no-op ALU/XN 参数化nop）+ mrn 系 6 个（nuke/pairs/flags/reloaded/rmw/rmw_dump）+ neon_rot_2src_sve（ldr z/str z 配方 SVE 通路判别）+ mite_sve）。svtbl [3,2,1,0] bswap32 与 __builtin_bswap32 5 万向量等价验证。**4 个 bug 被纪律抓住**：①mrn_rmw/rot 旋转相位用 base%4（批步进 4 → 恒 0 → 只 1/4 元素匹配 golden）→ 逐 lane 相位谓词分派；②probe_c 跨迭代 store-back 污染私有副本 → 每外层迭代重置 + asm 屏障防编译器消除真实 reload；③probe_e mmap MAP_FAILED 未检查 + free() mmap 内存 UB → 如实简化 aligned_alloc；④partial_store_forwarding_sve DECLARE 字段顺序。**两阶段**：阶段1=2779/0；阶段2=2678/0（数据点 #9）。
+  **批次 6 前半完成**（2/7）：partial_store_forwarding_sve（**谓词控部分写 = SVE 独有原生表达**：svst1+whilelt 精确 1/2/4/8 字节谓词）+ agu_stress_2src_sve（2 源 ldr z + 旋转 + str z/ldr z/str z，从 neon_rot_2src_sve 骨架派生）。阶段1=446/0；阶段2=240/0（数据点 #10）。
+  **进度 55/64**。**剩余 9 个**：批 6 后半 5 个（lsu_store_forward_arm / l2c_cross_cache_line_arm / mmu_split_tlb_arm / ooo_dep_chain_arm / arm64_sdc，每个 200-400 行精细微架构配方）+ 批 7 的 4 个（gmp_bigadd / gmp_bignum / crt_builtins / acl_gemm 库自实现）。
+
 - **2026-09-21（会话 13，批次 3+4 完成）**：**批次 3+4 完成并推送**（12 个：换算类 2 + 进位链/大数 10）。fisttp_sve=svcvt 真截断语义（1.9→1/-2.9→-2 实证）；iex_operand_combo_sve=svclz 真指令 + svtbl 字节反转组合 rbit/rev（2 万随机向量 vs 软件参考 0 差异）；adcx 系 8 个=svadd 批内向量加 + 串行进位折叠；operand_space_sve=svadd 链+svmul+原版 asm slf 探针；bigint_mulx_sve=svmul 部分积 512-bit 乘（svmulh 是 SVE2 本机无 → 高半 __int128 折叠，init 时与 golden 交叉核对）。**1 个系统性 bug 被纪律抓住**：生成器推导的进位公式 `carry=(vsum+c)>>64` 丢了 a+b 自身溢出 → 9 个进位测试全部 word[2] 差 1；正确公式 `carry=(vsum<lhs)+((vsum+c)>>64)`；探针版本公式本来就对（__int128(a+b+c)），生成器重推导时引入错误——教训：模板生成必须逐字核对与验证过的探针公式一致。**两阶段**：阶段1=76253/0；阶段2=75479/0（数据点 #8：进位链/svcvt 负载不触发 122）。**环境注记**：fisttp_arm 原版因 ACL vendored 未构建不在当前二进制（环境 gate 非回归）；fisttp_sve 无 ACL 依赖因此更可用。**进度 32/64**。剩余批次 5（core-179 向量版 21）+ 6（访存 7）+ 7（库 4）。
 
 - **2026-09-21（用户指示固化）**：建立 **[122 候选名单](2026-09-21-cpu122-fail-candidates.md)**——SDC 有偶然性，阶段 2 短窗（30-60s）未复现 fail 不能排除负载可触发 122。当前头号线索：**批次 2 首轮的 1 次未归因 fail**（全核 29755/1；同负载排除 122 时 30882/0 零 fail——但日志被过早删除丢失 cpu-mask 证据）。此后规则：阶段 2 出现任何 fail → 立即提取 测试名/cpu-mask/miscompare 详情 → 记入名单 → 全部 64 个写完后对候选做小时级长测 + 126 核对照轮交叉锁定 122。

@@ -1,0 +1,114 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M311C3SENTH5ES7P79B28Q2X",
+  "session_id": "5b466196-81cc-4ebf-9ce5-01bc68d3b970",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-21T03:50:27.35612612Z",
+  "branch": "feat/sve-port-avx53",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    ".superpowers/sdd/2026-09-18-eigen-sve-double-packets/task-1-report.md",
+    ".superpowers/sdd/2026-09-18-eigen-sve-double-packets/task-2-report.md",
+    "docs/docs_xu/README.md",
+    "docs/research/README.md",
+    "docs/research/adding-tests.md",
+    "docs/research/progress-log.md",
+    "docs/research/third-party-sdc-param-critique.md",
+    "docs/research/third-party-sdc-test-review.md",
+    "docs/research/usage.md",
+    "m5out/citations.bib",
+    "m5out/config.ini",
+    "m5out/config.json",
+    "m5out/stats.txt"
+  ],
+  "agent": "Claude Code",
+  "model": "GLM-5.3[1m]",
+  "turn_id": "3e79345b4cf1",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 8473727,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 343161536,
+    "output_tokens": 386716,
+    "api_call_count": 934,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-superpowers:writing-plans-2026-09-18T10:21:05.02157407Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "f1462b84d32d",
+      "timestamp": "2026-09-18T10:21:05.02157407Z",
+      "native": {
+        "command": "/superpowers:writing-plans"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-superpowers:writing-plans-2026-09-18T17:23:02.78673874Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "070f8dd86418",
+      "timestamp": "2026-09-18T17:23:02.78673874Z",
+      "native": {
+        "command": "/superpowers:writing-plans"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-21T03:50:25.39761277Z",
+    "agent_lines": 1045,
+    "agent_removed": 0,
+    "human_added": 12619,
+    "human_modified": 1996,
+    "human_removed": 0,
+    "total_committed": 15660,
+    "total_lines_changed": 17378,
+    "agent_percentage": 6.013350212912878,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

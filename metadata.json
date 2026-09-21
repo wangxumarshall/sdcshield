@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M311C3SENTH5ES7P79B28Q2X",
+  "strategy": "manual-commit",
+  "branch": "feat/sve-port-avx53",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".superpowers/sdd/2026-09-18-eigen-sve-double-packets/task-1-report.md",
+    ".superpowers/sdd/2026-09-18-eigen-sve-double-packets/task-2-report.md",
+    "docs/docs_xu/README.md",
+    "docs/research/README.md",
+    "docs/research/adding-tests.md",
+    "docs/research/progress-log.md",
+    "docs/research/third-party-sdc-param-critique.md",
+    "docs/research/third-party-sdc-test-review.md",
+    "docs/research/usage.md",
+    "m5out/citations.bib",
+    "m5out/config.ini",
+    "m5out/config.json",
+    "m5out/stats.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8473727,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 343161536,
+    "output_tokens": 386716,
+    "api_call_count": 934,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  }
+}

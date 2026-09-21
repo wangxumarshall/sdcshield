@@ -29,6 +29,9 @@
 
 ## 进度日志
 
+- **2026-09-21（批次 6+7 完成 → 64/64 全部完成）**：**最后 9 个转换完成并推送**。批 6 后半 5 个按批次 5 固化的"访存序列等价"标准：**被测的标量 asm 微操逐字保留**（lsu 的 str/ldr 转发窗口、l2c 的 ldxr/stxr/dc-civac、ooo 的 asm ldr 指针追逐链、mmu 的 mmap/memfd 别名逻辑），向量化的只是 128-bit 数据搬运部分（svst1/svld1）；arm64_sdc_sve = svld1 向量扫描 + 软件CRC表，fail-closed 1-bit 自检逐字保留（BETA 级照抄原版）。批 7 的 4 个：gmp_bigadd（2048-bit SVE 进位链）、gmp_bignum（svmul 部分积）、crt_builtins（soft-float 保留为被测路径 + 独立库挂 libclang_rt，与原版同 gate——本机无此库两侧都不构建）、acl_gemm（SVE GEMM 64×64 vs naive golden）。**1 个 bug 被纪律抓住**：acl_gemm 用 svmla（单次舍入）vs golden 的标量乘加序 → ULP 级全 mismatch → 改 svmul+svadd 位级一致。**两阶段**：阶段1=18294/0；阶段2=18068/0（数据点 #11）。原版回归全 pass（acl_gemm 原版本机同样被 ACL gate，环境非回归）。
+  **🎉 64/64 转换计划全部完成**（含批 5 保真修复）。SVE 测试总数：64（转换）+ 53（avx53 移植）= 117 个新 SVE 测试。122 候选名单等待长时窗检测（唯一线索仍是批次 2 首轮的 1 次未归因 fail）。
+
 - **2026-09-21（批次 5 保真修复完成）**：用户质询批次 5 是否改变测试逻辑 → 自查发现 **movbe 系 13 个存在实质偏差**（store/reload 经栈数组中转，而原版探针的被测对象是"直接堆 store→堆 reload"的存储转发路径——对触发配方探针，访存序列就是被测对象本身）。**已全部修复**：svst1/svld1 直接打堆指针（movbe 基线/probe_c SLF 私有副本/probe_f/g1/g2/h 特殊目标地址），probe_a 还原链寄存器直连（原版 no-store 语义，旧版错误地读了从未写过的 swapped 缓冲区）。其余批次 5 判定：neon_rot_2src/mrn_nuke/pairs/reloaded 完全保真；mrn_flags/mite/rmw 计算保真（标量 asm 标志链→向量谓词的 SVE 化改变已在描述注明）。**修复后重验**：13 个全 pass；阶段1=2775/0；阶段2=2732/0（数据点 #9 在保真实现上重确认）。自查报告：`2026-09-21-batch5-logic-fidelity-audit.md`。**教训固化：触发配方探针的"逻辑保真"= 微操作序列等价（访存目标/顺序），不同于普通测试的"计算结果等价"——批次 6/7 剩余测试按此双重标准审查。**
 
 - **2026-09-21（会话 14，批次 5 + 批次 6 前半完成）**：

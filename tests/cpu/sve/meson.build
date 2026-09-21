@@ -169,7 +169,55 @@ if host_machine.cpu_family() == 'aarch64'
         # composition and the str z/ldr z/str z chain.
         'mem/partial_store_forwarding_sve.cpp',
         'mem/agu_stress_2src_sve.cpp',
+        # Batch 6 remainder (5): LSU store-forward with scalar asm micro-ops
+        # preserved (they ARE the tested forwarding window) and the 128-bit
+        # cross-line phase on svst1/svld1; L2C cross-line with ldxr/stxr/
+        # dc-civac preserved and the 16B forward vectorized; MMU alias/split
+        # with mmap/memfd logic intact and 128-bit stores vectorized; OoO
+        # pointer-chase asm ldr preserved (the dependency chain IS the
+        # test); arm64_sdc CRC/checksum detectors on svld1 scans with the
+        # fail-closed self-check kept verbatim.
+        'mem/lsu_store_forward_sve.cpp',
+        'mem/l2c_cross_cache_line_sve.cpp',
+        'mem/mmu_split_tlb_sve.cpp',
+        'mem/ooo_dep_chain_sve.cpp',
+        'mem/arm64_sdc_sve.cpp',
+        # Batch 7 (4): library-backed tests re-implemented on SVE —
+        # GMP big-add on the carry chain, GMP multiply on svmul partial
+        # products (bigint_mulx skeleton), compiler-rt soft-float kept as
+        # the tested integer path with an SVE probe, ACL GEMM on svmla
+        # micro-kernels vs the naive golden.
+        'arithmetic/gmp_bigadd_sve.cpp',
+        'arithmetic/gmp_bignum_sve.cpp',
+        'arithmetic/acl_gemm_sve.cpp',
     )
+
+    # compiler-rt soft-float test: needs libclang_rt.builtins (mirror of the
+    # arithmetic_arm crt block — same probe path, SVE probe added in init).
+    crt_builtins_path_sve = '/usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/libclang_rt.builtins.a'
+    if run_command('test', '-f', crt_builtins_path_sve, check: false).returncode() == 0
+        crt_builtins_lib_sve = declare_dependency(
+            link_args : ['-l:libclang_rt.builtins.a',
+                         '-L' + '/usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu'],
+        )
+        tests_sve_crt = static_library(
+            'tests_sve_crt',
+            sources: files('arithmetic/crt_builtins_sve.cpp'),
+            build_by_default: false,
+            include_directories: [framework_incdir],
+            dependencies: [boost_dep, crt_builtins_lib_sve],
+            cpp_args: [
+                debug_c_flags,
+                default_cpp_warn,
+                default_cpp_flags,
+                march_generic_flags,
+                '-march=armv8.2-a+sve',
+            ],
+        )
+        sandstone_tests += [tests_sve_crt]
+    else
+        message('libclang_rt.builtins not found — crt_builtins_sve not built (same gate as the arithmetic_arm original)')
+    endif
 
     # IPSec domain (24 ports). Two tiers:
     # - HMAC/SHA family (17): encryption stays on OpenSSL EVP, the MAC runs

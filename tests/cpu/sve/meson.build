@@ -163,6 +163,12 @@ if host_machine.cpu_family() == 'aarch64'
 'core179/mrn_rmw_dump_sve.cpp',
 'core179/neon_rot_2src_sve.cpp',
 'core179/mite_sve.cpp',
+        # Batch 6 (first 2 of 7): partial-width predicated stores (the
+        # native SVE form of partial stores) with store-buffer partial-hit
+        # loads; AGU 2-source vector-load throughput with the rotating
+        # composition and the str z/ldr z/str z chain.
+        'mem/partial_store_forwarding_sve.cpp',
+        'mem/agu_stress_2src_sve.cpp',
     )
 
     # IPSec domain (24 ports). Two tiers:

@@ -48,10 +48,6 @@ static int lockgen_run(struct test *test, int cpu) {
     auto idx_dist = []() { return (size_t)random64() % ARRAY_SIZE; };
     uint64_t local_sum = 0;
 
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
-
     do {
         uint64_t inc = inc_dist();
         size_t idx = idx_dist();   // 随机索引，产生 TLB 和缓存压力
@@ -68,19 +64,10 @@ static int lockgen_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        // 输出本次的输入（线程、索引、增量）和结果（操作成功，PASS）
-        fprintf(stderr, "lockgen: Thread %d, idx=%zu, inc=%lu, result=%sPASS%s\n",
-                id, idx, inc, GREEN, RESET);
-        fflush(stderr);
-
     } while (test_time_condition(test));
 
     sd->local_sums[id] = local_sum;
     return EXIT_SUCCESS;
-
-    #undef GREEN
-    #undef RED
-    #undef RESET
 }
 
 static int lockgen_finish(struct test *test) {

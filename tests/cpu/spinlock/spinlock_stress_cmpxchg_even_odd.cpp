@@ -80,10 +80,6 @@ static int spinlock_stress_cmpxchg_run_common(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        fprintf(stderr, "spinlock_stress_cmpxchg_%s: Thread %d, inc=%lu, result=PASS\n",
-                sd->even ? "even" : "odd", id, inc);
-        fflush(stderr);
-
     } while (test_time_condition(test));
 
     sd->local_sums[id] = local_sum;

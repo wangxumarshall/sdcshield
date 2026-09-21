@@ -68,9 +68,6 @@ static int spinlock_stress_cmpxchg16b_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        fprintf(stderr, "spinlock_stress_cmpxchg16b: Thread %d, inc=%lu, result=PASS\n", id, inc);
-        fflush(stderr);
-
     } while (test_time_condition(test));
 
     sd->local_sums[id] = local_sum;

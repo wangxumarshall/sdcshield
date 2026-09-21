@@ -70,13 +70,6 @@ static int spinlock_rmw_xchg_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        // 每轮输出（保留）
-        static uint64_t iter = 0;
-        if ((iter++ % 1) == 0) {
-            fprintf(stderr, "spinlock_rmw_xchg: Thread %d, inc=%lu, lock_ok=1, result=PASS\n", id, inc);
-            fflush(stderr);
-        }
-
     } while (test_time_condition(test));
 
     sd->local_sums[id] = local_sum;

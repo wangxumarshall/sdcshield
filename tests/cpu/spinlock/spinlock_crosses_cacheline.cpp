@@ -91,9 +91,6 @@ static int spinlock_crosses_cacheline_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        fprintf(stderr, "spinlock_crosses_cacheline: Thread %d, inc=%lu, result=PASS\n", id, inc);
-        fflush(stderr);
-
     } while (test_time_condition(test));
 
     td->local_sums[id] = local_sum;

@@ -61,10 +61,6 @@ static int spinlock_same_core_run(struct test *test, int cpu) {
     auto dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
     uint64_t local_sum = 0;
 
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
-
     do {
         uint64_t inc = dist();
 
@@ -74,18 +70,10 @@ static int spinlock_same_core_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        fprintf(stderr, "spinlock_same_core: Thread %d, inc=%lu, result=%sPASS%s\n",
-                id, inc, GREEN, RESET);
-        fflush(stderr);
-
     } while (test_time_condition(test));
 
     sd->local_sums[id] = local_sum;
     return EXIT_SUCCESS;
-
-    #undef GREEN
-    #undef RED
-    #undef RESET
 }
 
 static int spinlock_same_core_finish(struct test *test) {

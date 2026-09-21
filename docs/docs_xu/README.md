@@ -29,6 +29,8 @@
 
 ## 进度日志
 
+- **2026-09-21（批次 5 保真修复完成）**：用户质询批次 5 是否改变测试逻辑 → 自查发现 **movbe 系 13 个存在实质偏差**（store/reload 经栈数组中转，而原版探针的被测对象是"直接堆 store→堆 reload"的存储转发路径——对触发配方探针，访存序列就是被测对象本身）。**已全部修复**：svst1/svld1 直接打堆指针（movbe 基线/probe_c SLF 私有副本/probe_f/g1/g2/h 特殊目标地址），probe_a 还原链寄存器直连（原版 no-store 语义，旧版错误地读了从未写过的 swapped 缓冲区）。其余批次 5 判定：neon_rot_2src/mrn_nuke/pairs/reloaded 完全保真；mrn_flags/mite/rmw 计算保真（标量 asm 标志链→向量谓词的 SVE 化改变已在描述注明）。**修复后重验**：13 个全 pass；阶段1=2775/0；阶段2=2732/0（数据点 #9 在保真实现上重确认）。自查报告：`2026-09-21-batch5-logic-fidelity-audit.md`。**教训固化：触发配方探针的"逻辑保真"= 微操作序列等价（访存目标/顺序），不同于普通测试的"计算结果等价"——批次 6/7 剩余测试按此双重标准审查。**
+
 - **2026-09-21（会话 14，批次 5 + 批次 6 前半完成）**：
   **批次 5 完成**（core-179 数据流向量版 21 个：movbe_sve + movbe_dump_sve + 11 个 probe 变体（A 无store/B 16nops/C SLF 私有副本+屏障+迭代重置/D 常量全局/E NUMA 如实简化/F 单行窗口/G1 单set 16槽/G2 16行/H env 扫描/X 语义no-op ALU/XN 参数化nop）+ mrn 系 6 个（nuke/pairs/flags/reloaded/rmw/rmw_dump）+ neon_rot_2src_sve（ldr z/str z 配方 SVE 通路判别）+ mite_sve）。svtbl [3,2,1,0] bswap32 与 __builtin_bswap32 5 万向量等价验证。**4 个 bug 被纪律抓住**：①mrn_rmw/rot 旋转相位用 base%4（批步进 4 → 恒 0 → 只 1/4 元素匹配 golden）→ 逐 lane 相位谓词分派；②probe_c 跨迭代 store-back 污染私有副本 → 每外层迭代重置 + asm 屏障防编译器消除真实 reload；③probe_e mmap MAP_FAILED 未检查 + free() mmap 内存 UB → 如实简化 aligned_alloc；④partial_store_forwarding_sve DECLARE 字段顺序。**两阶段**：阶段1=2779/0；阶段2=2678/0（数据点 #9）。
   **批次 6 前半完成**（2/7）：partial_store_forwarding_sve（**谓词控部分写 = SVE 独有原生表达**：svst1+whilelt 精确 1/2/4/8 字节谓词）+ agu_stress_2src_sve（2 源 ldr z + 旋转 + str z/ldr z/str z，从 neon_rot_2src_sve 骨架派生）。阶段1=446/0；阶段2=240/0（数据点 #10）。

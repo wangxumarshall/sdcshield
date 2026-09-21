@@ -102,7 +102,21 @@ static int mesh_upi_avx512_asymm_write_only_int_run(struct test *test, int cpu) 
                         break;
                     }
                 }
-                // 原代码发现不一致时仅记录，我们也同样处理（最终会在读核心校验时失败）
+                /* 写核心的立即读回是唯一逐字节的写入内容校验——读核心的
+                 * sum 校验可被保和损坏（如元素交换）绕过，所以 block_ok
+                 * 为假必须直接判失败，不能只记录。 */
+                if (!block_ok) {
+                    fprintf(stderr, "mesh_upi_avx512_asymm_write_only_int: Thread %d (writer), block %u immediate read-back mismatch, written vals[0..3]=(%d,%d,%d,%d), loaded data[0..3] at offset %zu=(%d,%d,%d,%d), result=%sFAIL%s\n",
+                            id, block,
+                            vals[0], vals[1], vals[2], vals[3],
+                            offset,
+                            td->data[offset], td->data[offset + 1],
+                            td->data[offset + 2], td->data[offset + 3],
+                            RED, RESET);
+                    fflush(stderr);
+                    report_fail_msg("mesh_upi_avx512_asymm_write_only_int: writer immediate read-back mismatch (store/load corruption)");
+                    return EXIT_FAILURE;
+                }
 
                 td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
                 td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);

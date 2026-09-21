@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -141,7 +140,6 @@ static int kreg8_run(struct test *test, int cpu) {
                 break;
             }
             case 3: { // VPMOVM2Q (64-bit, 8 elements)
-                std::uniform_int_distribution<uint8_t> mask_dist(0, 0xFF);
                 uint8_t mask_val = (uint8_t)(random32() & 0xFF);
 
                 uint64_t hw_vals[8];

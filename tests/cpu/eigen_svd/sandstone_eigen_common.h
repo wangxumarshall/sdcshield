@@ -61,16 +61,14 @@ template <typename SVD, int Dim> struct EigenSVDTest
 
     static int init(struct test *test)
     {
+        /* H11'' (PR #147 review): run() primes per-thread matrices itself
+         * and never reads eigen_test_data's matrices — the init-time
+         * Mat::Random + golden SVD this function used to compute (for the
+         * compile-time Dim users) was dead since the per-thread re-roll
+         * landed. Removed. d->dim (set from Dim by the struct default, or
+         * by the enclosing test's init for kRuntimeDim — see
+         * svd_cdouble_sve.cpp) is the only field run() consumes. */
         auto d = new eigen_test_data;
-        if constexpr (!kRuntimeDim) {
-            d->orig_matrix = Mat::Random(Dim, Dim);
-            calculate_once(d->orig_matrix, d->u_matrix, d->v_matrix);
-        }
-        /* kRuntimeDim: the enclosing test's own init wrapper has already
-         * set d->dim (and typically allocates below); the template's init
-         * only runs if the wrapper calls it, which it does NOT — see
-         * svd_cdouble_sve.cpp. This branch exists so misuse fails loudly
-         * instead of allocating a 0x0 matrix. */
         test->data = d;
         return EXIT_SUCCESS;
     }

@@ -169,9 +169,10 @@ static int sve512_f64_chain_arm_init(struct test *test)
          * RNG (per-run fresh, -s reproducible) instead of the fixed
          * splitmix/table indices that made every run byte-identical.
          * Design invariant preserved: every generated f64 stays in the
-         * finite band |x| <= 2 (uniform exponent 0x3FE..0x400 covers
-         * [0.5, 4); we clamp the top to keep |x| <= 2), so 512-step
-         * products/sums can still never overflow or NaN. 25% of entries
+         * finite band |x| <= 2 (uniform exponent 0x3FE..0x3FF covers
+         * [0.5, 2); the switch's other selections fold back to 0x3FE),
+         * so 512-step products/sums can still never overflow or NaN.
+         * 25% of entries
          * still draw from the high-Hamming F64_FINITE table to keep the
          * gate-toggle density the table was designed for. */
         auto random_finite_f64 = []() -> uint64_t {

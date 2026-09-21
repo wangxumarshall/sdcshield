@@ -19,7 +19,7 @@
  * The matrix dimension is chosen at init time from the RAM available per
  * worker (see size_matrix() below): the largest N whose peak RSS fits the
  * per-worker memory share, capped at the largest N that finishes the whole
- * test (golden BDCSVD in init + recomputation in run) inside a 10-minute
+ * test (prime BDCSVD + recomputation, both in run) inside a 10-minute
  * budget, and floored at 300. An explicit override is available via
  * `-O eigen_svd_cdouble_sve.mdim=N` (300..6000).
  *
@@ -56,8 +56,8 @@ using eigen_svd_cdouble_sve_test = EigenSVDTest<SVD, Eigen::Dynamic>;
  *
  *   MDIM_MIN  = 300: the NEON counterpart's parity point; the floor.
  *   MDIM_TIME = 4400: the largest N whose FULL test time fits a 10-minute
- *                     budget. The framework counts the golden BDCSVD in
- *                     test_init PLUS the recomputation in test_run — two
+ *                     budget. The framework counts the prime BDCSVD plus
+ *                     the DUT recomputation, both in test_run — two
  *                     complete decompositions. Measured single-BDCSVD
  *                     times: 2400→40s, 3600→134s, 4400→243s, 4800→322s,
  *                     5600→511s, 5800→563s, 6000→622s (~N³ scaling);
@@ -128,7 +128,7 @@ static int g_dim = MDIM_MIN;
  *   would make small dimensions loop for the whole budget and large ones
  *   start an un-budgeted second iteration).
  * - the derived timeout (test_timeout(): 5*duration+30s, 300s floor)
- *   scales along, covering the init's golden decomposition too.
+ *   scales along, covering both run-side decompositions (prime + DUT).
  * Model (measured, cortex x3b VL=128; plan 2026-09-19-...md):
  * t(N) ~= 243.4s * (N/4400)^3 + 1s fixed overhead — within ±2% of the
  * measured points at N>=2400 and conservative (over-estimates) below.
@@ -166,12 +166,14 @@ static int sve_probe_and_init(struct test *test)
              243.4 * std::pow((double)g_dim / 4400.0, 3.0) + 1.0,
              test->desired_duration);
 
-    /* Allocate the test data and run the golden BDCSVD here (the runtime-
-     * dimension template does not do it in its own init). */
+    /* Allocate the test data (the runtime-dimension template's run()
+     * primes its own per-thread matrices; the init-time golden BDCSVD
+     * became dead computation once run() stopped reading eigen_test_data's
+     * matrices — removed. Timing note: desired_duration now covers exactly
+     * the two run-side decompositions (prime + DUT); init no longer
+     * contributes a third. */
     auto d = new eigen_svd_cdouble_sve_test::eigen_test_data;
     d->dim = g_dim;
-    d->orig_matrix = Mat::Random(g_dim, g_dim);
-    eigen_svd_cdouble_sve_test::calculate_once(d->orig_matrix, d->u_matrix, d->v_matrix);
     test->data = d;
     return EXIT_SUCCESS;
 }

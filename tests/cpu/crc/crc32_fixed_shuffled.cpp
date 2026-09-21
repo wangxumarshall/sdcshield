@@ -17,7 +17,7 @@ static constexpr size_t BLOCK_SIZE = 1024;
  * (probe-verified: __crc32b('123456789') chain = 0xCBF43926, the zlib
  * CRC-32, NOT CRC32C). Replaces the previous hw-vs-hw duplicate compute
  * that a deterministic CRC-unit defect would pass. */
-static uint32_t crc32c_software(const uint8_t *buf, size_t len) {
+static uint32_t crc32_ieee_software(const uint8_t *buf, size_t len) {
     uint32_t crc = 0xFFFFFFFF;
     for (size_t i = 0; i < len; ++i) {
         crc ^= buf[i];
@@ -86,8 +86,8 @@ static int crc32_fixed_shuffled_run(struct test *test, int cpu) {
         // 内存屏障
         __sync_synchronize();
 
-        // 第二次硬件 CRC 计算（重用相同步长序列）
-        uint32_t crc2 = crc32c_software(local_data.data(), BLOCK_SIZE);
+        // 第二次计算：独立软件参考（IEEE 802.3 CRC-32，逐字节，不依赖步长序列）
+        uint32_t crc2 = crc32_ieee_software(local_data.data(), BLOCK_SIZE);
 
         bool data_ok = (crc1 == crc2);
 

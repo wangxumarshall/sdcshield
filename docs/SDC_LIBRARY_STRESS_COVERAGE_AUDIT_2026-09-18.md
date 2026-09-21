@@ -50,7 +50,7 @@
 - run 第 185-190 行：`cblas_dgemm(..., c, ...)` 重复同一调用。
 - 第 200 行 `memcmp_or_fail(c, d->golden, ...)` 字节精确——但 golden 由同一 kernel 产生，确定性 kernel 缺陷两边同错。
 
-同一模式（同源 golden）贯穿：sleef_neon.cpp:346（init）vs :495（run）；sandstone_eigen_common.h:33-57（init calculate_once）vs run；openssl_sha.cpp:110 vs :141；pocketfft fft.cpp:174 vs run；gmp_bigadd.cpp:63（init mpz_add）vs run。
+同一模式（同源 golden）贯穿：sleef_neon.cpp:346（init）vs :495（run）；sandstone_eigen_common.h 的 calculate_once（现仅 run 侧 prime+DUT，init 侧 golden 已随 PR #147 死代码清理删除）；openssl_sha.cpp:110 vs :141；pocketfft fft.cpp:174 vs run。gmp_bigadd 原在此列（init mpz_add 同源 golden），已于 2026-09-21 commit 65b396c 替换为独立 __int128 标量进位链 golden——不再同源。
 
 **唯一例外**：`tests/cpu/isa-l/igzip.cpp`——第 189 行 `memcmp_or_fail(comp, d->comp_golden, ...)`（同源 deflate）之外，第 191-207 行**再做 inflate 回读** `isal_inflate` 后 `memcmp_or_fail(decomp, d->input, ...)`。inflate 是 deflate 的逆数据通路，一个让两者同时错、且错的比特还刚好互逆的确定性缺陷几乎不存在——这是**六个库共 20+ 用例里唯一一个真正独立的正确性校验**。
 

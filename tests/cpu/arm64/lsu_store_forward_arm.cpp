@@ -130,7 +130,6 @@ static int lsu_store_forward_arm_run(struct test *test, int cpu)
 
     do {
         bool all_passed = true;
-        static uint64_t golden_cycle = 0;
         /* randomization hardening H18' (P17): 25% of iterations draw the
          * golden words purely from the framework RNG (per-thread stream,
          * -s reproducible); the rest keep a random-INDEXED high-Hamming

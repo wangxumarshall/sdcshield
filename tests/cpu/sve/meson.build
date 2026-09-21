@@ -114,6 +114,28 @@ if host_machine.cpu_family() == 'aarch64'
         'vector2/kreg7_sve.cpp',
         'vector2/swizzle_sve.cpp',
         'vector2/insert_extract_sve.cpp',
+        # Batch 3 (2 conversions): fisttp on real svcvt lanes
+        # (round-toward-zero semantics verified); IEX opcode-combo with
+        # svclz (real instruction) + svtbl byte-reverse for rbit/rev
+        # (bit-exact vs software reference, 20k random vectors).
+        'arithmetic/fisttp_sve.cpp',
+        'arithmetic/iex_operand_combo_sve.cpp',
+        # Batch 4 (10): carry chains on svadd lanes with the serial carry
+        # fold (equivalence vs __int128 verified on 20k random chains);
+        # operand-space adds/muls (svmul low half; svmulh is SVE2 so the
+        # high half folds __int128 on the same operand stream); 512-bit
+        # bigint multiply on svmul partial products with an init-time
+        # cross-check against the schoolbook golden.
+        'arithmetic/adcx_sve.cpp',
+        'arithmetic/adox_sve.cpp',
+        'arithmetic/adcxlong_sve.cpp',
+        'arithmetic/adcx_arm_sve.cpp',
+        'arithmetic/adox_arm_sve.cpp',
+        'arithmetic/adcxlong_arm_sve.cpp',
+        'arithmetic/adcx_adox_interleaved_sve.cpp',
+        'arithmetic/adcx_adox_interleaved_arm_sve.cpp',
+        'arithmetic/operand_space_sve.cpp',
+        'arithmetic/bigint_mulx_sve.cpp',
     )
 
     # IPSec domain (24 ports). Two tiers:

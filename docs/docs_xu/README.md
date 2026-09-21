@@ -7,7 +7,8 @@
 
 ## ⚡ 当前活动任务（高优先级）
 
-**[122 号核心 SDC 故障狩猎](2026-09-19-cpu122-sdc-hunt-mission.md)** — CPU 122 存在 SDC 故障（唯一故障核心）。目标：写出能快速检出它的测试用例 + 分析什么负载最快触发。**强制流程**：每次新写/改写测试 → ① 热插拔 offline 122 → ② 其余全核跑 60s 必须 100% pass（fail=我的代码 bug）→ ③ online 122 → ④ 全核跑验证 fail 精确锁定 cpu 122。任务纲领详见链接文档。
+**[122 号核心 SDC 故障狩猎](2026-09-19-cpu122-sdc-hunt-mission.md)** — CPU 122 存在 SDC 故障（唯一故障核心）。目标：写出能快速检出它的测试用例 + 分析什么负载最快触发。**强制流程**：每次新写/改写测试 → ① 排除 122（`--cpuset='!122'`）→ ② 其余全核跑 60s 必须 100% pass（fail=我的代码 bug）→ ③ 全核含 122 → ④ fail 应锁定 cpu 122。
+**⚠️ SDC 偶然性原则（2026-09-21 用户指示）**：短窗口未复现 fail ≠ 负载不能触发 122。阶段 2 出现过任何 fail/可疑信号 → 记入 **[122 候选名单](2026-09-21-cpu122-fail-candidates.md)**；fail 必须先提取 测试名/cpu-mask/miscompare 详情再清日志。全部 64 个转换完成后对候选统一做小时级长时窗检测 + 126 核对照轮交叉锁定。
 
 ## 约定
 
@@ -23,9 +24,12 @@
 | [2026-09-19-avx-named-tests-audit.md](2026-09-19-avx-named-tests-audit.md) | 53 个 avx 命名测试源码审计：三层证据证明全部无 SVE 代码（旧机器 NEON 版），`tests/cpu/sve/` 覆盖缺口分析 | 完成 |
 | [2026-09-19-avx53-workload-environments.md](2026-09-19-avx53-workload-environments.md) | 53 个测试的负载环境实录（框架模式+FMA 11+Mesh 18+IPSec 23 逐一参数表）——SVE 版移植的负载基准；含 OpenSSL SVE 路径调查（仅 ChaCha20 有 SVE）与 3 个开放决策问题 | 完成 |
 | [2026-09-20-95tests-sve-improvability-v2.md](2026-09-20-95tests-sve-improvability-v2.md) | 95 个测试的 SVE 可转换性分析 v2（修正口径：计算负载视角而非微架构特征视角） | 完成 |
-| [2026-09-20-64tests-batch-plan.md](2026-09-20-64tests-batch-plan.md) | **64 个可转换未转换测试的名单 + 7 批次转换计划**（kreg谓词→NEON直换→换算→进位链→core-179向量版→访存谓词优势→库自实现） | **待执行** |
+| [2026-09-20-64tests-batch-plan.md](2026-09-20-64tests-batch-plan.md) | 64 个可转换未转换测试的名单 + 7 批次转换计划（kreg谓词→NEON直换→换算→进位链→core-179向量版→访存谓词优势→库自实现） | 执行中（批1✅批2✅，20/64） |
+| [2026-09-21-cpu122-fail-candidates.md](2026-09-21-cpu122-fail-candidates.md) | 【**122 候选名单**】阶段 2 出现过 fail/可疑信号的测试记录 + 长时窗检测计划（SDC 偶然性——短窗未复现≠不触发，全部写完后统一长测） | **活动·持续追加** |
 
 ## 进度日志
+
+- **2026-09-21（用户指示固化）**：建立 **[122 候选名单](2026-09-21-cpu122-fail-candidates.md)**——SDC 有偶然性，阶段 2 短窗（30-60s）未复现 fail 不能排除负载可触发 122。当前头号线索：**批次 2 首轮的 1 次未归因 fail**（全核 29755/1；同负载排除 122 时 30882/0 零 fail——但日志被过早删除丢失 cpu-mask 证据）。此后规则：阶段 2 出现任何 fail → 立即提取 测试名/cpu-mask/miscompare 详情 → 记入名单 → 全部 64 个写完后对候选做小时级长测 + 126 核对照轮交叉锁定 122。
 
 - **2026-09-21（会话 12，批次 2 完成）**：**批次 2 完成并推送**（13 个 NEON 直换，比计划 12 多出 insert_extract）。FMA/FPU/misc/vector 四域：neon_add/fma/fpu_special_values/power_virus_dit/movdq2q/movq2dq/movmskpspd/fsu_byteexact + kreg1/4/7 + swizzle(svtbl 字节表置换)+insert_extract。**4 个 bug 被纪律抓住**：①浮点符号比较漏 -0.0（-0.0<+0.0 为 false）→整数符号位比较；②谓词极性反了（svcmplt 选的是符号位=0 的 lane）→svcmpge；③kreg7 掩码承载类型太窄（64 元素 u8 装进 uint16 截断）→按元素数定宽；④`mov x, z.d[0]` 汇编器不收 → svlastb 向量→标量通道。**两阶段**：阶段1（!122, 30s）=30882/0；阶段2 首轮 29755/1——**1 个未复现 fail 且我删日志太早丢了 cpu-mask 归因证据**（操作失误如实记录），4 轮复跑共 ~10 万结果 0 fail，122 每轮参与未触发（数据点 #7）。教训：阶段2 出 fail **必须先提取 cpu-mask 再删日志**。剩余 44 个（批次 3-7）。
 

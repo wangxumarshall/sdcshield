@@ -22,8 +22,12 @@
 | [2026-09-18-sve-capability-research.md](2026-09-18-sve-capability-research.md) | SVE 指令测试可行性：本机 SVE 实测（cortex x3b，VL=256bit）、FMMLA/BFDOT/SDOT/USMMLA/FCMLA 逐条 golden 验证、FCMLA 语义澄清（差点误判硬件 SDC 的完整证据链） | 完成 |
 | [2026-09-19-avx-named-tests-audit.md](2026-09-19-avx-named-tests-audit.md) | 53 个 avx 命名测试源码审计：三层证据证明全部无 SVE 代码（旧机器 NEON 版），`tests/cpu/sve/` 覆盖缺口分析 | 完成 |
 | [2026-09-19-avx53-workload-environments.md](2026-09-19-avx53-workload-environments.md) | 53 个测试的负载环境实录（框架模式+FMA 11+Mesh 18+IPSec 23 逐一参数表）——SVE 版移植的负载基准；含 OpenSSL SVE 路径调查（仅 ChaCha20 有 SVE）与 3 个开放决策问题 | 完成 |
+| [2026-09-20-95tests-sve-improvability-v2.md](2026-09-20-95tests-sve-improvability-v2.md) | 95 个测试的 SVE 可转换性分析 v2（修正口径：计算负载视角而非微架构特征视角） | 完成 |
+| [2026-09-20-64tests-batch-plan.md](2026-09-20-64tests-batch-plan.md) | **64 个可转换未转换测试的名单 + 7 批次转换计划**（kreg谓词→NEON直换→换算→进位链→core-179向量版→访存谓词优势→库自实现） | **待执行** |
 
 ## 进度日志
+
+- **2026-09-21（会话 11，批次 1 完成）**：**64 转换计划批次 1 完成并推送**（kreg 7 个：软件仿真 → SVE 谓词真指令）。映射全部独立探针验证后落地：KSHIFTL/R→svlsl/svlsr、KORTEST/KTEST→svptest_any、KUNPCK→svzip1、掩码展开→svsel、KMOV→谓词 lane+svcntp、arm0102 配方→ldr z/str z+谓词比较扩展。**核心价值升级**：原版 sw==hw 同义反复 → SVE 版独立标量 golden（谓词指令真算错才 fail）。**两个 bug 被纪律抓住**：kreg9 谓词 lane 数硬编码 16（VL=256 实际 8）→svcnt* 动态；arm0102 store 用 svptrue 8-lane 写 4 元素子块 → 越界 16B/迭代砸堆元数据（851 次后 double free）→4-lane whilelt。**两阶段**：阶段1=7954/0（另短窗复核 exit pass）；阶段2=7359/0（**数据点 #6：谓词指令负载不触发 122**）。教训：kreg 系 stderr 每迭代多行 fprintf × 126 核 × 60s 会打 9.4GB 日志——后续批次对高频 fprintf 测试改用 -t 短窗或考虑框架日志限流。剩余 57 个待转（批次 2-7）。
 
 - **2026-09-20（会话 10，Task 7 收尾）**：**全部 53 个 SVE 测试完成并推送（分支 feat/sve-port-avx53，8 个 commit）**。
   **最终验证**：53 个全量同跑（全核，10s/测试）= **16909 pass / 0 fail / exit: pass**；总测试数 342 = 289 原有 + 53 新增（精确匹配，无破坏）；README 测试表新增 SVE avx53 套件行；计划文件 35 个勾选框全部完成。

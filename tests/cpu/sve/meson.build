@@ -81,6 +81,23 @@ if host_machine.cpu_family() == 'aarch64'
         # golden pattern (init computes once, run recomputes and
         # byte-compares). n=128 calibrated at ~0.92ms/iter.
         'eigen/eigen_svd_bidiag_sve.cpp',
+        # kreg batch (7 ports of the 64-batch plan): software simulations of
+        # x86 AVX-512 k-register ops upgraded to REAL SVE predicate
+        # instructions — the only true k-register equivalent on ARM.
+        # kreg2: KSHIFTL/R -> svlsl/svlsr; kreg3: KORTEST/KTEST ->
+        # svptest_any; kreg5: KUNPCK/KNOT -> svzip1/sveor; kreg6/kreg8:
+        # mask expansion -> svsel; kreg9: KMOVB/W/D/Q -> vector/predicate
+        # lanes + svcntp; arm0102: trigger recipe on ldr z/str z with
+        # predicate compare expansion. Software references are now
+        # independent scalar goldens (the originals compared an
+        # expression with itself).
+        'kreg/kreg2_sve.cpp',
+        'kreg/kreg3_sve.cpp',
+        'kreg/kreg5_sve.cpp',
+        'kreg/kreg6_sve.cpp',
+        'kreg/kreg8_sve.cpp',
+        'kreg/kreg9_sve.cpp',
+        'kreg/arm0102_kreg_mask_sve.cpp',
     )
 
     # IPSec domain (24 ports). Two tiers:

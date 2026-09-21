@@ -50,19 +50,18 @@ static int kreg3_run(struct test *test, int cpu) {
         bool passed = kor_pass && kt_pass && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        fprintf(stderr, "kreg3: Iter %lu, a=0x%04X, b=0x%04X\n",
-                iteration, a_val, b_val);
-        fprintf(stderr, "  KORTEST: hw: ZF=%d CF=%d  sw: ZF=%d CF=%d\n",
-                hw_zf_kor, hw_cf_kor, sw_zf_kor, sw_cf_kor);
-        fprintf(stderr, "  KTEST :  hw: ZF=%d CF=%d  sw: ZF=%d CF=%d\n",
-                hw_zf_kt, hw_cf_kt, sw_zf_kt, sw_cf_kt);
-        fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
 
         if (!passed) {
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg3: Iter %lu, a=0x%04X, b=0x%04X\n",
+                    iteration, a_val, b_val);
+            fprintf(stderr, "  KORTEST: hw: ZF=%d CF=%d  sw: ZF=%d CF=%d\n",
+                    hw_zf_kor, hw_cf_kor, sw_zf_kor, sw_cf_kor);
+            fprintf(stderr, "  KTEST :  hw: ZF=%d CF=%d  sw: ZF=%d CF=%d\n",
+                    hw_zf_kt, hw_cf_kt, sw_zf_kt, sw_cf_kt);
+            fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
             report_fail_msg("kreg3: mismatch in KORTEST/KTEST flags or consistency");
             return EXIT_FAILURE;
         }

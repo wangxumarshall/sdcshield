@@ -43,19 +43,18 @@ static int kreg6_run(struct test *test, int cpu) {
         bool passed = all_match && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        fprintf(stderr, "kreg6: Iter %lu, mask=0x%04X\n", iteration, mask_val);
-        fprintf(stderr, "  sw: ");
-        for (int i = 0; i < 16; ++i) fprintf(stderr, "%08X ", sw_vals[i]);
-        fprintf(stderr, "\n  hw: ");
-        for (int i = 0; i < 16; ++i) fprintf(stderr, "%08X ", hw_vals[i]);
-        fprintf(stderr, "\n  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
-        fflush(stderr);
 
         if (!passed) {
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg6: Iter %lu, mask=0x%04X\n", iteration, mask_val);
+            fprintf(stderr, "  sw: ");
+            for (int i = 0; i < 16; ++i) fprintf(stderr, "%08X ", sw_vals[i]);
+            fprintf(stderr, "\n  hw: ");
+            for (int i = 0; i < 16; ++i) fprintf(stderr, "%08X ", hw_vals[i]);
+            fprintf(stderr, "\n  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
+            fflush(stderr);
             report_fail_msg("kreg6: mismatch in broadcast or consistency");
             return EXIT_FAILURE;
         }

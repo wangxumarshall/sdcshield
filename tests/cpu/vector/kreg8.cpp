@@ -54,14 +54,16 @@ static int kreg8_run(struct test *test, int cpu) {
                 passed = all_match && cons;
                 strcpy(type_name, "VPMOVM2B");
 
-                fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%016lX\n",
-                        iter.load(), type_name, mask_val);
-                fprintf(stderr, "  sw[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                        sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3],
-                        sw_vals[4], sw_vals[5], sw_vals[6], sw_vals[7]);
-                fprintf(stderr, "  hw[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                        hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3],
-                        hw_vals[4], hw_vals[5], hw_vals[6], hw_vals[7]);
+                if (!passed) {
+                    fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%016lX\n",
+                            iter.load(), type_name, mask_val);
+                    fprintf(stderr, "  sw[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                            sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3],
+                            sw_vals[4], sw_vals[5], sw_vals[6], sw_vals[7]);
+                    fprintf(stderr, "  hw[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                            hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3],
+                            hw_vals[4], hw_vals[5], hw_vals[6], hw_vals[7]);
+                }
                 break;
             }
             case 1: { // VPMOVM2W (16-bit, 32 elements)
@@ -91,12 +93,14 @@ static int kreg8_run(struct test *test, int cpu) {
                 passed = all_match && cons;
                 strcpy(type_name, "VPMOVM2W");
 
-                fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%08X\n",
-                        iter.load(), type_name, mask_val);
-                fprintf(stderr, "  sw[0..3]=%04X %04X %04X %04X\n",
-                        sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
-                fprintf(stderr, "  hw[0..3]=%04X %04X %04X %04X\n",
-                        hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%08X\n",
+                            iter.load(), type_name, mask_val);
+                    fprintf(stderr, "  sw[0..3]=%04X %04X %04X %04X\n",
+                            sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
+                    fprintf(stderr, "  hw[0..3]=%04X %04X %04X %04X\n",
+                            hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                }
                 break;
             }
             case 2: { // VPMOVM2D (32-bit, 16 elements)
@@ -126,12 +130,14 @@ static int kreg8_run(struct test *test, int cpu) {
                 passed = all_match && cons;
                 strcpy(type_name, "VPMOVM2D");
 
-                fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%04X\n",
-                        iter.load(), type_name, mask_val);
-                fprintf(stderr, "  sw[0..3]=%08X %08X %08X %08X\n",
-                        sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
-                fprintf(stderr, "  hw[0..3]=%08X %08X %08X %08X\n",
-                        hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%04X\n",
+                            iter.load(), type_name, mask_val);
+                    fprintf(stderr, "  sw[0..3]=%08X %08X %08X %08X\n",
+                            sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
+                    fprintf(stderr, "  hw[0..3]=%08X %08X %08X %08X\n",
+                            hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                }
                 break;
             }
             case 3: { // VPMOVM2Q (64-bit, 8 elements)
@@ -161,23 +167,24 @@ static int kreg8_run(struct test *test, int cpu) {
                 passed = all_match && cons;
                 strcpy(type_name, "VPMOVM2Q");
 
-                fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%02X\n",
-                        iter.load(), type_name, mask_val);
-                fprintf(stderr, "  sw[0..3]=%016lX %016lX %016lX %016lX\n",
-                        sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
-                fprintf(stderr, "  hw[0..3]=%016lX %016lX %016lX %016lX\n",
-                        hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%02X\n",
+                            iter.load(), type_name, mask_val);
+                    fprintf(stderr, "  sw[0..3]=%016lX %016lX %016lX %016lX\n",
+                            sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
+                    fprintf(stderr, "  hw[0..3]=%016lX %016lX %016lX %016lX\n",
+                            hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                }
                 break;
             }
         }
 
-        fprintf(stderr, "  consistent=%d, ", consistent);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-        fprintf(stderr, "result=%s%s\033[0m\n", color, result_str);
-        fflush(stderr);
-
         if (!passed) {
+            fprintf(stderr, "  consistent=%d, ", consistent);
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "result=%s%s\033[0m\n", color, result_str);
+            fflush(stderr);
             report_fail_msg("kreg8: mismatch in mask-to-vector conversion or consistency");
             return EXIT_FAILURE;
         }

@@ -33,10 +33,18 @@ static int kreg1_run(struct test *test, int cpu) {
         uint32x4_t gt = vcgtq_f32(vec_a, vec_b);
 
         // 提取低 4 位掩码 (每个 lane 取最低位)
+        // （vgetq_lane_u32 要求编译期常量 lane — 先按常量 lane 提取到数组，
+        //   再用变量下标读数组，ACLE 规范）
         uint8_t mask1 = 0, mask2 = 0;
-        for (int i = 0; i < 4; ++i) {
-            if (vgetq_lane_u32(lt, i)) mask1 |= (1 << i);
-            if (vgetq_lane_u32(gt, i)) mask2 |= (1 << i);
+        {
+            const uint32_t lt_[] = { vgetq_lane_u32(lt, 0), vgetq_lane_u32(lt, 1),
+                                     vgetq_lane_u32(lt, 2), vgetq_lane_u32(lt, 3) };
+            const uint32_t gt_[] = { vgetq_lane_u32(gt, 0), vgetq_lane_u32(gt, 1),
+                                     vgetq_lane_u32(gt, 2), vgetq_lane_u32(gt, 3) };
+            for (int i = 0; i < 4; ++i) {
+                if (lt_[i]) mask1 |= (1 << i);
+                if (gt_[i]) mask2 |= (1 << i);
+            }
         }
 
         // 3. 掩码逻辑运算 (与 x86 完全一致)
@@ -48,11 +56,13 @@ static int kreg1_run(struct test *test, int cpu) {
 
         // 4. 使用 or_mask 混合两个向量 (模拟 _mm_mask_blend_ps)
         // 构造掩码向量 (每个 lane 根据 or_mask 对应位为全 1 或全 0)
+        // （vsetq_lane_u32 要求编译期常量 lane — 逐 lane 常量展开，
+        //   对齐 insert_extract.cpp 的既有样式）
         uint32x4_t blend_mask = vdupq_n_u32(0);
-        for (int i = 0; i < 4; ++i) {
-            uint32_t val = (or_mask & (1 << i)) ? 0xFFFFFFFF : 0;
-            blend_mask = vsetq_lane_u32(val, blend_mask, i);
-        }
+        blend_mask = vsetq_lane_u32((or_mask & (1 << 0)) ? 0xFFFFFFFF : 0, blend_mask, 0);
+        blend_mask = vsetq_lane_u32((or_mask & (1 << 1)) ? 0xFFFFFFFF : 0, blend_mask, 1);
+        blend_mask = vsetq_lane_u32((or_mask & (1 << 2)) ? 0xFFFFFFFF : 0, blend_mask, 2);
+        blend_mask = vsetq_lane_u32((or_mask & (1 << 3)) ? 0xFFFFFFFF : 0, blend_mask, 3);
         // vbslq_f32: 如果掩码位为 1 选择 vec_b，否则选择 vec_a
         float32x4_t result = vbslq_f32(blend_mask, vec_b, vec_a);
 
@@ -83,21 +93,20 @@ static int kreg1_run(struct test *test, int cpu) {
         bool passed = mask_pass && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        // 8. 详细输出 (与 x86 版本格式保持一致)
-        fprintf(stderr, "kreg1: Iter %lu, a=[%.2f,%.2f,%.2f,%.2f], b=[%.2f,%.2f,%.2f,%.2f]\n",
-                iteration, a_arr[0], a_arr[1], a_arr[2], a_arr[3],
-                b_arr[0], b_arr[1], b_arr[2], b_arr[3]);
-        fprintf(stderr, "  sw: and=%x or=%x xor=%x nand=%x xnor=%x\n",
-                sw_and, sw_or, sw_xor, sw_nand, sw_xnor);
-        fprintf(stderr, "  hw: and=%x or=%x xor=%x nand=%x xnor=%x\n",
-                and_mask, or_mask, xor_mask, nand_mask, xnor_mask);
-        fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
 
         if (!passed) {
+            // 8. 首次失败证据 (与 x86 版本格式保持一致)
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg1: Iter %lu, a=[%.2f,%.2f,%.2f,%.2f], b=[%.2f,%.2f,%.2f,%.2f]\n",
+                    iteration, a_arr[0], a_arr[1], a_arr[2], a_arr[3],
+                    b_arr[0], b_arr[1], b_arr[2], b_arr[3]);
+            fprintf(stderr, "  sw: and=%x or=%x xor=%x nand=%x xnor=%x\n",
+                    sw_and, sw_or, sw_xor, sw_nand, sw_xnor);
+            fprintf(stderr, "  hw: and=%x or=%x xor=%x nand=%x xnor=%x\n",
+                    and_mask, or_mask, xor_mask, nand_mask, xnor_mask);
+            fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
             report_fail_msg("kreg1: mismatch in mask logic or consistency");
             return EXIT_FAILURE;
         }

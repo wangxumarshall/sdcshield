@@ -59,14 +59,23 @@ static uint8_t sw_movepi64_mask(const uint64_t *data) {
 }
 
 // -------------------- ARM NEON 硬件掩码提取（使用 vgetq_lane 逐位提取，避免类型转换问题） --------------------
+// （vgetq_lane_* 要求编译期常量 lane — 先按常量 lane 提取到数组，再用变量
+//   下标读数组，ACLE 规范）
 static uint64_t neon_movepi8_mask(const uint8_t *data) {
     uint64_t mask = 0;
     // 一次处理 16 个字节，共 4 组
     for (int block = 0; block < 4; ++block) {
         uint8x16_t vec = vld1q_u8(data + block * 16);
+        const uint8_t v_[] = { vgetq_lane_u8(vec, 0), vgetq_lane_u8(vec, 1),
+                               vgetq_lane_u8(vec, 2), vgetq_lane_u8(vec, 3),
+                               vgetq_lane_u8(vec, 4), vgetq_lane_u8(vec, 5),
+                               vgetq_lane_u8(vec, 6), vgetq_lane_u8(vec, 7),
+                               vgetq_lane_u8(vec, 8), vgetq_lane_u8(vec, 9),
+                               vgetq_lane_u8(vec, 10), vgetq_lane_u8(vec, 11),
+                               vgetq_lane_u8(vec, 12), vgetq_lane_u8(vec, 13),
+                               vgetq_lane_u8(vec, 14), vgetq_lane_u8(vec, 15) };
         for (int i = 0; i < 16; ++i) {
-            uint8_t val = vgetq_lane_u8(vec, i);
-            if (val & 0x80) {
+            if (v_[i] & 0x80) {
                 mask |= (1ULL << (block * 16 + i));
             }
         }
@@ -79,9 +88,12 @@ static uint32_t neon_movepi16_mask(const uint16_t *data) {
     // 一次处理 8 个 16-bit 元素，共 4 组
     for (int block = 0; block < 4; ++block) {
         uint16x8_t vec = vld1q_u16(data + block * 8);
+        const uint16_t v_[] = { vgetq_lane_u16(vec, 0), vgetq_lane_u16(vec, 1),
+                                vgetq_lane_u16(vec, 2), vgetq_lane_u16(vec, 3),
+                                vgetq_lane_u16(vec, 4), vgetq_lane_u16(vec, 5),
+                                vgetq_lane_u16(vec, 6), vgetq_lane_u16(vec, 7) };
         for (int i = 0; i < 8; ++i) {
-            uint16_t val = vgetq_lane_u16(vec, i);
-            if (val & 0x8000) {
+            if (v_[i] & 0x8000) {
                 mask |= (1U << (block * 8 + i));
             }
         }
@@ -94,9 +106,10 @@ static uint16_t neon_movepi32_mask(const uint32_t *data) {
     // 一次处理 4 个 32-bit 元素，共 4 组
     for (int block = 0; block < 4; ++block) {
         uint32x4_t vec = vld1q_u32(data + block * 4);
+        const uint32_t v_[] = { vgetq_lane_u32(vec, 0), vgetq_lane_u32(vec, 1),
+                                vgetq_lane_u32(vec, 2), vgetq_lane_u32(vec, 3) };
         for (int i = 0; i < 4; ++i) {
-            uint32_t val = vgetq_lane_u32(vec, i);
-            if (val & 0x80000000) {
+            if (v_[i] & 0x80000000) {
                 mask |= (1U << (block * 4 + i));
             }
         }
@@ -109,9 +122,9 @@ static uint8_t neon_movepi64_mask(const uint64_t *data) {
     // 一次处理 2 个 64-bit 元素，共 4 组
     for (int block = 0; block < 4; ++block) {
         uint64x2_t vec = vld1q_u64(data + block * 2);
+        const uint64_t v_[] = { vgetq_lane_u64(vec, 0), vgetq_lane_u64(vec, 1) };
         for (int i = 0; i < 2; ++i) {
-            uint64_t val = vgetq_lane_u64(vec, i);
-            if (val & 0x8000000000000000ULL) {
+            if (v_[i] & 0x8000000000000000ULL) {
                 mask |= (1U << (block * 2 + i));
             }
         }
@@ -155,9 +168,11 @@ static int kreg7_run(struct test *test, int cpu) {
                 consistent = cons;
                 passed = (hw == sw) && cons;
                 strcpy(type_name, "VPMOVB2M");
-                fprintf(stderr, "kreg7: Iter %lu, type=%s, data[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                        iter.load(), type_name, data[0], data[1], data[2], data[3],
-                        data[4], data[5], data[6], data[7]);
+                if (!passed) {
+                    fprintf(stderr, "kreg7: Iter %lu, type=%s, data[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                            iter.load(), type_name, data[0], data[1], data[2], data[3],
+                            data[4], data[5], data[6], data[7]);
+                }
                 break;
             }
             case 1: { // VPMOVW2M (16-bit)
@@ -177,8 +192,10 @@ static int kreg7_run(struct test *test, int cpu) {
                 consistent = cons;
                 passed = (hw == sw) && cons;
                 strcpy(type_name, "VPMOVW2M");
-                fprintf(stderr, "kreg7: Iter %lu, type=%s, data[0..3]=%04X %04X %04X %04X\n",
-                        iter.load(), type_name, data[0], data[1], data[2], data[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg7: Iter %lu, type=%s, data[0..3]=%04X %04X %04X %04X\n",
+                            iter.load(), type_name, data[0], data[1], data[2], data[3]);
+                }
                 break;
             }
             case 2: { // VPMOVD2M (32-bit)
@@ -198,8 +215,10 @@ static int kreg7_run(struct test *test, int cpu) {
                 consistent = cons;
                 passed = (hw == sw) && cons;
                 strcpy(type_name, "VPMOVD2M");
-                fprintf(stderr, "kreg7: Iter %lu, type=%s, data[0..3]=%08X %08X %08X %08X\n",
-                        iter.load(), type_name, data[0], data[1], data[2], data[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg7: Iter %lu, type=%s, data[0..3]=%08X %08X %08X %08X\n",
+                            iter.load(), type_name, data[0], data[1], data[2], data[3]);
+                }
                 break;
             }
             case 3: { // VPMOVQ2M (64-bit)
@@ -219,21 +238,21 @@ static int kreg7_run(struct test *test, int cpu) {
                 consistent = cons;
                 passed = (hw == sw) && cons;
                 strcpy(type_name, "VPMOVQ2M");
-                fprintf(stderr, "kreg7: Iter %lu, type=%s, data[0..3]=%016lX %016lX %016lX %016lX\n",
-                        iter.load(), type_name, data[0], data[1], data[2], data[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg7: Iter %lu, type=%s, data[0..3]=%016lX %016lX %016lX %016lX\n",
+                            iter.load(), type_name, data[0], data[1], data[2], data[3]);
+                }
                 break;
             }
         }
 
-        fprintf(stderr, "  sw mask=0x%016lX, hw mask=0x%016lX\n", sw_mask, hw_mask);
-        fprintf(stderr, "  consistent=%d, ", consistent);
-
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-        fprintf(stderr, "result=%s%s\033[0m\n", color, result_str);
-        fflush(stderr);
-
         if (!passed) {
+            fprintf(stderr, "  sw mask=0x%016lX, hw mask=0x%016lX\n", sw_mask, hw_mask);
+            fprintf(stderr, "  consistent=%d, ", consistent);
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "result=%s%s\033[0m\n", color, result_str);
+            fflush(stderr);
             report_fail_msg("kreg7: mismatch in mask or consistency");
             return EXIT_FAILURE;
         }

@@ -50,17 +50,16 @@ static int kreg2_run(struct test *test, int cpu) {
         bool passed = left_pass && right_pass && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        fprintf(stderr, "kreg2: Iter %lu, src=0x%04X, shift=%d\n",
-                iteration, src_mask_val, shift_amount);
-        fprintf(stderr, "  sw: left=0x%04X, right=0x%04X\n", sw_left, sw_right);
-        fprintf(stderr, "  hw: left=0x%04X, right=0x%04X\n", left_shifted, right_shifted);
-        fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
 
         if (!passed) {
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg2: Iter %lu, src=0x%04X, shift=%d\n",
+                    iteration, src_mask_val, shift_amount);
+            fprintf(stderr, "  sw: left=0x%04X, right=0x%04X\n", sw_left, sw_right);
+            fprintf(stderr, "  hw: left=0x%04X, right=0x%04X\n", left_shifted, right_shifted);
+            fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
             report_fail_msg("kreg2: mismatch in shift or consistency");
             return EXIT_FAILURE;
         }

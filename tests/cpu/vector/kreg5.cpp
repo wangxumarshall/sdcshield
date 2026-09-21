@@ -43,17 +43,16 @@ static int kreg5_run(struct test *test, int cpu) {
         bool passed = kunpack_pass && knot_pass && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        fprintf(stderr, "kreg5: Iter %lu, a=0x%04X, b=0x%04X\n",
-                iteration, a_val, b_val);
-        fprintf(stderr, "  KUNPCK: sw=0x%08X, hw=0x%08X\n", sw_c, hw_c);
-        fprintf(stderr, "  KNOT :  sw=0x%04X, hw=0x%04X\n", sw_d, hw_d);
-        fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
 
         if (!passed) {
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg5: Iter %lu, a=0x%04X, b=0x%04X\n",
+                    iteration, a_val, b_val);
+            fprintf(stderr, "  KUNPCK: sw=0x%08X, hw=0x%08X\n", sw_c, hw_c);
+            fprintf(stderr, "  KNOT :  sw=0x%04X, hw=0x%04X\n", sw_d, hw_d);
+            fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
             report_fail_msg("kreg5: mismatch in KUNPCK/KNOT or consistency");
             return EXIT_FAILURE;
         }

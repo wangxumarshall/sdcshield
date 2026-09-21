@@ -34,8 +34,10 @@ static int kreg9_run(struct test *test, int cpu) {
                 consistent = cons;
                 passed = equal && cons;
                 strcpy(type_name, "KMOVB");
-                fprintf(stderr, "kreg9: Iter %lu, type=%s, orig=0x%02X, gpr=0x%02X\n",
-                        iter.load(), type_name, orig, gpr);
+                if (!passed) {
+                    fprintf(stderr, "kreg9: Iter %lu, type=%s, orig=0x%02X, gpr=0x%02X\n",
+                            iter.load(), type_name, orig, gpr);
+                }
                 break;
             }
             case 1: { // KMOVW (16-bit)
@@ -49,8 +51,10 @@ static int kreg9_run(struct test *test, int cpu) {
                 consistent = cons;
                 passed = equal && cons;
                 strcpy(type_name, "KMOVW");
-                fprintf(stderr, "kreg9: Iter %lu, type=%s, orig=0x%04X, gpr=0x%04X\n",
-                        iter.load(), type_name, orig, gpr);
+                if (!passed) {
+                    fprintf(stderr, "kreg9: Iter %lu, type=%s, orig=0x%04X, gpr=0x%04X\n",
+                            iter.load(), type_name, orig, gpr);
+                }
                 break;
             }
             case 2: { // KMOVD (32-bit)
@@ -64,8 +68,10 @@ static int kreg9_run(struct test *test, int cpu) {
                 consistent = cons;
                 passed = equal && cons;
                 strcpy(type_name, "KMOVD");
-                fprintf(stderr, "kreg9: Iter %lu, type=%s, orig=0x%08X, gpr=0x%08X\n",
-                        iter.load(), type_name, orig, gpr);
+                if (!passed) {
+                    fprintf(stderr, "kreg9: Iter %lu, type=%s, orig=0x%08X, gpr=0x%08X\n",
+                            iter.load(), type_name, orig, gpr);
+                }
                 break;
             }
             case 3: { // KMOVQ (64-bit)
@@ -79,19 +85,20 @@ static int kreg9_run(struct test *test, int cpu) {
                 consistent = cons;
                 passed = equal && cons;
                 strcpy(type_name, "KMOVQ");
-                fprintf(stderr, "kreg9: Iter %lu, type=%s, orig=0x%016lX, gpr=0x%016lX\n",
-                        iter.load(), type_name, orig, gpr);
+                if (!passed) {
+                    fprintf(stderr, "kreg9: Iter %lu, type=%s, orig=0x%016lX, gpr=0x%016lX\n",
+                            iter.load(), type_name, orig, gpr);
+                }
                 break;
             }
         }
 
-        fprintf(stderr, "  consistent=%d, ", consistent);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-        fprintf(stderr, "result=%s%s\033[0m\n", color, result_str);
-        fflush(stderr);
-
         if (!passed) {
+            fprintf(stderr, "  consistent=%d, ", consistent);
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "result=%s%s\033[0m\n", color, result_str);
+            fflush(stderr);
             report_fail_msg("kreg9: mismatch in KMOV or consistency");
             return EXIT_FAILURE;
         }

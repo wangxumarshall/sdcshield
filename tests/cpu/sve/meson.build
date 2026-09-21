@@ -136,6 +136,33 @@ if host_machine.cpu_family() == 'aarch64'
         'arithmetic/adcx_adox_interleaved_arm_sve.cpp',
         'arithmetic/operand_space_sve.cpp',
         'arithmetic/bigint_mulx_sve.cpp',
+        # Batch 5 (21): core-179 dataflow family on SVE lanes — movbe byte-swap
+        # round-trips (svtbl [3,2,1,0], verified vs __builtin_bswap32 on 50k
+        # vectors), 11 probe variants (no-store/nops/SLF/global-store/NUMA/
+        # line-window/set-attack/line-sweep/no-op-ALU/param-nops), the mrn
+        # memory-renaming family, neon_rot_2src on z registers (asm ldr z/
+        # str z), and mite's constant chain with predicate branches.
+'core179/movbe_sve.cpp',
+'core179/movbe_dump_sve.cpp',
+'core179/movbe_dump_probe_a_sve.cpp',
+'core179/movbe_dump_probe_b_sve.cpp',
+'core179/movbe_dump_probe_c_sve.cpp',
+'core179/movbe_dump_probe_d_sve.cpp',
+'core179/movbe_dump_probe_e_sve.cpp',
+'core179/movbe_dump_probe_f_sve.cpp',
+'core179/movbe_dump_probe_g1_sve.cpp',
+'core179/movbe_dump_probe_g2_sve.cpp',
+'core179/movbe_dump_probe_h_sve.cpp',
+'core179/movbe_dump_probe_x_sve.cpp',
+'core179/movbe_dump_probe_xn_sve.cpp',
+'core179/mrn_nuke_sve.cpp',
+'core179/mrn_pairs_sve.cpp',
+'core179/mrn_flags_sve.cpp',
+'core179/mrn_reloaded_sve.cpp',
+'core179/mrn_rmw_sve.cpp',
+'core179/mrn_rmw_dump_sve.cpp',
+'core179/neon_rot_2src_sve.cpp',
+'core179/mite_sve.cpp',
     )
 
     # IPSec domain (24 ports). Two tiers:

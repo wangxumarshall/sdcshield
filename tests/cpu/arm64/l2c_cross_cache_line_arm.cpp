@@ -231,7 +231,6 @@ static int l2c_cross_cache_line_arm_run(struct test *test, int cpu)
 
     do {
         bool all_passed = true;
-        static uint64_t golden_cycle = 0;
         /* randomization hardening H18' (P17): 25% of iterations draw the
          * golden words purely from the framework RNG (per-thread stream,
          * -s reproducible); the rest keep a random-INDEXED high-Hamming
@@ -246,7 +245,6 @@ static int l2c_cross_cache_line_arm_run(struct test *test, int cpu)
             g1 = GOLDEN_TABLE[(base + 1) % GOLDEN_TABLE_SIZE];
             g2 = GOLDEN_TABLE[(base + 2) % GOLDEN_TABLE_SIZE];
         }
-        (void)golden_cycle;
 
         // ---- (1) L2 exclusives / snoop / coherency path. ldxr/stxr is the
         // exclusive class — it enforces alignment checking, so the address is

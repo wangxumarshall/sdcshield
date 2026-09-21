@@ -162,8 +162,21 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
                     break;
                 }
             }
-            // 原代码发现不一致时仅记录，最终会在全量校验时失败
-            (void)block_ok;
+            /* 写阶段的立即读回是本测试唯一逐字节的写入内容校验——读阶段
+             * 只做 store_buf 自一致性比较，不对照写入值，所以 block_ok
+             * 为假必须直接判失败，不能只记录（同 87ebc4b 的修法）。 */
+            if (!block_ok) {
+                fprintf(stderr, "mesh_upi_sve_wide_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, block,
+                        vals[0], vals[1], vals[2], vals[3],
+                        offset,
+                        td->data[offset], td->data[offset + 1],
+                        td->data[offset + 2], td->data[offset + 3],
+                        RED, RESET);
+                fflush(stderr);
+                report_fail_msg("mesh_upi_sve_wide_sym: write-phase immediate read-back mismatch (store/load corruption)");
+                return EXIT_FAILURE;
+            }
 
             (void)local_sum;  // 原版算了 local_sum 但未累加到 global_sum（字段保留未用）
             td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);

@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -73,15 +72,31 @@ static int mesh_upi_sse_asymm_distrib_int_run(struct test *test, int cpu) {
 
     do {
         if (is_writer) {
-            while (test_time_condition(test)) {
-                // 等待读核心完成上一轮重置（allocated_blocks==0 且 round_done==0）
+            /* 等待读核心完成上一轮重置（allocated_blocks==0 且
+             * round_done==0）。原实现把该轮次屏障放在逐块循环体内：
+             * 第 0 块填完后 allocated_blocks==1，写者在第 1 块前就
+             * 自旋等待“重置完成”，单轮永远填不完 1 块 —— 读端的
+             * 256 块等待条件永假，校验从未执行（vacuous pass 的
+             * 写端根因）。现在作为轮次屏障放在填充之前；ttc 预算
+             * 检查按 1024 自旋一档节流（同 2731971 的 asymm 修复）。 */
+            {
+                uint32_t spin = 0;
                 while (td->allocated_blocks.load(std::memory_order_seq_cst) > 0 ||
                        td->round_done.load(std::memory_order_seq_cst) > 0) {
-                    if (!test_time_condition(test)) break;
-                    __asm__ volatile("yield");
+                    if ((++spin & 1023u) == 0) {
+                        if (!test_time_condition(test)) goto out_of_budget;
+                    } else {
+                        __asm__ volatile("yield");
+                    }
                 }
-                if (!test_time_condition(test)) break;
+            }
 
+            /* 串行填充所有块：有限工作量（NUM_BLOCKS×VECTOR_SIZE 个
+             * 元素，微秒级），不逐块消耗 fracture 预算 —— 原实现每块
+             * 烧 2 次 test_time_condition，一轮 256 块需 ~513 次而
+             * 预算（自动翻倍窗口关闭后停留在 ~160）永远达不到，写者
+             * 在填充中途预算耗尽退出。同 2731971 写者的无守卫填充。 */
+            while (true) {
                 uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
                 if (block >= NUM_BLOCKS) {
                     break;
@@ -114,12 +129,22 @@ static int mesh_upi_sse_asymm_distrib_int_run(struct test *test, int cpu) {
                 td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
             }
         } else {
-            // 读核心：等待所有块分配完成
-            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
+            /* 读核心：等待所有块分配完成。原实现每次自旋都调
+             * test_time_condition：读者 40 次预算在微秒级就被自旋
+             * 烧光（实测读者放弃时写者仅填到第 1 块；而旧写者的
+             * 逐块预算烧法本身也到不了 256 块），等待提前中断 →
+             * 校验被跳过 → vacuous pass（实测 -f no -t 3000 -n 2
+             * 下 0 行读端验证输出）。按 2731971 已验证的节流模式：
+             * 等待条件每自旋检查、ttc 预算每 1024 自旋检查一次，
+             * 预算耗尽走 out_of_budget 干净退出。 */
+            uint32_t spin = 0;
+            while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
+                if ((++spin & 1023u) == 0) {
+                    if (!test_time_condition(test)) goto out_of_budget;
+                } else {
+                    __asm__ volatile("yield");
+                }
             }
-            if (!test_time_condition(test)) break;
 
             // 全内存屏障
             __sync_synchronize();
@@ -152,16 +177,16 @@ static int mesh_upi_sse_asymm_distrib_int_run(struct test *test, int cpu) {
             bool sum_ok = (read_sum == expected_sum);
             bool passed = sum_ok && consistent;
 
-            fprintf(stderr, "mesh_upi_sse_asymm_distrib_int: Thread %d (reader), data[0..3]=(%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
-                    id,
-                    td->data[0], td->data[1], td->data[2], td->data[3],
-                    read_sum, expected_sum, consistent,
-                    passed ? GREEN : RED,
-                    passed ? "PASS" : "FAIL",
-                    RESET);
-            fflush(stderr);
-
             if (!passed) {
+                // 首次失败证据（原先每轮都打印 PASS 行；与 Task 5 家族统一移入失败分支）
+                fprintf(stderr, "mesh_upi_sse_asymm_distrib_int: Thread %d (reader), data[0..3]=(%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
+                        id,
+                        td->data[0], td->data[1], td->data[2], td->data[3],
+                        read_sum, expected_sum, consistent,
+                        passed ? GREEN : RED,
+                        passed ? "PASS" : "FAIL",
+                        RESET);
+                fflush(stderr);
                 report_fail_msg("mesh_upi_sse_asymm_distrib_int: Sum mismatch or consistency failure");
                 return EXIT_FAILURE;
             }
@@ -175,15 +200,21 @@ static int mesh_upi_sse_asymm_distrib_int_run(struct test *test, int cpu) {
                 td->allocated_blocks.store(0, std::memory_order_seq_cst);
                 td->round_done.store(0, std::memory_order_seq_cst);
             } else {
-                while (td->round_done.load(std::memory_order_seq_cst) != 0 &&
-                       test_time_condition(test)) {
-                    __asm__ volatile("yield");
+                /* 非最后的读核心等待最后一者重置（同样按 1024 自旋一档
+                 * 节流 ttc 预算检查）。 */
+                uint32_t spin = 0;
+                while (td->round_done.load(std::memory_order_seq_cst) != 0) {
+                    if ((++spin & 1023u) == 0) {
+                        if (!test_time_condition(test)) goto out_of_budget;
+                    } else {
+                        __asm__ volatile("yield");
+                    }
                 }
-                if (!test_time_condition(test)) break;
             }
         }
     } while (test_time_condition(test));
 
+out_of_budget:
     return EXIT_SUCCESS;
 
     #undef GREEN

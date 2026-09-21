@@ -107,8 +107,21 @@ static int mesh_upi_sve_wide_asymm_distrib_write_int_run(struct test *test, int 
                         break;
                     }}
                 }}
-                // 原代码发现不一致时仅记录，我们也同样处理
-                (void)block_ok;
+                /* 写核心的立即读回是唯一逐字节的写入内容校验——读核心的
+                 * sum 校验可被保和损坏（如元素交换）绕过，所以 block_ok
+                 * 为假必须直接判失败，不能只记录（同 87ebc4b 的修法）。 */
+                if (!block_ok) {
+                    fprintf(stderr, "mesh_upi_sve_wide_asymm_distrib_write_int: Thread %d (writer), block %u immediate read-back mismatch, written vals[0..3]=(%d,%d,%d,%d), loaded data[0..3] at offset %zu=(%d,%d,%d,%d), result=%sFAIL%s\n",
+                            id, block,
+                            vals[0], vals[1], vals[2], vals[3],
+                            offset,
+                            td->data[offset], td->data[offset + 1],
+                            td->data[offset + 2], td->data[offset + 3],
+                            RED, RESET);
+                    fflush(stderr);
+                    report_fail_msg("mesh_upi_sve_wide_asymm_distrib_write_int: writer immediate read-back mismatch (store/load corruption)");
+                    return EXIT_FAILURE;
+                }
 
                 __sync_synchronize();   // 确保写入对其他核心可见
 

@@ -71,8 +71,10 @@ static int mesh_upi_sse_asymm_int_run(struct test *test, int cpu) {
      * thread_count() 则给出确定性结果。 */
     uint32_t total_threads = thread_count();
     if (total_threads < 2) {
-        report_fail_msg("Requires at least 2 threads");
-        return EXIT_FAILURE;
+        log_skip(CpuTopologyIssueSkipCategory,
+                 "mesh_upi_sse_asymm_int requires at least 2 threads (inter-core test); "
+                 "skipping on this thread count");
+        return EXIT_SKIP;
     }
 
     /* randomization hardening H14' (P17): framework RNG (per-thread

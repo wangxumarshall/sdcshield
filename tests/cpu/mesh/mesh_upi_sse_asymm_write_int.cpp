@@ -25,8 +25,6 @@ struct TestData {
     std::atomic<uint32_t> round_done;    // 已完成校验的读核心数
     std::atomic<uint32_t> reader_count;  // 读核心总数（仅用于同步）
     std::atomic<uint64_t> iter;          // 全局轮次（用于切换读者）
-    std::atomic<uint32_t> num_threads;   // 实际运行的线程数
-    std::atomic<uint32_t> ready;         // 就绪标志
 };
 
 static int mesh_upi_sse_asymm_write_int_init(struct test *test) {
@@ -51,8 +49,6 @@ static int mesh_upi_sse_asymm_write_int_init(struct test *test) {
     td->round_done.store(0, std::memory_order_relaxed);
     td->reader_count.store(0, std::memory_order_relaxed);
     td->iter.store(0, std::memory_order_relaxed);
-    td->num_threads.store(0, std::memory_order_relaxed);
-    td->ready.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -65,34 +61,18 @@ static int mesh_upi_sse_asymm_write_int_run(struct test *test, int cpu) {
     // 每个线程分配唯一 ID
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
 
-    // ID 为 0 的线程负责检测实际线程数并设置标志
-    if (id == 0) {
-        while (td->thread_idx.load(std::memory_order_acquire) < 1) {
-            __asm__ volatile("yield");
-        }
-        uint32_t prev = 0;
-        uint32_t stable_count = 0;
-        while (stable_count < 3) {
-            uint32_t cur = td->thread_idx.load(std::memory_order_acquire);
-            if (cur == prev && cur > 1) {
-                stable_count++;
-            } else {
-                stable_count = 0;
-                prev = cur;
-            }
-            __asm__ volatile("yield");
-        }
-        td->num_threads.store(prev, std::memory_order_release);
-        td->ready.store(1, std::memory_order_release);
-    } else {
-        while (td->ready.load(std::memory_order_acquire) == 0) {
-            __asm__ volatile("yield");
-        }
-    }
-    uint32_t total_threads = td->num_threads.load(std::memory_order_acquire);
+    /* 线程总数取框架权威值 thread_count()（自动尊重 --cpuset、
+     * test.max_threads 与 OS 亲和性限制，每个线程取值一致）—— 与
+     * 2731971 对 sym/symm/asymm 六文件的修复相同。原“3 次稳定读数”
+     * 启发式在 -n 1 下会永久自旋挂死（cur > 1 永不成立，后面的
+     * 线程数检查不可达），大规模并发下又严重欠计；单线程运行现在按
+     * memcpy_rewr 先例干净跳过（log_skip + EXIT_SKIP）。 */
+    uint32_t total_threads = thread_count();
     if (total_threads < 2) {
-        report_fail_msg("This test requires at least 2 threads");
-        return EXIT_FAILURE;
+        log_skip(CpuTopologyIssueSkipCategory,
+                 "mesh_upi_sse_asymm_write_int requires at least 2 threads (inter-core test); "
+                 "skipping on this thread count");
+        return EXIT_SKIP;
     }
 
     /* randomization hardening H14' (P17): framework RNG (per-thread

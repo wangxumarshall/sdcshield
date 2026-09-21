@@ -88,9 +88,8 @@ static int movbe_dump_probe_xn_sve_run(struct test *test, int cpu)
             svuint8_t vswapped = svtbl_u8(svld1_u8(pg, in_bytes), vidx);
 
             /* store swapped (向量 store/reload 路径) */
-            uint8_t sw_bytes[64];
-            svst1_u8(pg, sw_bytes, vswapped);
-            memcpy(data->swapped + base, sw_bytes, n * 4);
+            /* ★ 直接堆 store (修复: 无栈中转) */
+            svst1_u8(pg, (uint8_t *)(data->swapped + base), vswapped);
             /* PROBE XN: 参数化 nop 数 (PROBE_XN_NOPS env, 默认 4) */
             {
                 static int xn_nops = -1;
@@ -102,7 +101,7 @@ static int movbe_dump_probe_xn_sve_run(struct test *test, int cpu)
             }
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
-            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, sw_bytes), vidx);
+            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, (const uint8_t *)(data->swapped + base)), vidx);
             uint8_t out_bytes[64];
             svst1_u8(pg, out_bytes, vrestored);
 

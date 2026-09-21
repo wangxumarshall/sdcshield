@@ -93,13 +93,14 @@ static int movbe_dump_probe_e_sve_run(struct test *test, int cpu)
             memcpy(in_bytes, data->input + base, n * 4);
             svuint8_t vswapped = svtbl_u8(svld1_u8(pg, in_bytes), vidx);
 
-            /* store swapped (向量 store/reload 路径) */
-            uint8_t sw_bytes[64];
-            svst1_u8(pg, sw_bytes, vswapped);
-            memcpy(data->swapped + base, sw_bytes, n * 4);
+            /* ★ 直接堆 store (修复: 无栈中转, 原版被测路径) */
+            svst1_u8(pg, (uint8_t *)(data->swapped + base), vswapped);
+
+            /* ★ 堆 reload (被测 store→load 转发路径) */
+            svuint8_t reloaded = svld1_u8(pg, (const uint8_t *)(data->swapped + base));
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
-            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, sw_bytes), vidx);
+            svuint8_t vrestored = svtbl_u8(reloaded, vidx);
             uint8_t out_bytes[64];
             svst1_u8(pg, out_bytes, vrestored);
 

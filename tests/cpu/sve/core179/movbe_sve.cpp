@@ -79,18 +79,20 @@ static int movbe_sve_run(struct test *test, int cpu)
             int n = (MOVBE_BUFFER_SIZE - base < (size_t)lanes) ? (int)(MOVBE_BUFFER_SIZE - base) : lanes;
             svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)(n * 4));
 
-            /* 载入 n 个 32-bit 元素 (向量) → 字节级重排 */
+            /* 直接堆访存 (无栈中转): 修复版 —— 原版被测路径是
+             * 堆 store(swapped) 后紧跟堆 reload, 栈中转会改变被测微操作序列 */
             uint8_t in_bytes[64];
             memcpy(in_bytes, data->input + base, n * 4);
             svuint8_t vswapped = svtbl_u8(svld1_u8(pg, in_bytes), vidx);
 
-            /* store swapped (向量 store/reload 路径) */
-            uint8_t sw_bytes[64];
-            svst1_u8(pg, sw_bytes, vswapped);
-            memcpy(data->swapped + base, sw_bytes, n * 4);
+            /* ★ 堆 store: svst1 直接写 swapped 堆缓冲区 */
+            svst1_u8(pg, (uint8_t *)(data->swapped + base), vswapped);
+
+            /* ★ 堆 reload: svld1 直接从 swapped 读回 (被测的 store→load 转发路径) */
+            svuint8_t reloaded = svld1_u8(pg, (const uint8_t *)(data->swapped + base));
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
-            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, sw_bytes), vidx);
+            svuint8_t vrestored = svtbl_u8(reloaded, vidx);
             uint8_t out_bytes[64];
             svst1_u8(pg, out_bytes, vrestored);
 

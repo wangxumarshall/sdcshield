@@ -87,15 +87,19 @@ static int movbe_dump_probe_f_sve_run(struct test *test, int cpu)
             svuint8_t vswapped = svtbl_u8(svld1_u8(pg, in_bytes), vidx);
 
             /* store swapped (向量 store/reload 路径) */
-            uint8_t sw_bytes[64];
-            svst1_u8(pg, sw_bytes, vswapped);
-            /* PROBE F: store 在单个 cache line 内轮转 (i&15 槽位), 不越行 */
-            static uint32_t line_window[16];
-            line_window[(base / lanes) & 15] = ((uint32_t *)sw_bytes)[0];
-            (void)line_window;
+            /* PROBE F: store 在单个 cache line 内轮转 (不越行) — svst1 直打窗口 */
+            {
+                static uint32_t line_window[16];
+                uint32_t first = 0;
+                memcpy(&first, &vswapped, 4);   /* 取首元素 (编译器协助) */
+                svbool_t pg1 = svwhilelt_b32((uint64_t)0, (uint64_t)1);
+                svst1_u32(pg1, &line_window[(base / lanes) & 15],
+                          svdup_u32(((uint32_t *)&vswapped)[0]));
+                (void)first;
+            }
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
-            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, sw_bytes), vidx);
+            svuint8_t vrestored = svtbl_u8(vswapped, vidx);   /* 寄存器直连: 原版 bswap 作用于寄存器值, 这些 probe 被测的是 store 侧效应 */
             uint8_t out_bytes[64];
             svst1_u8(pg, out_bytes, vrestored);
 

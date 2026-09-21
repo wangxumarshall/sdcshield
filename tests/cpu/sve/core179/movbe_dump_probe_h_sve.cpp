@@ -88,9 +88,7 @@ static int movbe_dump_probe_h_sve_run(struct test *test, int cpu)
             svuint8_t vswapped = svtbl_u8(svld1_u8(pg, in_bytes), vidx);
 
             /* store swapped (向量 store/reload 路径) */
-            uint8_t sw_bytes[64];
-            svst1_u8(pg, sw_bytes, vswapped);
-            /* PROBE H: 行足迹 sweep (PROBE_H_LINES env, 默认 512 行) */
+            /* PROBE H: 行足迹 sweep (PROBE_H_LINES env, 默认 512 行) — svst1 直打堆 */
             {
                 static int h_lines = -1;
                 if (h_lines < 0) {
@@ -99,11 +97,11 @@ static int movbe_dump_probe_h_sve_run(struct test *test, int cpu)
                     if (h_lines < 1) h_lines = 1;
                 }
                 size_t line_idx = (base / 128) % (size_t)h_lines;
-                memcpy(data->swapped + line_idx * (128 / 4), sw_bytes, n * 4);
+                svst1_u8(pg, (uint8_t *)(data->swapped + line_idx * (128 / 4)), vswapped);
             }
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
-            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, sw_bytes), vidx);
+            svuint8_t vrestored = svtbl_u8(vswapped, vidx);   /* 寄存器直连: 原版 bswap 作用于寄存器值, 这些 probe 被测的是 store 侧效应 */
             uint8_t out_bytes[64];
             svst1_u8(pg, out_bytes, vrestored);
 

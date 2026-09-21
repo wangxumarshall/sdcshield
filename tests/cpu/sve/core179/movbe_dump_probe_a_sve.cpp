@@ -85,13 +85,9 @@ static int movbe_dump_probe_a_sve_run(struct test *test, int cpu)
             memcpy(in_bytes, data->input + base, n * 4);
             svuint8_t vswapped = svtbl_u8(svld1_u8(pg, in_bytes), vidx);
 
-            /* store swapped (向量 store/reload 路径) */
-            uint8_t sw_bytes[64];
-            svst1_u8(pg, sw_bytes, vswapped);
-            /* PROBE A: no store side-effect (swapped buffer untouched) */
-
-            /* 再交换一次还原 (同一索引表, svtbl 可逆) */
-            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, sw_bytes), vidx);
+            /* PROBE A: no store —— 还原链寄存器直连 (无堆 store/reload 副作用,
+             * 对齐原版 no-store 探针; swapped 缓冲区不触碰) */
+            svuint8_t vrestored = svtbl_u8(vswapped, vidx);
             uint8_t out_bytes[64];
             svst1_u8(pg, out_bytes, vrestored);
 

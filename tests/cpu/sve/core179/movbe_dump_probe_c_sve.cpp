@@ -98,15 +98,14 @@ static int movbe_dump_probe_c_sve_run(struct test *test, int cpu)
              * asm memory barrier 阻断编译器对 store/reload 序列的优化
              * (无屏障时编译器消除真实 reload, 破坏 SLF 语义)。 */
             memcpy(priv_input + base, in_bytes, n * 4);
-            uint8_t sw_bytes[64];
-            svst1_u8(pg, sw_bytes, vswapped);
+            /* ★ 直接 store 到输入位置 (SLF 核心, svst1 直打堆无栈中转) */
+            svst1_u8(pg, (uint8_t *)(priv_input + base), vswapped);
             __asm__ volatile("" ::: "memory");
-            memcpy(priv_input + base, sw_bytes, n * 4);   /* store 到输入位置 */
-            __asm__ volatile("" ::: "memory");
-            memcpy(sw_bytes, priv_input + base, n * 4);   /* reload (SLF) */
+            /* ★ reload: svld1 直接读刚写过的输入位置 (真实 store→load 转发) */
+            svuint8_t reloaded = svld1_u8(pg, (const uint8_t *)(priv_input + base));
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
-            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, sw_bytes), vidx);
+            svuint8_t vrestored = svtbl_u8(reloaded, vidx);
             uint8_t out_bytes[64];
             svst1_u8(pg, out_bytes, vrestored);
 

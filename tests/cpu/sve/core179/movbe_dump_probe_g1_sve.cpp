@@ -89,16 +89,14 @@ static int movbe_dump_probe_g1_sve_run(struct test *test, int cpu)
             svuint8_t vswapped = svtbl_u8(svld1_u8(pg, in_bytes), vidx);
 
             /* store swapped (向量 store/reload 路径) */
-            uint8_t sw_bytes[64];
-            svst1_u8(pg, sw_bytes, vswapped);
-            /* PROBE G1: store 到 16 个 256KB 间隔地址之一 (单 LLC set 攻击) */
+            /* PROBE G1: store 到 16 个 256KB 间隔地址之一 (单 LLC set 攻击) — svst1 直打堆 */
             {
                 const size_t slot_scale = (256 * 1024) / 4;
-                memcpy(data->swapped + ((base / lanes) & 15) * slot_scale, sw_bytes, n * 4);
+                svst1_u8(pg, (uint8_t *)(data->swapped + ((base / lanes) & 15) * slot_scale), vswapped);
             }
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
-            svuint8_t vrestored = svtbl_u8(svld1_u8(pg, sw_bytes), vidx);
+            svuint8_t vrestored = svtbl_u8(vswapped, vidx);   /* 寄存器直连: 原版 bswap 作用于寄存器值, 这些 probe 被测的是 store 侧效应 */
             uint8_t out_bytes[64];
             svst1_u8(pg, out_bytes, vrestored);
 

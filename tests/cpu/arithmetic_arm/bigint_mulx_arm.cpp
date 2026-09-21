@@ -5,10 +5,10 @@
  * @test bigint_mulx_arm
  * @parblock
  * 512-bit large integer multiplication via the GMP library (ARM64).
- * The golden low-half product is precomputed in init (GMP mpz_mul), and every
- * run recomputes the product with GMP (which exercises UMULL 64x64->128 inside
- * mpn_mul_basecase) and compares the low 512 bits against the golden. Pattern
- * follows Intel OpenDCDiag's Eigen-based design.
+ * Operands are re-rolled every iteration from the framework RNG; the golden
+ * low-half product is computed by an independent scalar schoolbook multiply
+ * (unsigned __int128), while the DUT path is GMP's mpz_mul (UMULL inside
+ * mpn_mul_basecase). Pattern follows Intel OpenDCDiag's Eigen-based design.
  *
  * Logging follows SDCShield convention: pass path is silent; on mismatch the
  * failing inputs (a, b) and actual-vs-golden outputs are dumped via log_data()
@@ -47,6 +47,23 @@ static void words_to_mpz(mpz_t dst, const uint64_t *words, int num_words) {
     mpz_import(dst, num_words, -1, sizeof(uint64_t), 0, 0, words);
 }
 
+// 独立标量黄金：__int128 schoolbook 乘法（与 GMP 的 mpn/UMULL 路径不同实现，
+// 参考 adcx.cpp 的 __int128 golden vs ADCS 汇编 DUT 模式）。已在本机用 10000
+// 组随机 512 位输入验证与 GMP 逐位一致（低 512 位）。
+static void schoolbook_mul_golden(const uint64_t *a, const uint64_t *b, uint64_t *out) {
+    uint64_t acc[2 * NUM_WORDS] = {0};
+    for (int i = 0; i < NUM_WORDS; ++i) {
+        unsigned __int128 carry = 0;
+        for (int j = 0; j < NUM_WORDS; ++j) {
+            unsigned __int128 cur = (unsigned __int128)a[i] * b[j] + acc[i + j] + carry;
+            acc[i + j] = (uint64_t)cur;
+            carry = cur >> 64;
+        }
+        acc[i + NUM_WORDS] += (uint64_t)carry;
+    }
+    memcpy(out, acc, NUM_WORDS * sizeof(uint64_t));
+}
+
 // 初始化：操作数已改为 run 内每迭代重掷（框架 RNG 按线程独立流），init 只
 // 分配共享的向量长度。原实现用固定 mt19937_64 种子，所有机器所有运行字节相同。
 static int bigint_mulx_arm_init(struct test *test) {
@@ -75,20 +92,19 @@ static int bigint_mulx_arm_run(struct test *test, int cpu) {
     mpz_init(product);
 
     do {
-        // 每迭代重掷操作数（random64 按线程独立流）；golden 同迭代用 GMP
-        // 先算出精确乘积低 512 位，再用 MUL 后的 SIMD 路径复算比对
+        // 每迭代重掷操作数（random64 按线程独立流）；golden 同迭代由独立的
+        // 标量 schoolbook 路径算出，受测路径用 GMP mpz_mul 复算比对
         for (int i = 0; i < NUM_WORDS; ++i) {
             a[i] = random64();
             b[i] = random64();
         }
 
-        // 使用 GMP 计算本次操作数的精确乘积作为 golden
+        // 独立标量黄金（__int128 schoolbook，非 GMP 路径）
+        schoolbook_mul_golden(a, b, golden);
+
+        // 受测路径：GMP mpz_mul（内部 mpn_mul_basecase 的 UMULL 64x64->128）
         words_to_mpz(a_mpz, a, NUM_WORDS);
         words_to_mpz(b_mpz, b, NUM_WORDS);
-        mpz_mul(product, a_mpz, b_mpz);
-        mpz_to_words_trunc(golden, product, NUM_WORDS);
-
-        // 用 GMP 重新计算乘积（受测路径）
         mpz_mul(product, a_mpz, b_mpz);
 
         uint64_t result[NUM_WORDS];
@@ -129,7 +145,7 @@ static int bigint_mulx_arm_run(struct test *test, int cpu) {
             log_data("bigint_mulx input a (512-bit LE limbs)", a, NUM_WORDS * sizeof(uint64_t));
             log_data("bigint_mulx input b (512-bit LE limbs)", b, NUM_WORDS * sizeof(uint64_t));
             log_data("bigint_mulx output result (mpz_mul low 512-bit)", result, NUM_WORDS * sizeof(uint64_t));
-            log_data("bigint_mulx golden (mpz_mul low 512-bit, re-rolled this iter)",
+            log_data("bigint_mulx golden (__int128 schoolbook low 512-bit)",
                      golden, NUM_WORDS * sizeof(uint64_t));
             mpz_clear(a_mpz);
             mpz_clear(b_mpz);

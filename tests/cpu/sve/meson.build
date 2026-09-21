@@ -98,6 +98,22 @@ if host_machine.cpu_family() == 'aarch64'
         'kreg/kreg8_sve.cpp',
         'kreg/kreg9_sve.cpp',
         'kreg/arm0102_kreg_mask_sve.cpp',
+        # Batch 2 (12 NEON-direct replacements of the 64-test plan):
+        # vector/FPU/misc tests whose NEON intrinsics map 1:1 onto SVE
+        # instructions. Workload parameters preserved per original.
+        'fma2/neon_add_sve.cpp',
+        'fma2/fma_sve.cpp',
+        'fma2/fpu_special_values_sve.cpp',
+        'fma2/power_virus_dit_sve.cpp',
+        'fma2/movdq2q_sve.cpp',
+        'fma2/movq2dq_sve.cpp',
+        'fma2/movmskpspd_sve.cpp',
+        'fma2/fsu_byteexact_sve.cpp',
+        'vector2/kreg1_sve.cpp',
+        'vector2/kreg4_sve.cpp',
+        'vector2/kreg7_sve.cpp',
+        'vector2/swizzle_sve.cpp',
+        'vector2/insert_extract_sve.cpp',
     )
 
     # IPSec domain (24 ports). Two tiers:

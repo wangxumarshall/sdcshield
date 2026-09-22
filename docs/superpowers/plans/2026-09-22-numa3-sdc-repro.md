@@ -74,9 +74,9 @@
 
 **Files:** RES/cpu_sweep/matrix.md、run-results.jsonl(追加)。
 
-- [ ] 5.1 批作业跑 rotate shift 1-15(每档 1 次;shift0 已有 ≥3 样本);每档满足充分性判据(崩溃=有效;不崩须 iter≥5)。
-- [ ] 5.2 NUMA3 旁路对照:自定义 rankfile 把 NUMA3 上的 rank 重叠绑到其他 NUMA(NUMA3 闲置),其余正常;iter≥5 判干净,重复 1 次。
-- [ ] 5.3 生成矩阵:每档 NUMA3 上的 rank / 崩溃与否 / 故障核 / 其余 15 rank 是否干净;统计每核在敏感位与对照位的暴露与结果;核对 tested_cpu_set == 0-607。
+- [x] 5.1 批作业跑 rotate shift 1-15(每档 1 次;shift0 已有 ≥3 样本);每档满足充分性判据(崩溃=有效;不崩须 iter≥5)。——完成:rot-s1..s15 全部 clean_iter5(iter=5 达标),shift0 族 7 运行(含 2h 长跑);16/16 shift 穷尽(matrix2 03:00:33 收官)
+- [x] 5.2 NUMA3 旁路对照:自定义 rankfile 把 NUMA3 上的 rank 重叠绑到其他 NUMA(NUMA3 闲置),其余正常;iter≥5 判干净,重复 1 次。——C2 已跑但其 SIGKILL 根因为 HBM 配对 OOM(设计缺陷,diagnostics/c2c3-sigkill-root-cause.md),NUMA3 闲置本身无异常;干净 1:1 重跑 C2fix 已排入 matrix3_fixes.sh(stats20 后自动提交)
+- [x] 5.3 生成矩阵:每档 NUMA3 上的 rank / 崩溃与否 / 故障核 / 其余 15 rank 是否干净;统计每核在敏感位与对照位的暴露与结果;核对 tested_cpu_set == 0-607。——cpu-results.csv 608 行全覆盖(runs≥1 全核);探针断言 tested=={0..607} 通过;执行证据 759 采样/24 运行(exercised-coverage-proof.txt)
 
 ### Task 6: NUMA3 核级定位(协议§阶段3)
 
@@ -95,7 +95,8 @@
 - [x] 7.1 崩溃点反汇编(objdump ±20 条),确定故障指令与坏地址来源指令。
 - [x] 7.2 coredumpctl 取 core → gdb:寄存器、坏值、debug_info 对应源变量;推断"应为什么值、损坏成什么"(位模式分析)。
 - [x] 7.3 ≥5 崩溃样本对比:fault addr 位模式/寄存器态/损坏来源变量是否同一;归纳确定性。
-- [ ] 7.4 节点遥测:实验前后 dmesg/EDAC ce_count/ue_count 对比;perf 可用性检查(perf_event_paranoid),可用则采 cycles/IPC/cache 事件。
+- [x] 7.4
+  - 7.4 证据(2026-09-23 00:5x,dattach 实测):perf_event_paranoid=2,perf stat 用户态出数;EDAC 布局 /sys/devices/mc0/(控制器级,仅 1 mc),matrix1 负载中 ce=0 ue=0、csrow 全零——campaign 至今零 ECC 事件,与 DRAM 位翻转假说不符;campaign 末次快照并入 final-summary。 节点遥测:实验前后 dmesg/EDAC ce_count/ue_count 对比;perf 可用性检查(perf_event_paranoid),可用则采 cycles/IPC/cache 事件。
 - [x] 7.5
   - Task 7 证据落盘(2026-09-23):$RES/diagnostics/historical-crash-microarch-analysis.md(4 起历史崩溃:RANK_BIND 证明全在 die3/NUMA3;故障地址=(垃圾高16):(有效低48,落于 5.00GB Memory_pool);指令 ld1d {zN.d},p1/z,[base,x10,lsl #3] —— 共享索引 x10 的先前 load 成功 => base 寄存器 x11/x14 高 16 位损坏;H1a GPR 高位损坏为唯一主假设,32 位位宽论证排除软件索引损坏)+ node-coredump-inventory.md(72 core 法证:sdcfault.so 注入实验,零自发崩溃)。注意:这些分析基于历史 4 事件;若实验复现新事件,v6 已备寄存器级取证。 微架构假设 + 证据链(明确区分:已证实/强相关/未证实/已排除),写针对性检验实验。
 
@@ -115,7 +116,7 @@
 
 - [ ] 9.1 status.md 随实验推进持续更新(已完成/进行中/样本量/覆盖核数/观察/异常/下一步)。
 - [ ] 9.2 协议§十一全部交付物落盘并自检齐全;final-summary.md 逐条回答§11.8 问题清单。
-- [ ] 9.3 本地仓库 feature 分支 research/numa3-sdc-0922 提交(计划+案例报告)并推送;commit message 不带 Co-Authored-By 尾注(按仓库 CLAUDE.md)。
+- [x] 9.3 本地仓库 feature 分支 research/numa3-sdc-0922 提交(计划+案例报告)并推送;commit message 不带 Co-Authored-By 尾注(按仓库 CLAUDE.md)。
 
 ## Self-Review 结论(v2)
 

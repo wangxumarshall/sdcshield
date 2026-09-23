@@ -275,19 +275,19 @@ Expected: host=cn23154；affinity 为 0-607；`probe_ok=608 probe_bad=0`；freq 
 **Interfaces:**
 - Produces: 输出结构知识（供 Task 5 判定器）：程序打印哪些量、SCF 迭代行格式、最终判定量、每 rank 输出归属、确定性来源（MPI/OMP 归约次序）、已知 UB 风险清单。
 
-- [ ] **Step 1: 清点 + 哈希**
+- [x] **Step 1: 清点 + 哈希**
 
 ```bash
 cd $MAT && find . -type f | sort > $RES/inventory/filelist.txt
 sha256sum src/a.out lib/libomp.so Si.inpt Si.ion Si.psp8 local_run_rot.sh src/Makefile.xlsdft_920f src/Makefile.config.920f_lvtx > $RES/inventory/hashes.tsv
 ```
 
-- [ ] **Step 2: 源码理解（读以下文件并回答固定问题清单，写入 understanding.md）**
+- [x] **Step 2: 源码理解（读以下文件并回答固定问题清单，写入 understanding.md）**
 
 必读：`src/main.cpp src/scf.cpp src/chefsi.cpp src/eigen_solver.cpp src/tools.cpp src/args.cpp`（rg 定位打印点）。
 固定问题（每条给出 文件:行 证据）：1) SCF 每迭代打印什么（格式串原文）？2) 最终收敛判据与打印量（能量/残差/本征值）？3) 哪些输出可归属到具体 rank/分区？4) 归约次序是否确定（MPI_Allreduce/OMP reduction 的使用点）？5) PRNG/未初始化/整型溢出/数据竞争风险点？6) PRINT_EIGEN/PRINT_DENSITY 落盘文件名？7) 崩溃时 MPI 报错是否含 rank 号？8) Si.ion 第二段 SCF 的输出前缀如何区分？
 
-- [ ] **Step 3: 判定初稿**（understanding.md 末节）：列出候选"正确性判据量"及其容差规则（供 Task 5 实现并按 Task 4 实测修正）。
+- [x] **Step 3: 判定初稿**（understanding.md 末节）：列出候选"正确性判据量"及其容差规则（供 Task 5 实现并按 Task 4 实测修正）。
 
 ---
 ### Task 4: 试点基线 — 满机原始绑定 x3

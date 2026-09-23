@@ -450,14 +450,14 @@ Expected: 分类结果与人工读日志一致（每类至少抽 1 个 run 人�
 - Consumes: runrec/classify/golden；W0/W1/W2 = rankfile_window.sh 偏移 0/1/2。
 - Produces: 每核 >=2 个通过窗口的一级筛查表；失败窗口清单（Task 7 输入）。
 
-- [ ] **Step 1: 生成窗口 rankfile 与队列（rep 轮转交错：round1 W0,W1,W2 / round2 W0,W1,W2 + 首尾各 1 控制重复 W0）**
+- [x] **Step 1: 生成窗口 rankfile 与队列（rep 轮转交错：round1 W0,W1,W2 / round2 W0,W1,W2 + 首尾各 1 控制重复 W0）**
 
 ```bash
 for o in 0 1 2; do $RES/scripts/rankfile_window.sh $o $RES/cpu_sweep/rf_w$o.txt; done
 { echo "ctrl_w0 $RES/cpu_sweep/rf_w0.txt 2"; for r in 1 2; do for o in 0 1 2; do echo "w$o_r$r $RES/cpu_sweep/rf_w$o.txt 1"; done; done; echo "ctrl_w0b $RES/cpu_sweep/rf_w0.txt 2"; } > $RES/scripts/queue.tsv
 ```
 
-- [ ] **Step 2: job_sweep.sh = 链式状态机驱动（读 queue.tsv，逐行执行未完成项，作业被杀可续）**
+- [x] **Step 2: job_sweep.sh = 链式状态机驱动（读 queue.tsv，逐行执行未完成项，作业被杀可续）**
 
 ```bash
 cat > $RES/scripts/job_sweep.sh <<'EOF'
@@ -487,9 +487,9 @@ echo "SWEEP_JOB_DONE $(date -Is)"
 EOF
 ```
 
-- [ ] **Step 3: 提交（若 -T 43200 被拒降到 21600/10800，记录实际接受值）+ 后台轮询；作业到期即续投（dsub 同脚本）直到 queue 全完成**
+- [x] **Step 3: 提交（若 -T 43200 被拒降到 21600/10800，记录实际接受值）+ 后台轮询；作业到期即续投（dsub 同脚本）直到 queue 全完成**
 
-- [ ] **Step 4: 汇总一级筛查表 cpu-results.csv**
+- [x] **Step 4: 汇总一级筛查表 cpu-results.csv**
 
 ```bash
 # 每核聚合：covered_by_windows, runs_active, failures_active, freq_min, verdict_first_pass
@@ -500,7 +500,7 @@ done > $RES/cpu_sweep/coverage_map.txt
 ```
 再把 results.tsv + classify 输出按窗口核集聚合（awk 完成，产出列：cpu_id,numa_node,pos,runs,failures,freq_min,verdict），verdict 规则：含失败窗口 → `implicated_by_w{...}`；全部覆盖窗口通过 → `clean_n={通过次数}`。
 
-- [ ] **Step 5: P2-sweep.md（repo + RES）— 真实数字：每窗口 rc/分类/频率判定、失败签名一致性、覆盖证明（608 核 x 窗口映射完整）、pass 数与上界表述。commit + push**
+- [x] **Step 5: P2-sweep.md（repo + RES）— 真实数字：每窗口 rc/分类/频率判定、失败签名一致性、覆盖证明（608 核 x 窗口映射完整）、pass 数与上界表述。commit + push**
 
 ---
 

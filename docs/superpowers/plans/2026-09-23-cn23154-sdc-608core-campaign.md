@@ -299,7 +299,7 @@ sha256sum src/a.out lib/libomp.so Si.inpt Si.ion Si.psp8 local_run_rot.sh src/Ma
 - Consumes: runrec.sh；原始绑定 = local_run_rot.sh ppr 模式等价（--bind-to core --map-by ppr:1:numa:PE=36）。
 - Produces: 实测单次时长（中位数）、失败形态/签名、失败率初步、RSS/PSR 采样、rank 归因信号有无 —— 这些参数决定 Task 6 超时与重复预算。
 
-- [ ] **Step 1: 写基线 rankfile 等价物与作业脚本**
+- [x] **Step 1: 写基线 rankfile 等价物与作业脚本**
 
 ```bash
 # ppr 等价：rank r -> NUMA r 前 36 核（与 --map-by ppr:1:numa:PE=36 相同核集）
@@ -328,15 +328,15 @@ EOF
 
 注：runrec 内已有 taskset 包装；此处外层再包一次以覆盖 mpirun 启动器本身。
 
-- [ ] **Step 2: 提交 + 后台轮询（Task 2 Step 3 同款循环）**，首跑完成后即 `tail` 该 run 的 stdout.log 观察 SCF 迭代行格式（Task 3 问题 1 的实证）。
+- [x] **Step 2: 提交 + 后台轮询（Task 2 Step 3 同款循环）**，首跑完成后即 `tail` 该 run 的 stdout.log 观察 SCF 迭代行格式（Task 3 问题 1 的实证）。
 
-- [ ] **Step 3: 三跑结束后汇总实测参数（写入 RES/baseline/summary.md，真实数字）**
+- [x] **Step 3: 三跑结束后汇总实测参数（写入 RES/baseline/summary.md，真实数字）**
 
 Run: `awk -F'\t' '{print $1,$2,$7,$8}' $RES/raw/results.tsv`（run/配置/rc/频率判定）
 计算：单次时长中位数 T50；失败形态分类（exit code + stderr 特征）；错误签名（若结果错误：与另两跑逐量 diff 的首个分歧量）；rank 归因信号有无（stderr/stdout 中的 rank 号）。
 Expected: 得到 T50、初步失败率 p_hat（0/3、1/3、2/3、3/3 四种情形各自的后继预算：若 0/3 通过且无异常 → 直接进 Task 6 并在报告注明"基线未复现，故障率上界 ~63%（3 次零失败）"；若 >=1 异常 → 按签名做 Task 5 判定器优先实现）。
 
-- [ ] **Step 4: 更新 status.md（基线结论 + 实测参数）**
+- [x] **Step 4: 更新 status.md（基线结论 + 实测参数）**
 
 ---
 

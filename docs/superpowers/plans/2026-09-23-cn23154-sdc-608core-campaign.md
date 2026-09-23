@@ -572,9 +572,9 @@ printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.t
 - Consumes: 确认故障核 F、对照核 C1（同 NUMA 邻核）、C2（远端 NUMA 核）。
 - Produces: 诊断报告（微架构级根因假设 + 证据链 + 置信分级 + admin_requests 条目）。
 
-- [ ] **Step 1: 调用 superpowers:systematic-debugging skill** 并按其流程执行本任务全部步骤（四阶段：复现控制 -> 假设 -> 实验 -> 结论），本计划步骤作为其实验清单。
+- [x] **Step 1: 调用 superpowers:systematic-debugging skill** 并按其流程执行本任务全部步骤（四阶段：复现控制 -> 假设 -> 实验 -> 结论），本计划步骤作为其实验清单。
 
-- [ ] **Step 2: bench_units.c — 执行单元/SIMD/数据模式微基准（逐位比对，数千次迭代）**
+- [x] **Step 2: bench_units.c — 执行单元/SIMD/数据模式微基准（逐位比对，数千次迭代）**
 
 ```c
 /* bench_units.c - per-execution-unit microbench with bit-exact self-check
@@ -588,13 +588,13 @@ printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.t
 ```
 （执行时写全内核实现；每单元至少 INT/FP/SVE 通路各一，lane 逐个验证：SVE 用 VL=128 拆 lane；denormal 用最小正规数邻值。）
 
-- [ ] **Step 3: 三核同条件执行矩阵** — F/C1/C2 各跑 units x patterns x >=3000 轮（每轮 checksum 比对），taskset 单核绑定；任何 delta_bits>0 记录完整位模式进 bitsig/。
+- [x] **Step 3: 三核同条件执行矩阵** — F/C1/C2 各跑 units x patterns x >=3000 轮（每轮 checksum 比对），taskset 单核绑定；任何 delta_bits>0 记录完整位模式进 bitsig/。
 
-- [ ] **Step 4: 缓存层级定位** — 工作集尺寸扫 {4KB(L1) 64KB(L2) 32MB(L3) 512MB(远端)} x 访问模式 {seq,stride64,random} x 数据位置 {本地 NUMA, 远端 NUMA(numactl)}，F vs C1；错位首次出现的工作集尺寸 → 层级结论。
+- [x] **Step 4: 缓存层级定位** — 工作集尺寸扫 {4KB(L1) 64KB(L2) 32MB(L3) 512MB(远端)} x 访问模式 {seq,stride64,random} x 数据位置 {本地 NUMA, 远端 NUMA(numactl)}，F vs C1；错位首次出现的工作集尺寸 → 层级结论。
 
 - [ ] **Step 5: perf 采集**（先 `perf list` 确认事件存在，仅自有进程）: instructions/cycles/IPC/branches,branch-misses/cache-{ref,misses},L1-dcache,stalled-cycles; F vs C1 差异只作相关性记录。
 
-- [ ] **Step 6: 位签名映射** — XLSDFT 错误输出的错位模式（Task 5/8 记录）映射到源码计算路径（rg 定位该量在 src/ 的产生式）+ objdump 热函数（perf 定位）指令类别。
+- [x] **Step 6: 位签名映射** — XLSDFT 错误输出的错位模式（Task 5/8 记录）映射到源码计算路径（rg 定位该量在 src/ 的产生式）+ objdump 热函数（perf 定位）指令类别。
 
 - [ ] **Step 7: 频率/温度相关性** — 从 freqmon CSV 提取故障时刻前后 F 核频率轨迹；对照温度区间；只做观察式结论。
 
@@ -602,6 +602,12 @@ printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.t
 
 ---
 
+**Task 9 鏈嶅姟杩涘害璁板綍 (2026-09-23, 鎵ц琛屼腑)**:
+- Step 1-3 瀹屾垚: bench_units 15 鍗曞厓脳8 鍥炬妗堢煩闃?job 1713002) + SVE-512 FMA (rdvl 灏忎鏁颁慨澶嶅悗, job 1713658) 鈥?F(139)/C1(140)/C2(252) 鍏ㄩ儴骞插噣, bitsig 涓虹┖銆?
+- Step 4 瀹屾垚 (閫傞厤: 鐢?bench_mem l1fill/l2stream/bigstream/svestream 浜ゅ弶鏍￠獙闃舵?浛浠ｑ函鏃跺欢娴嬮噺, job 1713774): 姣忓崟鍏?~300 浜垮瓧鏍￠獙, 鍏ㄢ豢 鈥?瓒宠抗瑕嗙洊鎺掗櫎 (L1 fill/L2 闃靛垪/DRAM+TLB 512MB/SVE 璁诲嚭鍏ㄨ帓闄?)銆?
+- Step 6 瀹屾垚: p5-crashmap.md 鈥?15/15 byte6(bits48-55) 闅忔満鍨冨溇+浣?48 浣嶅畬濂? 娲楁鏈? 鍚?SVE ld1d/ld1b銆丼ME za st1d銆丩ibomp 绾鏍囬噺 鈥?鎸囦护绫诲瀷鎺掗櫎; 娴嬬瘯鐮 4 涓?H 娣樺急鍖栥鏋勬瀯鍓╀疱 2 涓?BR/H-PRF)銆?
+- 鏂板-H-droop 瀹為獙 (job 1713961, 瀹為闄呮浇鍏虫潯浠堕悗琛ュ厖): 鍏ㄦ牤鍚?涔熷姞杞戒笅 139/140 鍙屽娴嬮噺 (l2stream 浜ゅ弱鏍￠獙) + 114-149 鍑?34 鏍哥噧鐑? 鈥?妫€獙"鍏ㄦ牤鍚戝彂璐熻浇+139 鎵ц琛?"缁勫悎鏉′欢鍋囪? (鎵?鏈?bench 鍧囤崟鏍歌┖闂茬⒓, XLSDFT 鏁寸?36 绾跨▼鎵撴弧, skip139 簹闂?139 绌洪棽鍗充笉宕? 鐨勪簨瀹炰笌涔嬭嚜娆)銆?
+- Step 5 (perf) 寰?droop 缁撴灉鍚庡喅瀹氭寮哄害; Step 7 棰戠巼娓╁害鐩稿叧鎬?/ Step 8 璇婃柇鎶ュ憡寰呭仛銆?
 ### Task 10: P6 最小化复现提取（条件：已确认故障核）
 
 **Files:**

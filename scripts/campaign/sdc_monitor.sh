@@ -45,6 +45,7 @@ last_sel_id=""
 sel_tick=0
 bmc_fail=0
 thermal_paused=0
+thermal_hot=0
 fan_bad=0
 
 paused_for() { [ -f "$PAUSE_FLAG" ] && grep -q "$1" "$PAUSE_FLAG" 2>/dev/null; }
@@ -76,14 +77,26 @@ while :; do
     dp=$(df -P "$CAMPAIGN_DIR" | awk 'NR==2{gsub(/%/,"");print $5}')
     echo "$ts,${c1:-},${c2:-},${m1:-},${m2:-},${ot:-},${in_:-},${pw:-},${v1:-},${v2:-},${f2:-},${f3:-},${p1:-},${p2:-},${tz0:-},${tz1:-},${ma:-},${l1:-},${dp:-},$bmc" >> "$CSV"
 
-    # ---- 温度联锁（双 socket 取 max，滞回 95→90）----
+    # ---- 温度联锁（双 socket 取 max，滞回 95→90；PAUSE 对长调用无牙 → 5 分钟升级 KILL）----
     maxt=0
     for t in "$c1" "$c2"; do [ -n "$t" ] && [ "$t" -gt "$maxt" ] 2>/dev/null && maxt=$t; done
     if [ "$maxt" -ge "$PAUSE_C" ] 2>/dev/null; then
         if ! paused_for thermal; then set_pause thermal "CPU ${maxt}C >= ${PAUSE_C}C"; fi
         thermal_paused=1
+        # 升级：thermal PAUSE 连续 5 个采样（≥5 分钟）仍有负载在跑 → root 直接杀
+        # （驱动 check_pause 只在调用间生效；进程内 --temperature-threshold 本板 no-op。
+        #   TERM 对 sdcshield 无效已实测，直接 KILL；部分 YAML 无 fail/crash 行 →
+        #   驱动判别为阶段边界终止非事件，下一调用自然进入 PAUSE 等待）
+        thermal_hot=$((thermal_hot + 1))
+        if [ "$thermal_hot" -ge 5 ] && pgrep -x sdcshield >/dev/null 2>&1; then
+            alert "热升级：PAUSE ${thermal_hot} 分钟未退温，KILL 负载进程（$(pgrep -x sdcshield | tr '\n' ' ')）"
+            pkill -KILL -x sdcshield
+            thermal_hot=0
+        fi
     elif [ "$thermal_paused" = 1 ] && [ "$maxt" -le "$RESUME_C" ] 2>/dev/null; then
-        clr_pause_if thermal; thermal_paused=0
+        clr_pause_if thermal; thermal_paused=0; thermal_hot=0
+    else
+        thermal_hot=0
     fi
 
     # ---- 风扇联锁（FAN2/3 任一异常；连续 3 个采样异常才暂停，恢复即放行）----

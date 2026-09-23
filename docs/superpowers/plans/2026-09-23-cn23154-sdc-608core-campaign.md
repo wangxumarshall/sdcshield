@@ -349,7 +349,7 @@ Expected: 得到 T50、初步失败率 p_hat（0/3、1/3、2/3、3/3 四种情�
 - Consumes: Task 3 问题清单答案 + Task 4 实测日志格式。
 - Produces: `extract_quantities.sh RUN_DIR`（stdout: `name<TAB>value` 行）；`golden_build.sh RUN_DIR...`（写 golden.json：每量 median/max_dev/tol）；`check_output.sh RUN_DIR`（stdout: 每量 VERDICT 行 + 末行 `MISMATCH=n`）；`classify.sh RUN_DIR`（stdout: 单行分类标签，属于 correct/SDC/crash/hang/timeout/OOM/signal/affinity_failure/infra_failure/freq_grey）。
 
-- [ ] **Step 1: extract_quantities.sh — 按 Task 3/4 确定的真实格式提取判定量**
+- [x] **Step 1: extract_quantities.sh — 按 Task 3/4 确定的真实格式提取判定量**
 
 从 Task 4 的 stdout.log 实测格式出发（示例模板，正则按实测改，改动记录在脚本头注释）：
 ```bash
@@ -365,7 +365,7 @@ EOF
 ```
 （Task 5 执行时用真实日志校准每条 grep/awk，产出稳定的 `name value` 流；此为本任务核心工作，须在脚本头注明校准样本 run_id。）
 
-- [ ] **Step 2: golden_build.sh — 多数共识 + 容差规则**
+- [x] **Step 2: golden_build.sh — 多数共识 + 容差规则**
 
 规则（spec 固定）：对每个量 q，取 N 次独立运行值的中位数 M_q；一致运行间最大偏差 D_q；容差 tol_q = max(10 x D_q, 1e-12 x |M_q|)；若 D_q=0 则 tol_q=0（逐位一致）。
 ```bash
@@ -387,7 +387,7 @@ EOF
 chmod +x $RES/scripts/golden_build.sh
 ```
 
-- [ ] **Step 3: check_output.sh + classify.sh**
+- [x] **Step 3: check_output.sh + classify.sh**
 
 ```bash
 cat > $RES/scripts/check_output.sh <<'EOF'
@@ -432,7 +432,7 @@ EOF
 chmod +x $RES/scripts/check_output.sh $RES/scripts/classify.sh
 ```
 
-- [ ] **Step 4: 用 Task 4 真实数据验证判定器**
+- [x] **Step 4: 用 Task 4 真实数据验证判定器**
 
 Run: `$RES/scripts/golden_build.sh $RES/summary/golden.json $RES/raw/base_ppr_*`（仅 correct 类 run；若 3 跑全失败，GOLDEN 延后到 Task 6 首批通过 run 再建，先记录 blocker）
 Run: `for r in $RES/raw/base_ppr_*; do echo "$r -> $($RES/scripts/classify.sh $r)"; done`

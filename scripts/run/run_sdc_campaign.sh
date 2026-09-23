@@ -101,18 +101,20 @@ record() { echo "$(date '+%F %T') [CLASS] $1 → $2：$3" >> "$FAILS_LOG"
            echo "$1 $2" >> "$CAMPAIGN_DIR/classifications.txt"; }
 
 # ---------------- 运行与失败分类 ----------------
-run_sdc() { # run_sdc <yaml> <time> [args...]  返回 sdcshield 退出码
-    local yaml="$1" t="$2"; shift 2
-    local slack=$(( $(tsec "$t") + 420 ))   # mesh 失败复跑存在 ~10min 挂起形态，420s 收紧
-    echo "$(date '+%F %T') [cmd] $SDC $* -t $t -o $yaml" >> "$CMDLOG"
+ncount() { local s="$1"; [ -n "$s" ] || { echo 0; return; }; awk -F',' '{print NF}' <<< "$s"; }
+run_sdc() { # run_sdc <yaml> <time> <ntests> [args...]  返回 sdcshield 退出码
+    local yaml="$1" t="$2" n="$3"; shift 3
+    # -t 为每测试语义：一次调用的真实时长 ≈ ntests × t + 启动/收尾开销（+600s 兜 mesh 失败后 ~10min 挂起形态）
+    local slack=$(( $(tsec "$t") * n + n * 3 + 600 ))
+    echo "$(date '+%F %T') [cmd] $SDC $* -t $t -o $yaml (ntests=$n, slack=${slack}s)" >> "$CMDLOG"
     timeout -k 60 "$slack" "$SDC" "$@" -t "$t" -o "$yaml" >> "$STDOUT_LOG" 2>&1
     local rc=$?
     [ $rc -ne 0 ] && echo "$(date '+%F %T') [exit=$rc] $*" >> "$FAILS_LOG"
     return $rc
 }
-go() { # go <yaml> <time> [args...] = run + 分类 + 磁盘守卫
-    local yaml="$1" t="$2"; shift 2
-    run_sdc "$yaml" "$t" "$@"
+go() { # go <yaml> <time> <ntests> [args...] = run + 分类 + 磁盘守卫
+    local yaml="$1" t="$2" n="$3"; shift 3
+    run_sdc "$yaml" "$t" "$n" "$@"
     classify_run "$yaml" "$(basename "$yaml" .yaml)"
     disk_guard
 }
@@ -126,11 +128,11 @@ classify_fail() { # classify_fail <test> <label>
     RERUN_SEQ=$((RERUN_SEQ+1))
     y="$RERUN_DIR/r${RERUN_SEQ}_${t}_all.yaml"
     echo "$(date '+%F %T') [FAIL] $t（来自 $label）" >> "$FAILS_LOG"
-    run_sdc "$y" "$RERUN_TIME" -e "$t" -n "$NCORES" --ignore-unknown-tests
+    run_sdc "$y" "$RERUN_TIME" 1 -e "$t" -n "$NCORES" --ignore-unknown-tests --on-crash=context -vv
     if ! has_fail "$y"; then
         record "$t" transient "全核复跑 pass（单次失败；SEVI 长尾数据点，继续观察后续 cycle）"; return; fi
     y1="$RERUN_DIR/r${RERUN_SEQ}_${t}_n1.yaml"
-    run_sdc "$y1" "$RERUN_TIME" -e "$t" -n 1 --ignore-unknown-tests
+    run_sdc "$y1" "$RERUN_TIME" 1 -e "$t" -n 1 --ignore-unknown-tests --on-crash=context -vv
     if ! has_fail "$y1"; then
         case " $KNOWN_FLAKY " in *" $t "*)
             record "$t" known_benign_ulp "CLAUDE.md 已知全核 ULP 抖动，-n 1 复现通过";;
@@ -144,7 +146,7 @@ bisect_per_core() { # CORE179 式逐核定位
     echo "$(date '+%F %T') [BISECT] $t 开始（${NCORES} 核 × ${BISECT_TIME}）" >> "$FAILS_LOG"
     for c in $(seq 0 $((NCORES-1))); do
         y="$BISECT_DIR/${t}_core${c}.yaml"
-        run_sdc "$y" "$BISECT_TIME" -e "$t" --cpuset="$c" --ignore-unknown-tests
+        run_sdc "$y" "$BISECT_TIME" 1 -e "$t" --cpuset="$c" --ignore-unknown-tests
         has_fail "$y" && bad="$bad $c"
     done
     echo "$(date '+%F %T') [BISECT] $t 失败核:${bad:-无}" >> "$FAILS_LOG"
@@ -208,7 +210,8 @@ discover() {
     # 引擎名保留原大小写（-s help 输出: Constant/LCG/AES；默认引擎为 LCG）
     RNG_ENGINES="${RNG_ENGINES:-$( { "$SDC" -s help 2>&1 || true; } \
         | grep -oE 'Constant|LCG|AES' | awk '!s[$0]++' | tr '\n' ' ')}"
-    echo "[discover] 测试总数 $(echo "$ALL_TESTS" | wc -l)"
+    N_ALL=$(echo "$ALL_TESTS" | wc -l)
+    echo "[discover] 测试总数 $N_ALL"
     echo "[discover] GEMM(OpenBLAS)=${GEMM_OBLAS:-无} GEMM(其他)=${GEMM_OTHER:-无} CRYPTO=$CRYPTO"
     echo "[discover] COMPRESS=${COMPRESS:-无} MESH=$(echo "$ALL_TESTS" | grep -c '^mesh_')个(聚焦$(echo "$ALL_TESTS" | grep -c 'asymm_distrib')) SLEEF=${SLEEF:-无} RNG=${RNG_ENGINES:-无}"
 }
@@ -233,9 +236,9 @@ fi
 
 # ---------------- 各阶段 ----------------
 phase_p1() { [ -f "$CAMPAIGN_DIR/.done_p1" ] && return 0
-    banner "P1 全量广域扫（--quality=$QUALITY 全核 -t $SWEEP_TIME，fracturing=seed 自动轮换）"
-    go "$LOG/p1_sweep.yaml" "$SWEEP_TIME" --quality="$QUALITY" \
-       --on-crash=context -vv --ignore-os-errors --ignore-timeout \
+    banner "P1 全量广域扫（--quality=$QUALITY 全核 -t $SWEEP_TIME×${N_ALL}测试，fracturing=seed 自动轮换）"
+    go "$LOG/p1_sweep.yaml" "$SWEEP_TIME" "$N_ALL" --quality="$QUALITY" \
+       --on-crash=context --ignore-os-errors --ignore-timeout \
        --ignore-unknown-tests ${ENABLE_ARGS[@]+"${ENABLE_ARGS[@]}"}
     touch "$CAMPAIGN_DIR/.done_p1"
 }
@@ -243,31 +246,31 @@ phase_p2() { [ -f "$CAMPAIGN_DIR/.done_p2" ] && return 0
     banner "P2 文献优先级加权 soak（-t 为每测试语义，各档时长=测试数×档时长）"
     local m tb L e n eng
     for m in 64 256 512 1024; do   # 2a 尺寸谱（L1→LLC/DRAM 足迹，Biswas 驻留）
-        [ -n "$GEMM_OBLAS" ] && go "$LOG/p2_gemm_m${m}.yaml" "$GEMM_SIZE_T" -e "$GEMM_OBLAS" \
+        [ -n "$GEMM_OBLAS" ] && go "$LOG/p2_gemm_m${m}.yaml" "$GEMM_SIZE_T" "$(ncount "$GEMM_OBLAS")" -e "$GEMM_OBLAS" \
             -O openblas_dgemm.mdim=$m -O openblas_sgemm.mdim=$m \
             -O openblas_zgemm.mdim=$m -O openblas_cgemm.mdim=$m --ignore-unknown-tests
     done
-    [ -n "$GEMM_OTHER" ] && go "$LOG/p2_gemm_others.yaml" "$GEMM_OTHER_T" -e "$GEMM_OTHER" --ignore-unknown-tests
+    [ -n "$GEMM_OTHER" ] && go "$LOG/p2_gemm_others.yaml" "$GEMM_OTHER_T" "$(ncount "$GEMM_OTHER")" -e "$GEMM_OTHER" --ignore-unknown-tests
     for tb in 0 1 2 3; do          # 2b 形态谱（转置×β 相位）
-        go "$LOG/p2_gemm_tb${tb}.yaml" "$SOAK_TIME_S" -e openblas_dgemm \
+        go "$LOG/p2_gemm_tb${tb}.yaml" "$SOAK_TIME_S" 1 -e openblas_dgemm \
             -O openblas_dgemm.transab=$tb -O openblas_dgemm.beta_permille=500 --ignore-unknown-tests
     done
-    go "$LOG/p2_crypto.yaml" "$CRYPTO_T" -e "${CRYPTO}${IPSEC_SAMPLE:+,$IPSEC_SAMPLE}" --ignore-unknown-tests
+    go "$LOG/p2_crypto.yaml" "$CRYPTO_T" "$(ncount "${CRYPTO}${IPSEC_SAMPLE:+,$IPSEC_SAMPLE}")" -e "${CRYPTO}${IPSEC_SAMPLE:+,$IPSEC_SAMPLE}" --ignore-unknown-tests
     for L in 0 1 2 3; do           # 2d 压缩 level 谱（四套 match-finder 数据结构）
-        go "$LOG/p2_igzip_L${L}.yaml" "$SOAK_TIME_S" -e isal_igzip -O isal_igzip.level=$L --ignore-unknown-tests
+        go "$LOG/p2_igzip_L${L}.yaml" "$SOAK_TIME_S" 1 -e isal_igzip -O isal_igzip.level=$L --ignore-unknown-tests
     done
-    [ -n "$COMPRESS" ] && go "$LOG/p2_compress.yaml" "$COMPRESS_T" -e "$COMPRESS" --ignore-unknown-tests
+    [ -n "$COMPRESS" ] && go "$LOG/p2_compress.yaml" "$COMPRESS_T" "$(ncount "$COMPRESS")" -e "$COMPRESS" --ignore-unknown-tests
     for e in 1024 16384 262144; do # 2e SLEEF 足迹谱
-        go "$LOG/p2_sleef_e${e}.yaml" "$SOAK_TIME_S" -e sleef_neon -O sleef_neon.nelems=$e --ignore-unknown-tests
+        go "$LOG/p2_sleef_e${e}.yaml" "$SOAK_TIME_S" 1 -e sleef_neon -O sleef_neon.nelems=$e --ignore-unknown-tests
     done
-    [ -n "$SLEEF" ] && go "$LOG/p2_sleef_all.yaml" "$SOAK_TIME_S" -e "$SLEEF" --ignore-unknown-tests
+    [ -n "$SLEEF" ] && go "$LOG/p2_sleef_all.yaml" "$SOAK_TIME_S" "$(ncount "$SLEEF")" -e "$SLEEF" --ignore-unknown-tests
     for n in 4096 4099 6144 10000; do # 2f FFT 因子谱（pow2/质数/混合 radix）
-        go "$LOG/p2_fft_n${n}.yaml" "$SOAK_TIME_S" -e pocketfft_fft -O pocketfft_fft.n=$n --ignore-unknown-tests
+        go "$LOG/p2_fft_n${n}.yaml" "$SOAK_TIME_S" 1 -e pocketfft_fft -O pocketfft_fft.n=$n --ignore-unknown-tests
     done
     # 2g 一致性聚焦：asymm_distrib 子集（冒烟实证失败族；全 mesh 家族已在广域扫覆盖）
-    [ -n "$MESH_FOCUS" ] && go "$LOG/p2_mesh.yaml" "$MESH_T" -e "$MESH_FOCUS" --ignore-unknown-tests
+    [ -n "$MESH_FOCUS" ] && go "$LOG/p2_mesh.yaml" "$MESH_T" "$(ncount "$MESH_FOCUS")" -e "$MESH_FOCUS" --ignore-unknown-tests
     for eng in $RNG_ENGINES; do    # 2g 混合多样性轮 × RNG 引擎（MeRLiN 故障等价类）
-        go "$LOG/p2_mixed_${eng}.yaml" "$MIXED_T" \
+        go "$LOG/p2_mixed_${eng}.yaml" "$MIXED_T" 6 \
             -e openblas_dgemm,sleef_neon,pocketfft_fft,isal_igzip,openssl_sha3,zstd19 \
             -s "${eng}:$(( (RANDOM<<15) ^ RANDOM ^ $$ ))" --ignore-unknown-tests
     done
@@ -278,7 +281,7 @@ phase_p3() { [ -f "$CAMPAIGN_DIR/.done_p3" ] && return 0
     local L i=0
     for L in openblas_dgemm sleef_neon isal_igzip pocketfft_fft; do
         i=$((i+1))
-        go "$LOG/p3_dwell_${i}_${L}.yaml" "$DWELL_TIME" -e "$L" \
+        go "$LOG/p3_dwell_${i}_${L}.yaml" "$DWELL_TIME" 1 -e "$L" \
            --max-test-loop-count=0 --on-crash=context -vv --ignore-unknown-tests
     done
     touch "$CAMPAIGN_DIR/.done_p3"
@@ -288,17 +291,17 @@ phase_p4() { local c
     for c in $(seq 1 "$CYCLES"); do
         [ -f "$CAMPAIGN_DIR/.done_p4c${c}" ] && continue
         banner "P4 cycle $c/$CYCLES：随机序广域扫 + 拓扑/并发档 + 轮换驻留"
-        go "$LOG/p4c${c}_sweep.yaml" "$SWEEP_TIME" --quality="$QUALITY" --test-list-randomize \
-           --on-crash=context -vv --ignore-os-errors --ignore-timeout \
+        go "$LOG/p4c${c}_sweep.yaml" "$SWEEP_TIME" "$N_ALL" --quality="$QUALITY" --test-list-randomize \
+           --on-crash=context --ignore-os-errors --ignore-timeout \
            --ignore-unknown-tests ${ENABLE_ARGS[@]+"${ENABLE_ARGS[@]}"}
         local i=0 t cs
         for t in "${TOPO_SETS[@]}"; do   # 不同并发=不同电流拉载（无 cpufreq 板的 V/F 代理）
             i=$((i+1)); cs=""; [ -n "$t" ] && cs="--cpuset=$t"
-            go "$LOG/p4c${c}_topo${i}.yaml" "$TOPO_TIME" \
+            go "$LOG/p4c${c}_topo${i}.yaml" "$TOPO_TIME" 5 \
                -e openblas_dgemm,sleef_neon,isal_igzip,openssl_sha3,zstd19 $cs --ignore-unknown-tests
         done
         local L=${loads[$(( (c-1) % ${#loads[@]} ))]}
-        go "$LOG/p4c${c}_dwell_${L}.yaml" "$CYCLE_DWELL_TIME" -e "$L" \
+        go "$LOG/p4c${c}_dwell_${L}.yaml" "$CYCLE_DWELL_TIME" 1 -e "$L" \
            --max-test-loop-count=0 --on-crash=context -vv --ignore-unknown-tests
         touch "$CAMPAIGN_DIR/.done_p4c${c}"
     done

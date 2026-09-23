@@ -805,7 +805,7 @@ git push
 - Consumes: Task 1 的 `builddir/sdcshield`、Task 3 的战役脚本。
 - Produces: 全部战役数据（logs/*.yaml、monitor.csv、fails.log、campaign_summary.md）——Task 5 报告的数据源。
 
-- [ ] **Step 1: 脱离会话启动（24h+ 必须防会话中断）**
+- [x] **Step 1: 脱离会话启动（24h+ 必须防会话中断）**
 
 ```bash
 cd /home/sdc/wangxu/sdcshield
@@ -900,3 +900,7 @@ git push
 6. **跨核测试协议盲区（重要发现）**：mesh 类跨核测试 `-n 1` 一律 skip → 永远无法到达 sdc_suspect/逐核二分。冒烟实测 `mesh_upi_sse_asymm_distrib_int`（2026-09-22 刚修复的 3 个 starved asymm 之一，修后"真正开始验证"）与 `mesh_upi_avx2_asymm_distrib_int` 在 3-5s 档失败、60s 复跑一过一挂，归入 full_core_only 桶。补偿：P4 拓扑档（node0/node1/全核）提供 NUMA 归因；跨 cycle 重复失败 = 强信号，由报告汇总观察。
 7. **免费收获**：YAML 每测试自带 `avg-freq-mhz`（实测 ~2.5GHz）——每条日志都在回答"CPU 主频"。
 
+
+8. **外层超时 slack 按测试数计算（第一次启动后修正）**：`run_sdc` 增加 `ntests` 参数，slack = tsec×ntests + ntests×3 + 600s。原实现按单个 `-t`+420s 计算，导致多测试调用被系统性截断（P1 广域扫 7.3 分钟即被杀，实需 ~2h；P2 GEMM 档 14 分钟被杀，实需 28 分钟）。第一次启动（19:46-20:22）已归档 `campaign_aborted_v1`，修复后重启。
+9. **`-vv` 从多测试档位撤下**：单次 7 分钟广域扫产生 649MB 日志（全程扫将 ~12GB/次×6）；`-vv --on-crash=context` 仅保留在驻留（单测试）与失败复跑（复现时补齐 crash 转储）；`avg-freq-mhz` 遥测不受影响（默认级别即有）。
+10. **campaign.pid 修正**：`nohup setsid` 会 fork（$! 捕获的是短命父进程），启动后用 `pgrep -f run_sdc_campaign.sh` 取真实 bash pid。

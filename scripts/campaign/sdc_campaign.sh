@@ -186,6 +186,16 @@ stressng_layer() {
     done
 }
 
+run_bounded() { # run_bounded <label> <预算秒> <单测上限秒> <args...>
+    # 多用例有界阶段：-T 预算 + --strict-runtime（L0 实测：有限 -T 单独不硬停，
+    # 9.11s>4s；加 strict 后 6.08s≈预算+在飞用例），timeout 兜底防 hang。
+    local label="$1" budget="$2" per="$3"; shift 3
+    local pto=$(( budget + per + 120 ))
+    local sf=()
+    flag_ok --strict-runtime && sf=(--strict-runtime)
+    run_sdc "$label" "$pto" -T "${budget}s" -t "${per}s" "${sf[@]}" "$@"
+}
+
 # ---------------- L5 辅助 ----------------
 gov() { echo "$1" > "$CMD_DIR/governor.request"; sleep 35; }   # root 监控代理写 governor
 
@@ -195,7 +205,7 @@ phase_cold() {
     reps=$(resolve 'memcpy_rewr,cachebounce,lock*,atomic_simd_*,fma*,crc32,mul64,openblas_dgemm,sleef_neon,pocketfft_fft,isal_igzip,zstd19,openssl_sha,openssl_sm3sm4,acl_gemm')
     if [ -z "$reps" ]; then log "冷机首轮：无匹配用例，跳过"; return; fi
     log "[cycle $CYCLE] 冷机首轮（L1 代表集）。基线温度: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | cut -d, -f2,3)"
-    run_sdc "cold_c${CYCLE}" 0 -e "$reps" -t "$T_COLD" "${FLAGS[@]}"
+    run_bounded "cold_c${CYCLE}" "$(DUR_S "$T_COLD")" 60 -e "$reps" "${FLAGS[@]}"
 }
 
 phase_l2() {
@@ -219,7 +229,8 @@ phase_l2() {
         for ds in 1024 65536 16777216; do
             oargs=(); IFS=',' read -ra arr <<< "$IPSEC_SUBSET"
             for t in "${arr[@]}"; do oargs+=(-O "$t.datasize=$ds"); done
-            run_sdc "l2_ipsec_ds${ds}_c${CYCLE}" 0 -e "$IPSEC_SUBSET" "${oargs[@]}" -t "$T_IPSEC" "${FLAGS[@]}"
+            run_bounded "l2_ipsec_ds${ds}_c${CYCLE}" "$(DUR_S "$T_IPSEC")" 120 \
+                -e "$IPSEC_SUBSET" "${oargs[@]}" "${FLAGS[@]}"
         done
     fi
     # 1h: memcpy_rewr 三策略（跨 NUMA / 同 die L3 对打 / 目录失效风暴）
@@ -240,7 +251,7 @@ phase_l3() {
     run_sdc "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" -T forever -t 60s "${dis[@]}" "${FLAGS[@]}"
     run_sdc "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" -T forever -t 60s --test-list-randomize "${dis[@]}" "${FLAGS[@]}"
     local eig; eig=$(resolve 'eigen*')
-    [ -n "$eig" ] && run_sdc "l3_eigen_n1_c${CYCLE}" 0 -e "$eig" -n 1 -t "$T_EIGEN" "${FLAGS[@]}"
+    [ -n "$eig" ] && run_bounded "l3_eigen_n1_c${CYCLE}" "$(DUR_S "$T_EIGEN")" 60 -e "$eig" -n 1 "${FLAGS[@]}"
 }
 
 l5_dit() {
@@ -248,32 +259,33 @@ l5_dit() {
     pv=$(resolve 'power_virus*,arm64_sdc')
     if [ -n "$pv" ]; then q=(--quality=0); else pv=$(resolve 'fma*,cachebounce'); fi
     [ -z "$pv" ] && { log "L5 di/dt：无可用负载，跳过"; return; }
+    local rounds=6; [ "$MODE" = smoke ] && rounds=1
     local i burst=$(( $(DUR_S "$T_L5") / 12 ))
-    [ $burst -lt 15 ] && burst=15
-    for i in 1 2 3 4 5 6; do
+    [ $burst -lt 60 ] && burst=60
+    for i in $(seq 1 $rounds); do
         gov powersave; sleep 30
         gov performance
-        run_sdc "l5_dit_r${i}_c${CYCLE}" 0 -e "$pv" "${q[@]}" -t "${burst}s" "${FLAGS[@]}"
+        run_bounded "l5_dit_r${i}_c${CYCLE}" "$burst" 60 -e "$pv" "${q[@]}" "${FLAGS[@]}"
     done
     gov performance   # 恢复
 }
 
 l5_heatsoak() {
-    log "L5 热激发：预热至 $(( THERMAL_PAUSE_C - 10 ))C 带（上限 $(DUR_S "$T_HEAT")s）"
-    local heat_t=0 target=$(( THERMAL_PAUSE_C - 10 )) cur=0
+    log "L5 热激发：预热至 $(( THERMAL_PAUSE_C - 10 ))C 带"
+    local target=$(( THERMAL_PAUSE_C - 10 )) cur=0 i
     local heat_suite; heat_suite=$(resolve 'openblas_dgemm,cachebounce')
     [ -z "$heat_suite" ] && return
-    while [ $heat_t -lt "$(DUR_S "$T_HEAT")" ]; do
-        run_sdc "l5_heat_c${CYCLE}" 0 -e "$heat_suite" -t 5m "${FLAGS[@]}"
+    local iters=$(( $(DUR_S "$T_HEAT") / 300 )); [ $iters -lt 1 ] && iters=1
+    for i in $(seq 1 $iters); do
+        run_bounded "l5_heat_c${CYCLE}_i${i}" 300 300 -e "$heat_suite" "${FLAGS[@]}"
         cur=$(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | awk -F, '{print ($2 > $3) ? $2 : $3}')
-        heat_t=$((heat_t + 300))
         if [ -n "$cur" ] && [ "$cur" -ge "$target" ] 2>/dev/null; then
             log "L5 热激发：已达目标温度带 ${cur}C"
             break
         fi
     done
     local tgt; tgt=$(resolve 'openblas_dgemm,sleef_neon,fma*')
-    [ -n "$tgt" ] && run_sdc "l5_hot_target_c${CYCLE}" 0 -e "$tgt" -t "$T_TARGET" "${FLAGS[@]}"
+    [ -n "$tgt" ] && run_bounded "l5_hot_target_c${CYCLE}" "$(DUR_S "$T_TARGET")" 600 -e "$tgt" "${FLAGS[@]}"
     log "L5 热激发完成，末态温度: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null | cut -d, -f2,3)"
 }
 
@@ -298,7 +310,7 @@ l5_per_domain() {
     [ -z "$L5_SUITE" ] && { log "L5 逐域：无套件，跳过"; return; }
     local p
     for p in p0 p1 p2 p3; do
-        run_sdc "l5_dom_${p}_c${CYCLE}" 0 -e "$L5_SUITE" --cpuset="$p" -t "$T_DOM" "${FLAGS[@]}"
+        run_bounded "l5_dom_${p}_c${CYCLE}" "$(DUR_S "$T_DOM")" 60 -e "$L5_SUITE" --cpuset="$p" "${FLAGS[@]}"
     done
 }
 

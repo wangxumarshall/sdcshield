@@ -278,6 +278,14 @@ SWEEP_TIME=30s DWELL_TIME=1m bash scripts/run/run_sdc_spectrum.sh   # 冒烟（�
 
 模式选择依据：CORE179 探针证明 store→reload 的 cache-domain 与跨线模式是触发判别条件（模式 A 逐层覆盖）；文献共识"负载多样性即检出率"（模式 B 与模式 D 阶段 1，详见 `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`）；大矩阵档把分块 GEMM 的 packing/回写路径推进 DRAM 与 NUMA 远端域（模式 C）；固定 seed 长驻留提升单模式的统计采样深度（模式 D 阶段 2）。mdim>256 档在固定时间窗内迭代数按 mdim³ 骤减，是计算密度换覆盖广度的交换——统计采样请加长 `-t`。
 
+**模式 E：单板机器扫描 `scripts/run/sdc_machine_scan.sh`**——压测战役第 0 步，新单板可直接复用：一次性采集 DMI/BMC 传感器/SEL/NUMA 内存位置/RAS/软件栈，产出 `capabilities.env` 能力开关（`NCORES/HAS_SVE/HAS_CPUFREQ/HAS_IPMI/...`）与人读摘要，并自动标记硬件异常（SEL 周期故障、无本地内存 node、无 SVE/cpufreq 等），战役参数据此适配：
+
+```bash
+SUDO_PW=<密码> bash scripts/run/sdc_machine_scan.sh          # root 全量模式
+bash scripts/run/sdc_machine_scan.sh                         # 无 root 降级模式
+```
+
+
 ## 测试用例与检测能力
 
 当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3，vendored 依赖齐备时）默认 quality 下共 **329 个用例**（`--list-tests` 实测，含 SVE 全向量长家族）。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。

@@ -34,7 +34,7 @@
 **Interfaces:**
 - Produces: `RES` 路径（写入本计划"战役参数"节）；脚本签名——`freqmon.sh OUTDIR [INTERVAL=10]`；`freq_window.sh CSV TS1 TS2 CPULIST`（输出 `VERDICT|min=|med=|mean=|n=`，VERDICT 属于 VALID/GREY/EXCLUDED/NO_DATA）；`rankfile_window.sh OFFSET OUTFILE`（offset 0/1/2）；`rankfile_custom.sh OUTFILE R0=cpu,cpu,... R1=...`（16 个 rank 全给或只给覆盖项、缺省用窗口 0 填充）；`runrec.sh CONFIG_ID RF_PATH [TIMEOUT_S]`（建 raw/<run_id>/，返回 run_id，追加 RES/raw/results.tsv）；`driver.sh`（读 RES/scripts/queue.tsv 状态机）。
 
-- [ ] **Step 1: 建立结果目录**
+- [x] **Step 1: 建立结果目录**
 
 ```bash
 TS=$(date +%Y%m%d-%H%M%S)
@@ -44,7 +44,7 @@ printf '# cn23154 SDC campaign status\nstarted %s\n' "$(date -Is)" > $RES/status
 echo "$RES" > /home/share/suke/0903-NUMA3-report-materials-wangxu-v2/.last_campaign_dir
 ```
 
-- [ ] **Step 2: 写 freqmon.sh（频率守护）**
+- [x] **Step 2: 写 freqmon.sh（频率守护）**
 
 ```bash
 cat > $RES/scripts/freqmon.sh <<'EOF'
@@ -67,7 +67,7 @@ EOF
 chmod +x $RES/scripts/freqmon.sh
 ```
 
-- [ ] **Step 3: 写 freq_window.sh（窗口频率判定）**
+- [x] **Step 3: 写 freq_window.sh（窗口频率判定）**
 
 ```bash
 cat > $RES/scripts/freq_window.sh <<'EOF'
@@ -87,7 +87,7 @@ EOF
 chmod +x $RES/scripts/freq_window.sh
 ```
 
-- [ ] **Step 4: 写 rankfile 生成器（窗口 + 自定义混合槽位）**
+- [x] **Step 4: 写 rankfile 生成器（窗口 + 自定义混合槽位）**
 
 ```bash
 cat > $RES/scripts/rankfile_window.sh <<'EOF'
@@ -115,7 +115,7 @@ EOF
 chmod +x $RES/scripts/rankfile_window.sh $RES/scripts/rankfile_custom.sh
 ```
 
-- [ ] **Step 5: 写 runrec.sh（单次运行记录器）**
+- [x] **Step 5: 写 runrec.sh（单次运行记录器）**
 
 ```bash
 cat > $RES/scripts/runrec.sh <<'EOF'
@@ -154,7 +154,7 @@ EOF
 chmod +x $RES/scripts/runrec.sh
 ```
 
-- [ ] **Step 6: 写 env_report.sh、probe_cpus.sh、fpstress.c**
+- [x] **Step 6: 写 env_report.sh、probe_cpus.sh、fpstress.c**
 
 ```bash
 cat > $RES/scripts/env_report.sh <<'EOF'
@@ -201,14 +201,14 @@ EOF
 chmod +x $RES/scripts/env_report.sh $RES/scripts/probe_cpus.sh
 ```
 
-- [ ] **Step 7: 语法验证（登录节点）**
+- [x] **Step 7: 语法验证（登录节点）**
 
 Run: `for f in $RES/scripts/*.sh; do bash -n $f && echo "OK $f"; done`
 Expected: 全部 OK（freqmon/freq_window/rankfile_window/rankfile_custom/runrec/env_report/probe_cpus）
 Run: `awk -v c=5 '{print ($39==c)?"OK":"BAD"}' c=5 /proc/self/stat`（登录节点验证 probe 原理）
 Expected: `OK`
 
-- [ ] **Step 8: 把 RES 路径记入本计划"战役参数"节并 commit（本计划文件自身首次提交）**
+- [x] **Step 8: 把 RES 路径记入本计划"战役参数"节并 commit（本计划文件自身首次提交）**
 
 ---
 
@@ -632,7 +632,7 @@ runrec 执行（config attr1），失败签名指向 rank j → 嫌疑 = R{j} �
 
 ## 战役参数（执行中回填）
 
-- RES=（Task 1 Step 1 建立）
+- RES=/home/share/suke/0903-NUMA3-report-materials-wangxu-v2/ai-run-cn23154-20260923-220641（Task 1 Step 1 建立）
 - 首个 job_id=（Task 2）
 - 队列实际接受 -T=（Task 2/6）
 - 实测单次时长 T50=（Task 4）

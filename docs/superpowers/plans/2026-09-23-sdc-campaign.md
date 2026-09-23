@@ -841,7 +841,36 @@ P4 全部 CYCLES 完成 + summary 生成。若中途出现 sdc_suspect：等战�
 
 ---
 
-### Task 5: 输出报告（commit #3）
+### Task 5a: 研究成果应用——补充战役相 `run_sdc_supplement.sh`（commit #4，主战役结束后执行）
+
+**依据**：agent1 研究报告（`~/sdc_campaign_2026-09-23/research/agent1_input_patterns.md`）R2/R5 + mesh 处置建议 + 其余 agent 待回传的建议。**约束：主战役运行期间不得编辑战役脚本/不得重建 builddir**（运行中 bash 增量读脚本 + 每次 run 重 exec 二进制——中途改脚本会损坏尾部读取、中途重建二进制会破坏基线一致性）。
+
+**Files:**
+- Create: `scripts/run/run_sdc_supplement.sh`（独立脚本，日志写同一 `$CAMPAIGN_DIR/logs/p6_*`，自建 p6 监测 CSV）
+
+**内容（三档，~3h，全部用现有二进制与测试）：**
+1. **多 seed 驻留（R2，对冲单轨迹 Bernoulli 漏检）**：4 负载（openblas_dgemm/sleef_neon/isal_igzip/pocketfft_fft）× 3 次独立 `--max-test-loop-count=0 -t 10m`（每次调用自动换轨迹）——替代单条 30m 轨迹的漏检风险（CORE179：部分 seed 零命中、超级 seed 11/11）
+2. **mesh_upi_sse_asymm_distrib_int NUMA 归因档**：× {node0 全 48 核 | node1 全 48 核（跨互连访存）| node0 前 24 核 | 跨 node 2 核 (cpu0,cpu48) | 全核对照} × 5m——区分 cache 一致性域内/跨互连触发（阿里一致性型画像 vs HCCS 互连）
+3. **值域配对档（R1 零代码近似）**：`-e eigen_gemm_double_dynamic_square`（[-1,1]）+ `-e openblas_dgemm`（[1e-6,2e-3]）+ `-e fma_patterns_avx512_ps`（[-1e6,1e6]）各 10m——三个数量级值域的显式对照（SEVI 245× 杠杆的现有手段近似）
+
+**步骤**：写脚本 → bash -n → SMOKE 冒烟（3s 档）→ 主战役 P4+summary 完成后正式执行 → 结果并入输出报告 → commit + push。
+
+### Task 5b: R1 代码级应用——openblas GEMM 值域旋钮 `val_exp`（commit #5，主战役结束后开发+构建+验证）
+
+**Files:** Modify `tests/cpu/openblas_gemm/{d,s,z,c}gemm.cpp`（init-only：`random_bounded()` 的值域上界参数化为 `-O <test>.val_exp=N`，N∈{-6,-3,0,3,6}，默认 -3 = 现值域不变；finiteness 哨兵按最大档校验；热循环零扰动）
+**验证**：5 档各 `-e openblas_dgemm -O openblas_dgemm.val_exp=N -t 5000 -n 1` 全 pass + 默认值域行为 bit 不变（x86 非回归：默认值不变，改动可加进共享文件）。
+
+### Task 5c: R4 代码级应用——FP16 FMA + SDOT/UDOT 新测试（commit #6）
+
+**依据**：PinDrop Obs12（新指令代际逃逸率最高）× TaiShan v110 的 ARMv8.2 FP16/DOT 是本芯片最新扩展 × 现测试树零覆盖（grep 零命中）。
+**Files:** Create `tests/cpu/fp16_dot/fma_fp16_arm.c(pp)`（vfmaq_f16 8-lane，golden=软件 double 累加舍回 FP16）+ `dot_int8_arm`（vdotq_s32，golden=int64 累加）；`minimum_cpu = cpu_feature_fp16/asimddp` 门控，无特性核干净 skip。按 docs/writing_tests.md 规范。
+
+### Task 5d: R3 代码级应用——操作数位偏置测试 `bias_mask`（commit #7）
+
+**依据**：SEVI 37% case 有位偏置（P(bit)>0.8）——Constant（全偏置）与全随机之间缺中间形态。
+**Files:** Create/Modify NEON FMA 测试加 `-O bias_mask=0x... -O bias_value=0/1`：操作数生成后按掩码强制位段，其余位保持随机（保留 toggle、注入偏置）。
+
+### Task 5: 输出报告（commit #3 → 顺延至 Task 5a 完成后执行）
 
 **Files:**
 - Create: `docs/superpowers/output/2026-09-23-sdc-campaign-output.md`
@@ -869,7 +898,8 @@ awk -F';' 'NR>1{if($2+0>mx){mx=$2+0;t=$1}}END{print "CPU1 峰值结温:",mx/1000
 5. **结果全景**（pass/fail/skip 计数、假通过扣除清单、失败分类明细、skip 理由分类）
 6. **异常观察**（SEL 增量与负载相关性、温度抬升、EDAC、任何 transient/full_core_only）
 7. **结论与健康判定**（诚实边界：「当前覆盖 × 24h+ 时长内未见/见到 SDC」；引用 PinDrop「一次 pass 不证明健康」）
-8. **新单板复用指南**（scan 脚本 → capabilities.env → 有 cpufreq 板加 V/F 档、有 SVE 板加 SVE 负载、多内存 node 板拓扑档变化；战役参数怎么调）
+8. **研究成果应用记录**（5 个研究 agent 的 GAP 结论 + 已落地项（Task 5a 补充相）+ 代码级待落地项（5b-5d）+ **R5 失败×温度/电压事后相关分析**：fails.log 每次 fail 的时刻与 monitor.csv 最近邻采样窗口配对，检验「失败是否聚在温度/电压极值窗口」（阿里 log-线性结论的本地检验））
+9. **新单板复用指南**（scan 脚本 → capabilities.env → 有 cpufreq 板加 V/F 档、有 SVE 板加 SVE 负载、多内存 node 板拓扑档变化；战役参数怎么调）
 
 - [ ] **Step 3: commit + push**
 

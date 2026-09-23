@@ -6,7 +6,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 Environment=SDC_CAMPAIGN_DIR=@CAMPAIGN_DIR@
-ExecStart=@REPO@/scripts/campaign/sdc_monitor.sh
+ExecStart=/bin/bash @REPO@/scripts/campaign/sdc_monitor.sh
 Restart=always
 RestartSec=10
 TimeoutStopSec=30

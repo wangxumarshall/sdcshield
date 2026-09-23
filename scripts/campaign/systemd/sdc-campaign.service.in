@@ -10,7 +10,7 @@ User=@USER@
 Group=@USER@
 WorkingDirectory=@REPO@
 Environment=SDC_CAMPAIGN_DIR=@CAMPAIGN_DIR@
-ExecStart=@REPO@/scripts/campaign/sdc_campaign.sh full
+ExecStart=/bin/bash @REPO@/scripts/campaign/sdc_campaign.sh full
 Restart=always
 RestartSec=10
 TimeoutStopSec=150

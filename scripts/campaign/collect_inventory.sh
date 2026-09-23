@@ -53,7 +53,8 @@ runc() { # runc <输出文件> <命令>（root 类；无 root 通道时记录缺
     local out="$1"; shift
     case $ROOT_MODE in
         sudo)  timeout 120 sudo -n "$@" > "$out" 2>&1 ;;
-        supty) SDC_ROOT_PW="$SDC_ROOT_PW" timeout 150 python3 "$TMPD/su_run.py" "$*" > "$out" 2>&1 ;;
+        supty) SDC_ROOT_PW="$SDC_ROOT_PW" timeout 150 python3 "$TMPD/su_run.py" "$*" 2>&1 \
+                   | tr -d '\r' | sed '1{/^密码：* *$/d;}' > "$out" ;;
         none)  echo "SKIP(no-root): $*" > "$out"; echo "no-root: $*" >> "$GAPS" ;;
     esac
 }

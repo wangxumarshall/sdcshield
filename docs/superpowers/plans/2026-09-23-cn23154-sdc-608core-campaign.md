@@ -548,13 +548,18 @@ printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.t
 - Consumes: Task 7 输出的嫌疑核 F（单个或极小集）+ 已洗清算池。
 - Produces: 每个故障核的确认结论（失败次数/重复数/失败率/置信区间）+ 跟随性结论 + 邻核/缓存域结论。若 Branch B（无嫌疑核）→ 本任务记"不适用"并保留判定证据。
 
-- [ ] **Step 1: 确认重复** — 配置 = F 核放回其原 NUMA rank 的第 35 槽 + 其余 575 槽全干净核；重复运行至出现 >=3 次同签名失败或达 10 次（先到为准）。记录失败率与二项置信区间（Clopper-Pearson，用 awk 或 bc 算，公式写入 confirm.md）。
+- [x] **Step 1: 确认重复** — 配置 = F 核放回其原 NUMA rank 的第 35 槽 + 其余 575 槽全干净核；重复运行至出现 >=3 次同签名失败或达 10 次（先到为准）。记录失败率与二项置信区间（Clopper-Pearson，用 awk 或 bc 算，公式写入 confirm.md）。
 
-- [ ] **Step 2: 跟核 vs 跟 rank 判别** — 把 F 核放进 rank (n+8)%16 的槽集重跑 2-3 次：故障仍现且签名同 → 跟核（硬件侧证据增强）；故障消失/签名变 → 跟 rank（软件/算法路径嫌疑，按任务规范重审 SDC 判定，如实报告）。反向对照：原 rank 用全干净核跑 2 次应通过。
+- [x] **Step 2: 跟核 vs 跟 rank 判别** — 把 F 核放进 rank (n+8)%16 的槽集重跑 2-3 次：故障仍现且签名同 → 跟核（硬件侧证据增强）；故障消失/签名变 → 跟 rank（软件/算法路径嫌疑，按任务规范重审 SDC 判定，如实报告）。反向对照：原 rank 用全干净核跑 2 次应通过。
 
-- [ ] **Step 3: 邻核与缓存域** — 读 `/sys/devices/system/cpu/cpu{F}/cache/index*/shared_cpu_list` 定 F 的 L1/L2/L3 共享域；对 F+-1, F+-2 与同 L3 域代表核各跑 1-2 次（同 Step 1 配置形状）。
+- [x] **Step 3: 邻核与缓存域** — 读 `/sys/devices/system/cpu/cpu{F}/cache/index*/shared_cpu_list` 定 F 的 L1/L2/L3 共享域；对 F+-1, F+-2 与同 L3 域代表核各跑 1-2 次（同 Step 1 配置形状）。
 
-- [ ] **Step 4: P4-confirm.md（repo + RES）：结论四分栏（已证实/强相关/未证实/已排除）+ 每项证据的 run_id 指针。commit + push**
+- [x] **Step 4: P4-confirm.md（repo + RES）：结论四分栏（已证实/强相关/未证实/已排除）+ 每项证据的 run_id 指针。commit + push**
+**适配记录（Task 8，2026-09-24 执行时）：**
+- Step 1 停止条件（>=3 次同签名失败）在历史跑 base_ppr_1_20260923T230306 即达成，至 P3 收敛已累积 15/15 同签名失败（自然位形 13 + swap37 换域 2）——判据由既有数据满足，本任务未新增 XLSDFT 运行，故 rf_confirm_*.txt 未创建。Clopper-Pearson 公式与 bc 实算值见 P4-confirm.md §1（15/15 → [78.20%,100%]）。
+- Step 2（跟核 vs 跟 rank）已被 Task 7 证据直接回答：swap37 域级交换证明故障跟物理域不跟 rank 身份；skip139 + W1/W2 psr 将域内故障精确定位到 cpu139——(n+8)%16 重排实验的回答空间为空，不再重跑。
+- Step 3 邻核运行证据由 P2 同跑对照覆盖：137/138/140/141 与 139 的 10 次归因跑是同一批 mpirun 跑（同为 rank3 窗口成员）且全部 exercised_clean，无需另跑；/sys 拓扑已取证（dsub job 1712838 → RES/fault_localization/topology_139.txt；本节点 sysfs 不导出 L3/index3，最大共享粒度 = cluster_cpus_list 114-151，L1d/L1i/L2 全私有）。
+- Step 4 产出定于 RES/fault_localization/P4-confirm.md（与 attribution.md 同目录保持取证链一处可溯；其 §1 已含 CP 公式与实算值，等价于计划中 confirm.md 的内容要求）。
 
 ---
 

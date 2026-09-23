@@ -1,0 +1,17 @@
+# SDC 7x24 战役日志轮转（install.sh 替换 @CAMPAIGN_DIR@ 后装入 /etc/logrotate.d/）
+# 注意：YAML 取证日志（logs/YYYYMMDD/*.yaml）、events/、monitor/ 证据目录
+# 不在本轮转清单内 —— 每日归档脚本压缩保存，永久保留（plan §8）。
+@CAMPAIGN_DIR@/logs/*.out
+@CAMPAIGN_DIR@/logs/*/*.out
+@CAMPAIGN_DIR@/logs/spectrum_*.out
+@CAMPAIGN_DIR@/driver.log
+@CAMPAIGN_DIR@/daily_summary.log
+@CAMPAIGN_DIR@/stressng/stressng.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}

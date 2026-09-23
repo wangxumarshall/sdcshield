@@ -1,0 +1,16 @@
+[Unit]
+Description=SDCShield campaign monitor (root: IPMI/OS sampling + safety interlocks)
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=SDC_CAMPAIGN_DIR=@CAMPAIGN_DIR@
+ExecStart=@REPO@/scripts/campaign/sdc_monitor.sh
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

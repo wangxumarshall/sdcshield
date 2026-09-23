@@ -67,7 +67,8 @@
 
 - [x] 4.1 批作业跑基线系列:ppr:0 ×3 + rotate:0 ×2(串行,每个跑完再下一个);KMP_AFFINITY=verbose;运行目录 RES/app(日志 tee 到 RES/app/logs/,不触材料原件)。
 - [x] 4.2 每次运行记录 run_id 与协议§五全字段(时间戳/作业/哈希/绑定/时长/退出码/stdout 摘要/判定/错误签名/是否迁核/频率抽查)→ run-results.jsonl。
-- [ ] 4.3 对照(干净)配置:OMP_NUM_THREADS=35 + 自定义 rankfile 完全避开 NUMA3(15 个 NUMA × 35 核 = 525,rank16 …需实测可否);若可行,取"已知正确输出"= 干净配置的 SCF 轨迹;不可行则记录原因并改用 NUMA3 旁路(过订阅)方案。
+- [x] 4.3 对照(干净)配置:OMP_NUM_THREADS=35 + 自定义 rankfile 完全避开 NUMA3(15 个 NUMA × 35 核 = 525,rank16 …需实测可否);若可行,取"已知正确输出"= 干净配置的 SCF 轨迹;不可行则记录原因并改用 NUMA3 旁路(过订阅)方案。
+      → 已闭合(路径变更):app 级'完全避开 NUMA3'对照结构性不可构造 —— 应用强制 np=16 且 HBM 池配对必炸(c2c3-sigkill-root-cause.md;status.md 09-23 14:05);干净对照由 mini 级 die0 承担(8.3 die0×10 全清)。
 - [x] 4.4 汇总:崩溃跟随哪个 NUMA、故障线程绑定核(KMP verbose tid→core)、复现率、时间分布;阶段结论(独立!)写入 RES/baseline/summary.md。**此后才允许**把历史日志与此独立结论做交叉验证并记录异同。
 
 ### Task 5: 608 核对比矩阵(协议§阶段4)
@@ -82,11 +83,16 @@
 
 **Files:** RES/numa139/、analysis 脚本 RES/scripts/gen_rankfile.sh。
 
-- [ ] 6.1 从崩溃日志提故障线程绑定核;若集中单一核→坏核假设,若分散→域级(L3/内存控制器)假设。
-- [ ] 6.2 NUMA3 内包含/排除实验:避开 139(114-138+140-150)跑;含 139 最小子集二分(OMP_NUM_THREADS 相应缩减,记录负载变化);每档 ≥1 阳性 + 1 阴性重复。
-- [ ] 6.3 严格 CPU139 实验:敏感 rank OMP_NUM_THREADS=1 taskset -c 139(其余 rank 正常)——能否触发。
-- [ ] 6.4 计算侧 vs 内存侧:读 Memory_pool/memkind 代码确定分配落点;numactl --membind 改绑敏感 rank 内存(本地/远端)对比实验,记录实际内存落点(/proc/<pid>/numa_maps)。
-- [ ] 6.5 交错对照时间漂移检查:control → 139 → candidate → 139 → control 至少一轮。
+- [x] 6.1 从崩溃日志提故障线程绑定核;若集中单一核→坏核假设,若分散→域级(L3/内存控制器)假设。
+      → 历史 4 崩溃的 rank→die 绑定已由 RANK_BIND 逐一证明(全 die3);campaign 期 0 新崩溃,无新故障核可提(historical-crash-microarch-analysis.md)。
+- [x] 6.2 NUMA3 内包含/排除实验:避开 139(114-138+140-150)跑;含 139 最小子集二分(OMP_NUM_THREADS 相应缩减,记录负载变化);每档 ≥1 阳性 + 1 阴性重复。
+      → mini 级完成:NUMA3 全 38 核逐核 NT=1 120s 全清(Phase B,10141 校验);app 级包含/排除因门控下 0 复现(无阳性基线)不可执行,如实记录。
+- [x] 6.3 严格 CPU139 实验:敏感 rank OMP_NUM_THREADS=1 taskset -c 139(其余 rank 正常)——能否触发。
+      → 完成:core139 NT=1 单核 120s 干净,4275 迭代/267 校验全过,35.62 it/s 带内(mini-sweep Phase B 定稿)。
+- [x] 6.4 计算侧 vs 内存侧:读 Memory_pool/memkind 代码确定分配落点;numactl --membind 改绑敏感 rank 内存(本地/远端)对比实验,记录实际内存落点(/proc/<pid>/numa_maps)。
+      → 完成路径:mini --mem-node 因子 HBM→DDR 仅 -2.1%(工作集 2.75MB 常驻 LLC);hbw 池按域绑定机制已取证(C1 numa_maps 快照);应用侧 numactl 改绑受 memkind bind 约束,以 mini 因子替代执行(8.2)。
+- [x] 6.5 交错对照时间漂移检查:control → 139 → candidate → 139 → control 至少一轮。
+      → 完成:stats20 ppr/rot 交错 20 跑 + 8.3 die3/die0 交错各 10,全部 clean 无时间漂移。
 
 ### Task 7: 微架构诊断(协议§七)
 
@@ -105,20 +111,24 @@
 **Files:** RES/minimal/(源码+构建+运行+校验+README)、RES/minimization/reduction-log.md。
 
 - [x] 8.1 从应用源码抽独立复现器(无 MPI):复用 stencil/aar/内存池 + Si.inpt 几何;金标准=好核/串行计算;输出逐字节比对,损坏以数据比对捕获(不依赖崩溃)。
-- [ ] 8.2 单因素逐步裁剪(规模/循环/线程/类型/工作集/访问模式/指令路径/编译选项/SIMD/对齐/绑定),每步 A/B 验证并记录复现率,直到不可再删。
+- [x] 8.2 单因素逐步裁剪(规模/循环/线程/类型/工作集/访问模式/指令路径/编译选项/SIMD/对齐/绑定),每步 A/B 验证并记录复现率,直到不可再删。
+      → 完成:reduction-results.md 定稿 —— 10/10 有效因子全清(grid55 修正补测 red-grid55fix2 rc=0 clean,1944.64 it/s);门控 0 复现下最小用例 = red-base 原参数(结构定义),缩减代价排序实测入档。
 - [x] 8.3 稳定性统计:敏感核 ≥10 次(复现率+首错时间),对照核 ≥10 次阴性;608 核逐 CPU 扫描(tested==allocated)。
 
 > **进度 2026-09-23 06:55**:8.2 收官 —— 9/9 有效因子 clean(消减方向与全参数方向同样零触发);grid55 因 mini_phase2.sh:55 误传 --grid(二进制接口为 --nx/--ny/--nz)rc=2 未执行,修正调用已定义,待 die3 空闲补测;最小用例 = red-base 原始参数(结构保真定义,复现力排序在门控下不可行)。red-* 全表与解读 RES/minimization/reduction-results.md,案例报告 §5.3。8.3 稳定性系列(die3x10 vs die0x10)运行中(~08:30)。
 > **进度 2026-09-23 10:45**:8.3 收官 —— die3x10 全清(332.89±2.88 it/s,CV 0.87%)vs die0x10 全清(334.32±3.09,CV 0.92%),Welch t=-1.07 不显著、带宽完全重叠,零 SDC 零 crash、无首错时间;Rule of Three 合计 n=136 -> 上界 2.2%。608 核逐核扫描(tested==allocated)已由 Task 6 Phase A/B/C 完成。案例报告 §5.4;final-summary Q11 已填。剩余:stats20 终值并入、EDAC 末次快照、matrix3、grid55 补测。
-- [ ] 8.4 README:构建/运行/判定/复现方法,第三方可从零复现。
+- [x] 8.4 README:构建/运行/判定/复现方法,第三方可从零复现。
+      → 完成:minimal-reproducer/README.md 交付,端到端验证(重编译 sha256 与 campaign 二进制逐位一致;die3 8s 冒烟 clean)。
 
 
 > **进度 2026-09-22 22:55**:8.1 完成 — `RES/minimization/mini_laplacian.cpp`(v5,目录由 minimal/ 改为 minimization/,与协议交付物目录一致)。忠实提取 stencil.cpp:1695 `calc_laplacian_d3_c2_o0<double,double>`(FDn=12/ghost=12/omp static-chunk+simd/指针步进),Si.inpt 220x160x160 折半为 110x80x40;金标准=同函数 1 线程 parallel 区计算(逐位相等依据:逐元素数学与 k 划分无关);每迭代 memcmp + 巡检轮转 FNV + 金丝雀 + 信号捕获,退出码 0/3/4/5/6/7 分类 SDC/崩溃/越界。aar 未纳入(历史崩溃指令位于 stencil 内核,非 aar;若 8.2 显示必要再并入)。两个仪表缺陷已修复并记录(悬垂 json_path;BiSheng libomp 跨 single 陈旧读→全 atomic)——后者为重要工具链发现,原应用同工具链编译,列入诊断清单。验证:1555 迭代 checks=97 精确、rot 严格单调、~3100 迭代 0 误报、放置验证通过、SVE ld1d 同构指令确认。608 核扫描作业 1700367 已入队(Phase A 16 die×NT=36×300s;Phase B NUMA3 逐核×120s;Phase C 对照 10 核),即 8.3 的 608 核扫描部分;8.2 单因素裁剪与 ≥10 敏感/≥10 对照统计待扫描结果后执行。### Task 9: 交付物、报告与提交(协议§十一 + 仓库义务)
 
 **Files:** RES 内 README.md、environment-report.md、experiment-plan.md、cpu-results.csv、run-results.jsonl(终版)、diagnosis-report.md、minimal-reproducer/、final-summary.md、status.md(持续更新);本地仓库 docs/cases/hpc/2026-09-22-numa3-sdc-cn23154.md。
 
-- [ ] 9.1 status.md 随实验推进持续更新(已完成/进行中/样本量/覆盖核数/观察/异常/下一步)。
-- [ ] 9.2 协议§十一全部交付物落盘并自检齐全;final-summary.md 逐条回答§11.8 问题清单。
+- [x] 9.1 status.md 随实验推进持续更新(已完成/进行中/样本量/覆盖核数/观察/异常/下一步)。
+      → 完成:status.md 全程时序维护,含 4 条勘误(grid55 参数、C4 set -u、Rule of Three 构成、EDAC 路径),终条 09-23 15:50。
+- [x] 9.2 协议§十一全部交付物落盘并自检齐全;final-summary.md 逐条回答§11.8 问题清单。
+      → 完成:§11 交付物齐全;final-summary.md 13 问全答、无 PENDING;终值 app 49 + mini 96 = 145 零事件 → 2.1%(analyze_queue.py 有效暴露计数)。
 - [x] 9.3 本地仓库 feature 分支 research/numa3-sdc-0922 提交(计划+案例报告)并推送;commit message 不带 Co-Authored-By 尾注(按仓库 CLAUDE.md)。
 
 ## Self-Review 结论(v2)
@@ -126,3 +136,8 @@
 - 覆盖:目标五要素 + 协议§3-§十一全部映射到 Task 0-9;SDC 严格定义贯穿 Task 4/8;阅读顺序偏差的诚实记录在 Global Constraints 与 Task 4.4。
 - 占位符:无 TBD;所有步骤有具体命令或明确产出物定义(脚本体在执行时落入 RES/scripts/,内容随 Task 附带)。
 - 一致性:RES 路径统一;脚本名唯一(gen_rankfile.sh、dsub_env.sh 模板、run-results.jsonl 追加式)。
+
+> **计划完结(2026-09-23 15:50)**:全部任务闭合。campaign 终态 = 目标现象 0 候选,
+> 145 次零事件(上界 2.1%),非目标异常全归因;头号未证解释 = 1550MHz 钉频门控;
+> H1a 微架构假设保留待 2GHz 工况判定性检验。时序与勘误详见 RES/status.md;结论详见
+> docs/cases/hpc/2026-09-22-numa3-sdc-cn23154.md §5.6/§6 与 RES/final-summary.md。

@@ -504,40 +504,38 @@ done > $RES/cpu_sweep/coverage_map.txt
 
 ---
 
-### Task 7: P3 归因与二分（条件分支）
+### Task 7: P3 归因确认（已适配：Task 6 psr 直证已将嫌疑集收敛为 S={cpu139}）
+
+> 适配记录 (2026-09-24): 原计划的窗口差集收缩/16-rank 归因/二分循环不再需要——Task 6 的 13/13 崩溃全部经 psr 多数采样直证钉在 cpu139（含 W1/W2 follow-core 判据），S 已为单核。本任务改为两个决定性确认实验（映射原 Step 2/3 语义：rank 级归因 + S\S1 必要性）。
 
 **Files:**
-- Create (cluster): `RES/fault_localization/{suspects.md, rankfiles/, attribution.md}`
+- Create (cluster): `RES/fault_localization/{rankfiles/rf_swap37.txt, rankfiles/rf_skip139.txt, attribution.md}`
 
 **Interfaces:**
-- Consumes: Task 6 失败窗口集合 FAIL 与通过窗口集合 PASS；GOLDEN；classify。
-- Produces: 嫌疑核集合（目标：单核或极小集）+ 证据链；或 Branch B 的零失败扩展证据。
+- Consumes: runrec.sh（cfg, rf, TMO）; classify.sh; results.tsv; freqmon.sh
+- Produces: cpu139 归因终判 + skip139 首次完整运行数值档案
 
-- [ ] **Step 1 (Branch A，存在 >=1 失败窗口): 差集收缩**
+- [x] **Step 1: 嫌疑集收敛确认（Task 6 已完成）** — S={cpu139}（13/13 psr 直证，W0/W1/W2 follow-core 三重验证）；rf_swap37（rank3=266-301 NUMA7, rank7=114-149 含139）与 rf_skip139（rank3=114-138,140-149 共36槽不含139, 575活跃）已生成并验证（16行/576/575核/139归属）
 
-嫌疑集 S = U(FAIL 窗口活跃核) - U(PASS 窗口活跃核)。若 S 为空（失败与通过窗口核集无法区分）→ 记录并转入"全 576 核嫌疑"，用二分组合（Step 3）直接开始。
-输出 suspects.md：S 的每核（cpu, numa, 首次进入原因, 频率记录）。
-
-- [ ] **Step 2 (Branch A): rank 级归因一轮（若 Task 4/6 签名可定位 rank）**
+- [x] **Step 2: swap37 决定性实验（follow-core 终判）×2 reps**
 
 ```bash
-# 16 嫌疑核各进一个 rank 的第 35 槽（其余 35 槽 = 已洗清算填充），覆盖项 R{r}=...
-ARGS=""; i=0
-for s in $SUSPECTS_16; do r=$i; base=$((r*38)); sl=$(seq -s, $base $((base+34))),$s; ARGS="$ARGS R$r=$sl"; i=$((i+1)); done
-$RES/scripts/rankfile_custom.sh $RES/fault_localization/rf_attr1.txt $ARGS
+# rank3↔rank7 NUMA 交换：若崩溃签名 rank=7 且 cpu=139 → 故障完全随物理核+其所属 rank 窗口走（与 rank3 软件身份无关）
+# 若 rank=3 且 cpu=NUMA7 某核 → rank3 软件身份参与；若不崩 → rank/NUMA 交互效应
+printf 'swap37\t%s\t2\t1048\n' "$RES/fault_localization/rankfiles/rf_swap37.txt" >> $RES/scripts/queue_p3.tsv
 ```
-runrec 执行（config attr1），失败签名指向 rank j → 嫌疑 = R{j} 中的那 1 个核；无指向 → Step 3。
 
-- [ ] **Step 3 (Branch A): 二分组合收缩循环**
+- [x] **Step 3: skip139 必要性实验 + 首次完整运行 ×1 rep（TMO=10800，用户先验收敛 >2h）**
 
-对当前嫌疑集 S（|S|>1）：取半 S1=S 前半，配置 = S1 各核进不同 rank 槽 + 干净核补满 576 槽；失败且签名可归 → 嫌疑在 S1 对应 rank 的槽核内；失败不可归 → 若 S1 含故障核假设下本轮失败，继续对 S1 再分半；通过 → 嫌疑在 S\S1。每轮 1-2 次运行，至 |S|=1。
-每轮写入 attribution.md（配置、结果、收缩推理、频率判定）。
+```bash
+# cpu139 空闲：预期不崩 → 139 必要性确认 + 解锁完整运行数值核对（scf_error_iter_1==1.812e-01, 化学势==0.159497, 特征值全集, 收敛轨迹）
+# 若仍崩 → 存在第二故障核/机制 → 转入 P4 全核扩展排查
+printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.txt" >> $RES/scripts/queue_p3.tsv
+```
 
-- [ ] **Step 4 (Branch B，全部窗口通过): 零失败扩展**
+- [x] **Step 4: 裁决与证据链** — 按 suspects.md §3 决策表判读 swap37（cpu139→硬件终判 / rank3-NUMA7核→软件参与 / 不崩→交互）；skip139（不崩→必要性+完整数值档案 / 崩→第二故障核）。写 attribution.md：每轮配置、results.tsv 行、classify 签名、裁决推理、频率判定。
 
-按 spec 自适应预算：对 W0/W1/W2 各加 1 轮重复（每核通过窗口数 +1，目标每核 >=4 次通过 → ">90% 必现故障核"假设下漏检概率 <= 1e-4），把四轮通过证据与上界写入 P2/P3 报告；若用户先验"稳定复现"与此矛盾 → 环境差异排查（频率轨迹、负载、节点状态对比 Task 2 快照）并如实报告，征求用户是否继续加测。
-
-- [ ] **Step 5: 更新 status.md + attribution.md 完整证据链（每次归因运行都有 results.tsv 行可回溯）**
+- [x] **Step 5: 更新 status.md + attribution.md + repo 文档，commit + push**
 
 ---
 ### Task 8: P4 故障核确认（跟核 vs 跟 rank 判别 + 邻核 + 置信重复）

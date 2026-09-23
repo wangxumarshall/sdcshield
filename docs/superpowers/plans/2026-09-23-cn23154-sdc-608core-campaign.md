@@ -222,7 +222,7 @@ Expected: `OK`
 - Consumes: Task 1 全部脚本。
 - Produces: 首个 job_id；608 CPU 可用性证据（probe_ok=608）；频率守护 CSV 首批数据；队列 -T 上限探测结论。
 
-- [ ] **Step 1: 写 job_env.sh（作业脚本）**
+- [x] **Step 1: 写 job_env.sh（作业脚本）**
 
 ```bash
 cat > $RES/scripts/job_env.sh <<'EOF'
@@ -245,12 +245,12 @@ echo "ENV_JOB_DONE $(date -Is)"
 EOF
 ```
 
-- [ ] **Step 2: 提交前检查 + 提交**
+- [x] **Step 2: 提交前检查 + 提交**
 
 Run: `djob | grep -c cn23154` → Expected: `0`（无 RUNNING 才提交）
 Run: `dsub -s $RES/scripts/job_env.sh` → 记录 job_id 与状态（PENDING/RUNNING）。
 
-- [ ] **Step 3: 后台轮询到作业结束（<=2 分钟输出节奏）**
+- [x] **Step 3: 后台轮询到作业结束（<=2 分钟输出节奏）**
 
 ```bash
 # run_in_background Bash：
@@ -258,12 +258,12 @@ while true; do st=$(djob | awk -v j=$JOBID '$1==j{print $3}'); echo "$(date '+%T
 ```
 Expected: 数分钟后 state 离开 RUNNING，读取 RES/logs/job.env.out。
 
-- [ ] **Step 4: 核验 608 CPU 证据（真实输出摘录进 P0 报告）**
+- [x] **Step 4: 核验 608 CPU 证据（真实输出摘录进 P0 报告）**
 
 Run: `grep -E 'host=|affinity:|probe_ok' $RES/logs/job.env.out; grep -c '^.*,[0-9]*,' $RES/environment/freq-*.csv | head -1`
 Expected: host=cn23154；affinity 为 0-607；`probe_ok=608 probe_bad=0`；freq CSV 行数 > 12000（20 秒 x 608 核 x ~1）。若 probe_ok<608：**立即停止后续任务**，保留证据，向用户报告缺哪些核，不得宣称 608 全覆盖。
 
-- [ ] **Step 5: 写 P0-environment.md（摘录真实输出：主机名、608 探针、拓扑、频率基线、EDAC、cgroup）并 commit + push**
+- [x] **Step 5: 写 P0-environment.md（摘录真实输出：主机名、608 探针、拓扑、频率基线、EDAC、cgroup）并 commit + push**
 
 ---
 
@@ -633,7 +633,7 @@ runrec 执行（config attr1），失败签名指向 rank j → 嫌疑 = R{j} �
 ## 战役参数（执行中回填）
 
 - RES=/home/share/suke/0903-NUMA3-report-materials-wangxu-v2/ai-run-cn23154-20260923-220641（Task 1 Step 1 建立）
-- 首个 job_id=（Task 2）
+- 首个 job_id=1710250（Task 2，已完成，probe_ok=608）
 - 队列实际接受 -T=（Task 2/6）
 - 实测单次时长 T50=（Task 4）
 - 基线失败率=（Task 4）

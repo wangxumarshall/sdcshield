@@ -13,12 +13,13 @@ ensure_dirs
 
 # ---------------- 时长表（smoke/full 两档）----------------
 if [ "$MODE" = smoke ]; then
-    T_COLD=2m;  T_SWEEP=30s; T_DWELLM=1m; T_L3F=2m; T_L3R=1m
+    T_COLD=2m;  T_SWEEP=10s; T_DWELLM=1m; T_L3F=2m; T_L3R=1m
     T_L5=1m;    T_L4E=1m;    T_IPSEC=30s; T_MEMCPY=30s; T_DOM=1m
     T_HEAT=1m;  T_TARGET=1m; T_EIGEN=30s
 else
-    T_COLD=30m; T_SWEEP=15m; T_DWELLM=15m; T_L3F=6h; T_L3R=2h
-    T_L5=90m;   T_L4E=2h;    T_IPSEC=15m; T_MEMCPY=15m; T_DOM=30m
+    # SWEEP=4m：spectrum 脚本 -t 为每用例语义（42 个测试槽 × 4m ≈ 2.8h ≈ plan L2 预算）
+    T_COLD=30m; T_SWEEP=4m; T_DWELLM=4m; T_L3F=6h; T_L3R=2h
+    T_L5=90m;   T_L4E=2h;   T_IPSEC=15m; T_MEMCPY=15m; T_DOM=30m
     T_HEAT=30m; T_TARGET=30m; T_EIGEN=300s
 fi
 DUR_S() { python3 -c "
@@ -112,10 +113,17 @@ run_sdc() { # run_sdc <label> <phase_timeout_s|0> <sdcshield args...>（自动�
         "$BIN" "$@" -o "$yaml" > "$out" 2>&1
     fi
     local rc=$?
-    [ $rc -eq 124 ] && log "$label 达到阶段时长（正常切换）"
-    # 失败信号双通道：YAML result: fail/crash + 进程 rc（timeout/oserror 进日汇总）
-    if grep -Eq 'result: *(fail|crash)' "$yaml" 2>/dev/null || { [ $rc -ne 0 ] && [ $rc -ne 124 ]; }; then
-        handle_failure "$label" "$yaml" "$rc" "$*"
+    # 阶段边界判别：我们自己的 timeout 兜底 kill（TERM=143/KILL=137/timeout=124）
+    # 且 YAML 无 fail/crash 行 → 非事件（smoke 实测：sdcshield 对 TERM 60s+ 无响应，
+    # 需 KILL；把 137 当事件会产生伪取证与无界复测）
+    local killed=0
+    case $rc in 124|137|143) killed=1 ;; esac
+    if grep -Eq 'result: *(fail|crash)' "$yaml" 2>/dev/null; then
+        handle_failure "$label" "$yaml" "$rc" "$*"       # 真实 SDC/崩溃事件
+    elif [ $rc -ne 0 ] && [ $killed -eq 0 ]; then
+        handle_failure "$label" "$yaml" "$rc" "$*"       # 进程级失败（无 YAML 失败行，如 init 崩溃）
+    elif [ $killed -eq 1 ]; then
+        log "$label 被阶段边界终止（rc=$rc，无 fail/crash 行）——非事件"
     fi
     return 0
 }
@@ -151,10 +159,13 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     : > "$evdir/retests.txt"
     for i in 1 2 3; do
         sleep 5; check_pause
+        # 复测必须封顶（15m + KILL 兜底）：-T forever 类命令复测不可无界（smoke 实测教训）
         if [ -n "$seed_ok" ]; then
-            "$BIN" $cmd -s "$seed" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
+            timeout --signal=TERM --kill-after=60s 900s \
+                "$BIN" $cmd -s "$seed" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
         else
-            "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
+            timeout --signal=TERM --kill-after=60s 900s \
+                "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
         fi
         echo "retest$i(seed=${seed_ok:+on}) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
     done
@@ -210,6 +221,7 @@ phase_cold() {
 
 phase_l2() {
     log "[cycle $CYCLE] L2 谱系扫档（复用 run_sdc_spectrum.sh + ipsec/memcpy 扩展）"
+    state_set phase "l2_spectrum_c${CYCLE}"
     ( cd "$REPO_DIR" && SWEEP_TIME="$T_SWEEP" DWELL_TIME="$T_DWELLM" \
         bash scripts/run/run_sdc_spectrum.sh ) > "$LOG_ROOT/spectrum_c${CYCLE}.out" 2>&1
     local tsdir
@@ -248,8 +260,10 @@ phase_l3() {
     if [ -n "${L3_DISABLE:-}" ] && flag_ok --disable=zstd19; then
         dis=(--disable "$L3_DISABLE")
     fi
-    run_sdc "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" -T forever -t 60s "${dis[@]}" "${FLAGS[@]}"
-    run_sdc "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" -T forever -t 60s --test-list-randomize "${dis[@]}" "${FLAGS[@]}"
+    # 自终止预算（-T + --strict-runtime），不用 -T forever + 外部 kill：
+    # smoke 实测 sdcshield 对 TERM 60s+ 无响应，外部 KILL 产生 rc=137 伪事件
+    run_bounded "l3_fixed_c${CYCLE}" "$(DUR_S "$T_L3F")" 60 "${dis[@]}" "${FLAGS[@]}"
+    run_bounded "l3_rand_c${CYCLE}"  "$(DUR_S "$T_L3R")" 60 --test-list-randomize "${dis[@]}" "${FLAGS[@]}"
     local eig; eig=$(resolve 'eigen*')
     [ -n "$eig" ] && run_bounded "l3_eigen_n1_c${CYCLE}" "$(DUR_S "$T_EIGEN")" 60 -e "$eig" -n 1 "${FLAGS[@]}"
 }
@@ -350,11 +364,20 @@ daily_summary() {
         echo "=== 日汇总 $(date '+%F %T') cycle=$CYCLE ==="
         echo "事件数: $(wc -l < "$EVENTS_DIR/ledger.csv" 2>/dev/null || echo 0)"
         echo "今日 YAML: $(find "$LOG_ROOT/$(date +%F | tr -d -)" -name '*.yaml' 2>/dev/null | wc -l)"
-        echo "fail/crash 文件数: $(grep -lE 'result: *(fail|crash)' "$LOG_ROOT"/*/*.yaml 2>/dev/null | wc -l)"
+        echo "fail/crash 文件数: $(grep -lE 'result: *(fail|crash)' "$LOG_ROOT"/*/*.yaml "$LOG_ROOT"/spectrum_c*_files/*.yaml 2>/dev/null | wc -l)"
         echo "timeout/oserror 行数: $(grep -hE 'result: *(timeout|oserror)' "$LOG_ROOT"/*/*.yaml 2>/dev/null | wc -l)"
+        echo "阶段边界终止次数: $(grep -c '被阶段边界终止' "$CAMPAIGN_DIR/driver.log" 2>/dev/null || echo 0)（异常增多=疑似框架 hang）"
         echo "最新工况: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null)"
     } >> "$CAMPAIGN_DIR/daily_summary.log"
-    log "日汇总完成"
+    # 磁盘保护：压缩昨日及更早的 YAML（实测 gzip 比 ≈12×；L3 体量 ~30GB/天原始 → ~2.5GB）
+    local yday=$(date -d yesterday +%F | tr -d -) d
+    for d in "$LOG_ROOT"/*/; do
+        d=${d%/}; [ -d "$d" ] || continue
+        [ "$(basename "$d")" -le "$yday" ] 2>/dev/null || continue
+        find "$d" -name '*.yaml' ! -name '*.gz' -mtime +0 -print0 2>/dev/null \
+            | xargs -0 -r gzip -q 2>/dev/null
+    done
+    log "日汇总完成（历史 YAML 已压缩）"
 }
 
 # ---------------- 主循环 ----------------

@@ -278,6 +278,20 @@ SWEEP_TIME=30s DWELL_TIME=1m bash scripts/run/run_sdc_spectrum.sh   # 冒烟（�
 
 模式选择依据：CORE179 探针证明 store→reload 的 cache-domain 与跨线模式是触发判别条件（模式 A 逐层覆盖）；文献共识"负载多样性即检出率"（模式 B 与模式 D 阶段 1，详见 `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`）；大矩阵档把分块 GEMM 的 packing/回写路径推进 DRAM 与 NUMA 远端域（模式 C）；固定 seed 长驻留提升单模式的统计采样深度（模式 D 阶段 2）。mdim>256 档在固定时间窗内迭代数按 mdim³ 骤减，是计算密度换覆盖广度的交换——统计采样请加长 `-t`。
 
+**模式 E：7×24 全核战役 `scripts/campaign/`**——模式 D 的无人值守工程化（systemd 托管、断点续跑、安全联锁、事件取证流水线），参数全部由本机画像自动推导（新单板零修改复用，见 `scripts/campaign/NEW_BOARD_ONBOARDING.md`）：
+
+```bash
+scripts/campaign/collect_inventory.sh docs/superpowers/inventory/   # ① 画像（幂等）
+su -c "bash scripts/campaign/install.sh"                            # ② 安装 units + logrotate
+timeout 900 bash scripts/campaign/sdc_campaign.sh smoke             # ③ 冒烟验收（~10 分钟）
+su -c "systemctl start sdc-monitor sdc-campaign"                    # ④ 正式 7×24
+bash scripts/campaign/status.sh                                     # 状态一览（任意用户）
+```
+
+- **24h 周期**：冷机首轮 → L2 谱系扫档 → L3 全用例多样性轮转（固定序 + 随机序 + eigen `-n 1`）→ L5 专项轮换（di/dt governor 阶跃 / 热激发 / 跨 NUMA / 逐 L3 域隔离）→ L4 深驻留（夜间，`--max-test-loop-count=0`）。
+- **安全联锁**（root 监控服务，60s 周期）：温度 ≥Tjmax−10°C 退载（滞回恢复）、风扇/内存/磁盘水位、SEL Critical 粘性暂停；`--vary-frequency` 不在构建内时 di/dt 由 governor 阶跃承担。
+- **事件流水线**：任何 `result: fail/crash` → 自动取证（YAML+种子+核位+工况切片+EDAC）→ 种子重放复测 ×3 → 台账，**战役不中断**（普查模式）。方案与安全边界见 `docs/superpowers/plans/` 下对应 plan 文档。
+
 ## 测试用例与检测能力
 
 当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3，vendored 依赖齐备时）默认 quality 下共 **329 个用例**（`--list-tests` 实测，含 SVE 全向量长家族）。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。

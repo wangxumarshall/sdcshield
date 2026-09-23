@@ -29,7 +29,7 @@
 
 ## Global Constraints
 
-- **24h+ 预算**：战役总时长 ≥24h（构建 1h + P1 1.7h + P2 ~2.3h + P3 2h + P4 5×~3.4h ≈ 24.5h），今天启动。
+- **24h+ 预算**：战役总时长 ≥24h。**执行期修正（2026-09-23 冒烟后发现）**：`-t` 语义为**每测试**而非每次运行，原 P2/P4 档位算术失算（如 mesh 39 测试 × 8m = 5.2h）。修正后预算：构建 1h + P1 1.9h（333×20s）+ P2 ≈4.5h（GEMM 尺寸谱 4×4×7m=112min 主导）+ P3 2h（4×30m）+ P4 4 cycles×3.8h（扫 2.1h + 拓扑 4×5×2m + 驻留 1h）≈ **24.6h**；CYCLES 默认 5→4，TOPO_TIME 10m→2m（每测试）。详见「执行期修订记录」。
 - **One-patch-per-unit**：仅 3 个 commit（扫描脚本 / 战役脚本 / 输出报告），构建与执行任务不产生 commit。
 - **分支**：`feat/sdc-campaign`（自当前 `pr-147` HEAD 切出——战役使用含 mesh 修复的最新代码）；每 commit 验证后自动 push，**不 push main**。
 - **提交信息结尾不加 `Co-Authored-By: Claude <noreply@anthropic.com>`**（CLAUDE.md 明令）。
@@ -374,7 +374,7 @@ git push -u origin feat/sdc-campaign
 - Consumes: `./builddir/sdcshield`（Task 1 产物）；`--list-test-ids` 测试全集；`-s help` 引擎名（Task 1 Step 5 记录）；YAML schema（Task 1 Step 8 记录）。
 - Produces: `$CAMPAIGN_DIR/{logs/*.yaml, monitor.csv, fails.log, commands.log, classifications.txt, campaign_summary.md, .done_*}`；退出码 0=全绿 / 1=有失败 / 5=有 sdc_suspect / 2=磁盘守卫触发。
 
-- [ ] **Step 1: 写入脚本（完整代码如下）**
+- [x] **Step 1: 写入脚本（完整代码如下）**
 
 ```bash
 #!/bin/bash
@@ -747,14 +747,14 @@ grep -q 'sdc_suspect' "$CAMPAIGN_DIR/classifications.txt" 2>/dev/null && exit 5
 exit 0
 ```
 
-- [ ] **Step 2: 语法检查 + 解析器自测**
+- [x] **Step 2: 语法检查 + 解析器自测**
 
 ```bash
 bash -n scripts/run/run_sdc_campaign.sh            # 期望: 无输出
 bash scripts/run/run_sdc_campaign.sh --selftest-classify   # 期望: ALL PASS（若失败，按 Task 1 Step 8 的真实 schema 修正 parse_results）
 ```
 
-- [ ] **Step 3: 冒烟（SMOKE=1 全流程，~10min）**
+- [x] **Step 3: 冒烟（SMOKE=1 全流程，~10min）**
 
 ```bash
 cd /home/sdc/wangxu/sdcshield
@@ -766,7 +766,7 @@ Expected:
 - `monitor.csv` ≥ 20 行且 ipmi 列非 na
 - `crc32` 在跑但被标进假通过清单（验证 FAKE_PASS_RE）
 
-- [ ] **Step 4: 断点续跑演练（杀掉重启）**
+- [x] **Step 4: 断点续跑演练（杀掉重启）**
 
 ```bash
 CAMPAIGN_DIR=/tmp/campaign_smoke PHASES=p1 bash scripts/run/run_sdc_campaign.sh &   # 启动后 10 秒 kill
@@ -774,7 +774,7 @@ sleep 10; pkill -f run_sdc_campaign.sh; sleep 2
 CAMPAIGN_DIR=/tmp/campaign_smoke SMOKE=1 bash scripts/run/run_sdc_campaign.sh       # 期望: 跳过已完成阶段（.done 标记），不重复跑
 ```
 
-- [ ] **Step 5: README 更新（模式 F）**
+- [x] **Step 5: README 更新（模式 F）**
 
 在模式 E 段之后追加：
 
@@ -787,7 +787,7 @@ SMOKE=1 bash scripts/run/run_sdc_campaign.sh                            # 冒烟
 ```
 ```
 
-- [ ] **Step 6: commit + push**
+- [x] **Step 6: commit + push**
 
 ```bash
 git add scripts/run/run_sdc_campaign.sh README.md
@@ -887,3 +887,16 @@ git push
 - 代码任务：`bash -n` 0 错误；真实运行输出引用进对话；commit 前 `git diff --stat` 核对无意外文件
 - 回归：战役冒烟里 `zstd19`/`crc32`/`mesh_*` pass 证明脚本对正常路径无破坏
 - x86-64 不动：diff 只含 `scripts/run/`、`README.md`、`docs/`（无框架/测试代码改动）
+
+## 执行期修订记录（2026-09-23 冒烟后，对应 Task 3 实现修正）
+
+冒烟（SMOKE=1 全流程）实证发现并修正：
+
+1. **`-t` 每测试语义**（计划算术错误）：P2 档位时长全部重算——2a GEMM 尺寸谱每测试 7m（4 测试×4 尺寸=112min）；2a2 eigen+acl 8 测试×2m；2b 形态谱 4×4m；2c crypto（3 openssl+3 ipsec 抽样）×5m；2d igzip 4×4m + 压缩族 8×3m；2e sleef 3×4m+全族 2×4m；2f fft 4×4m；2g mesh 改为 **asymm_distrib 聚焦子集**（~10 测试×2m，全族 39 个已在广域扫覆盖）+ 混合×2 引擎（Constant/AES，LCG 为全程默认引擎）×6 测试×2m。P2 总计 ≈4.5h。
+2. **P4 拓扑档**：TOPO_TIME 10m→**2m**（5 测试×2m=10min/档 ×4 档）；CYCLES 默认 5→**4**。总计 ≈24.6h。
+3. **`--list-test-ids` 为两列输出**（id+shortid）：动态发现取第一列；eigen GEMM 实际命名为 `eigen_gemm_*`（正则由 `eigen_.*gemm$` 修正为 `eigen_gemm_[a-z0-9_]+`，8 个测试命中）。
+4. **RNG 引擎名首字母大写**（Constant/LCG/AES），默认引擎 LCG；显式档用 `Engine:seed` 格式。
+5. **run_sdc 外层超时 slack** 600s→420s：mesh 失败后的复跑存在 ~10 分钟挂起形态（框架内部 retry 后不退出），slack 收紧减少浪费。
+6. **跨核测试协议盲区（重要发现）**：mesh 类跨核测试 `-n 1` 一律 skip → 永远无法到达 sdc_suspect/逐核二分。冒烟实测 `mesh_upi_sse_asymm_distrib_int`（2026-09-22 刚修复的 3 个 starved asymm 之一，修后"真正开始验证"）与 `mesh_upi_avx2_asymm_distrib_int` 在 3-5s 档失败、60s 复跑一过一挂，归入 full_core_only 桶。补偿：P4 拓扑档（node0/node1/全核）提供 NUMA 归因；跨 cycle 重复失败 = 强信号，由报告汇总观察。
+7. **免费收获**：YAML 每测试自带 `avg-freq-mhz`（实测 ~2.5GHz）——每条日志都在回答"CPU 主频"。
+

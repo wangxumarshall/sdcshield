@@ -285,6 +285,14 @@ SUDO_PW=<密码> bash scripts/run/sdc_machine_scan.sh          # root 全量模�
 bash scripts/run/sdc_machine_scan.sh                         # 无 root 降级模式
 ```
 
+**模式 F：24h+ 压测战役执行器 `scripts/run/run_sdc_campaign.sh`**——把模式 D 的两阶段协议扩展为 24h+ 持续测试（PinDrop 模式：持续高频测试比快照式多数量级地抓出缺陷）：P1 全量广域扫（`--quality=0` 全测试 × 全核，fracturing seed 自动轮换）→ P2 文献优先级加权 soak（GEMM 尺寸/形态谱×三调度、crypto、压缩 level 谱、SLEEF 足迹谱、FFT 因子谱、mesh 一致性、混合负载×RNG 引擎）→ P3 固定 seed 深驻留 → P4×N 循环（`--test-list-randomize` 随机序重扫 + NUMA 拓扑/并发档 + 轮换驻留）。全程 ipmitool/EDAC/SEL 环境监测（30s 采样 → monitor.csv），fail-continue + 自动失败分类（known_benign_ulp / full_core_only / sdc_suspect）+ 可复现嫌疑自动逐核二分（CORE179 式定位），`.done` 阶段标记支持断点续跑：
+
+```bash
+nohup setsid bash scripts/run/run_sdc_campaign.sh > campaign.log 2>&1 &   # 24h+ 正式
+SMOKE=1 bash scripts/run/run_sdc_campaign.sh                            # 冒烟（~15min）
+bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析器自测
+```
+
 
 ## 测试用例与检测能力
 

@@ -1,186 +1,135 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with code in this repository.
+Guidance for Claude Code in this repository. SDCShield detects **silent data
+corruption (SDC)** — computations that don't crash but produce wrong bits — by
+stressing compute units (FMA, SIMD, compression, SVD, crypto) and
+byte-comparing against golden values. Forked from Intel's OpenDCDiag; ported
+to ARM64 (Kunpeng 920 / ARMv8.1+); x86-64 is the untouched reference
+architecture. Deep-dives live under `docs/` — the Documentation map below
+routes you; consult it before guessing.
 
-## What this is
+## Non-negotiable rules
 
-SDCShield is a CPU/system defect-detection tool ("is this silicon working correctly?"). Tests stress compute units (FMA, SIMD, compression, SVD) and compare results against golden values — the whole point is catching **silent data corruption (SDC)**: computations that don't crash but produce wrong bits. Forked from Intel's OpenDCDiag and ported to ARM64 (Kunpeng 920 / generic ARMv8.1+), with x86-64 still the reference architecture.
+1. **One patch per unit** — each feature/bug/porting point is its own commit;
+   never bundle. Work multi-item lists sequentially: verify → commit → push.
+2. **Self-verify before commit, 100% real** — (a) `ninja -C builddir` clean,
+   zero new warnings; (b) run the affected behavior and quote real output;
+   (c) regression: `-e zstd19 -t 2000 -n 1` → `exit: pass`; (d) x86
+   non-regression by inspection. No "should work" — fix and re-verify, never
+   commit.
+3. **DCO + auto-push** — `git commit -s` (last line `Signed-off-by: wangxu
+   <wangxumarshall@qq.com>`, nothing after, no Co-Authored-By). Push each
+   verified commit to the feature branch, never `main`; run
+   `git branch --show-current` before committing (sessions switch branches).
+4. **Plan-driven** — anything beyond a single obvious line: invoke
+   `superpowers:writing-plans` first, plan under
+   `docs/superpowers/plans/YYYY-MM-DD-<feature>.md`. No plan, no code.
+5. **x86-64 untouched** — the port is additive (`#elif __aarch64__`, per-arch
+   meson guards); widen `#ifdef __x86_64__` to include `__aarch64__` only
+   where genuinely shared.
+6. **Placeholder honesty** — unimplemented-on-ARM features must skip with
+   reason `"to be implemented (placeholder): <what's missing>"` (`EXIT_SKIP`
+   from `test_init`, never `EXIT_SUCCESS`). A no-op test reporting pass is a
+   bug. `mce_check` is a real EDAC-backed test on ARM64 and must pass.
+7. **Docs sync** — 大颗粒度修改必须同步更新 README.md 与 docs/ 下对应文档，
+   确保 100% 准确。
+
+## Always
+
+- Reply in Chinese.
+- Be concise.
+- State result before cause when practical.
+- 必须诚实、不能说谎、必须100%服从事实、所有工作和结果必须基于事实并且经过严格的逻辑推理或实证，永远尊重事实、永远真诚。
+- 所有回答必须通俗易懂却不失深刻，必须言简意赅，深刻准确。
 
 ## Build & run
 
-The central header is `framework/sandstone.h` — the authoritative API reference.
-
 ```console
-# ARM64 requires Eigen 5.0.0+ (system Eigen 3.3.x breaks on GCC 12+).
-# The repo ships third-party/eigen5; create its pkg-config file once:
+# ARM64 needs vendored Eigen 5.0.0+ (system 3.3.x breaks on GCC 12+):
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
+# Fresh clone: run the vendored build.sh first (openssl/openblas/sleef/isa-l/
+# acl — see README). Missing install/ degrades gracefully, never hard.
 
-# Default binary: builddir/sdcshield
-./builddir/sdcshield --list-tests            # list tests at default PROD quality
-./builddir/sdcshield -e zstd19 -t 5000       # run one test, 5s, all CPUs
-./builddir/sdcshield -e zstd19 -t 5000 -n 1  # single-threaded (deterministic, avoids big-system eigen numeric flakiness)
-./builddir/sdcshield --quality=-1 -e <test>  # run SKIP-level tests too
-./builddir/sdcshield --selftests ...         # framework self-tests (cause_sigill, kvm_*, etc.)
-./builddir/sdcshield --dump-cpu-info         # detected CPU + features + topology, then exit
-./builddir/sdcshield -s help                 # list RNG engines (Constant/LCG/AES)
-./builddir/sdcshield --on-crash=context -e selftest_sigsegv -vv  # crash backtrace dump
-
-# Vendored compute libraries (third-party/, see list below): on a fresh clone
-# run each build.sh once BEFORE first meson setup — openssl, openblas, sleef,
-# isa-l (pocketfft needs no prebuild: its header+source are compiled directly).
-# Missing install/ dirs degrade gracefully: meson prints a message and the
-# corresponding tests are simply not built (isa-l falls back to system libisal).
-./third-party/openssl/build.sh      # → install/lib/libcrypto.a (SSL tests default-on)
-./third-party/openblas/build.sh     # → install/lib/libopenblas.a (openblas_{d,s,z}gemm)
-./third-party/sleef/build.sh        # → install/lib/libsleef.a (sleef_neon + sleef_sve)
-./third-party/isa-l/build.sh        # → install/lib/libisal.a (isal_igzip + isal_crc*)
-./third-party/acl/build.sh           # → install/lib/libarm_compute-core.a (acl_gemm NEGEMM + fisttp_arm)
-# OpenSSL fallback: if the install dir is absent, meson falls back to system
-# libcrypto (or disables SSL tests with a message).
-# isa-l fallback: same two-tier gate — vendored install/ first, system libisal
-# second, message + no isal_* tests if neither.
-# SSL tests (openssl_sha + ipsec suite) are on by default (ssl_link_type=dynamic):
-./builddir/sdcshield --list-tests | grep -c ipsec     # 46 ipsec tests
-./builddir/sdcshield -e openssl_sha -t 3000 -n 1      # linked statically — no libcrypto.so runtime dep
-# Vendored-library tests (PROD quality, 278 total tests at default quality):
-./builddir/sdcshield -e openblas_dgemm -t 5000 -n 1   # OpenBLAS NEON FMA GEMM
-./builddir/sdcshield -e sleef_neon -t 5000 -n 1       # SLEEF NEON transcendentals
-./builddir/sdcshield -e sleef_sve -t 2000  # SVE variant: clean skip (CpuNotSupported) on non-SVE hosts
-./builddir/sdcshield -e pocketfft_fft -t 5000 -n 1   # pocketfft complex FFT
-./builddir/sdcshield -e isal_igzip -t 5000 -n 1      # isa-l deflate/inflate (vendored third-party/isa-l, static)
+./builddir/sdcshield --list-tests             # 422 tests at default PROD quality
+./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
+./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
+./builddir/sdcshield --quality=-1 -e <test>   # include SKIP-level tests
+./builddir/sdcshield --dump-cpu-info          # CPU/features/topology dump
+./builddir/sdcshield -s help                  # RNG engines: Constant/LCG/AES
 ```
 
-## Vendored third-party libraries (`third-party/`)
-
-Each directory keeps the upstream tarball for provenance plus a `build.sh` that builds and installs a static archive into `install/` (gitignored; the meson build probes `install/` and degrades with a message if absent — never a hard error, never a disabler). Library selection rationale is documented in `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md` (31-paper SDC literature synthesis: vector-FMA GEMM > hash/crypto > compression > SVE transcendentals).
-
-- `eigen5/` — Eigen 5.0.0 (header-only, committed directly; system Eigen 3.3.x breaks on GCC 12+).
-- `openssl/` — OpenSSL 3.5.0, `build.sh` → static `libcrypto.a`; default-enables the SSL tests (`openssl_sha` + 46 `ipsec_*`) with no runtime .so dependency.
-- `openblas/` — OpenBLAS 0.3.29, `build.sh` → static `libopenblas.a` (TARGET=TSV110, single-threaded `USE_THREAD=0` + `USE_LOCKING=1` so per-core worker threads can call cblas concurrently without corrupting the packing-buffer pool); powers `openblas_{d,s,z}gemm`.
-- `sleef/` — SLEEF 3.9.0, `build.sh` → static `libsleef.a` (TLFLOAT=OFF); powers `sleef_neon` (runs on any NEON host) and `sleef_sve` (needs SVE hardware; clean-skips elsewhere).
-- `isa-l/` — Intel isa-l 2.32.1, `build.sh` → static `libisal.a` (Makefile.unx path — no autoconf/nasm on aarch64; the .so and igzip CLI that `make install` also produces are deleted, only the archive + headers are kept); powers `isal_igzip` + the 10 `isal_crc*` tests. Meson prefers this install/ (openssl-style two-tier gate) and falls back to system libisal.
-- `acl/` — Arm Compute Library v23.02 (first official pure-CMake release; gcc ≥ 10.2 — satisfied by 24.03's gcc 12.3, 22.03's 10.3, and 20.03's gcc-toolset-10), `build.sh` builds ONLY the `arm_compute_core` target (NEON runtime: NEGEMM/NECast/Tensor) → static `libarm_compute-core.a` (fPIC — sdcshield links -pie; OPENMP=OFF — the framework provides its own per-core threads; sve/sve2/graph targets are neither built nor linked so no SVE machine code enters the binary). v23.02 ships no CMake install rules, so build.sh hand-assembles the install tree (archive + arm_compute/ + support/ + half/ header closure). Powers `acl_gemm` (real NEGEMM run against a long-double naive golden, 1e-4 absolute tolerance) and `fisttp_arm` (NECast FCVTZS). Container builds rebuild it natively per OS (glibc-tag pattern, same as openssl/openblas); 22.03/20.03 need `scripts/offline-build/supplement-cmake.sh` run once on a networked machine first.
-- `pocketfft/` — pocketfft C edition, header + `.c` committed directly (BSD-3, no build.sh — compiled straight into the test library); powers `pocketfft_fft`.
-- `meson/` — vendored meson 0.59.4 for the openEuler 20.03 container build path.
-- `rpms/` — three git submodules of prebuilt per-OS-version binaries (see README quick start).
-
-After changing meson sources/options: `meson setup --reconfigure builddir ...` then `ninja` (plain ninja won't pick up config changes).
-
-Verbose levels: `-v` (1), `-vv` (2) — crash context dumps and per-thread freq appear at verbose≥2. Logging format default is YAML (`-Dlogging_format=yaml|tap|no_output`).
-
-## Architecture
-
-### Fork model (critical to understand test lifecycle)
-Each test runs in a **forked child process**. Flow: parent `run_one_test_inner` → `child_run` → `test_init` (child main thread) → spawns per-CPU worker threads each calling `test_run` via `test_run_wrapper_function` → `test_cleanup`. The parent collects results via `forkfd`. A test that crashes crashes the *child*, which reports back through `CrashContext` (see `framework/sysdeps/unix/child_debug.cpp`). Fork modes (`SandstoneApplication::ForkMode`): `no_fork`, `fork_each_test` (default for non-debug), `exec_each_test` (default for debug). `test_preinit` runs **once in the parent** (and is nulled after first run, so it won't re-run across iterations — use `test_init` for per-iteration skipping).
-
-### Test declaration & the "tests" section
-Tests are `struct test` instances placed in a special ELF section (`section("tests")`) via the `DECLARE_TEST` macro. The framework iterates `__start_tests`..`__stop_tests` to find them. `DECLARE_MANUAL_TEST` omits the section attribute (used for special/injected tests like `mce_check`, which is always appended last regardless of selection). Fields: `test_preinit`/`test_init`/`test_run`/`test_cleanup` (function pointers — NULL is allowed and skipped, **except `test_run` which must be non-NULL**), `minimum_cpu` (feature gate), `quality_level`, `groups`, `flags`.
-
-### Quality levels
-`TEST_QUALITY_SKIP`(-1) < `BETA`(0) < `PROD`(2, default `--quality=2`). A test runs if `quality_level >= requested_quality`. SKIP tests only run at `--quality=-1`. The framework's "SKIP-skip" guard (`sandstone.cpp:546/559`) skips SKIP tests unless `requested_quality < 0` — so a SKIP-level test with a NULL `test_run` will **crash** under `--quality=-1` unless it self-skips in init (see `mce_check`).
-
-### Cross-architecture portability model
-The x86-64 implementation is the reference; ARM64 is a parallel port. Many pieces are gated with `#ifdef __x86_64__` with ARM64 `#elif`/stubs. Key principle from this fork: **placeholder tests for unimplemented-on-ARM features must skip with reason "to be implemented (placeholder)"** (return `EXIT_SKIP` from `test_init`, not `EXIT_SUCCESS` — a no-op returning success is misleading). See `tests/cpu/ist/ist.c`, `tests/common/smi_count/smi_count.cpp`, `tests/common/mce_check/mce_check.cpp`. Real features get real implementations; truly-absent hardware (ARM has no CPU microcode/PPIN/MSR) stays a documented stub, not faked.
-
-### CPU feature detection (config-driven generator pipeline)
-`framework/device/cpu/{simd.conf | simd-arm.conf}` → `{x86simd_generate.pl | armsimd_generate.pl}` (Perl, run at meson-configure time) → `builddir/.../cpu_features.h` (generated, **do not edit**). This emits `device_features_t` (128-bit), `cpu_feature_*` constants, `cpu_*` arch macros, `features_string`/`features_indices` (name table), `x86_locators`/`x86_architectures` tables. x86 keys on CPUID leaves; ARM keys on HWCAP bits (`getauxval(AT_HWCAP/HWCAP2)`). `detect_cpu()` (`cpuid_internal.h`) fills the global `device_features`; `device_has_feature(cpu_feature_X)` / `minimum_cpu` gating use it. `dump_device_info()` (`cpu_device.cpp`) and `device_features_to_string()` consume the generated tables. **Both generators emit identical symbol names** (`x86_locators`, etc.) so `cpu_device.cpp`/`cpuid_internal.h` work unchanged across arches.
-
-### Sysdeps layering
-`framework/sysdeps/<os>/` (linux/darwin/freebsd/windows) + `framework/sysdeps/unix/` (shared unix). `framework/device/cpu/sysdeps/<os>/` for CPU-specific. `framework/sysdeps/generic/` for non-x86 fallbacks (e.g. `kvm.c` skip stub). Arch gating is **inside files** (`#ifdef __x86_64__`/`__aarch64__`) and **inside meson** (`host_machine.cpu_family()`). The meson build for sysdeps picks files per arch — e.g. `msr.c` is x86-only, `interrupt_monitor.cpp` is x86+aarch64.
-
-### InterruptMonitor / RAS
-`framework/interrupt_monitor.hpp` + `sysdeps/linux/interrupt_monitor.cpp`. `InterruptMonitorWorks` is `true` on linux x86-64+aarch64. x86 counts MCE/TRM lines from `/proc/interrupts`; aarch64 counts EDAC `ce_count`+`ue_count` (controller-wide, placed at index 0). `count_smi_events()` uses `read_msr` (x86-only MSR 0x34 — no ARM equivalent, returns nullopt). `mce_check` is a special always-inserted test.
-
-### Tests directory layout
-`tests/common/` (arch-agnostic: mce_check, smi_count), `tests/cpu/` (eigen_*, zlib, zstd, ifs, ist, openssl, openblas_gemm, sleef, pocketfft, isa-l), `tests/{gpu,idxd}/` (only built for `-Ddevice_type=gpu/idxd`), `tests/examples/` (never built — reference only). `tests/cpu/meson.build` uses meson **sourceset** mechanism: `tests_set_base` (all arches), `tests_set_hsw`/`tests_set_skx` (x86 AVX2/AVX512, compiled with `-DEigen=EigenAVX2`/`EigenAVX512` namespace rename so multiple SIMD backends link without symbol clash), `tests_set_sve` (aarch64 SVE, `-DEigen=EigenSVE`).
-
-### RNG
-`framework/random.cpp`. Engines: Constant, LCG, AES (the default auto-picks AES when `haveAes()`). AES engine uses `#pragma GCC target` per-arch: x86 `_mm_aesenc_si128`, aarch64 `vaesmcq_u8(vaeseq_u8(...))` via `+crypto`. RNG state is per-thread (`thread_rng` union, 64-byte aligned). The framework **overrides libc `rand`/`random`/`srand`** (they abort for the seed functions).
+Meson changes need `meson setup --reconfigure builddir` before `ninja`.
+Verbose `-v`/`-vv`; logging `-Dlogging_format=yaml|tap|no_output`; full CLI
+incl. undocumented options: `docs/research/usage.md`.
 
 ## Writing tests
 
-See `docs/writing_tests.md`. Minimal pattern:
+Guides: `docs/misc/writing_tests.md` (full); registration
+`docs/research/adding-tests.md`; style `docs/misc/coding_style_guide.md`
+(C++20/C17, GCC-10, no warnings, naming, layout). Minimal pattern:
+
 ```c
 #include "sandstone.h"
-static int my_init(struct test *test) { /* set up golden data */ return EXIT_SUCCESS; }
+static int my_init(struct test *test) { /* golden data */ return EXIT_SUCCESS; }
 static int my_run(struct test *test, int cpu) {
-    TEST_LOOP(test, N) { /* compute, memcmp_or_fail(actual, golden, len, "...") */ }
+    TEST_LOOP(test, N) { memcmp_or_fail(actual, golden, len, "..."); }
     return EXIT_SUCCESS;
 }
 DECLARE_TEST(my_test, "description")
     .test_init = my_init, .test_run = my_run, .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST
 ```
-- `EXIT_SKIP` (-255) from init/run → test skipped (use `log_skip(category, "reason")` first).
-- `report_fail()` / `memcmp_or_fail()` are `[[noreturn]]` or abort the thread.
-- `TEST_LOOP` is the standard timed loop; `test_time_condition()` checks remaining budget.
-- Golden-value comparison is **byte-identical `memcmp`** — floating point must be reproducible (the framework quiets SNaN uniformly in `sandstone_data.cpp` precisely so FP16/BF16 NaN bit patterns match cross-arch).
+
+- `EXIT_SKIP` (-255) → skipped (log the reason first via `log_skip`);
+  `report_fail()`/`memcmp_or_fail()` abort the thread; `TEST_LOOP` is the
+  standard timed loop.
+- Golden comparison is **byte-identical `memcmp`** — FP must be reproducible
+  (the framework quiets SNaN uniformly in `sandstone_data.cpp` so FP16/BF16
+  NaN bit patterns match cross-arch).
 
 ## Known platform quirks (Kunpeng 920, openEuler 24.03 SP3)
 
-- `sysfs cluster_id` is monotonically increasing (138→654→1170…) and `physical_package_id` is large (36/6378/12720/19062) — a firmware/ACPI-PPTT artifact, not an SDCShield bug; read as-is.
-- No `cpufreq` on this board → `--vary-frequency`/`--vary-uncore-frequency` print "skipping" and continue (frequency_manager degrades gracefully; it no longer `exit(EX_IOERR)`).
-- No `thermal_zone*` CPU zones (only `cooling_device*`) → thermal throttle is a no-op; on boards that do expose `cpu`/`soc` zones it activates.
-- Eigen numerical tests (`eigen_svd_double`, `eigen_sparse`) fail **sporadically** under full-system multi-threading (192 CPUs) due to ULP-level differences in parallel SVD/sparse-solve ordering vs strict `memcmp` golden comparison — single-threaded (`-n 1`) always passes. This is an Eigen/large-core-count limitation, not a port defect; same workload would show it on x86 at high concurrency.
-- The vendored Eigen 5.0 SVE packet backend now carries `double`/`complex<double>` packets (`PacketXd` in `arch/SVE/PacketMath.h`, `PacketXcd` + `arch/SVE/Complex.h`, feat/eigen-sve-double-packets, 2026-09-19): `eigen_svd_cdouble_sve` runs real vectorized SVD (~0.7 s at M_DIM 300 vs >10 min scalar). Verified at compile-VL 128/256 on hardware (cortex x3b) and at VL=512 in gem5 SE mode (`scripts/eigen-sve-double/gem5/`). **Runtime-VL rule**: size-specific SVE code requires the process vector length to equal the compile-time `-msve-vector-bits`; this host is VL=256 while `tests_sve` compiles at 128, so running the SVD SVE test standalone requires pinning the task VL (`prctl(PR_SVE_SET_VL, 16)` launcher — see `scripts/eigen-sve-double/`); `sleef_sve` still compiles at 128 by design.
+- `sysfs cluster_id` increases monotonically (138→654→1170…) and
+  `physical_package_id` is large — firmware/ACPI-PPTT artifact, read as-is.
+- No `cpufreq` → `--vary-frequency`/`--vary-uncore-frequency` skip gracefully;
+  no CPU `thermal_zone*` zones → thermal throttle is a no-op here.
+- `eigen_svd_double`/`eigen_sparse` fail sporadically under full-system
+  multithreading (192 CPUs; ULP-level diffs vs strict memcmp) — `-n 1` always
+  passes. Eigen/large-core-count limitation, not a port defect.
+- SVE runtime-VL rule: host is VL=256 while `tests_sve` compiles at 128 → the
+  eigen SVD SVE test needs the VL-pinning launcher in
+  `scripts/eigen-sve-double/`; `sleef_sve` stays at 128 by design.
 
-## x86-64 untouched rule
+## Documentation map — consult before guessing
 
-The ARM64 port is additive: prefer `#elif defined(__aarch64__)` branches and per-arch meson guards over modifying x86 logic. The x86-64 paths are the reference and must keep working unchanged. Shared `#ifdef __x86_64__` blocks that need ARM64 should be widened to `#if defined(__x86_64__) || defined(__aarch64__)` only when the code genuinely applies to both.
-
-## Patch discipline (feature/porting/bug/adapter)
-
-This repository enforces a strict one-patch-per-unit workflow. Apply it to **every** change, including ARM64 porting points, feature development, bug fixes, and architecture adapters.
-
-### One patch per unit
-
-Each feature, functionality point, bug, or adaptation point is its own commit. Never bundle unrelated changes into one commit. A "unit" means a single coherent item from a work list (e.g. "#13 uncore frequency exit bug" is one patch; "#12 thermal monitor" is the next). When a task spans several numbered points, solve them **one at a time, sequentially** — finish one (verify → commit → push) before starting the next. Do not parallelize or batch.
-
-### Self-verification before commit (mandatory, 100% real)
-
-After writing code and before committing, the AI **must verify itself** with real commands — no claims based on "it should work" or reading the diff. Specifically:
-
-1. **Build clean**: `ninja -C builddir` must succeed with **zero new errors**. Pre-existing benign warnings (e.g. `sysv_abi ignored`, `[[assume]] ignored`, `-Wrestrict` on libstdc++ string internals) are acceptable; any warning/error introduced by the change is a failure.
-2. **Functional verification**: run the actual affected behavior with real commands and capture real output — e.g. `./builddir/sdcshield --dump-cpu-info`, `-e <test>`, `--on-crash=context -e selftest_sigsegv -vv`. Quote the real observed output (a frequency value, a `result: pass`, a crash backtrace) as proof, not a prediction.
-3. **Regression check**: run at least one unaffected test (e.g. `zstd19`) and confirm `exit: pass`, zero SIGSEGV, to prove no collateral breakage.
-4. **x86-64 non-regression**: the diff must not alter x86 behavior. Confirm by inspection that changes are under `#elif/__aarch64__` or per-arch meson guards, or widening `#ifdef __x86_64__` to `|| __aarch64__` only where genuinely shared.
-5. 大颗粒度修改，同步更新readme.md和docs目录下对应文档，确保文档100%准确
-Do **not** commit if any of these fail. If a verification step fails, fix and re-verify until it passes. Skipping verification or fabricating results ("assumed to pass") is strictly forbidden — every claim in the commit message must correspond to a command the AI actually ran.
-
-### Auto-push to a non-main branch after verification
-
-Once a patch is committed and verified, **push it automatically to the remote** — do not wait to be asked, and do not push to `main`. Work on a feature branch (e.g. `fix/mce-check-arm64-null-test-run`) and `git push` after each commit. If on `main` when starting work, create/switch to a feature branch first (`git checkout -b <branch>`) before committing.
-
-Commit message must not end with:
-```
-Co-Authored-By: Claude <noreply@anthropic.com>
-```
-
-### Signed-off-by is mandatory (DCO)
-
-Every commit **must** carry a `Signed-off-by: <name> <email>` trailer — the repo's CI enforces DCO and rejects any commit without it (`git commit --amend --signoff` to fix an existing one). Always commit with `git commit -s` (or add `--signoff` when amending). The trailer uses the configured `user.name`/`user.email`. Combined with the rule above, a compliant commit ends with:
-
-```
-Signed-off-by: wangxumarshall <wangxumarshall@qq.com>
-```
-
-and nothing after it (no Co-Authored-By).
-
-### Plan-driven workflow (mandatory for every non-trivial change)
-
-All non-trivial work — feature development, porting, refactors, multi-step fixes, anything beyond a single obvious line — **must** be executed via a written plan using the `superpowers:writing-plans` skill, not ad-hoc. "Trivial" means a typo or a one-line obvious fix the change itself describes completely.
-
-1. **Plan first**: before writing any code, invoke `superpowers:writing-plans` and save the plan to `docs/superpowers/plans/YYYY-MM-DD-<feature>.md`. The plan defines one-patch-per-unit decomposition, exact files, real test commands, and per-step checkboxes (`- [ ]`).
-2. **Plan == the work list**: each plan task maps to exactly one commit, satisfying "One patch per unit" above. Do not bundle multiple plan tasks into one commit, and do not commit work not in the plan.
-3. **Track progress visibly**: implement via `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans`. Check off each `- [ ]` as it completes; the live plan file is the single source of truth for what is done vs pending. If the scope changes mid-execution, edit the plan file first, then proceed.
-4. **Verify against the plan, not the diff**: the self-verification above applies per task; a task is not "done" until its plan-specified verification command's real output is quoted and its checkbox is checked.
-5. **Provenance**: keep plan files in the repo under `docs/superpowers/plans/` (they document *why* a change was made one unit at a time, complementing git history).
-
-If a request would produce more than one commit, write the plan first. No plan, no code.
-
-### Placeholder-test honesty
-
-When porting a feature that cannot be fully implemented yet (e.g. SMI counting on ARM, IST backend), the test must report a clean skip with reason `"to be implemented (placeholder): <what's missing>"` (return `EXIT_SKIP` from `test_init`, **not** `EXIT_SUCCESS`). A no-op test that returns success is a bug — it falsely reports `pass`. The `mce_check` test, by contrast, is a *real* EDAC-backed test on ARM64 and should `pass`.
-
-### 必须诚实、不能说谎、必须100%服从事实、所有工作和结果必须基于事实并且经过严格的逻辑推理或实证，永远尊重事实、永远真诚。
+- **Framework internals**: each test runs in a forked child whose `test_init`
+  spawns per-CPU worker threads calling `test_run`; the parent collects via
+  `forkfd`; tests are `struct test` instances in a special ELF `tests`
+  section. **Read `docs/architecture.md` before touching `framework/`** (fork
+  lifecycle, quality gates, feature detection, sysdeps, RAS, RNG).
+- **Writing tests / code style**: `docs/misc/writing_tests.md`,
+  `docs/research/adding-tests.md`, `docs/misc/coding_style_guide.md`.
+- **CLI beyond this file**: `docs/research/usage.md` (all options).
+- **Build/deploy/multi-OS**: README (quick start, 15-version build);
+  `docs/build-deploy/` (design + usermanual + offline deps).
+- **Session recovery** (machine may die anytime; persist conclusions to
+  disk): `docs/research/progress-log.md`; fact card in
+  `docs/research/README.md`.
+- **SDC case history**: `docs/cases/` — CPU179 has TWO competing root-cause
+  lineages (OoO register-liveness vs LSU load-return); state which you cite.
+  Also CPU122 (mercurial core), cn23154 (P0→P6 core localization), hpc
+  (counter-example methodology). Excitation/reproduction methodology:
+  `docs/sdc-excite-reproduce/`.
+- **Microarch/hardware reference**: `docs/cpu/arm64-microarchtecture-internals/`
+  (canonical start; Ch.9 SDC-sensitive units, Ch.10 CPU179 case),
+  `docs/cpu/arm64/kungpeng/` (measured 920 + PMU events),
+  `docs/cpu/arm64/armv8-isa/` (per-instruction), `neoverse-*-trm/`;
+  gem5+CHAOS fault injection: `docs/gem5-doc/`.
+- **Literature rationale** (why these workloads/libs — 31-paper synthesis):
+  `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`; fault-injection experiment
+  plan: `docs/paper/SDC_FAULT_INJECTION_EXPERIMENT_PLAN_CN.md`.
+- **Theory**: `docs/hypothesis/ARM64-SDC-uArch.md`; **output schema**:
+  `docs/sdcshield-cpu.schema.json`; **provenance/compliance**:
+  `docs/misc/OPEN_SOURCE_PROVENANCE.md`.
+- **Process artifacts**: `docs/superpowers/` (plans/, specs/, inventory/).

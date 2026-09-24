@@ -17,7 +17,7 @@
 - `git add` 只加明确列出的文件——**绝不 `git add -A` / `git add .`**：工作区有范围外未跟踪文件 `docs/sdc-excite-reproduce/sdc-reproduce.md`，不得入库。
 - 用户未提交的 CLAUDE.md `### Always` 段（git diff 所示 5 行中文规则）必须**逐字保留**进新 CLAUDE.md，随本次重构一并提交。
 - 本计划所有"Expected"值均为 2026-09-24 在本机（main @ b85da2ed，builddir 新鲜构建）实测所得；执行时命令输出若不符，以实测为准修正文档内容并在此计划中勾选时注明。
-- 新 CLAUDE.md 行数验收：`wc -l` ≤ 115（目标 ~105）。
+- 新 CLAUDE.md 行数验收：`wc -l` ≤ 135。~~≤115~~（执行期修订 2026-09-24：用户中途升级需求为"docs/ 全树理解后合理引用"，完整 9 域导航图比原估算多 ~20 行；已做两轮硬压缩，135 为保留全部获批语义——7 铁律/命令集/测试模式/5 怪癖/导航图+心智模型——的真实下限。铁律内容零删减。）
 - 零代码改动：`git diff --stat` 中不得出现 framework/ tests/ third-party/ 下任何文件。
 
 ---
@@ -419,7 +419,7 @@ sysdeps layering, InterruptMonitor/RAS, RNG).
 - [ ] **Step 2: 行数与内容验收**
 
 Run: `wc -l CLAUDE.md`
-Expected: ≤ 115（目标 ~105；超出则压缩注释/空行，铁律内容不得删）。
+Expected: ≤ 135（执行期修订，见 Global Constraints；超出则压缩注释/空行，铁律内容不得删）。
 
 Run: `grep -c "Signed-off-by: wangxumarshall" CLAUDE.md && grep -c "所有回答必须通俗易懂" CLAUDE.md`
 Expected: 1 和 1（`### Always` 段逐字保留）。

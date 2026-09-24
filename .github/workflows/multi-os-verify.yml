@@ -20,9 +20,14 @@ on:
         default: 'full'
         type: choice
         options: [full, smoke]
+      publish_release:
+        description: '把本次 15 个 built/ tarball 发布为 GitHub Release(永久保存;默认否,artifact 90 天滚动)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: read
+  contents: write                # Release 创建/上传需要(release job);verify 作业仍只读用法
   packages: read                 # 从 ghcr.io 拉私有镜像必需(公开镜像也可留)
 
 # 并行度上限:GHA 免费版同仓并发 20 job,15 个镜像 job + 1 个 report 无压力;
@@ -146,6 +151,52 @@ jobs:
           builddir/sdcshield --dump-cpu-info | head -1
           echo "::endgroup::"
 
+      # ---- 打包自包含 built/(bin+libs+脚本+元数据),与本地 podman 链路的
+      # third-party/rpms/.../built/ 结构一致。脚本见 scripts/gha/package-built.sh;
+      # 原生容器模式 ldd/strip 直跑(15 镜像实测全有),20.03-LTS 的 tar 用
+      # bsdtar 兜底(脚本内置)。BUILD-HASH 公式与 build-all.sh 对齐,同 commit
+      # 时与本地 built/ 相等 —— 两条链路等价的机器可查锚点。----
+      - name: Package built/ (self-contained tarball)
+        shell: bash
+        run: |
+          set -uo pipefail
+          # SP 归一化:矩阵值是完整形式(LTS-SP3),case 认裸形式(SP3)/LTS 本体。
+          # 与 package-built.sh 的归一化同语义(非 LTS 时剥 LTS- 前缀)。
+          [ "$SP" != "LTS" ] && SP="${SP#LTS-}"
+          OS_TAG="openEuler-${SERIES}$(case "$SP" in LTS) echo LTS;; SP*) echo LTS_$SP;; esac)"
+          # 自诊断:失败时日志里直接有环境现场(uid/工具/目录),不再盲猜
+          echo "pkg-debug: uid=$(id -u) tar=$(command -v tar || echo MISSING) bsdtar=$(command -v bsdtar || echo MISSING) strip=$(command -v strip || echo MISSING) ldd=$(command -v ldd || echo MISSING) git=$(command -v git || echo MISSING) readlink=$(command -v readlink || echo MISSING)"
+          echo "pkg-debug: builddir/sdcshield: $(ls -la builddir/sdcshield 2>&1)"
+          bash -x scripts/gha/package-built.sh builddir "dist/$OS_TAG" "$SERIES" "$SP" 2>&1 | tee /tmp/pkg-trace.log
+          rc=${PIPESTATUS[0]}
+          echo "pkg-debug: exit=$rc; dist 树:"
+          find dist -maxdepth 3 2>/dev/null || true
+          exit $rc
+
+      # ---- 产物闸门:解开刚打的 tarball,只设 LD_LIBRARY_PATH=libs 运行
+      # (容器内形态的 verify-built-pristine.sh smoke)。失败即红 ——
+      # 打出来的包必须真能跑,不静默降级。----
+      - name: Package smoke-verify (pristine, libs/ only)
+        shell: bash
+        run: |
+          set -uo pipefail
+          # SP 归一化:矩阵值是完整形式(LTS-SP3),case 认裸形式(SP3)/LTS 本体。
+          # 与 package-built.sh 的归一化同语义(非 LTS 时剥 LTS- 前缀)。
+          [ "$SP" != "LTS" ] && SP="${SP#LTS-}"
+          OS_TAG="openEuler-${SERIES}$(case "$SP" in LTS) echo LTS;; SP*) echo LTS_$SP;; esac)"
+          TARBALL=$(ls dist/$OS_TAG/sdcshield-$OS_TAG-*.tar.gz 2>/dev/null | sed -n 1p)
+          [ -n "$TARBALL" ] || { echo "::error::no tarball in dist/$OS_TAG (package step output above)"; exit 1; }
+          rm -rf /tmp/pristine && mkdir -p /tmp/pristine
+          tar -xzf "$TARBALL" -C /tmp/pristine 2>/dev/null || bsdtar -xzf "$TARBALL" -C /tmp/pristine
+          PKG="/tmp/pristine/$OS_TAG"
+          export LD_LIBRARY_PATH="$PKG/libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          N="$($PKG/sdcshield --list-tests 2>/dev/null | wc -l)"
+          echo "pristine list-tests: $N"
+          [ "$N" -gt 100 ] || { echo "::error::pristine too few tests ($N)"; exit 1; }
+          out=$($PKG/sdcshield -e zstd19 -t 2000 -n 1 2>&1 | grep -iE 'exit:' | tail -1 || echo "exit: unknown")
+          echo "pristine zstd19: $out"
+          echo "$out" | grep -qi 'exit: pass'
+
       # ---- 全量参数功能验证(脚本见 scripts/gha/verify-params.py) ----
       - name: Verify (full parameter sweep)
         if: ${{ inputs.verify_depth != 'smoke' }}
@@ -184,7 +235,7 @@ jobs:
       # ---- 上传结果(成功与否都传,便于诊断) ----
       - name: Upload logs & benchmark
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verify-${{ matrix.series }}-${{ matrix.sp }}
           retention-days: 7
@@ -197,6 +248,17 @@ jobs:
             builddir/sdcshield-*.yaml
             builddir/sdcshield-*.log
 
+      # ---- 上传自包含 built/ tarball(每次 CI 一版,90 天保留)。
+      # if: always() 保失败现场;if-no-files-found: error 让打包缺失显式红。----
+      - name: Upload built/ tarball
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: built-${{ matrix.series }}-${{ matrix.sp }}
+          retention-days: 90
+          if-no-files-found: error
+          path: dist/*/sdcshield-*.tar.gz
+
   report:
     name: report
     needs: verify
@@ -206,7 +268,7 @@ jobs:
       - name: Checkout (for scripts/gha/report-summary.py)
         uses: actions/checkout@v6
       - name: Download all artifacts (keep per-image dirs)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: all-results
           pattern: verify-*
@@ -217,3 +279,42 @@ jobs:
           set +e
           python3 scripts/gha/report-summary.py >> "$GITHUB_STEP_SUMMARY"
           echo "report done"
+
+  # ---- Release 永久保存(人工选择):workflow_dispatch 勾选 publish_release 时,
+  # 把本次 15 个 built/ tarball 从 artifact 下载后作为 Release 资产上传。
+  # Release 资产永久保留(除非手动删),公开仓免费,单资产上限 2GB。
+  # cron 触发时 inputs.publish_release 不存在 → 恒 false,行为不变。
+  # 用法语义:里程碑式手动钉版(重要合入后);nightly 由 90 天滚动 artifact 承担。----
+  release:
+    name: release (permanent)
+    needs: [verify, report]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built/ tarballs
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: built-*
+          merge-multiple: true     # 15 个 artifact 的 tar.gz 合并到 dist/ 平铺
+      - name: Create release with 15 tarballs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -la dist/
+          # tarball 在 dist/<OS_TAG>/ 子目录(upload-artifact 保留最小公共祖先
+          # 下的目录层级,merge-multiple 只合并不平铺)— glob 深一层匹配
+          TAG="build-$(date +%Y%m%d)-${GITHUB_SHA::8}"
+          echo "release tag: $TAG"
+          # --repo 显式指定:本 job 无 checkout 步骤,gh 无法从 .git 推断仓库
+          # (run 35513299740 现场: fatal: not a git repository)
+          gh release create "$TAG" dist/*/sdcshield-*.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "sdcshield build $(date +%Y-%m-%d)" \
+            --notes "Multi-OS Verify 构建产物(15 个 openEuler SP 自包含包)。
+          源 commit: ${GITHUB_SHA}
+          验证 run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          每个包含 stripped 二进制 + libs/ + run-sdcshield.sh + MANIFEST.tsv + VERSION + BUILD-HASH。
+          保留策略:Release 资产永久;同源 artifact 另有 90 天滚动副本。"
+          echo "==> release created: $TAG"

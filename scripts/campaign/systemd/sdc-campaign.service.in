@@ -1,0 +1,20 @@
+[Unit]
+Description=SDCShield 7x24 SDC campaign driver (L0-L5, break-point resume)
+Wants=sdc-monitor.service
+After=sdc-monitor.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@REPO@
+Environment=SDC_CAMPAIGN_DIR=@CAMPAIGN_DIR@
+ExecStart=/bin/bash @REPO@/scripts/campaign/sdc_campaign.sh full
+Restart=always
+RestartSec=10
+TimeoutStopSec=150
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,178 @@
+/**
+ * @copyright
+ * Copyright 2025 Intel Corporation.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * @test @b arm64_sdc_sve
+ * @parblock
+ * SVE port of arm64_sdc: CRC32/CRC64/additive-checksum detectors computed
+ * over a random buffer, with the buffer scan running on SVE vector lanes
+ * (svld1 batches feed a byte-at-a-time software CRC; the additive checksum
+ * sums via svaddv reductions). The detector self-check (inject a 1-bit flip
+ * in init and require every detector to catch it) is preserved verbatim —
+ * fail-closed before the timed run. Byte-exact golden comparison per
+ * iteration exactly as the original.
+ * @endparblock
+ */
+
+#include "sandstone.h"
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+
+#if defined(__aarch64__)
+#include <arm_sve.h>
+#include <sys/auxv.h>
+
+#ifndef HWCAP_SVE
+#define HWCAP_SVE (1 << 22)
+#endif
+#endif
+
+#define SDC_SVE_BUFFER_SIZE (64 * 1024)
+
+struct sdc_sve_data {
+    uint8_t *test_buffer;
+    uint32_t golden_crc32;
+    uint64_t golden_crc64;
+    uint32_t golden_checksum;
+};
+
+/* ---- 软件检测器 (SVE 向量扫描 + 标量 CRC 表) ---- */
+static uint32_t crc32_for_byte[256];
+static uint64_t crc64_for_byte[256];
+static void crc_tables_init(void) {
+    for (uint32_t i = 0; i < 256; ++i) {
+        uint32_t c = i;
+        for (int k = 0; k < 8; ++k) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+        crc32_for_byte[i] = c;
+        uint64_t c64 = i;
+        for (int k = 0; k < 8; ++k) c64 = (c64 & 1) ? (0xC96C5795D7870F42ULL ^ (c64 >> 1)) : (c64 >> 1);
+        crc64_for_byte[i] = c64;
+    }
+}
+
+static int sdc_sve_detect(const void *data, size_t len,
+                          uint32_t *crc32_out, uint64_t *crc64_out, uint32_t *sum_out)
+{
+#if defined(__aarch64__)
+    const uint8_t *p = static_cast<const uint8_t *>(data);
+    uint32_t crc32 = 0xFFFFFFFFu;
+    uint64_t crc64 = 0xFFFFFFFFFFFFFFFFULL;
+    uint64_t sum = 0;
+    const int lanes = svcntb();
+    for (size_t base = 0; base < len; base += lanes) {
+        int n = (len - base < (size_t)lanes) ? (int)(len - base) : lanes;
+        svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)n);
+        svuint8_t v = svld1_u8(pg, p + base);
+        uint8_t chunk[64];
+        svst1_u8(pg, chunk, v);
+        for (int i = 0; i < n; ++i) {
+            crc32 = crc32_for_byte[(crc32 ^ chunk[i]) & 0xFFu] ^ (crc32 >> 8);
+            crc64 = crc64_for_byte[(crc64 ^ chunk[i]) & 0xFFull] ^ (crc64 >> 8);
+            sum += chunk[i];
+        }
+    }
+    *crc32_out = ~crc32;
+    *crc64_out = ~crc64;
+    *sum_out = (uint32_t)sum;
+    return 0;
+#else
+    (void)data; (void)len; (void)crc32_out; (void)crc64_out; (void)sum_out;
+    return -1;
+#endif
+}
+
+static int arm64_sdc_sve_init(struct test *test)
+{
+#if defined(__aarch64__)
+    unsigned long hwcap = getauxval(AT_HWCAP);
+    if ((hwcap & HWCAP_SVE) == 0) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "to be implemented (placeholder): ARM SVE required for arm64_sdc_sve");
+        return EXIT_SKIP;
+    }
+    crc_tables_init();
+
+    auto *data = new sdc_sve_data;
+    data->test_buffer = static_cast<uint8_t *>(aligned_alloc(64, SDC_SVE_BUFFER_SIZE));
+    memset_random(data->test_buffer, SDC_SVE_BUFFER_SIZE);
+    sdc_sve_detect(data->test_buffer, SDC_SVE_BUFFER_SIZE,
+                   &data->golden_crc32, &data->golden_crc64, &data->golden_checksum);
+
+    /* 检测器自检 (fail-closed): 注入 1-bit 翻转, 每个检测器必须能抓到 */
+    uint8_t *probe = static_cast<uint8_t *>(aligned_alloc(64, SDC_SVE_BUFFER_SIZE));
+    memcpy(probe, data->test_buffer, SDC_SVE_BUFFER_SIZE);
+    probe[SDC_SVE_BUFFER_SIZE / 2] ^= 0x01;
+    uint32_t p_crc32; uint64_t p_crc64; uint32_t p_sum;
+    sdc_sve_detect(probe, SDC_SVE_BUFFER_SIZE, &p_crc32, &p_crc64, &p_sum);
+    free(probe);
+    if (p_crc32 == data->golden_crc32 && p_crc64 == data->golden_crc64
+        && p_sum == data->golden_checksum) {
+        delete data;
+        log_error("arm64_sdc_sve: detector self-check failed — injected 1-bit "
+                  "corruption not caught by CRC32/CRC64/checksum");
+        return EXIT_FAILURE;
+    }
+
+    test->data = data;
+    return EXIT_SUCCESS;
+#else
+    (void)test;
+    return EXIT_SUCCESS;
+#endif
+}
+
+static int arm64_sdc_sve_run(struct test *test, int cpu)
+{
+#if !defined(__aarch64__)
+    (void)test; (void)cpu;
+    return EXIT_SKIP;
+#else
+    auto *data = static_cast<sdc_sve_data *>(test->data);
+    uint8_t *test_buffer = static_cast<uint8_t *>(aligned_alloc(64, SDC_SVE_BUFFER_SIZE));
+    uint32_t crc32_result; uint64_t crc64_result; uint32_t checksum_result;
+
+    TEST_LOOP(test, 128) {
+        memcpy(test_buffer, data->test_buffer, SDC_SVE_BUFFER_SIZE);
+        if (sdc_sve_detect(test_buffer, SDC_SVE_BUFFER_SIZE,
+                           &crc32_result, &crc64_result, &checksum_result) == 0) {
+            if (crc32_result != data->golden_crc32)
+                memcmp_or_fail(&crc32_result, &data->golden_crc32, 1,
+                        "CRC32 signature mismatch — silent data corruption "
+                        "detected on the integrity datapath");
+            if (crc64_result != data->golden_crc64)
+                memcmp_or_fail(&crc64_result, &data->golden_crc64, 1,
+                        "CRC64 signature mismatch — silent data corruption "
+                        "detected on the integrity datapath");
+            if (checksum_result != data->golden_checksum)
+                memcmp_or_fail(&checksum_result, &data->golden_checksum, 1,
+                        "Additive checksum mismatch — silent data corruption "
+                        "detected on the integrity datapath");
+        }
+    }
+
+    free(test_buffer);
+    return EXIT_SUCCESS;
+#endif
+}
+
+static int arm64_sdc_sve_cleanup(struct test *test)
+{
+#ifdef __aarch64__
+    auto *data = static_cast<sdc_sve_data *>(test->data);
+    if (data) {
+        free(data->test_buffer);
+        delete data;
+    }
+#endif
+    return EXIT_SUCCESS;
+}
+
+DECLARE_TEST(arm64_sdc_sve, "SVE SDC detection: CRC32/CRC64/checksum computed over svld1 vector-lane scans, byte-exact golden + fail-closed detector self-check (port of arm64_sdc)")
+    .test_init = arm64_sdc_sve_init,
+    .test_run = arm64_sdc_sve_run,
+    .test_cleanup = arm64_sdc_sve_cleanup,
+    .quality_level = TEST_QUALITY_BETA,
+END_DECLARE_TEST

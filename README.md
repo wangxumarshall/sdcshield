@@ -32,6 +32,8 @@ cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 
 > **SP 必须与目标机一致**：SP3 的 `glibc-devel` 携带 `Requires: glibc = <sp3-N>`，装到 SP4 会触发受保护 `glibc` 降级死结。`install-deps.sh` 通过 `.os-version` 标记在安装前拦截错配。
 
+**从 CI 下载预构建二进制（无需 clone 子模块）**：每次 [Multi-OS Verify](.github/workflows/multi-os-verify.yml) CI 运行（每日 cron + 手动触发）都为 15 个 SP 各产出一个自包含 tarball（`built-<series>-<sp>` artifact，保留 90 天）——仓库 → Actions → 任意运行 → Artifacts 下载，或 `gh run download <run-id> --name built-24.03-SP3`。解包后 `./run-sdcshield.sh` 用法同上。要**永久保存**某次构建：手动触发时勾选 `publish_release`，15 个 tarball 会作为 GitHub Release 资产上传（详见 [docs/multi-version-build-deploy.md §6.2.1](docs/multi-version-build-deploy.md)）。
+
 ### 从源码构建
 
 ```bash
@@ -285,7 +287,7 @@ SUDO_PW=<密码> bash scripts/run/sdc_machine_scan.sh          # root 全量模�
 bash scripts/run/sdc_machine_scan.sh                         # 无 root 降级模式
 ```
 
-**模式 F：24h+ 压测战役执行器 `scripts/run/run_sdc_campaign.sh`**——把模式 D 的两阶段协议扩展为 24h+ 持续测试（PinDrop 模式：持续高频测试比快照式多数量级地抓出缺陷）：P1 全量广域扫（`--quality=0` 全测试 × 全核，fracturing seed 自动轮换）→ P2 文献优先级加权 soak（GEMM 尺寸/形态谱×三调度、crypto、压缩 level 谱、SLEEF 足迹谱、FFT 因子谱、mesh 一致性、混合负载×RNG 引擎）→ P3 固定 seed 深驻留 → P4×N 循环（`--test-list-randomize` 随机序重扫 + NUMA 拓扑/并发档 + 轮换驻留）。全程 ipmitool/EDAC/SEL 环境监测（30s 采样 → monitor.csv），fail-continue + 自动失败分类（known_benign_ulp / full_core_only / sdc_suspect）+ 可复现嫌疑自动逐核二分（CORE179 式定位），`.done` 阶段标记支持断点续跑：
+**模式 F：24h+ 压测执行器 `scripts/run/run_sdc_campaign.sh`**——把模式 D 的两阶段协议扩展为 24h+ 持续测试（PinDrop 模式：持续高频测试比快照式多数量级地抓出缺陷）：P1 全量广域扫（`--quality=0` 全测试 × 全核，fracturing seed 自动轮换）→ P2 文献优先级加权 soak（GEMM 尺寸/形态谱×三调度、crypto、压缩 level 谱、SLEEF 足迹谱、FFT 因子谱、mesh 一致性、混合负载×RNG 引擎）→ P3 固定 seed 深驻留 → P4×N 循环（`--test-list-randomize` 随机序重扫 + NUMA 拓扑/并发档 + 轮换驻留）。全程 ipmitool/EDAC/SEL 环境监测（30s 采样 → monitor.csv），fail-continue + 自动失败分类（known_benign_ulp / full_core_only / sdc_suspect）+ 可复现嫌疑自动逐核二分（CORE179 式定位），`.done` 阶段标记支持断点续跑：
 
 ```bash
 nohup setsid bash scripts/run/run_sdc_campaign.sh > campaign.log 2>&1 &   # 24h+ 正式
@@ -316,9 +318,9 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 | OpenSSL SHA | `openssl_sha`、`openssl_sha3`、`openssl_sm3sm4` | SHA-256/384/512（SHA-2 加法链）、SHA-3-224/256/384/512 + SHAKE128 XOF（Keccak 置换 AND/旋转/χθ 步，与 SHA-2 正交的 FU 混合）、SM3 摘要 + SM4-CBC 加解密往返（国密整数通路）vs golden（默认构建，优先 vendored OpenSSL） |
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
-| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器 |
-| core-179 归因探针（NEON） | `neon_rot_ldr_at_top`（父）+ `*_rowmajor`、`*_k5inter_rand`、`*_k7pattern`（4 cell）、`*_k3res` | 3x ldr + 背靠背 2x str 的 SDC 触发配方，按扫描顺序/源布局/数据模式/缓存驻留四轴归因；`tests/cpu/misc/` |
-| core-179 归因探针（SVE） | `sve_rot_ldr_at_top`（父）+ 同名 4 变体（8 测试） | NEON 家族的 SVE VLA 移植（z 寄存器 3x ldr + 背靠背 2x str，`svadd/sveor/svand/svorr`），真 VLA 按 `svcntb()` 适配；仅 SVE 硬件运行；`tests/cpu/sve/` |
+| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀） |
+| ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别（uint64x2 旋转 ALU + 向量 store/reload/store）、ldr_at_top 扫描顺序变体（升/降序交替，区分槽位局部 vs 前进位置特征）、core-179 字节交换往返触发探针组 |
+| SVE 版 avx53 套件（tests/cpu/sve/，53 个） | `fma_tail_sve{,_wide}`、`fmatail_sve{,_wide}`×4 对、`fma_patterns_sve_wide_{ps,pd}`、`mesh_upi_sve_*` 18 个、`eigen_svd_bidiag_sve`、`ipsec_*_sve{,_wide}` 24 个 | 53 个 avx 命名 NEON 测试的 SVE1 移植（负载环境不变：向量宽度/随机域/特殊值注入/块结构/原子协议/golden 模式全保留；命名 `_avx/_avx2→_sve`、`_avx512→_sve_wide`）。FMA 10 + Mesh 18 = 纯指令替换（SVE 谓词访存）；eigen 1 = 自写 Householder 双对角化 SVE 负载（替代崩溃的 Eigen-SVE 后端路径）；ipsec 17 = EVP 加密 + 多流 SVE HMAC（SHA 内核与 OpenSSL 全向量比对 5200+1360 全对，lane0=原 MAC 语义+变体填 lane），7 个 EVP-only（GCM/CMAC/XCBC）如实标注计算路径。构建于 `tests_sve_avx53`/`tests_sve_avx53_ipsec` 库（`-march=armv8.2-a+sve`，init 探 HWCAP_SVE 干净 skip） |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
 
 ### 用例质量分级

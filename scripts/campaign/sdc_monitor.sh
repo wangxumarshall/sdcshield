@@ -241,7 +241,9 @@ PYEOF
         selout=$(timeout 40 ipmitool sel list 2>/dev/null)
         if [ -n "$selout" ]; then
             sel_fail=0
-            lastid=$(tail -1 <<<"$selout" | awk -F'|' '{gsub(/ /,"",$1)}')
+            # 修复（2026-09-24）：原 awk 只 gsub 无 print → lastid 恒空 → 增量捕获
+            # 从未生效（sel_events 空目录的真正根因）；同时过滤尾部空行
+            lastid=$(grep -v '^[[:space:]]*$' <<<"$selout" | tail -1 | awk -F'|' '{gsub(/ /,"",$1); print $1}')
             if [ -n "$last_sel_id" ] && [ "$lastid" != "$last_sel_id" ]; then
                 evf="$SEL_EV/$(date +%Y%m%d-%H%M%S).txt"
                 awk -F'|' -v a="$last_sel_id" '{gsub(/ /,"",$1); if (strtonum("0x"$1) > strtonum("0x"a)) print}' <<<"$selout" > "$evf"

@@ -133,20 +133,32 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     local cmd="$*"
     local evdir="$EVENTS_DIR/$(date +%Y%m%d-%H%M%S)-${label}-rc${rc}"
     mkdir -p "$evdir"
-    cp "$yaml" "$evdir/" 2>/dev/null
-    # 种子与失败测试提取（L0 实测格式：state: { seed: 'AES:<hex>' } / "- test: <name>"）
-    local seed failed_test seed_ok=""
-    seed=$(grep -oE "seed: 'AES:[0-9a-f]+'" "$yaml" 2>/dev/null | head -1 | cut -d"'" -f2)
-    failed_test=$(grep -m1 '^- test:' "$yaml" 2>/dev/null | awk '{print $3}')
-    if [ -n "$seed" ]; then
-        "$BIN" -s "$seed" -l >/dev/null 2>&1
+    # ---- 失败测试与失败种子：优先从 .out 头部摘要提取（事件 #1 实测：框架退出时
+    #      打印精简失败报告，含 cpu-mask/ttf/失败迭代种子；YAML 全文 grep 取首 state
+    #      seed 会错位到轮转第一个用例）----
+    local outsum="${yaml%.yaml}.out" failed_test="" fail_seed=""
+    if [ -f "$outsum" ]; then
+        failed_test=$(awk '/^- test:/{t=$3} /^  result: *fail/{print t; exit}' "$outsum")
+        fail_seed=$(grep -m1 '^  fail: {' "$outsum" | grep -oE "AES:[0-9a-f]+")
+    fi
+    [ -z "$failed_test" ] && failed_test=$(LC_ALL=C grep -m1 -B3 'result: *fail' "$yaml" 2>/dev/null | grep '^- test:' | awk '{print $3}')
+    [ -z "$fail_seed" ]   && fail_seed=$(LC_ALL=C grep -m1 "seed: 'AES:" "$yaml" 2>/dev/null | grep -oE "AES:[0-9a-f]+")
+    local seed_ok=""
+    if [ -n "$fail_seed" ]; then
+        "$BIN" -s "$fail_seed" -l >/dev/null 2>&1
         [ $? -ne 64 ] && seed_ok=1
     fi
+    # ---- 提取式取证（事件 #1 实测：L3 单 YAML 2.76GB——不整文件复制）----
+    {
+        echo "# 提取自 $(basename "$yaml")（原件 $(du -h "$yaml" 2>/dev/null | cut -f1) 保留于 logs/，每日 gzip 归档）"
+        head -60 "$yaml" 2>/dev/null
+        echo "# ---- 失败相关切片（含前后上下文，最多 50 处）----"
+        LC_ALL=C grep -m 50 -B14 -A6 -E 'result: *(fail|crash)' "$yaml" 2>/dev/null
+    } > "$evdir/yaml_extract.txt"
+    cp "$outsum" "$evdir/stdout_summary.out" 2>/dev/null   # 摘要很小，全量保留
     {
         echo "cmd: $BIN $cmd"
-        echo "rc: $rc  date: $(date -Is)  seed: ${seed:-none}(usable=$seed_ok)  failed_test: ${failed_test:-?}"
-        echo "--- 失败行 ---"
-        grep -E 'result: *(fail|crash)' "$yaml" 2>/dev/null | head -20
+        echo "rc: $rc  date: $(date -Is)  fail_seed: ${fail_seed:-none}(usable=$seed_ok)  failed_test: ${failed_test:-?}"
         echo "--- monitor 最近 20 行 ---"
         tail -20 "$MON_DIR/monitor.csv" 2>/dev/null
         echo "--- EDAC ---"
@@ -155,21 +167,26 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
         free -h
     } > "$evdir/context.txt"
     touch "$CMD_DIR/snapshot.request"   # root 监控 60s 内补 dmesg/SEL/SDR 快照
+    # ---- 复测：定向（失败测试+失败种子，120s×3）；提取失败则回退整命令（900s 封顶）----
     local i rcf
     : > "$evdir/retests.txt"
-    for i in 1 2 3; do
-        sleep 5; check_pause
-        # 复测必须封顶（15m + KILL 兜底）：-T forever 类命令复测不可无界（smoke 实测教训）
-        if [ -n "$seed_ok" ]; then
-            timeout --signal=TERM --kill-after=60s 900s \
-                "$BIN" $cmd -s "$seed" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
-        else
+    if [ -n "$failed_test" ] && [ -n "$seed_ok" ]; then
+        for i in 1 2 3; do
+            sleep 5; check_pause
+            timeout --signal=TERM --kill-after=60s 150s \
+                "$BIN" -e "$failed_test" -s "$fail_seed" -n 0 -t 120s --max-test-loop-count=0 \
+                "${FLAGS[@]}" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
+            echo "retest$i(targeted) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
+        done
+    else
+        for i in 1 2 3; do
+            sleep 5; check_pause
             timeout --signal=TERM --kill-after=60s 900s \
                 "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
-        fi
-        echo "retest$i(seed=${seed_ok:+on}) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
-    done
-    echo "$(date '+%F %T'),$label,rc=$rc,seed=${seed_ok:+$seed},$(tr '\n' ';' < "$evdir/retests.txt"),$evdir" >> "$EVENTS_DIR/ledger.csv"
+            echo "retest$i(wholecmd) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
+        done
+    fi
+    echo "$(date '+%F %T'),$label,rc=$rc,test=${failed_test:-?},seed=${fail_seed:-none},$(tr '\n' ';' < "$evdir/retests.txt"),$evdir" >> "$EVENTS_DIR/ledger.csv"
     alert "SDC/崩溃事件: $label rc=$rc test=${failed_test:-?} → $evdir（战役继续）"
     [ -n "$failed_test" ] && DWELL_OVERRIDE="$failed_test"   # 本周期 L4 优先深驻留该测试
 }

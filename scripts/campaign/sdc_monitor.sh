@@ -47,6 +47,7 @@ bmc_fail=0
 thermal_paused=0
 thermal_hot=0
 fan_bad=0
+SLEEP_NEXT=60
 
 paused_for() { [ -f "$PAUSE_FLAG" ] && grep -q "$1" "$PAUSE_FLAG" 2>/dev/null; }
 set_pause() { echo "$1: $2 ($(date '+%F %T'))" > "$PAUSE_FLAG"; alert "PAUSE: $2"; }
@@ -77,21 +78,25 @@ while :; do
     dp=$(df -P "$CAMPAIGN_DIR" | awk 'NR==2{gsub(/%/,"");print $5}')
     echo "$ts,${c1:-},${c2:-},${m1:-},${m2:-},${ot:-},${in_:-},${pw:-},${v1:-},${v2:-},${f2:-},${f3:-},${p1:-},${p2:-},${tz0:-},${tz1:-},${ma:-},${l1:-},${dp:-},$bmc" >> "$CSV"
 
-    # ---- 温度联锁（双 socket 取 max，滞回 95→90；PAUSE 对长调用无牙 → 5 分钟升级 KILL）----
+    # ---- 温度联锁（2026-09-24 08:21 实战事件后收紧：
+    #      60s 采样 + 5 分钟升级曾让峰值持续 5 分钟 @105-106C（=Tjmax+1）。
+    #      新规则：maxt>=88 时 20s 快采样；PAUSE 95 保持；KILL 条件 =
+    #      绝对线 >=100 立即杀 或 连续 2 个热采样；连带杀 stress-ng。
+    #      Prochot 传感器本板全程 0x00 无用（节流只见于 SEL Processor State 事件））----
     maxt=0
     for t in "$c1" "$c2"; do [ -n "$t" ] && [ "$t" -gt "$maxt" ] 2>/dev/null && maxt=$t; done
+    if [ "$maxt" -ge 88 ] 2>/dev/null; then SLEEP_NEXT=20; else SLEEP_NEXT=60; fi
     if [ "$maxt" -ge "$PAUSE_C" ] 2>/dev/null; then
         if ! paused_for thermal; then set_pause thermal "CPU ${maxt}C >= ${PAUSE_C}C"; fi
         thermal_paused=1
-        # 升级：thermal PAUSE 连续 5 个采样（≥5 分钟）仍有负载在跑 → root 直接杀
-        # （驱动 check_pause 只在调用间生效；进程内 --temperature-threshold 本板 no-op。
-        #   TERM 对 sdcshield 无效已实测，直接 KILL；部分 YAML 无 fail/crash 行 →
-        #   驱动判别为阶段边界终止非事件，下一调用自然进入 PAUSE 等待）
         thermal_hot=$((thermal_hot + 1))
-        if [ "$thermal_hot" -ge 5 ] && pgrep -x sdcshield >/dev/null 2>&1; then
-            alert "热升级：PAUSE ${thermal_hot} 分钟未退温，KILL 负载进程（$(pgrep -x sdcshield | tr '\n' ' ')）"
-            pkill -KILL -x sdcshield
-            thermal_hot=0
+        if [ "$maxt" -ge 100 ] 2>/dev/null || [ "$thermal_hot" -ge 2 ]; then
+            if pgrep -x sdcshield >/dev/null 2>&1 || pgrep -x stress-ng >/dev/null 2>&1; then
+                alert "热升级：${maxt}C（连续${thermal_hot}个热采样）→ KILL 全部负载（绝对线100C/连续2采样）"
+                pkill -KILL -x sdcshield 2>/dev/null
+                pkill -KILL -x stress-ng 2>/dev/null
+                thermal_hot=0
+            fi
         fi
     elif [ "$thermal_paused" = 1 ] && [ "$maxt" -le "$RESUME_C" ] 2>/dev/null; then
         clr_pause_if thermal; thermal_paused=0; thermal_hot=0
@@ -162,5 +167,5 @@ while :; do
         mv "$CMD_DIR/snapshot.request" "$CMD_DIR/snapshot.done.$(date +%s)"
     fi
 
-    sleep 60
+    sleep "$SLEEP_NEXT"
 done

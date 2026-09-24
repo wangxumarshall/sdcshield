@@ -21,8 +21,15 @@ struct TestData {
     std::atomic<uint64_t> global_sum;    // 写核心的校验和累加
     std::atomic<uint32_t> allocated_blocks; // 已分配的块数
     std::atomic<uint32_t> thread_idx;    // 线程 ID 分配器
-    std::atomic<uint32_t> round_done;    // 已完成校验的读核心数
-    std::atomic<uint32_t> reader_count;  // 读核心总数
+    /* sense-reversal 轮次屏障（移植自 mesh_upi_avx2_asymm_int 的已验证
+     * 修复）：原读者侧 round_done/reader_count 协议有“快照欠计 + 非原子
+     * 重置”竞态 —— reader_count 依赖读线程自注册，早到读者的快照可能
+     * 欠计尚未注册的读者而独自判定 done==total 并重置轮次；重置的多个
+     * store 与其它读者的校验读不原子，被抢占期间迟到读者会校验到跨轮
+     * 混合数据 → sum 失配伪失败（伪 SDC）。改用 thread_count() 权威
+     * 参与数 + arrived/epoch 世代翻转屏障（写者也参与）。 */
+    std::atomic<uint32_t> arrived;       // 本轮已到达屏障的线程数（写者+读者）
+    std::atomic<uint32_t> epoch;         // 屏障世代（sense 反转）
 };
 
 static int mesh_upi_sse_asymm_distrib_int_init(struct test *test) {
@@ -44,8 +51,8 @@ static int mesh_upi_sse_asymm_distrib_int_init(struct test *test) {
     td->global_sum.store(0, std::memory_order_relaxed);
     td->allocated_blocks.store(0, std::memory_order_relaxed);
     td->thread_idx.store(0, std::memory_order_relaxed);
-    td->round_done.store(0, std::memory_order_relaxed);
-    td->reader_count.store(0, std::memory_order_relaxed);
+    td->arrived.store(0, std::memory_order_relaxed);
+    td->epoch.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -58,8 +65,19 @@ static int mesh_upi_sse_asymm_distrib_int_run(struct test *test, int cpu) {
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_writer = (id == 0);
 
-    if (!is_writer) {
-        td->reader_count.fetch_add(1, std::memory_order_relaxed);
+    /* 线程总数取框架权威值 thread_count()（自动尊重 --cpuset、
+     * test.max_threads 与 OS 亲和性限制，每个线程取值一致）—— 与
+     * mesh_upi_avx2_asymm_int / mesh_upi_sse_asymm_write_int 的修复
+     * 相同。原 reader_count 自注册计数在读线程尚未全部进入 test_run
+     * 时会被早到的读者欠计快照，轮次屏障参与者数目随之错误 → 轮次
+     * 隔离崩溃 → sum 失配伪失败。单线程（-n 1）按家族先例干净跳过
+     * （1 写 0 读无从校验，跑了也是 vacuous pass）。 */
+    uint32_t total_threads = thread_count();
+    if (total_threads < 2) {
+        log_skip(CpuTopologyIssueSkipCategory,
+                 "mesh_upi_sse_asymm_distrib_int requires at least 2 threads (inter-core test); "
+                 "skipping on this thread count");
+        return EXIT_SKIP;
     }
 
     /* randomization hardening H14' (P17): framework RNG (per-thread
@@ -70,26 +88,15 @@ static int mesh_upi_sse_asymm_distrib_int_run(struct test *test, int cpu) {
     #define RED   "\033[31m"
     #define RESET "\033[0m"
 
+    uint32_t my_epoch = 0;
     do {
         if (is_writer) {
-            /* 等待读核心完成上一轮重置（allocated_blocks==0 且
-             * round_done==0）。原实现把该轮次屏障放在逐块循环体内：
-             * 第 0 块填完后 allocated_blocks==1，写者在第 1 块前就
-             * 自旋等待“重置完成”，单轮永远填不完 1 块 —— 读端的
-             * 256 块等待条件永假，校验从未执行（vacuous pass 的
-             * 写端根因）。现在作为轮次屏障放在填充之前；ttc 预算
-             * 检查按 1024 自旋一档节流（同 2731971 的 asymm 修复）。 */
-            {
-                uint32_t spin = 0;
-                while (td->allocated_blocks.load(std::memory_order_seq_cst) > 0 ||
-                       td->round_done.load(std::memory_order_seq_cst) > 0) {
-                    if ((++spin & 1023u) == 0) {
-                        if (!test_time_condition(test)) goto out_of_budget;
-                    } else {
-                        __asm__ volatile("yield");
-                    }
-                }
-            }
+            /* 本轮状态已由上一轮 sense-reversal 屏障的最后到达线程在
+             * 全部线程（写者 + 读者）到达之后重置（第一轮由 init 重置），
+             * 写者无需再自旋等待“重置完成”—— 原先的
+             * allocated_blocks==0 && round_done==0 等待与读者侧的
+             * round_done/reader_count 协议共享同一个非原子重置窗口
+             * （欠计的早到读者可能提前触发重置、放行写者进入下一轮）。 */
 
             /* 串行填充所有块：有限工作量（NUM_BLOCKS×VECTOR_SIZE 个
              * 元素，微秒级），不逐块消耗 fracture 预算 —— 原实现每块
@@ -191,19 +198,28 @@ static int mesh_upi_sse_asymm_distrib_int_run(struct test *test, int cpu) {
                 return EXIT_FAILURE;
             }
 
-            // 同步屏障：所有读核心完成校验后，由最后一个重置
-            uint32_t done = td->round_done.fetch_add(1, std::memory_order_seq_cst) + 1;
-            uint32_t total_readers = td->reader_count.load(std::memory_order_acquire);
-            if (done == total_readers) {
+        }
+
+        /* ---------- 轮次屏障：sense-reversal（写者也到达） ----------
+         * 最后到达的线程（第 thread_count() 个 = 写者 + 全部读者）在
+         * 此重置下一轮状态（global_sum/next_block/allocated_blocks）：
+         * fetch_add(acq_rel) 的到达计数保证所有线程都已完成本轮流量的
+         * 生产/校验（含写者完成填充），epoch 的 release 存储 + 等待侧
+         * acquire 加载保证重置先于任何线程的下一轮访问可见 —— 同时
+         * 消除原协议“done 判定与重置不原子”和“round_done!=0 自旋
+         * 错过瞬态”两个窗口。自旋按 1024 次一档节流 ttc 预算检查
+         * （理由同读者等待）。 */
+        {
+            uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (done == total_threads) {
                 td->global_sum.store(0, std::memory_order_seq_cst);
                 td->next_block.store(0, std::memory_order_seq_cst);
                 td->allocated_blocks.store(0, std::memory_order_seq_cst);
-                td->round_done.store(0, std::memory_order_seq_cst);
+                td->arrived.store(0, std::memory_order_relaxed);
+                td->epoch.store(my_epoch + 1, std::memory_order_release);
             } else {
-                /* 非最后的读核心等待最后一者重置（同样按 1024 自旋一档
-                 * 节流 ttc 预算检查）。 */
                 uint32_t spin = 0;
-                while (td->round_done.load(std::memory_order_seq_cst) != 0) {
+                while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
                     if ((++spin & 1023u) == 0) {
                         if (!test_time_condition(test)) goto out_of_budget;
                     } else {
@@ -212,6 +228,7 @@ static int mesh_upi_sse_asymm_distrib_int_run(struct test *test, int cpu) {
                 }
             }
         }
+        ++my_epoch;
     } while (test_time_condition(test));
 
 out_of_budget:

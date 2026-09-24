@@ -39,7 +39,8 @@ struct sha_elem
 struct sha_test
 {
     uint8_t *arena;
-    uint8_t arena_size;
+    size_t arena_size;   /* was uint8_t — silently truncated every value
+                          * above 255 (randomization hardening H7') */
     sha_elem golden_elements[SHA_GOLDEN_ELEMS];
 };
 
@@ -120,24 +121,46 @@ static int ssl_sha_init(struct test* test)
     }
 }
 
+/* Per-thread MB-scale work arena: the elem pair lands at random offsets
+ * anywhere inside 4 MiB (was ±512 B), so the digest inputs/outputs touch
+ * different cache sets, pages and (with THP) huge-page offsets every
+ * iteration. Each thread re-rolls ITS OWN golden elem every iteration
+ * (fresh plaintext + freshly computed digests through the same EVP
+ * path), so no shared state is written after init — thread-safe by
+ * construction (randomization hardening H7'). */
+#define SHA_WORK_ARENA_SIZE    (4UL << 20)
+
 static int ssl_sha_run(struct test* test, int cpu)
 {
-    sha_test *sha_test_ptr = (sha_test *) test->data;
-    sha_elem *golden_elements = &sha_test_ptr->golden_elements[0];
-
-    const size_t our_arena_size = SHA_MAX_OFFSET + sizeof(sha_elem);
+    const size_t our_arena_size = SHA_WORK_ARENA_SIZE;
     uint8_t *our_arena = (uint8_t *) mmap(NULL, our_arena_size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
-
+    if (our_arena == MAP_FAILED) {
+        log_skip(TestResourceIssueSkipCategory, "ssl_sha: work-arena mmap failed");
+        return EXIT_SKIP;
+    }
 
     TEST_LOOP(test, 256) {
-        const size_t our_offset = (random64() & 0x1ff) | 1;
-        const size_t golden_idx = random64() & (SHA_GOLDEN_ELEMS - 1);
-        sha_elem *golden_elem = &golden_elements[golden_idx];
+        const size_t elem_sz = sizeof(sha_elem);
+        /* guaranteed-disjoint placement: split the arena into two halves;
+         * golden elem lands anywhere in the first half, our elem anywhere
+         * in the second — the two 656-byte ranges can never overlap. */
+        const size_t half = (our_arena_size - 2 * elem_sz) / 2;
+        const size_t golden_offset = (random64() % half) + 1;
+        const size_t our_offset = half + elem_sz + (random64() % half) + 1;
 
+        sha_elem *golden_elem = (sha_elem *) (&our_arena[golden_offset]);
         sha_elem *our_elem = (sha_elem *) (&our_arena[our_offset]);
-        memcpy(&our_elem->plain_text, &golden_elem->plain_text[0], PLAINTEXT_SIZE);
 
-        /* Calculate sha checksums */
+        /* Re-roll this thread's golden elem: fresh random plaintext +
+         * digests computed through the EVP path (same-iteration golden). */
+        memset_random(&golden_elem->plain_text[0], PLAINTEXT_SIZE);
+        ssl_sha256(golden_elem);
+        ssl_sha384(golden_elem);
+        ssl_sha512(golden_elem);
+
+        /* Same plaintext into OUR elem at a DIFFERENT random address,
+         * then recompute: byte-identical digests expected at any address. */
+        memcpy(&our_elem->plain_text, &golden_elem->plain_text[0], PLAINTEXT_SIZE);
         ssl_sha256(our_elem);
         ssl_sha384(our_elem);
         ssl_sha512(our_elem);
@@ -150,6 +173,8 @@ static int ssl_sha_run(struct test* test, int cpu)
         memcmp_or_fail(&our_elem->sha512sum[0], &golden_elem->sha512sum[0], SHA512_DIGEST_LENGTH,
                 "sha512sum values does not match.");
     }
+
+    munmap(our_arena, our_arena_size);
     return EXIT_SUCCESS;
 }
 

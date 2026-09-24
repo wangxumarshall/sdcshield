@@ -110,10 +110,11 @@ static int sve512_gather_scatter_svd_init(struct test *test)
         auto data = std::make_unique<SveGatherScatterSvdData>();
         data->vl_d = svcntd();
 
+        /* randomization hardening H12': seeds from the framework RNG. */
         data->seeds_f64.resize(data->vl_d);
         for (size_t lane = 0; lane < data->vl_d; ++lane) {
             data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+                (random64() & 0x000FFFFFFFFFFFFFULL);
         }
 
         // SVD-scale gather/scatter workspace: 300x300 doubles = 720 KB.
@@ -140,10 +141,11 @@ static int sve512_gather_scatter_svd_init(struct test *test)
                 const size_t cols_in =
                     (SVD_COLS - bc < SVD_BLOCK_COLS) ? (SVD_COLS - bc)
                                                      : SVD_BLOCK_COLS;
+                /* block-local shuffle driven by the framework RNG
+                 * (randomization hardening H12': per-run fresh
+                 * permutation; was a fixed splitmix permutation). */
                 for (size_t k = 0; k < rows_in * cols_in; ++k) {
-                    size_t j = (size_t)(splitmix64(0xBEEF0000ULL +
-                                                   (br * SVD_COLS + bc) * 256 +
-                                                   k) % (k + 1));
+                    size_t j = (size_t)(random64() % (k + 1));
                     size_t row_i = br + k / cols_in;
                     size_t col_i = bc + k % cols_in;
                     size_t row_j = br + j / cols_in;

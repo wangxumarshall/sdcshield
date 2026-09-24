@@ -54,17 +54,40 @@ static int eigen_gemm_cdouble_dynamic_square_init(struct test *test) {
 }
 
 static int eigen_gemm_cdouble_dynamic_square_run(struct test *test, int cpu) {
-    //int i=0;
+    /* randomization hardening H11' (P14): per-thread operands re-rolled
+     * every kRerollEvery iterations (framework RNG, -s reproducible,
+     * [-1, 1) bounded like Mat::Random); golden recomputed the same
+     * batch. No shared state is written after init. */
+    constexpr int kRerollEvery = 16;
+        auto fill_rand = [](Mat &m) {
+            for (int r = 0; r < m.rows(); ++r)
+                for (int c = 0; c < m.cols(); ++c)
+                    m(r, c) = std::complex<double>(frandom_scale(2.0) - 1.0,
+                                                   frandom_scale(2.0) - 1.0);
+        };
+    Mat l_lhs, l_rhs, l_prod;
+    l_lhs.resize(M_DIM, M_DIM);
+    l_rhs.resize(M_DIM, M_DIM);
+    l_prod.resize(M_DIM, M_DIM);
+    fill_rand(l_lhs);
+    fill_rand(l_rhs);
+    l_prod = l_lhs * l_rhs;
+    int since_reroll = 0;
+
     do {
-        //++i;
-        auto testdata = CAST(test->data);
         Mat x;
-        x = testdata->lhs * testdata->rhs;
+        x = l_lhs * l_rhs;
 
         memcmp_or_fail(reinterpret_cast<double *>(x.data()),
-                       reinterpret_cast<double *>(testdata->prod.data()), 2 * M_DIM * M_DIM);
+                       reinterpret_cast<double *>(l_prod.data()), 2 * M_DIM * M_DIM);
+
+        if (++since_reroll >= kRerollEvery) {
+            since_reroll = 0;
+            fill_rand(l_lhs);
+            fill_rand(l_rhs);
+            l_prod = l_lhs * l_rhs;
+        }
     } while (test_time_condition(test));
-    //log_info("Num iters = %i\n", i);
     return EXIT_SUCCESS;
 }
 

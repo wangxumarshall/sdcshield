@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -14,20 +13,19 @@ static int kreg8_init(struct test *test) {
 
 static int kreg8_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<int> type_dist(0, 3);
+    auto type_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((3) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        int type = type_dist(rng);
+        int type = type_dist();
         bool passed = false;
         bool consistent = true;
         char type_name[16] = "UNKNOWN";
 
         switch (type) {
             case 0: { // VPMOVM2B (8-bit, 64 elements)
-                std::uniform_int_distribution<uint64_t> mask_dist(0, 0xFFFFFFFFFFFFFFFFULL);
-                uint64_t mask_val = mask_dist(rng);
+                /* H9'/P12: framework RNG */
+                uint64_t mask_val = random64();
 
                 // 软件模拟（同时也是“硬件”实现）
                 uint8_t hw_vals[64];
@@ -55,19 +53,21 @@ static int kreg8_run(struct test *test, int cpu) {
                 passed = all_match && cons;
                 strcpy(type_name, "VPMOVM2B");
 
-                fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%016lX\n",
-                        iter.load(), type_name, mask_val);
-                fprintf(stderr, "  sw[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                        sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3],
-                        sw_vals[4], sw_vals[5], sw_vals[6], sw_vals[7]);
-                fprintf(stderr, "  hw[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                        hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3],
-                        hw_vals[4], hw_vals[5], hw_vals[6], hw_vals[7]);
+                if (!passed) {
+                    fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%016lX\n",
+                            iter.load(), type_name, mask_val);
+                    fprintf(stderr, "  sw[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                            sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3],
+                            sw_vals[4], sw_vals[5], sw_vals[6], sw_vals[7]);
+                    fprintf(stderr, "  hw[0..7]=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                            hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3],
+                            hw_vals[4], hw_vals[5], hw_vals[6], hw_vals[7]);
+                }
                 break;
             }
             case 1: { // VPMOVM2W (16-bit, 32 elements)
-                std::uniform_int_distribution<uint32_t> mask_dist(0, 0xFFFFFFFF);
-                uint32_t mask_val = mask_dist(rng);
+                /* H9'/P12: framework RNG */
+                uint32_t mask_val = random32();
 
                 uint16_t hw_vals[32];
                 uint16_t sw_vals[32];
@@ -92,17 +92,19 @@ static int kreg8_run(struct test *test, int cpu) {
                 passed = all_match && cons;
                 strcpy(type_name, "VPMOVM2W");
 
-                fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%08X\n",
-                        iter.load(), type_name, mask_val);
-                fprintf(stderr, "  sw[0..3]=%04X %04X %04X %04X\n",
-                        sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
-                fprintf(stderr, "  hw[0..3]=%04X %04X %04X %04X\n",
-                        hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%08X\n",
+                            iter.load(), type_name, mask_val);
+                    fprintf(stderr, "  sw[0..3]=%04X %04X %04X %04X\n",
+                            sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
+                    fprintf(stderr, "  hw[0..3]=%04X %04X %04X %04X\n",
+                            hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                }
                 break;
             }
             case 2: { // VPMOVM2D (32-bit, 16 elements)
-                std::uniform_int_distribution<uint16_t> mask_dist(0, 0xFFFF);
-                uint16_t mask_val = mask_dist(rng);
+                /* H9'/P12: framework RNG */
+                uint16_t mask_val = (uint16_t)(random32() & 0xFFFF);
 
                 uint32_t hw_vals[16];
                 uint32_t sw_vals[16];
@@ -127,17 +129,18 @@ static int kreg8_run(struct test *test, int cpu) {
                 passed = all_match && cons;
                 strcpy(type_name, "VPMOVM2D");
 
-                fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%04X\n",
-                        iter.load(), type_name, mask_val);
-                fprintf(stderr, "  sw[0..3]=%08X %08X %08X %08X\n",
-                        sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
-                fprintf(stderr, "  hw[0..3]=%08X %08X %08X %08X\n",
-                        hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%04X\n",
+                            iter.load(), type_name, mask_val);
+                    fprintf(stderr, "  sw[0..3]=%08X %08X %08X %08X\n",
+                            sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
+                    fprintf(stderr, "  hw[0..3]=%08X %08X %08X %08X\n",
+                            hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                }
                 break;
             }
             case 3: { // VPMOVM2Q (64-bit, 8 elements)
-                std::uniform_int_distribution<uint8_t> mask_dist(0, 0xFF);
-                uint8_t mask_val = mask_dist(rng);
+                uint8_t mask_val = (uint8_t)(random32() & 0xFF);
 
                 uint64_t hw_vals[8];
                 uint64_t sw_vals[8];
@@ -162,23 +165,24 @@ static int kreg8_run(struct test *test, int cpu) {
                 passed = all_match && cons;
                 strcpy(type_name, "VPMOVM2Q");
 
-                fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%02X\n",
-                        iter.load(), type_name, mask_val);
-                fprintf(stderr, "  sw[0..3]=%016lX %016lX %016lX %016lX\n",
-                        sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
-                fprintf(stderr, "  hw[0..3]=%016lX %016lX %016lX %016lX\n",
-                        hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                if (!passed) {
+                    fprintf(stderr, "kreg8: Iter %lu, type=%s, mask=0x%02X\n",
+                            iter.load(), type_name, mask_val);
+                    fprintf(stderr, "  sw[0..3]=%016lX %016lX %016lX %016lX\n",
+                            sw_vals[0], sw_vals[1], sw_vals[2], sw_vals[3]);
+                    fprintf(stderr, "  hw[0..3]=%016lX %016lX %016lX %016lX\n",
+                            hw_vals[0], hw_vals[1], hw_vals[2], hw_vals[3]);
+                }
                 break;
             }
         }
 
-        fprintf(stderr, "  consistent=%d, ", consistent);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-        fprintf(stderr, "result=%s%s\033[0m\n", color, result_str);
-        fflush(stderr);
-
         if (!passed) {
+            fprintf(stderr, "  consistent=%d, ", consistent);
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "result=%s%s\033[0m\n", color, result_str);
+            fflush(stderr);
             report_fail_msg("kreg8: mismatch in mask-to-vector conversion or consistency");
             return EXIT_FAILURE;
         }

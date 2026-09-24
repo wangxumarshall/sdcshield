@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <atomic>
 #include <cstring>
-#include <random>
 #include <ctime>
 #include <unistd.h>
 
@@ -15,6 +14,10 @@ struct alignas(16) SharedData {
     uint8_t padding[1];            // 偏移 1 字节
     uint8x16_t data;               // 非对齐地址
     std::atomic<uint64_t> seq;
+    /* run-constant random pattern (randomization hardening H10'):
+     * multi-writer seqlock → all writers write THIS value; a flip in any
+     * of the 128 bits is detectable (was all-0/all-1). */
+    uint8x16_t pattern;
 };
 
 static int atomic_simd_128_unaligned_init(struct test *test) {
@@ -22,6 +25,7 @@ static int atomic_simd_128_unaligned_init(struct test *test) {
     if (!sd) return EXIT_FAILURE;
     sd->data = vdupq_n_u8(0);
     sd->seq.store(0, std::memory_order_relaxed);
+    memset_random(&sd->pattern, sizeof(sd->pattern));   /* H10' */
     test->data = sd;
     return EXIT_SUCCESS;
 }
@@ -29,13 +33,9 @@ static int atomic_simd_128_unaligned_init(struct test *test) {
 static int atomic_simd_128_unaligned_run(struct test *test, int cpu) {
     (void)cpu;
     auto *sd = static_cast<SharedData*>(test->data);
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<int> dist(0, 1);
-    static std::atomic<uint64_t> iter{0};
-
     do {
-        uint64_t pattern = dist(rng);
-        uint8x16_t val = pattern ? vdupq_n_u8(0xFF) : vdupq_n_u8(0);
+        // H10': 所有写者写入共享的 run-constant 随机模式（init 时生成）
+        uint8x16_t val = sd->pattern;
 
         // 写操作：使用非对齐存储（vst1q_u8 支持非对齐地址）
         sd->seq.fetch_add(1, std::memory_order_acq_rel);
@@ -51,44 +51,25 @@ static int atomic_simd_128_unaligned_run(struct test *test, int cpu) {
             s2 = sd->seq.load(std::memory_order_acquire);
         } while (s1 != s2 || (s1 & 1));
 
-        // 验证数据完整性
-        uint8_t bytes[16];
-        vst1q_u8(bytes, read_val);
-        bool all_zero = true, all_one = true;
-        for (int i = 0; i < 16; ++i) {
-            if (bytes[i] != 0x00) all_zero = false;
-            if (bytes[i] != 0xFF) all_one = false;
-        }
-        bool data_ok = all_zero || all_one;
-
-        // 一致性测试：存储 -> 重载（非对齐）
-        alignas(16) uint8_t store_buf[16]; // 对齐缓冲区，但存储时使用非对齐存储
-        vst1q_u8(store_buf, read_val);     // 非对齐存储
-        uint8x16_t reload_val = vld1q_u8(store_buf); // 非对齐加载
-        // 比较 read_val 和 reload_val 是否完全相等
-        uint8x16_t cmp = vceqq_u8(read_val, reload_val);
-        bool consistent = true;
+        // 撕裂/位翻转检测：读出的 128 位必须逐位等于 run-constant 模式
+        uint8x16_t cmp = vceqq_u8(read_val, sd->pattern);
+        bool data_ok = true;
         for (int i = 0; i < 16; ++i) {
             if (vgetq_lane_u8(cmp, i) != 0xFF) {
-                consistent = false;
+                data_ok = false;
                 break;
             }
         }
 
-        bool passed = data_ok && consistent;
-
-        uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        fprintf(stderr, "atomic_simd_128_unaligned: Iter %lu, pattern=%s, read_data[0..3]=%02X %02X %02X %02X\n",
-                iteration, pattern ? "0xFF" : "0x00", bytes[0], bytes[1], bytes[2], bytes[3]);
-        fprintf(stderr, "  all_zero=%d, all_one=%d, consistent=%d, result=%s%s\033[0m\n",
-                all_zero, all_one, consistent, color, result_str);
-        fflush(stderr);
-
-        if (!passed) {
-            report_fail_msg("atomic_simd_128_unaligned: data tearing or consistency failure");
+        if (!data_ok) {
+            uint8_t rb[16], pb[16];
+            vst1q_u8(rb, read_val);
+            vst1q_u8(pb, sd->pattern);
+            report_fail_msg("atomic_simd_128_unaligned: payload mismatch "
+                            "(read=%02X%02X%02X%02X... want=%02X%02X%02X%02X...) — "
+                            "tearing or bit flip",
+                            rb[0], rb[1], rb[2], rb[3],
+                            pb[0], pb[1], pb[2], pb[3]);
             return EXIT_FAILURE;
         }
 

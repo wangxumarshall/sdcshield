@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -14,12 +13,11 @@ static int kreg6_init(struct test *test) {
 
 static int kreg6_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<uint16_t> mask16_dist(0, 0xFFFF);
+    auto mask16_dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((0xFFFF) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        uint16_t mask_val = mask16_dist(rng);
+        uint16_t mask_val = mask16_dist();
 
         // ---- 软件模拟（同时也是“硬件”实现，因无对应指令） ----
         uint32_t hw_vals[16];
@@ -45,19 +43,18 @@ static int kreg6_run(struct test *test, int cpu) {
         bool passed = all_match && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        fprintf(stderr, "kreg6: Iter %lu, mask=0x%04X\n", iteration, mask_val);
-        fprintf(stderr, "  sw: ");
-        for (int i = 0; i < 16; ++i) fprintf(stderr, "%08X ", sw_vals[i]);
-        fprintf(stderr, "\n  hw: ");
-        for (int i = 0; i < 16; ++i) fprintf(stderr, "%08X ", hw_vals[i]);
-        fprintf(stderr, "\n  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
-        fflush(stderr);
 
         if (!passed) {
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg6: Iter %lu, mask=0x%04X\n", iteration, mask_val);
+            fprintf(stderr, "  sw: ");
+            for (int i = 0; i < 16; ++i) fprintf(stderr, "%08X ", sw_vals[i]);
+            fprintf(stderr, "\n  hw: ");
+            for (int i = 0; i < 16; ++i) fprintf(stderr, "%08X ", hw_vals[i]);
+            fprintf(stderr, "\n  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
+            fflush(stderr);
             report_fail_msg("kreg6: mismatch in broadcast or consistency");
             return EXIT_FAILURE;
         }

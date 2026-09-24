@@ -126,10 +126,24 @@ static int sve512_f32_chain_svd_init(struct test *test)
     try {
         auto data = std::make_unique<SveF32ChainSvdData>();
         data->vl_w = svcntw();
+        /* randomization hardening H12': framework RNG per run (-s
+         * reproducible) instead of fixed splitmix/table indices; the
+         * |x| < 2 finite-band invariant is preserved (exponent in
+         * {0x3FE, 0x3FF}), and 25% of entries still draw from the
+         * high-Hamming F32_FINITE table for gate-toggle density. */
+        auto random_finite_f32 = []() -> uint32_t {
+            if ((random32() & 3) == 0)
+                return F32_FINITE[random32() % F32_FINITE_SIZE];
+            uint32_t sign = (random32() & 1U) << 31;
+            uint32_t mantissa = random32() & 0x007FFFFFU;
+            /* 0x3FE = [0.5, 1); 0x3FF = [1, 2) — both keep |x| < 2 */
+            uint32_t exp = 0x3FEU + (random32() & 1U);
+            return sign | (exp << 23) | mantissa;
+        };
         data->seeds_f32.resize(data->vl_w);
         for (size_t lane = 0; lane < data->vl_w; ++lane) {
             data->seeds_f32[lane] = 0x3F800000U |
-                ((uint32_t)splitmix64(0xC0FFEE00ULL + lane) & 0x007FFFFFU);
+                (random32() & 0x007FFFFFU);
         }
         // Block-major streams: 361 blocks x CHAIN_STEPS x VL f32 elements
         // (~11.8 MB per stream at a 512-bit VL, 23.7 MB across m and a —
@@ -141,8 +155,8 @@ static int sve512_f32_chain_svd_init(struct test *test)
         data->m_f32.resize(total);
         data->a_f32.resize(total);
         for (size_t i = 0; i < total; ++i) {
-            data->m_f32[i] = F32_FINITE[(i * 7 + 1) % F32_FINITE_SIZE];
-            data->a_f32[i] = F32_FINITE[(i * 5 + 3) % F32_FINITE_SIZE];
+            data->m_f32[i] = random_finite_f32();
+            data->a_f32[i] = random_finite_f32();
         }
         test->data = data.release();
         return EXIT_SUCCESS;

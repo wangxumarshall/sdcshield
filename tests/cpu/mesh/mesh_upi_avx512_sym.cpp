@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -62,8 +61,9 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     uint32_t total = td->total_threads;
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1000.0f, 1000.0f);
+    /* randomization hardening H14' (P17): framework RNG */
+    /* randomization hardening H14' (P17): framework RNG, [-1000, 1000) */
+    auto dist = []() { return frandomf_scale(2000.0f) - 1000.0f; };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -79,7 +79,7 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
             float vals[BLOCK_SIZE];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_SIZE; ++j) {
-                vals[j] = dist(rng);
+                vals[j] = dist();
                 local_sum += (double)vals[j];
             }
             // 使用 4 个 NEON 向量存储 16 个 float
@@ -103,7 +103,21 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
                     break;
                 }
             }
-            // 原代码发现不一致时仅记录，我们也同样处理（最终会在读阶段捕获）
+            /* 写阶段的立即读回是本测试唯一逐字节的写入内容校验——读阶段
+             * 只做 store_buf 自一致性比较，不对照写入值，所以 block_ok
+             * 为假必须直接判失败，不能只记录。 */
+            if (!block_ok) {
+                fprintf(stderr, "mesh_upi_avx512_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, block,
+                        vals[0], vals[1], vals[2], vals[3],
+                        offset,
+                        td->data[offset], td->data[offset + 1],
+                        td->data[offset + 2], td->data[offset + 3],
+                        RED, RESET);
+                fflush(stderr);
+                report_fail_msg("mesh_upi_avx512_sym: write-phase immediate read-back mismatch (store/load corruption)");
+                return EXIT_FAILURE;
+            }
             td->write_done.fetch_add(1, std::memory_order_seq_cst);
         }
 
@@ -148,8 +162,8 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
 
         bool passed = consistent;
 
-        // 输出结果（仅线程0输出）
-        if (id == 0) {
+        if (!passed) {
+            // 首次失败证据（原先每个工作迭代都从线程 0 打印 PASS 行）
             fprintf(stderr, "mesh_upi_avx512_sym: Thread %d, data[0..15]=(%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f), consistent=%d, result=%s%s%s\n",
                     id,
                     td->data[0], td->data[1], td->data[2], td->data[3],
@@ -161,9 +175,6 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
                     passed ? "PASS" : "FAIL",
                     RESET);
             fflush(stderr);
-        }
-
-        if (!passed) {
             report_fail_msg("mesh_upi_avx512_sym: Consistency failure");
             return EXIT_FAILURE;
         }

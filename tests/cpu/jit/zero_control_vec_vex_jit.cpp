@@ -89,8 +89,11 @@ static int zero_control_vec_vex_jit_init(struct test *test) {
 
 static int zero_control_vec_vex_jit_run(struct test *test, int cpu) {
 #if !defined(__x86_64__)
-    (void)test; (void)cpu;
-    return EXIT_SUCCESS;
+    // Unreachable on non-x86: init already returned EXIT_SKIP. Honest skip
+    // instead of a vacuous EXIT_SUCCESS in case init is ever bypassed.
+    (void)cpu;
+    log_skip(OsNotSupportedSkipCategory, "zero_control_vec_vex_jit: unsupported architecture (requires x86_64)");
+    return EXIT_SKIP;
 #else
     auto *data = static_cast<ZeroControlData *>(test->data);
     alignas(64) uint8_t input[64];

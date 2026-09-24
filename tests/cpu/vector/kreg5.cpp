@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -14,13 +13,12 @@ static int kreg5_init(struct test *test) {
 
 static int kreg5_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<uint16_t> mask16_dist(0, 0xFFFF);
+    auto mask16_dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((0xFFFF) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        uint16_t a_val = mask16_dist(rng);
-        uint16_t b_val = mask16_dist(rng);
+        uint16_t a_val = mask16_dist();
+        uint16_t b_val = mask16_dist();
 
         // ---- 模拟 KUNPCK：低16位 = a_val，高16位 = b_val ----
         uint32_t hw_c = (uint32_t)a_val | ((uint32_t)b_val << 16);
@@ -45,17 +43,16 @@ static int kreg5_run(struct test *test, int cpu) {
         bool passed = kunpack_pass && knot_pass && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        fprintf(stderr, "kreg5: Iter %lu, a=0x%04X, b=0x%04X\n",
-                iteration, a_val, b_val);
-        fprintf(stderr, "  KUNPCK: sw=0x%08X, hw=0x%08X\n", sw_c, hw_c);
-        fprintf(stderr, "  KNOT :  sw=0x%04X, hw=0x%04X\n", sw_d, hw_d);
-        fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
 
         if (!passed) {
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg5: Iter %lu, a=0x%04X, b=0x%04X\n",
+                    iteration, a_val, b_val);
+            fprintf(stderr, "  KUNPCK: sw=0x%08X, hw=0x%08X\n", sw_c, hw_c);
+            fprintf(stderr, "  KNOT :  sw=0x%04X, hw=0x%04X\n", sw_d, hw_d);
+            fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
             report_fail_msg("kreg5: mismatch in KUNPCK/KNOT or consistency");
             return EXIT_FAILURE;
         }

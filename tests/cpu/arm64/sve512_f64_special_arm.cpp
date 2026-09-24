@@ -167,11 +167,15 @@ static int sve512_f64_special_arm_init(struct test *test)
         auto data = std::make_unique<SveF64SpecialData>();
         data->vl_d = svcntd();
 
-        // Per-lane seed accumulators: finite in [1.0, 2.0).
+        /* randomization hardening H12': seeds from the framework RNG
+         * (per-run fresh, -s reproducible); the special VALUE table stays
+         * by design (its NaN/Inf/±0/±1 categories are the test's
+         * purpose), but which special each step draws is now a random
+         * index instead of a fixed strided permutation. */
         data->seeds_f64.resize(data->vl_d);
         for (size_t lane = 0; lane < data->vl_d; ++lane) {
             data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+                (random64() & 0x000FFFFFFFFFFFFFULL);
         }
 
         // f64 special chain: SPECIAL_CHAIN_STEPS vectors.
@@ -179,8 +183,8 @@ static int sve512_f64_special_arm_init(struct test *test)
         data->sm_f64.resize(ns64);
         data->sa_f64.resize(ns64);
         for (size_t i = 0; i < ns64; ++i) {
-            data->sm_f64[i] = F64_SPECIAL[(i * 3 + 1) % F64_SPECIAL_SIZE];
-            data->sa_f64[i] = F64_SPECIAL[(i * 5 + 2) % F64_SPECIAL_SIZE];
+            data->sm_f64[i] = F64_SPECIAL[random32() % F64_SPECIAL_SIZE];
+            data->sa_f64[i] = F64_SPECIAL[random32() % F64_SPECIAL_SIZE];
         }
 
         test->data = data.release();

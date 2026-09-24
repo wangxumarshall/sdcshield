@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -23,14 +22,13 @@ static int kreg2_init(struct test *test) {
 
 static int kreg2_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<uint16_t> mask_dist(0, 0xFFFF);
-    std::uniform_int_distribution<int> shift_dist(0, 15);
+    auto mask_dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((0xFFFF) - (0) + 1))); };
+    auto shift_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((15) - (0) + 1))); };
     static std::atomic<uint64_t> iter{0};
 
     do {
-        uint16_t src_mask_val = mask_dist(rng);
-        int shift_amount = shift_dist(rng);
+        uint16_t src_mask_val = mask_dist();
+        int shift_amount = shift_dist();
 
         // 硬件执行移位（在 ARM64 上，这里就是普通整数移位指令）
         uint16_t left_shifted  = kshiftl(src_mask_val, shift_amount);
@@ -52,17 +50,16 @@ static int kreg2_run(struct test *test, int cpu) {
         bool passed = left_pass && right_pass && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        fprintf(stderr, "kreg2: Iter %lu, src=0x%04X, shift=%d\n",
-                iteration, src_mask_val, shift_amount);
-        fprintf(stderr, "  sw: left=0x%04X, right=0x%04X\n", sw_left, sw_right);
-        fprintf(stderr, "  hw: left=0x%04X, right=0x%04X\n", left_shifted, right_shifted);
-        fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
 
         if (!passed) {
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg2: Iter %lu, src=0x%04X, shift=%d\n",
+                    iteration, src_mask_val, shift_amount);
+            fprintf(stderr, "  sw: left=0x%04X, right=0x%04X\n", sw_left, sw_right);
+            fprintf(stderr, "  hw: left=0x%04X, right=0x%04X\n", left_shifted, right_shifted);
+            fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
             report_fail_msg("kreg2: mismatch in shift or consistency");
             return EXIT_FAILURE;
         }

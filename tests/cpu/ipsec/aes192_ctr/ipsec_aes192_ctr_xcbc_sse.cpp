@@ -156,19 +156,42 @@ static int aes_xcbc_sse_run(struct test *test, int cpu) {
     uint8_t *decrypted = (uint8_t *)malloc(d->datasize);
     uint8_t *full_mac = (uint8_t *)malloc(XCBC_FULL_DIGEST_SIZE);
 
+
+    /* randomization hardening H6': per-thread plaintext + golden, re-rolled
+     * every iteration (thread-safe: shared d is only read; the shallow
+     * struct copy points plaintext/golden_ciphertext at thread-local
+     * buffers, and compute_golden writes only into the copy). */
+    struct aes_xcbc_sse_data local_d;
+    uint8_t *plain = (uint8_t *)malloc(d->datasize);
+    uint8_t *gold = (uint8_t *)malloc(d->datasize);
+    if (!plain || !gold) {
+        free(ciphertext); free(decrypted); free(full_mac);
+        free(plain); free(gold);
+        return EXIT_FAILURE;
+    }
+    memcpy(&local_d, d, sizeof(local_d));
+    local_d.plaintext = plain;
+    local_d.golden_ciphertext = gold;
     TEST_LOOP(test, 256) {
-        aes_ctr_encrypt(d->aes_key, d->aes_iv, d->plaintext, ciphertext, d->datasize);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, d->datasize, "AES-192-CTR ciphertext mismatch (SSE)");
+
+        /* re-roll: fresh plaintext + same-iteration golden (independent
+         * EVP path recomputed for this thread's data) */
+        memset_random(local_d.plaintext, d->datasize);
+        aes_xcbc_sse_compute_golden(&local_d);
+        aes_ctr_encrypt(local_d.aes_key, local_d.aes_iv, local_d.plaintext, ciphertext, local_d.datasize);
+        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, local_d.datasize, "AES-192-CTR ciphertext mismatch (SSE)");
         
-        aes_ctr_decrypt(d->aes_key, d->aes_iv, ciphertext, decrypted, d->datasize);
-        memcmp_or_fail(decrypted, d->plaintext, d->datasize, "AES-192-CTR decryption mismatch (SSE)");
+        aes_ctr_decrypt(local_d.aes_key, local_d.aes_iv, ciphertext, decrypted, local_d.datasize);
+        memcmp_or_fail(decrypted, local_d.plaintext, local_d.datasize, "AES-192-CTR decryption mismatch (SSE)");
         
-        aes_xcbc_96(d->xcbc_key, ciphertext, d->datasize, full_mac);
-        memcmp_or_fail(full_mac, d->golden_mac, XCBC_96_DIGEST_SIZE, "XCBC-96 digest mismatch (SSE)");
+        aes_xcbc_96(local_d.xcbc_key, ciphertext, local_d.datasize, full_mac);
+        memcmp_or_fail(full_mac, local_d.golden_mac, XCBC_96_DIGEST_SIZE, "XCBC-96 digest mismatch (SSE)");
     }
     free(ciphertext);
     free(decrypted);
     free(full_mac);
+    free(plain);
+    free(gold);
     return EXIT_SUCCESS;
 }
 

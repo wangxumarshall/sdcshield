@@ -127,8 +127,14 @@ static int ooo_dep_chain_arm_init(struct test *test)
         };
         constexpr size_t VS = sizeof(VT) / sizeof(VT[0]);
         data->values.resize(CHAIN_LEN);
+        /* randomization hardening H18' (P17): 25% of node values draw
+         * purely from the framework RNG (per-run fresh, -s reproducible);
+         * the rest keep the high-Hamming table ^ stride construction for
+         * the gate-toggle density the table was designed for. */
         for (size_t i = 0; i < CHAIN_LEN; ++i)
-            data->values[i] = VT[i % VS] ^ (i * 0x9E3779B97F4A7C15ULL);
+            data->values[i] = ((random32() & 3) == 0)
+                                  ? random64()
+                                  : (VT[i % VS] ^ (i * 0x9E3779B97F4A7C15ULL));
         // RW-hazard addresses: distinct cache-line-aligned slots.
         data->rw_addrs.resize(ROB_DEPTH);
         for (size_t i = 0; i < ROB_DEPTH; ++i)

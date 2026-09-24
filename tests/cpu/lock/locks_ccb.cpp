@@ -78,16 +78,13 @@ static int locks_ccb_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> dist(1, 1000);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
     uint64_t local_sum = 0;
 
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
-
     do {
-        uint64_t inc = dist(rng);   // 本次的输入
+        uint64_t inc = dist();   // 本次的输入
 
         td->lock->lock();
         td->counter += inc;
@@ -95,19 +92,10 @@ static int locks_ccb_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        // 输出本次的输入（线程、增量）和结果（锁操作成功，PASS）
-        fprintf(stderr, "locks_ccb: Thread %d, inc=%lu, result=%sPASS%s\n",
-                id, inc, GREEN, RESET);
-        fflush(stderr);
-
     } while (test_time_condition(test));
 
     td->local_sums[id] = local_sum;
     return EXIT_SUCCESS;
-
-    #undef GREEN
-    #undef RED
-    #undef RESET
 }
 
 static int locks_ccb_finish(struct test *test) {

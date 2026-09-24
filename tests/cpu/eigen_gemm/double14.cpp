@@ -53,29 +53,53 @@ static int eigen_gemm_double14_init(struct test *test) {
 }
 
 static int eigen_gemm_double14_run(struct test *test, int cpu) {
+    /* randomization hardening H11' (P14): per-thread operands re-rolled
+     * every kRerollEvery iterations (framework RNG, [-1, 1) bounded);
+     * golden recomputed the same batch. */
+    constexpr int kRerollEvery = 16;
+    auto fill_rand = [](Mat &m) {
+        for (int r = 0; r < m.rows(); ++r)
+            for (int c = 0; c < m.cols(); ++c)
+                m(r, c) = frandom_scale(2.0) - 1.0;
+    };
+    Mat l_lhs, l_rhs, l_prod;
+    l_lhs.resize(M_DIM, M_DIM);
+    l_rhs.resize(M_DIM, M_DIM);
+    l_prod.resize(M_DIM, M_DIM);
+    fill_rand(l_lhs);
+    fill_rand(l_rhs);
+    l_prod = l_lhs * l_rhs;
+    int since_reroll = 0;
+
     do {
-        auto testdata = CAST(test->data);
         Mat _x;
-        _x = testdata->lhs;
+        _x = l_lhs;
         Mat _y;
-        _y = testdata->rhs;
+        _y = l_rhs;
         Mat _prod;
         _prod = _x * _y;
 
-        if (!_x.isApprox(testdata->lhs)) {
+        if (!_x.isApprox(l_lhs)) {
                 report_fail_msg("_x.isApprox failed");
         }
-        memcmp_or_fail(_x.data(), testdata->lhs.data(), M_DIM * M_DIM);
+        memcmp_or_fail(_x.data(), l_lhs.data(), M_DIM * M_DIM);
 
-        if (!_y.isApprox(testdata->rhs)) {
+        if (!_y.isApprox(l_rhs)) {
                 report_fail_msg("_y.isApprox failed");
         }
-        memcmp_or_fail(_y.data(), testdata->rhs.data(), M_DIM * M_DIM);
+        memcmp_or_fail(_y.data(), l_rhs.data(), M_DIM * M_DIM);
 
-        if (!_prod.isApprox(testdata->prod)) {
+        if (!_prod.isApprox(l_prod)) {
                 report_fail_msg("_prod.isApprox failed");
         }
-        memcmp_or_fail(_prod.data(), testdata->prod.data(), M_DIM * M_DIM);
+        memcmp_or_fail(_prod.data(), l_prod.data(), M_DIM * M_DIM);
+
+        if (++since_reroll >= kRerollEvery) {
+            since_reroll = 0;
+            fill_rand(l_lhs);
+            fill_rand(l_rhs);
+            l_prod = l_lhs * l_rhs;
+        }
     } while (test_time_condition(test));
     return EXIT_SUCCESS;
 }

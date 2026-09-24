@@ -4,12 +4,28 @@
 #include <cstring>
 
 static int vmx_vmexit_cpuid_init(struct test *test) {
+#ifdef __aarch64__
+    // ARM64 has no VT-x/VMX virtualization — the previous "simulated" path
+    // (single constant store+reload, no TEST_LOOP) passed vacuously while
+    // stressing nothing. Honest skip per the placeholder-honesty rule.
     (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): no VT-x/VMX virtualization on ARM64");
+    return EXIT_SKIP;
+#else
     return EXIT_SUCCESS;
+#endif
 }
 
 static int vmx_vmexit_cpuid_run(struct test *test, int cpu) {
-    (void)cpu;
+#ifdef __aarch64__
+    // Unreachable on ARM64: init already returned EXIT_SKIP. Kept honest
+    // (no vacuous EXIT_SUCCESS) in case init is ever bypassed.
+    (void)test; (void)cpu;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): no VT-x/VMX virtualization on ARM64");
+    return EXIT_SKIP;
+#else
 
     // 在 ARM64 上使用 MRS 读取 MIDR_EL1，类似于 x86 的 CPUID
     uint64_t read_val;
@@ -39,6 +55,7 @@ static int vmx_vmexit_cpuid_run(struct test *test, int cpu) {
 
     fprintf(stderr, "\033[32mvmx_vmexit_cpuid PASS on CPU %d (MIDR_EL1 read)\033[0m\n", cpu);
     return EXIT_SUCCESS;
+#endif
 }
 
 static int vmx_vmexit_cpuid_finish(struct test *test) {

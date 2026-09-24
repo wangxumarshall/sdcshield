@@ -283,13 +283,17 @@ static int iex_operand_combo_arm_init(struct test *test)
         data->flag_seed_b.resize(COMBO_STEPS);
         data->flag_seed_alt.resize(COMBO_STEPS);
         for (size_t i = 0; i < COMBO_STEPS; ++i) {
-            // Successive steps use complementary table entries so the ALU
-            // input nets toggle maximally each step.
-            data->op_a[i] = HAMMING_TABLE[i % HAMMING_TABLE_SIZE];
-            data->op_b[i] = HAMMING_TABLE[(i + 1) % HAMMING_TABLE_SIZE];
+            /* randomization hardening H18' (P17): 25% of steps draw purely
+             * from the framework RNG (per-run fresh, -s reproducible); the
+             * rest keep complementary table entries so the ALU input nets
+             * still toggle maximally each step. */
+            bool rnd = (random32() & 3) == 0;
+            uint64_t base = random32() % HAMMING_TABLE_SIZE;
+            data->op_a[i] = rnd ? random64() : HAMMING_TABLE[base];
+            data->op_b[i] = rnd ? random64() : HAMMING_TABLE[(base + 1) % HAMMING_TABLE_SIZE];
             data->op_kind[i] = op_kind_for_step(i);
-            data->flag_seed_b[i] = HAMMING_TABLE[i % HAMMING_TABLE_SIZE];
-            data->flag_seed_alt[i] = HAMMING_TABLE[(i + 3) % HAMMING_TABLE_SIZE];
+            data->flag_seed_b[i] = rnd ? random64() : HAMMING_TABLE[base];
+            data->flag_seed_alt[i] = rnd ? random64() : HAMMING_TABLE[(base + 3) % HAMMING_TABLE_SIZE];
         }
         test->data = data.release();
         return EXIT_SUCCESS;

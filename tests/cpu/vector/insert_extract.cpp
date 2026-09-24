@@ -12,14 +12,12 @@
 static constexpr int LANES = 4;
 
 struct test_data {
-    std::mt19937 rng;
     float mem_buf[LANES];
 };
 
 // 初始化
 static int insert_extract_init(struct test *test) {
     auto *data = new test_data;
-    data->rng.seed(static_cast<unsigned>(time(nullptr)) + getpid());
     test->data = data;
     return EXIT_SUCCESS;
 }
@@ -28,8 +26,10 @@ static int insert_extract_init(struct test *test) {
 static int insert_extract_run(struct test *test, int cpu) {
     (void)cpu;
     auto *data = static_cast<test_data*>(test->data);
-    std::mt19937 &rng = data->rng;
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+    /* randomization hardening H9'/P12: framework RNG (per-thread stream,
+     * -s reproducible) replaces the shared std::mt19937 seeded from
+     * time()+getpid(); range [-100, 100) preserved. */
+    auto dist = []() { return frandomf_scale(200.0f) - 100.0f; };
 
     static std::atomic<uint64_t> iter{0};
 
@@ -37,14 +37,20 @@ static int insert_extract_run(struct test *test, int cpu) {
         // 1. 生成原始向量
         float32x4_t orig_vec = vdupq_n_f32(0.0f);
         float orig_vals[LANES];
-        for (int i = 0; i < LANES; ++i) {
-            orig_vals[i] = dist(rng);
-            orig_vec = vsetq_lane_f32(orig_vals[i], orig_vec, i);
-        }
+        /* vsetq_lane_f32 requires a compile-time-constant lane index —
+         * unrolled (LANES = 4) */
+        orig_vals[0] = dist();
+        orig_vec = vsetq_lane_f32(orig_vals[0], orig_vec, 0);
+        orig_vals[1] = dist();
+        orig_vec = vsetq_lane_f32(orig_vals[1], orig_vec, 1);
+        orig_vals[2] = dist();
+        orig_vec = vsetq_lane_f32(orig_vals[2], orig_vec, 2);
+        orig_vals[3] = dist();
+        orig_vec = vsetq_lane_f32(orig_vals[3], orig_vec, 3);
 
         // 2. 随机选择 lane 和插入值
-        int lane = static_cast<int>(dist(rng) * LANES);  // 0..3
-        float insert_val = dist(rng);
+        int lane = static_cast<int>(dist() * LANES);  // 0..3
+        float insert_val = dist();
 
         // 3. 执行插入和提取，使用 switch 确保 lane 为编译时常量
         float32x4_t new_vec;

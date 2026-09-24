@@ -19,17 +19,17 @@
  * error is flagged.
  *
  * This particular version of the Eigen SVD tests go for single
- * precision input matrices and the "Jacobi" SVD algorithm. Moreover,
- * the selected numbers will come, on their majority, from a pool of
- * known interesting floating point vectors (CPU/HW point of view).
+ * precision input matrices and the "Jacobi" SVD algorithm. Since the
+ * randomization hardening (H11') the operands are re-rolled per thread
+ * from the framework RNG, mapped into [-1, 1) like Mat::Random; the
+ * init-time interesting-vector matrix became dead computation with that
+ * change and was removed.
  *
  * This test requires at least 2 threads to run.
  * @endparblock
  */
 
 #include "eigen_svd/sandstone_eigen_common.h"
-
-#include "fp_vectors/static_vectors.h"
 
 using namespace Eigen;
 
@@ -41,15 +41,11 @@ typedef Eigen::JacobiSVD < Mat > SVD;
 using eigen_svd_jacobi_fvectors_test = EigenSVDTest<SVD, M_DIM>;
 
 static int eigen_svd_jacobi_fvectors_init(struct test *test) {
+    /* H11'' (PR #147 review): run() primes per-thread matrices itself and
+     * never reads eigen_test_data's matrices — the init-time
+     * interesting-vector matrix + golden SVD that used to live here was
+     * dead since the per-thread re-roll landed. Removed. */
     auto d = new eigen_svd_jacobi_fvectors_test::eigen_test_data;
-    d->orig_matrix =
-            Mat::NullaryExpr(M_DIM, M_DIM,[&]() {
-        Float32 ret = random_float32(80);
-        return ret.as_float;
-    }
-    );
-
-    eigen_svd_jacobi_fvectors_test::calculate_once(d->orig_matrix, d->u_matrix, d->v_matrix);
     test->data = d;
     return EXIT_SUCCESS;
 }

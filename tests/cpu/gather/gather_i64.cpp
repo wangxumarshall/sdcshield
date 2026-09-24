@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 
 static constexpr int VECTOR_SIZE = 4;          // 4 个 int64
 static constexpr int DATA_SIZE = 1024;         // 源数据大小
@@ -18,18 +17,17 @@ static int gather_i64_run(struct test *test, int cpu) {
     alignas(16) int64_t src[DATA_SIZE];
     int64_t indices[VECTOR_SIZE];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int64_t> int_dist(-1000000LL, 1000000LL);
-    std::uniform_int_distribution<int> idx_dist(0, DATA_SIZE - 1);
+    auto int_dist = []() { return (int64_t)((-1000000LL) + (int64_t)(random64() % (uint64_t)((1000000LL) - (-1000000LL) + 1))); };
+    auto idx_dist = []() { return (int)((0) + (int64_t)(random64() % (uint64_t)((DATA_SIZE - 1) - (0) + 1))); };
 
     do {
         // 生成随机源数据
         for (int i = 0; i < DATA_SIZE; ++i) {
-            src[i] = int_dist(rng);
+            src[i] = int_dist();
         }
         // 生成随机索引（64位）
         for (int i = 0; i < VECTOR_SIZE; ++i) {
-            indices[i] = idx_dist(rng);
+            indices[i] = idx_dist();
         }
 
         // ---- 硬件 Gather（标量模拟，逐个加载） ----

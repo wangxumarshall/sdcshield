@@ -111,20 +111,43 @@ static int hmac_sha384_x86_64_run(struct test *test, int cpu) {
     uint8_t *decrypted = (uint8_t *)malloc(d->datasize);
     uint8_t *mac = (uint8_t *)malloc(SHA384_DIGEST_SIZE);
 
+
+    /* randomization hardening H6': per-thread plaintext + golden, re-rolled
+     * every iteration (thread-safe: shared d is only read; the shallow
+     * struct copy points plaintext/golden_ciphertext at thread-local
+     * buffers, and compute_golden writes only into the copy). */
+    struct hmac_sha384_x86_64_data local_d;
+    uint8_t *plain = (uint8_t *)malloc(d->datasize);
+    uint8_t *gold = (uint8_t *)malloc(d->datasize);
+    if (!plain || !gold) {
+        free(ciphertext); free(decrypted); free(mac);
+        free(plain); free(gold);
+        return EXIT_FAILURE;
+    }
+    memcpy(&local_d, d, sizeof(local_d));
+    local_d.plaintext = plain;
+    local_d.golden_ciphertext = gold;
     TEST_LOOP(test, 256) {
-        des3_encrypt(d->des3_key, d->des3_iv, d->plaintext, ciphertext, d->datasize);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, d->datasize, "3DES-DOCSIS ciphertext mismatch");
 
-        des3_decrypt(d->des3_key, d->des3_iv, ciphertext, decrypted, d->datasize);
-        memcmp_or_fail(decrypted, d->plaintext, d->datasize, "3DES-DOCSIS decryption mismatch");
+        /* re-roll: fresh plaintext + same-iteration golden (independent
+         * EVP path recomputed for this thread's data) */
+        memset_random(local_d.plaintext, d->datasize);
+        hmac_sha384_x86_64_compute_golden(&local_d);
+        des3_encrypt(local_d.des3_key, local_d.des3_iv, local_d.plaintext, ciphertext, local_d.datasize);
+        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, local_d.datasize, "3DES-DOCSIS ciphertext mismatch");
 
-        hmac_sha384(d->hmac_key, ciphertext, d->datasize, mac);
-        memcmp_or_fail(mac, d->golden_mac, SHA384_DIGEST_SIZE, "HMAC-SHA384 digest mismatch");
+        des3_decrypt(local_d.des3_key, local_d.des3_iv, ciphertext, decrypted, local_d.datasize);
+        memcmp_or_fail(decrypted, local_d.plaintext, local_d.datasize, "3DES-DOCSIS decryption mismatch");
+
+        hmac_sha384(local_d.hmac_key, ciphertext, local_d.datasize, mac);
+        memcmp_or_fail(mac, local_d.golden_mac, SHA384_DIGEST_SIZE, "HMAC-SHA384 digest mismatch");
     }
 
     free(ciphertext);
     free(decrypted);
     free(mac);
+    free(plain);
+    free(gold);
     return EXIT_SUCCESS;
 }
 

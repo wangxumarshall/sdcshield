@@ -56,22 +56,19 @@ static int spinlock_stress_bts_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> dist(1, 1000);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
     uint64_t local_sum = 0;
 
     do {
-        uint64_t inc = dist(rng);
+        uint64_t inc = dist();
 
         spin_lock_bts(sd->lock);
         sd->counter += inc;
         spin_unlock_bts(sd->lock);
 
         local_sum += inc;
-
-        // 仅输出本次输入，不检查锁状态（避免缓存可见性问题误报）
-        fprintf(stderr, "spinlock_stress_bts: Thread %d, inc=%lu, result=PASS\n", id, inc);
-        fflush(stderr);
 
     } while (test_time_condition(test));
 

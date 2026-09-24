@@ -1,7 +1,6 @@
 #include <sandstone.h>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <cstring>
 #include <atomic>
 #include <ctime>
@@ -17,16 +16,15 @@ static int kreg4_init(struct test *test) {
 
 static int kreg4_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(static_cast<unsigned>(time(nullptr)) + getpid());
-    std::uniform_int_distribution<uint32_t> val_dist(0, 0xFFFFFFFF);
+    auto val_dist = []() { return random32(); };  /* full [0, 2^32) */
     static std::atomic<uint64_t> iter{0};
 
     do {
         // 1. 生成随机 16 个 32 位整数
         uint32_t a_vals[16], b_vals[16];
         for (int i = 0; i < 16; ++i) {
-            a_vals[i] = val_dist(rng);
-            b_vals[i] = val_dist(rng);
+            a_vals[i] = val_dist();
+            b_vals[i] = val_dist();
         }
 
         // 2. 使用 NEON 生成掩码（模拟 VPTESTM 和 VPTESTNM）
@@ -54,27 +52,25 @@ static int kreg4_run(struct test *test, int cpu) {
         uint32x4_t m3 = vmvnq_u32(vceqzq_u32(and3));
 
         // 提取每个 lane 的最低有效位（0 或 1）组合成 16 位掩码
+        // （vgetq_lane_u32 要求编译期常量 lane — 先按常量 lane 提取到数组，
+        //   再用变量下标读数组，ACLE 规范）
         uint16_t hw_mask_m = 0;
-        for (int i = 0; i < 4; ++i) {
-            // 分别处理每组 4 个元素
-            uint32_t v0 = vgetq_lane_u32(m0, i);
-            uint32_t v1 = vgetq_lane_u32(m1, i);
-            uint32_t v2 = vgetq_lane_u32(m2, i);
-            uint32_t v3 = vgetq_lane_u32(m3, i);
-            // 取最低位
-            int bit0 = (v0 & 1) ? 1 : 0;
-            int bit1 = (v1 & 1) ? 1 : 0;
-            int bit2 = (v2 & 1) ? 1 : 0;
-            int bit3 = (v3 & 1) ? 1 : 0;
+        {
+            const uint32_t v0_[] = { vgetq_lane_u32(m0, 0), vgetq_lane_u32(m0, 1),
+                                     vgetq_lane_u32(m0, 2), vgetq_lane_u32(m0, 3) };
+            const uint32_t v1_[] = { vgetq_lane_u32(m1, 0), vgetq_lane_u32(m1, 1),
+                                     vgetq_lane_u32(m1, 2), vgetq_lane_u32(m1, 3) };
+            const uint32_t v2_[] = { vgetq_lane_u32(m2, 0), vgetq_lane_u32(m2, 1),
+                                     vgetq_lane_u32(m2, 2), vgetq_lane_u32(m2, 3) };
+            const uint32_t v3_[] = { vgetq_lane_u32(m3, 0), vgetq_lane_u32(m3, 1),
+                                     vgetq_lane_u32(m3, 2), vgetq_lane_u32(m3, 3) };
             // 位置：组内 i 对应全局索引 i, i+4, i+8, i+12
-            int idx0 = i;
-            int idx1 = i + 4;
-            int idx2 = i + 8;
-            int idx3 = i + 12;
-            if (bit0) hw_mask_m |= (1 << idx0);
-            if (bit1) hw_mask_m |= (1 << idx1);
-            if (bit2) hw_mask_m |= (1 << idx2);
-            if (bit3) hw_mask_m |= (1 << idx3);
+            for (int i = 0; i < 4; ++i) {
+                if (v0_[i] & 1) hw_mask_m |= (1 << i);
+                if (v1_[i] & 1) hw_mask_m |= (1 << (i + 4));
+                if (v2_[i] & 1) hw_mask_m |= (1 << (i + 8));
+                if (v3_[i] & 1) hw_mask_m |= (1 << (i + 12));
+            }
         }
 
         // VPTESTNM 掩码：位 = 1 当且仅当 (and == 0)
@@ -84,23 +80,21 @@ static int kreg4_run(struct test *test, int cpu) {
         uint32x4_t nm2 = vceqzq_u32(and2);
         uint32x4_t nm3 = vceqzq_u32(and3);
         uint16_t hw_mask_nm = 0;
-        for (int i = 0; i < 4; ++i) {
-            uint32_t v0 = vgetq_lane_u32(nm0, i);
-            uint32_t v1 = vgetq_lane_u32(nm1, i);
-            uint32_t v2 = vgetq_lane_u32(nm2, i);
-            uint32_t v3 = vgetq_lane_u32(nm3, i);
-            int bit0 = (v0 & 1) ? 1 : 0;
-            int bit1 = (v1 & 1) ? 1 : 0;
-            int bit2 = (v2 & 1) ? 1 : 0;
-            int bit3 = (v3 & 1) ? 1 : 0;
-            int idx0 = i;
-            int idx1 = i + 4;
-            int idx2 = i + 8;
-            int idx3 = i + 12;
-            if (bit0) hw_mask_nm |= (1 << idx0);
-            if (bit1) hw_mask_nm |= (1 << idx1);
-            if (bit2) hw_mask_nm |= (1 << idx2);
-            if (bit3) hw_mask_nm |= (1 << idx3);
+        {
+            const uint32_t v0_[] = { vgetq_lane_u32(nm0, 0), vgetq_lane_u32(nm0, 1),
+                                     vgetq_lane_u32(nm0, 2), vgetq_lane_u32(nm0, 3) };
+            const uint32_t v1_[] = { vgetq_lane_u32(nm1, 0), vgetq_lane_u32(nm1, 1),
+                                     vgetq_lane_u32(nm1, 2), vgetq_lane_u32(nm1, 3) };
+            const uint32_t v2_[] = { vgetq_lane_u32(nm2, 0), vgetq_lane_u32(nm2, 1),
+                                     vgetq_lane_u32(nm2, 2), vgetq_lane_u32(nm2, 3) };
+            const uint32_t v3_[] = { vgetq_lane_u32(nm3, 0), vgetq_lane_u32(nm3, 1),
+                                     vgetq_lane_u32(nm3, 2), vgetq_lane_u32(nm3, 3) };
+            for (int i = 0; i < 4; ++i) {
+                if (v0_[i] & 1) hw_mask_nm |= (1 << i);
+                if (v1_[i] & 1) hw_mask_nm |= (1 << (i + 4));
+                if (v2_[i] & 1) hw_mask_nm |= (1 << (i + 8));
+                if (v3_[i] & 1) hw_mask_nm |= (1 << (i + 12));
+            }
         }
 
         // 3. 软件参考（逐元素计算）
@@ -134,20 +128,19 @@ static int kreg4_run(struct test *test, int cpu) {
         bool passed = mask_m_pass && mask_nm_pass && consistent;
 
         uint64_t iteration = iter.fetch_add(1, std::memory_order_relaxed);
-        const char *color = passed ? "\033[32m" : "\033[31m";
-        const char *result_str = passed ? "PASS" : "FAIL";
-
-        // 6. 输出详细信息（仅显示前几个元素）
-        fprintf(stderr, "kreg4: Iter %lu, a[0..3]=0x%08X,0x%08X,0x%08X,0x%08X\n",
-                iteration, a_vals[0], a_vals[1], a_vals[2], a_vals[3]);
-        fprintf(stderr, "          b[0..3]=0x%08X,0x%08X,0x%08X,0x%08X\n",
-                b_vals[0], b_vals[1], b_vals[2], b_vals[3]);
-        fprintf(stderr, "  sw: VPTESTM=0x%04X, VPTESTNM=0x%04X\n", sw_mask_m, sw_mask_nm);
-        fprintf(stderr, "  hw: VPTESTM=0x%04X, VPTESTNM=0x%04X\n", hw_mask_m, hw_mask_nm);
-        fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
-                consistent, color, result_str);
 
         if (!passed) {
+            // 6. 首次失败证据（仅显示前几个元素）
+            const char *color = passed ? "\033[32m" : "\033[31m";
+            const char *result_str = passed ? "PASS" : "FAIL";
+            fprintf(stderr, "kreg4: Iter %lu, a[0..3]=0x%08X,0x%08X,0x%08X,0x%08X\n",
+                    iteration, a_vals[0], a_vals[1], a_vals[2], a_vals[3]);
+            fprintf(stderr, "          b[0..3]=0x%08X,0x%08X,0x%08X,0x%08X\n",
+                    b_vals[0], b_vals[1], b_vals[2], b_vals[3]);
+            fprintf(stderr, "  sw: VPTESTM=0x%04X, VPTESTNM=0x%04X\n", sw_mask_m, sw_mask_nm);
+            fprintf(stderr, "  hw: VPTESTM=0x%04X, VPTESTNM=0x%04X\n", hw_mask_m, hw_mask_nm);
+            fprintf(stderr, "  consistent=%d, result=%s%s\033[0m\n",
+                    consistent, color, result_str);
             report_fail_msg("kreg4: mismatch in VPTESTM/VPTESTNM masks or consistency");
             return EXIT_FAILURE;
         }

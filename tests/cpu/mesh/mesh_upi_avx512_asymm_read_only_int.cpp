@@ -30,11 +30,12 @@ static int mesh_upi_avx512_asymm_read_only_int_init(struct test *test) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening H14' (P17): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
     uint64_t sum = 0;
     for (size_t i = 0; i < ARRAY_ELEMS; ++i) {
-        td->data[i] = dist(rng);
+        td->data[i] = dist();
         sum += (uint64_t)td->data[i];
     }
     td->golden_sum = sum;
@@ -100,8 +101,8 @@ static int mesh_upi_avx512_asymm_read_only_int_run(struct test *test, int cpu) {
         bool sum_ok = (local_sum == td->golden_sum);
         bool passed = sum_ok && consistent;
 
-        // 仅由线程 0 输出结果（避免重复打印）
-        if (id == 0) {
+        if (!passed) {
+            // 首次失败证据（原先每个工作迭代都从线程 0 打印 PASS 行）
             fprintf(stderr, "mesh_upi_avx512_asymm_read_only_int: Thread %d, data[0..15]=(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d), local_sum=%lu, golden_sum=%lu, consistent=%d, result=%s%s%s\n",
                     id,
                     td->data[0], td->data[1], td->data[2], td->data[3],
@@ -113,9 +114,6 @@ static int mesh_upi_avx512_asymm_read_only_int_run(struct test *test, int cpu) {
                     passed ? "PASS" : "FAIL",
                     RESET);
             fflush(stderr);
-        }
-
-        if (!passed) {
             report_fail_msg("mesh_upi_avx512_asymm_read_only_int: Sum mismatch or consistency failure");
             return EXIT_FAILURE;
         }

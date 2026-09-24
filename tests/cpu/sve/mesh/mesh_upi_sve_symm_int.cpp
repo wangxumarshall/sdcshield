@@ -29,8 +29,6 @@ struct TestData {
     std::atomic<uint32_t> thread_idx;
     std::atomic<uint32_t> round_done;
     std::atomic<uint64_t> iter;
-    std::atomic<uint32_t> num_threads;
-    std::atomic<uint32_t> ready;
     std::atomic<uint32_t> read_done;
 };
 
@@ -60,8 +58,6 @@ static int mesh_upi_sve_symm_int_init(struct test *test) {
     td->thread_idx.store(0, std::memory_order_relaxed);
     td->round_done.store(0, std::memory_order_relaxed);
     td->iter.store(0, std::memory_order_relaxed);
-    td->num_threads.store(0, std::memory_order_relaxed);
-    td->ready.store(0, std::memory_order_relaxed);
     td->read_done.store(0, std::memory_order_relaxed);
     test->data = td;
 
@@ -75,26 +71,17 @@ static int mesh_upi_sve_symm_int_run(struct test *test, int cpu) {
     // 分配唯一线程 ID
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
 
-    // 线程 0 负责确定总线程数
-    if (id == 0) {
-        while (td->thread_idx.load(std::memory_order_acquire) < 1) __asm__ volatile("yield");
-        uint32_t prev = 0, stable = 0;
-        while (stable < 3) {
-            uint32_t cur = td->thread_idx.load(std::memory_order_acquire);
-            if (cur == prev && cur > 1) stable++;
-            else { stable = 0; prev = cur; }
-            __asm__ volatile("yield");
-        }
-        td->num_threads.store(prev, std::memory_order_release);
-        td->ready.store(1, std::memory_order_release);
-    } else {
-        while (td->ready.load(std::memory_order_acquire) == 0) __asm__ volatile("yield");
-    }
-
-    uint32_t total_threads = td->num_threads.load(std::memory_order_acquire);
+    /* 线程总数取框架权威值 thread_count()（自动尊重 --cpuset、
+     * test.max_threads 与 OS 亲和性限制，每个线程取值一致）—— 与 NEON 侧
+     * 2731971 的修复相同。原“3 次稳定读数”启发式在 -n 1 下会永久自旋
+     * 挂死（cur > 1 永不成立，后面的线程数检查不可达），大规模并发下
+     * 又严重欠计；单线程运行现在按 memcpy_rewr 先例干净跳过。 */
+    uint32_t total_threads = thread_count();
     if (total_threads < 2) {
-        report_fail_msg("Requires at least 2 threads");
-        return EXIT_FAILURE;
+        log_skip(CpuTopologyIssueSkipCategory,
+                 "mesh_upi_sve_symm_int requires at least 2 threads (inter-core test); "
+                 "skipping on this thread count");
+        return EXIT_SKIP;
     }
 
     std::mt19937 rng(std::random_device{}());

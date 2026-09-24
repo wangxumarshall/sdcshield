@@ -61,16 +61,14 @@ template <typename SVD, int Dim> struct EigenSVDTest
 
     static int init(struct test *test)
     {
+        /* H11'' (PR #147 review): run() primes per-thread matrices itself
+         * and never reads eigen_test_data's matrices — the init-time
+         * Mat::Random + golden SVD this function used to compute (for the
+         * compile-time Dim users) was dead since the per-thread re-roll
+         * landed. Removed. d->dim (set from Dim by the struct default, or
+         * by the enclosing test's init for kRuntimeDim — see
+         * svd_cdouble_sve.cpp) is the only field run() consumes. */
         auto d = new eigen_test_data;
-        if constexpr (!kRuntimeDim) {
-            d->orig_matrix = Mat::Random(Dim, Dim);
-            calculate_once(d->orig_matrix, d->u_matrix, d->v_matrix);
-        }
-        /* kRuntimeDim: the enclosing test's own init wrapper has already
-         * set d->dim (and typically allocates below); the template's init
-         * only runs if the wrapper calls it, which it does NOT — see
-         * svd_cdouble_sve.cpp. This branch exists so misuse fails loudly
-         * instead of allocating a 0x0 matrix. */
         test->data = d;
         return EXIT_SUCCESS;
     }
@@ -81,15 +79,75 @@ template <typename SVD, int Dim> struct EigenSVDTest
         return EXIT_SUCCESS;
     }
 
+    /* randomization hardening H11' (P14): per-thread matrix, re-rolled
+     * every kRerollEvery iterations from the framework RNG (per-thread
+     * stream, -s reproducible) with values mapped into [-1, 1] like
+     * Mat::Random (keeps the SVD well-conditioned — raw random bit
+     * patterns would inject Inf/NaN/denormals). The golden is recomputed
+     * through the same Eigen SVD on the SAME fresh matrix the same
+     * "iteration batch" (same-source repeat, fresh operands — the
+     * verify property is unchanged, the operand freshness is new).
+     * Per-thread matrices also mean no shared state is written after
+     * init, so no cross-thread races. The known multi-thread ULP
+     * flakiness of parallel SVD (CLAUDE.md: use -n 1) is unaffected:
+     * each thread's SVD is unchanged, only its input differs. */
+    static constexpr int kRerollEvery = 16;
+
+    static void fill_matrix_random(Mat &m, int dim)
+    {
+        using Scalar = typename Mat::Scalar;
+        for (int r = 0; r < dim; ++r)
+            for (int c = 0; c < dim; ++c) {
+                /* [-1, 1) per Scalar; complex gets independent re/im */
+                if constexpr (boost::is_complex<Scalar>::value) {
+                    using VT = typename Scalar::value_type;
+                    VT re, im;
+                    if constexpr (sizeof(VT) == sizeof(float)) {
+                        re = frandomf_scale(2.0f) - 1.0f;
+                        im = frandomf_scale(2.0f) - 1.0f;
+                    } else {
+                        re = frandom_scale(2.0) - 1.0;
+                        im = frandom_scale(2.0) - 1.0;
+                    }
+                    m(r, c) = Scalar(re, im);
+                } else if constexpr (sizeof(Scalar) == sizeof(float)) {
+                    m(r, c) = static_cast<Scalar>(frandomf_scale(2.0f) - 1.0f);
+                } else {
+                    m(r, c) = static_cast<Scalar>(frandom_scale(2.0) - 1.0);
+                }
+            }
+    }
+
     static int run(struct test *test, int)
     {
         auto d = static_cast<eigen_test_data *>(test->data);
-        do {
-            Mat u, v;
-            calculate_once(d->orig_matrix, u, v);
 
-            compare_or_fail<typename Mat::Scalar>(u.data(), d->u_matrix.data(), d->dim, "Matrix U");
-            compare_or_fail<typename Mat::Scalar>(v.data(), d->v_matrix.data(), d->dim, "Matrix V");
+        /* Per-thread fresh matrices + goldens (kRerollEvery cadence).
+         * Allocated once; refilled in place. Dynamic-storage matrices
+         * (MatrixXd-family with a compile-time Dim, and the kRuntimeDim
+         * mode) must be sized here — fixed-size matrices resize to
+         * themselves harmlessly. */
+        Mat orig, u_gold, v_gold, u, v;
+        orig.resize(d->dim, d->dim);
+        u_gold.resize(d->dim, d->dim);
+        v_gold.resize(d->dim, d->dim);
+        u.resize(d->dim, d->dim);
+        v.resize(d->dim, d->dim);
+        fill_matrix_random(orig, d->dim);
+        calculate_once(orig, u_gold, v_gold);
+
+        int since_reroll = 0;
+        do {
+            calculate_once(orig, u, v);
+
+            compare_or_fail<typename Mat::Scalar>(u.data(), u_gold.data(), d->dim, "Matrix U");
+            compare_or_fail<typename Mat::Scalar>(v.data(), v_gold.data(), d->dim, "Matrix V");
+
+            if (++since_reroll >= kRerollEvery) {
+                since_reroll = 0;
+                fill_matrix_random(orig, d->dim);
+                calculate_once(orig, u_gold, v_gold);
+            }
         } while (test_time_condition(test));
         return EXIT_SUCCESS;
     }

@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #ifdef __aarch64__
 #include <arm_neon.h>
 #include <unistd.h>
@@ -54,8 +53,9 @@ static int mesh_upi_avx512_asymm_distrib_write_int_run(struct test *test, int cp
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_reader = (id == 0);
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening H14' (P17): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -72,7 +72,7 @@ static int mesh_upi_avx512_asymm_distrib_write_int_run(struct test *test, int cp
                 int32_t vals[BLOCK_ELEMENTS];
                 uint64_t local_sum = 0;
                 for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
-                    vals[j] = dist(rng);
+                    vals[j] = dist();
                     local_sum += (uint64_t)vals[j];
                 }
                 // 使用 4 个 NEON 向量存储 16 个元素
@@ -97,7 +97,21 @@ static int mesh_upi_avx512_asymm_distrib_write_int_run(struct test *test, int cp
                         break;
                     }
                 }
-                // 原代码发现不一致时仅记录，我们也同样处理（最终会在读核心校验时失败）
+                /* 写核心的立即读回是唯一逐字节的写入内容校验——读核心的
+                 * sum 校验可被保和损坏（如元素交换）绕过，所以 block_ok
+                 * 为假必须直接判失败，不能只记录。 */
+                if (!block_ok) {
+                    fprintf(stderr, "mesh_upi_avx512_asymm_distrib_write_int: Thread %d (writer), block %u immediate read-back mismatch, written vals[0..3]=(%d,%d,%d,%d), loaded data[0..3] at offset %zu=(%d,%d,%d,%d), result=%sFAIL%s\n",
+                            id, block,
+                            vals[0], vals[1], vals[2], vals[3],
+                            offset,
+                            td->data[offset], td->data[offset + 1],
+                            td->data[offset + 2], td->data[offset + 3],
+                            RED, RESET);
+                    fflush(stderr);
+                    report_fail_msg("mesh_upi_avx512_asymm_distrib_write_int: writer immediate read-back mismatch (store/load corruption)");
+                    return EXIT_FAILURE;
+                }
 
                 td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);
                 td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
@@ -151,20 +165,19 @@ static int mesh_upi_avx512_asymm_distrib_write_int_run(struct test *test, int cp
             bool sum_ok = (read_sum == expected_sum);
             bool passed = sum_ok && consistent;
 
-            // 输出结果
-            fprintf(stderr, "mesh_upi_avx512_asymm_distrib_write_int: Thread %d (reader), data[0..15]=(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
-                    id,
-                    td->data[0], td->data[1], td->data[2], td->data[3],
-                    td->data[4], td->data[5], td->data[6], td->data[7],
-                    td->data[8], td->data[9], td->data[10], td->data[11],
-                    td->data[12], td->data[13], td->data[14], td->data[15],
-                    read_sum, expected_sum, consistent,
-                    passed ? GREEN : RED,
-                    passed ? "PASS" : "FAIL",
-                    RESET);
-            fflush(stderr);
-
             if (!passed) {
+                // 首次失败证据（原先每轮都从读核心打印 PASS 行）
+                fprintf(stderr, "mesh_upi_avx512_asymm_distrib_write_int: Thread %d (reader), data[0..15]=(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
+                        id,
+                        td->data[0], td->data[1], td->data[2], td->data[3],
+                        td->data[4], td->data[5], td->data[6], td->data[7],
+                        td->data[8], td->data[9], td->data[10], td->data[11],
+                        td->data[12], td->data[13], td->data[14], td->data[15],
+                        read_sum, expected_sum, consistent,
+                        passed ? GREEN : RED,
+                        passed ? "PASS" : "FAIL",
+                        RESET);
+                fflush(stderr);
                 report_fail_msg("mesh_upi_avx512_asymm_distrib_write_int: Sum mismatch or consistency failure");
                 return EXIT_FAILURE;
             }

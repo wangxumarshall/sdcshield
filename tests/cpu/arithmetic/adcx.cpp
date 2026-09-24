@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 
 // ============================================================================
@@ -21,10 +20,6 @@
 // ============================================================================
 
 struct TestData {
-    std::vector<uint64_t> lhs;      // 操作数1
-    std::vector<uint64_t> rhs;      // 操作数2
-    std::vector<uint64_t> gold;     // 黄金参考值
-    uint64_t carry_in;              // 初始进位 (0 或 1)
     size_t num_elems;               // 向量长度
 };
 
@@ -119,22 +114,10 @@ static int adcx_init(struct test *test) {
     auto *data = new TestData;
     if (!data) return EXIT_FAILURE;
 
+    // Only the vector length is shared; operands are generated per-thread in
+    // adcx_run via the framework RNG (per-thread streams, -s reproducible).
     constexpr size_t N = 1024;
     data->num_elems = N;
-    data->lhs.resize(N);
-    data->rhs.resize(N);
-    data->gold.resize(N);
-
-    std::mt19937_64 rng(12345);
-    std::uniform_int_distribution<uint64_t> dist;
-    for (size_t i = 0; i < N; ++i) {
-        data->lhs[i] = dist(rng);
-        data->rhs[i] = dist(rng);
-    }
-    data->carry_in = dist(rng) & 1;
-
-    compute_golden(data->lhs.data(), data->rhs.data(), data->carry_in,
-                   data->gold.data(), N);
 
     test->data = data;
     return EXIT_SUCCESS;
@@ -145,13 +128,26 @@ static int adcx_run(struct test *test, int cpu) {
     auto *td = static_cast<TestData*>(test->data);
     const size_t N = td->num_elems;
 
+    // Per-thread operands + golden: re-rolled every iteration from the
+    // framework's per-thread RNG so the ADCS chain sees fresh data every
+    // loop (random64() is per-thread, so no sharing race).
+    std::vector<uint64_t> lhs(N);
+    std::vector<uint64_t> rhs(N);
+    std::vector<uint64_t> gold(N);
     std::vector<uint64_t> result(N);
     std::vector<uint64_t> store_buf(N);
 
     do {
-        adcx_chain_correct(td->lhs.data(), td->rhs.data(), result.data(), N, td->carry_in);
+        uint64_t carry_in = random64() & 1;
+        for (size_t i = 0; i < N; ++i) {
+            lhs[i] = random64();
+            rhs[i] = random64();
+        }
+        compute_golden(lhs.data(), rhs.data(), carry_in, gold.data(), N);
 
-        bool data_ok = (memcmp(result.data(), td->gold.data(), N * sizeof(uint64_t)) == 0);
+        adcx_chain_correct(lhs.data(), rhs.data(), result.data(), N, carry_in);
+
+        bool data_ok = (memcmp(result.data(), gold.data(), N * sizeof(uint64_t)) == 0);
 
         memcpy(store_buf.data(), result.data(), N * sizeof(uint64_t));
         bool consistent = (memcmp(store_buf.data(), result.data(), N * sizeof(uint64_t)) == 0);
@@ -160,9 +156,9 @@ static int adcx_run(struct test *test, int cpu) {
 
         if (!passed) {
             print_colored_result("adcx", passed,
-                                 td->lhs.data(), td->rhs.data(),
-                                 result.data(), td->gold.data(),
-                                 N, td->carry_in);
+                                 lhs.data(), rhs.data(),
+                                 result.data(), gold.data(),
+                                 N, carry_in);
             report_fail_msg("adcx: data_ok=%d, consistent=%d", data_ok, consistent);
             return EXIT_FAILURE;
         }

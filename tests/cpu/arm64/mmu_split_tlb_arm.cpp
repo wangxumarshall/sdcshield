@@ -222,7 +222,15 @@ static int mmu_split_tlb_arm_run(struct test *test, int cpu)
         // mismatch is an MMU/translation-coherency (STLB/snoop/alias) SDC.
         // Cycle the golden so the data-path gates also toggle across cycles.
         static uint64_t golden_cycle = 0;
-        uint64_t golden = GOLDEN_TABLE[golden_cycle % GOLDEN_TABLE_SIZE];
+        /* randomization hardening H18' (P17): 25% full-random golden,
+         * else random-indexed table pick. */
+        uint64_t golden;
+        if ((random32() & 3) == 0) {
+            golden = random64();
+        } else {
+            golden = GOLDEN_TABLE[random32() % GOLDEN_TABLE_SIZE];
+        }
+
         golden_cycle = (golden_cycle + 1) % GOLDEN_TABLE_SIZE;
 
         mmu_store64(aliases[0], golden);

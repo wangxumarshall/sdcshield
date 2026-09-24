@@ -57,7 +57,13 @@ static int initialize_problem(EigenSparseTestData *d)
             trip.push_back(Eigen::Triplet<double>(i,i,x));
         }
         d->A.setFromTriplets(trip.begin(), trip.end());
-        d->b = Eigen::VectorXd::Random(n);
+        /* randomization hardening H11' (P14): b from the framework RNG
+         * ([-1, 1), -s reproducible) instead of Eigen's deterministic
+         * VectorXd::Random; per-iteration re-roll is deliberately NOT
+         * done — CLAUDE.md documents multi-thread ULP flakiness in the
+         * sparse solve, and the A matrix already varies per run. */
+        for (size_t i = 0; i < n; ++i)
+            d->b[i] = frandom_scale(2.0) - 1.0;
     } catch (...) {
         log_skip(TestResourceIssueSkipCategory, "Exception on Eigen code, most probably OOM");
         return EXIT_SKIP;

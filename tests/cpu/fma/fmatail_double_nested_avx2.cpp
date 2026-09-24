@@ -21,8 +21,10 @@ static int fmatail_double_nested_avx2_init(struct test *test) {
 #ifdef __aarch64__
 static int fmatail_double_nested_avx2_run(struct test *test, int cpu) {
     (void)cpu;
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<double> dist(-1e10, 1e10);
+    /* randomization hardening H9'/P12: framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; range [-1e10, 1e10) mapped
+     * from frandom's [0,1). */
+    auto dist = []() { return frandom_scale((double)(1e10) - (double)(-1e10)) + (double)(-1e10); };
     static std::atomic<uint64_t> iter{0};
 
     do {
@@ -39,9 +41,9 @@ static int fmatail_double_nested_avx2_run(struct test *test, int cpu) {
 
             // 生成随机向量，并偶尔插入特殊值（0, 1, -1, Inf）
             for (int i = 0; i < VECTOR_SIZE; ++i) {
-                a[i] = dist(rng);
-                b[i] = dist(rng);
-                c[i] = dist(rng);
+                a[i] = dist();
+                b[i] = dist();
+                c[i] = dist();
                 // 随机插入特殊值
                 if (i % 3 == 0) {
                     switch ((i + group) % 4) {

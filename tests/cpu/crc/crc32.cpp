@@ -2,7 +2,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
 #include <vector>
 
 #ifdef __aarch64__
@@ -10,6 +9,23 @@
 #endif
 
 static constexpr size_t BLOCK_SIZE = 1024;
+
+
+/* randomization hardening H15' (P15): independent software CRC-32
+ * reference (bit-by-bit, IEEE 802.3 poly reflected 0xEDB88320, init
+ * 0xFFFFFFFF, final xorout) — matches the ARMv8 __crc32b instruction
+ * (probe-verified: __crc32b('123456789') chain = 0xCBF43926, the zlib
+ * CRC-32, NOT CRC32C). Replaces the previous hw-vs-hw duplicate compute
+ * that a deterministic CRC-unit defect would pass. */
+static uint32_t crc32_ieee_software(const uint8_t *buf, size_t len) {
+    uint32_t crc = 0xFFFFFFFF;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= buf[i];
+        for (int j = 0; j < 8; ++j)
+            crc = (crc & 1) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
+    }
+    return ~crc;
+}
 
 static int crc32_init(struct test *test) {
     (void)test;
@@ -20,15 +36,14 @@ static int crc32_init(struct test *test) {
 static int crc32_run(struct test *test, int cpu) {
     (void)cpu;
     std::vector<uint8_t> local_data(BLOCK_SIZE);
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
+    /* randomization hardening P15: framework RNG */
 
     do {
         for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            local_data[i] = byte_dist(rng);
+            local_data[i] = (uint8_t)random32();
         }
 
-        // 第一次硬件 CRC 计算（CRC-32C）
+        // 第一次硬件 CRC 计算（IEEE 802.3 CRC-32）
         uint32_t crc1 = 0xFFFFFFFF;
         for (size_t i = 0; i < BLOCK_SIZE; ++i) {
             crc1 = __crc32b(crc1, local_data[i]);
@@ -38,12 +53,8 @@ static int crc32_run(struct test *test, int cpu) {
         // 内存屏障，防止指令重排
         __sync_synchronize();
 
-        // 第二次硬件 CRC 计算
-        uint32_t crc2 = 0xFFFFFFFF;
-        for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            crc2 = __crc32b(crc2, local_data[i]);
-        }
-        crc2 = ~crc2;
+        // 第二次计算：独立软件参考（IEEE 802.3 CRC-32，逐字节）
+        uint32_t crc2 = crc32_ieee_software(local_data.data(), BLOCK_SIZE);
 
         bool data_ok = (crc1 == crc2);
 

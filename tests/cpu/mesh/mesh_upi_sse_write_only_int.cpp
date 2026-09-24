@@ -57,8 +57,9 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_reader = (id == 0);
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening H14' (P17): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
 
     #define GREEN "\033[32m"
     #define RED   "\033[31m"
@@ -75,7 +76,7 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
                 int32_t vals[VECTOR_SIZE];
                 uint64_t local_sum = 0;
                 for (int j = 0; j < VECTOR_SIZE; ++j) {
-                    vals[j] = dist(rng);
+                    vals[j] = dist();
                     local_sum += (uint64_t)vals[j];
                 }
                 // NEON 加载/存储
@@ -136,17 +137,16 @@ static int mesh_upi_sse_write_only_int_run(struct test *test, int cpu) {
             bool sum_ok = (read_sum == expected_sum);
             bool passed = sum_ok && consistent;
 
-            // 输出结果
-            fprintf(stderr, "mesh_upi_sse_write_only_int: Thread %d (reader), data[0..3]=(%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
-                    id,
-                    td->data[0], td->data[1], td->data[2], td->data[3],
-                    read_sum, expected_sum, consistent,
-                    passed ? GREEN : RED,
-                    passed ? "PASS" : "FAIL",
-                    RESET);
-            fflush(stderr);
-
             if (!passed) {
+                // 首次失败证据（原先每轮都从读核心打印 PASS 行）
+                fprintf(stderr, "mesh_upi_sse_write_only_int: Thread %d (reader), data[0..3]=(%d,%d,%d,%d), read_sum=%lu, expected_sum=%lu, consistent=%d, result=%s%s%s\n",
+                        id,
+                        td->data[0], td->data[1], td->data[2], td->data[3],
+                        read_sum, expected_sum, consistent,
+                        passed ? GREEN : RED,
+                        passed ? "PASS" : "FAIL",
+                        RESET);
+                fflush(stderr);
                 report_fail_msg("mesh_upi_sse_write_only_int: Sum mismatch or consistency failure");
                 return EXIT_FAILURE;
             }

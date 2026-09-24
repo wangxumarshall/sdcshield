@@ -56,16 +56,13 @@ static int spinlock_same_core_run(struct test *test, int cpu) {
         return EXIT_FAILURE;
     }
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint64_t> dist(1, 1000);
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
     uint64_t local_sum = 0;
 
-    #define GREEN "\033[32m"
-    #define RED   "\033[31m"
-    #define RESET "\033[0m"
-
     do {
-        uint64_t inc = dist(rng);
+        uint64_t inc = dist();
 
         spin_lock(sd->lock);
         sd->counter += inc;
@@ -73,18 +70,10 @@ static int spinlock_same_core_run(struct test *test, int cpu) {
 
         local_sum += inc;
 
-        fprintf(stderr, "spinlock_same_core: Thread %d, inc=%lu, result=%sPASS%s\n",
-                id, inc, GREEN, RESET);
-        fflush(stderr);
-
     } while (test_time_condition(test));
 
     sd->local_sums[id] = local_sum;
     return EXIT_SUCCESS;
-
-    #undef GREEN
-    #undef RED
-    #undef RESET
 }
 
 static int spinlock_same_core_finish(struct test *test) {

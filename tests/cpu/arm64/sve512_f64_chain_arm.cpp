@@ -165,11 +165,36 @@ static int sve512_f64_chain_arm_init(struct test *test)
         auto data = std::make_unique<SveF64ChainData>();
         data->vl_d = svcntd();
 
+        /* randomization hardening H12': operands come from the framework
+         * RNG (per-run fresh, -s reproducible) instead of the fixed
+         * splitmix/table indices that made every run byte-identical.
+         * Design invariant preserved: every generated f64 stays in the
+         * finite band |x| <= 2 (uniform exponent 0x3FE..0x3FF covers
+         * [0.5, 2); the switch's other selections fold back to 0x3FE),
+         * so 512-step products/sums can still never overflow or NaN.
+         * 25% of entries
+         * still draw from the high-Hamming F64_FINITE table to keep the
+         * gate-toggle density the table was designed for. */
+        auto random_finite_f64 = []() -> uint64_t {
+            if ((random32() & 3) == 0)
+                return F64_FINITE[random32() % F64_FINITE_SIZE];
+            uint64_t sign = (random64() & 1ULL) << 63;
+            uint64_t mantissa = random64() & 0x000FFFFFFFFFFFFFULL;
+            uint64_t exp;
+            uint64_t raw = random64();
+            switch ((raw >> 62) & 3ULL) {
+            case 0: exp = 0x3FEULL; break;   /* [0.5, 1)   */
+            case 1: exp = 0x3FFULL; break;   /* [1, 2)     */
+            default: exp = 0x3FEULL; break;  /* keep |x|<2 on the rest too */
+            }
+            return sign | (exp << 52) | mantissa;
+        };
+
         // Per-lane seed accumulators: finite in [1.0, 2.0).
         data->seeds_f64.resize(data->vl_d);
         for (size_t lane = 0; lane < data->vl_d; ++lane) {
             data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+                (random64() & 0x000FFFFFFFFFFFFFULL);
         }
 
         // f64 finite chain: CHAIN_STEPS full vectors of operands.
@@ -177,8 +202,8 @@ static int sve512_f64_chain_arm_init(struct test *test)
         data->m_f64.resize(n64);
         data->a_f64.resize(n64);
         for (size_t i = 0; i < n64; ++i) {
-            data->m_f64[i] = F64_FINITE[(i * 7 + 1) % F64_FINITE_SIZE];
-            data->a_f64[i] = F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE];
+            data->m_f64[i] = random_finite_f64();
+            data->a_f64[i] = random_finite_f64();
         }
 
         test->data = data.release();

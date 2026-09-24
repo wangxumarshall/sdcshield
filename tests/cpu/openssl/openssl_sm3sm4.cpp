@@ -144,30 +144,48 @@ static int ssl_sm3sm4_run(struct test *test, int cpu)
 
     int outlen = 0;
 
+    /* randomization hardening H7': per-thread copy of the whole (small,
+     * ~2 KB) struct — the shared d is only read; plaintext and goldens
+     * live in this thread's copy and are re-rolled every iteration. */
+    struct sm_test_data local_d;
+    memcpy(&local_d, d, sizeof(local_d));
+
     TEST_LOOP(test, 256) {
+        /* Re-roll: fresh plaintext + same-iteration golden through the
+         * same EVP path for this thread's data. */
+        memset_random(local_d.plaintext, SM_DATA_SIZE);
+        int g_len = 0;
+        sm4_cbc_encrypt(local_d.sm4_key, local_d.sm4_iv, local_d.plaintext,
+                        local_d.golden_ciphertext, SM_DATA_SIZE, &g_len);
+        if (g_len != (int)SM_DATA_SIZE)
+            report_fail_msg("golden SM4-CBC encryption produced %d bytes, expected %u (padding surprise)",
+                            g_len, SM_DATA_SIZE);
+        sm3_digest(local_d.plaintext, SM_DATA_SIZE, local_d.golden_sm3);
+
         /* 1. Re-encrypt the plaintext and compare against golden */
-        sm4_cbc_encrypt(d->sm4_key, d->sm4_iv, d->plaintext, ciphertext,
+        sm4_cbc_encrypt(local_d.sm4_key, local_d.sm4_iv, local_d.plaintext, ciphertext,
                         SM_DATA_SIZE, &outlen);
         if (outlen != (int)SM_DATA_SIZE)
             report_fail_msg("SM4-CBC encryption produced %d bytes, expected %u (padding surprise)",
                             outlen, SM_DATA_SIZE);
-        memcmp_or_fail(ciphertext, d->golden_ciphertext, SM_DATA_SIZE,
+        memcmp_or_fail(ciphertext, local_d.golden_ciphertext, SM_DATA_SIZE,
                        "sm4-cbc ciphertext mismatch");
 
         /* 2. Decrypt the golden ciphertext, verify roundtrip */
-        sm4_cbc_decrypt(d->sm4_key, d->sm4_iv, d->golden_ciphertext, decrypted,
+        sm4_cbc_decrypt(local_d.sm4_key, local_d.sm4_iv, local_d.golden_ciphertext, decrypted,
                         SM_DATA_SIZE, &outlen);
         if (outlen != (int)SM_DATA_SIZE)
             report_fail_msg("SM4-CBC decryption produced %d bytes, expected %u (padding surprise)",
                             outlen, SM_DATA_SIZE);
-        memcmp_or_fail(decrypted, d->plaintext, SM_DATA_SIZE,
+        memcmp_or_fail(decrypted, local_d.plaintext, SM_DATA_SIZE,
                        "sm4-cbc roundtrip mismatch");
 
         /* 3. Recompute the SM3 digest and compare against golden */
-        sm3_digest(d->plaintext, SM_DATA_SIZE, digest);
-        memcmp_or_fail(digest, d->golden_sm3, SM3_DIGEST_SIZE,
+        sm3_digest(local_d.plaintext, SM_DATA_SIZE, digest);
+        memcmp_or_fail(digest, local_d.golden_sm3, SM3_DIGEST_SIZE,
                        "sm3 digest mismatch");
     }
+
 
     free(ciphertext);
     free(decrypted);

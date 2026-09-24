@@ -107,6 +107,13 @@ if host_machine.cpu_family() == 'aarch64'
         'movbe_dump_probe_h.cpp',
         'movbe_dump_probe_x.cpp',
         'movbe_dump_probe_xn.cpp',
+        # NOTE: neon_rot_ldr_at_top_rowmajor.cpp and its k*/sve* variant
+        # family live in tests/cpu/misc/ + tests/cpu/sve/ (registered in
+        # tests/cpu/meson.build). This directory's copy was a byte-identical
+        # duplicate of misc/neon_rot_ldr_at_top_rowmajor.cpp (commits 8e397ec0
+        # and 3a4043f2 landed the same file twice) and its double
+        # registration broke the final link with "multiple definition of
+        # _test_neon_rot_ldr_at_top_rowmajor" — removed here.
     )
 
     arm64_tests_lib = static_library(

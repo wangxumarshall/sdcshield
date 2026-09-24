@@ -29,11 +29,12 @@ static int mesh_upi_avx2_read_L3_int_init(struct test *test) {
     }
 
     // 生成随机 int32 数据并计算参考累加和
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
+    /* randomization hardening H14' (P17): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
+    auto dist = []() { return (-1000000) + (int32_t)(random64() % (uint64_t)((1000000) - (-1000000) + 1)); };
     uint64_t sum = 0;
     for (size_t i = 0; i < ARRAY_SIZE; ++i) {
-        td->data[i] = dist(rng);
+        td->data[i] = dist();
         sum += (uint64_t)td->data[i];   // 无符号扩展，避免溢出
     }
     td->golden_sum = sum;
@@ -70,17 +71,16 @@ static int mesh_upi_avx2_read_L3_int_run(struct test *test, int cpu) {
 
         bool passed = (local_sum == td->golden_sum);
 
-        // 输出本次的输入（数组前 4 个元素）和结果
-        fprintf(stderr, "mesh_upi_avx2_read_L3_int: Thread %d, data[0..3]=(%d,%d,%d,%d), local_sum=%lu, golden_sum=%lu, result=%s%s%s\n",
-                id,
-                td->data[0], td->data[1], td->data[2], td->data[3],
-                local_sum, td->golden_sum,
-                passed ? GREEN : RED,
-                passed ? "PASS" : "FAIL",
-                RESET);
-        fflush(stderr);
-
         if (!passed) {
+            // 首次失败证据（原先每个工作迭代都打印 PASS 行）
+            fprintf(stderr, "mesh_upi_avx2_read_L3_int: Thread %d, data[0..3]=(%d,%d,%d,%d), local_sum=%lu, golden_sum=%lu, result=%s%s%s\n",
+                    id,
+                    td->data[0], td->data[1], td->data[2], td->data[3],
+                    local_sum, td->golden_sum,
+                    passed ? GREEN : RED,
+                    passed ? "PASS" : "FAIL",
+                    RESET);
+            fflush(stderr);
             report_fail_msg("mesh_upi_avx2_read_L3_int: Sum mismatch");
             return EXIT_FAILURE;
         }

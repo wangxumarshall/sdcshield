@@ -148,10 +148,23 @@ static int sve512_f64_chain_svd_init(struct test *test)
         auto data = std::make_unique<SveF64ChainSvdData>();
         data->vl_d = svcntd();
 
+        /* randomization hardening H12': framework RNG per run (-s
+         * reproducible) instead of fixed splitmix/table indices; the
+         * |x| <= 2 finite-band invariant is preserved (exponent capped
+         * at 0x3FF), and 25% of entries still draw from the high-Hamming
+         * F64_FINITE table for gate-toggle density. */
+        auto random_finite_f64 = []() -> uint64_t {
+            if ((random32() & 3) == 0)
+                return F64_FINITE[random32() % F64_FINITE_SIZE];
+            uint64_t sign = (random64() & 1ULL) << 63;
+            uint64_t mantissa = random64() & 0x000FFFFFFFFFFFFFULL;
+            uint64_t exp = 0x3FEU + (random64() & 1ULL);  /* [0.5, 2) */
+            return sign | (exp << 52) | mantissa;
+        };
         data->seeds_f64.resize(data->vl_d);
         for (size_t lane = 0; lane < data->vl_d; ++lane) {
             data->seeds_f64[lane] = 0x3FF0000000000000ULL |
-                (splitmix64(0xC0FFEE00ULL + lane) & 0x000FFFFFFFFFFFFFULL);
+                (random64() & 0x000FFFFFFFFFFFFFULL);
         }
 
         // SVD-scale operand streams, block-major: one contiguous
@@ -165,8 +178,8 @@ static int sve512_f64_chain_svd_init(struct test *test)
         data->m_f64.resize(total);
         data->a_f64.resize(total);
         for (size_t i = 0; i < total; ++i) {
-            data->m_f64[i] = F64_FINITE[(i * 7 + 1) % F64_FINITE_SIZE];
-            data->a_f64[i] = F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE];
+            data->m_f64[i] = random_finite_f64();
+            data->a_f64[i] = random_finite_f64();
         }
 
         test->data = data.release();

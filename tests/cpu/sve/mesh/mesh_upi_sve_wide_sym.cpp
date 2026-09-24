@@ -30,8 +30,6 @@ struct TestData {
     std::atomic<uint32_t> thread_idx;
     std::atomic<uint32_t> round_done;
     std::atomic<uint64_t> iter;
-    std::atomic<uint32_t> num_threads;
-    std::atomic<uint32_t> ready;
 };
 
 static int mesh_upi_sve_wide_sym_init(struct test *test) {
@@ -60,8 +58,6 @@ static int mesh_upi_sve_wide_sym_init(struct test *test) {
     td->thread_idx.store(0, std::memory_order_relaxed);
     td->round_done.store(0, std::memory_order_relaxed);
     td->iter.store(0, std::memory_order_relaxed);
-    td->num_threads.store(0, std::memory_order_relaxed);
-    td->ready.store(0, std::memory_order_relaxed);
     test->data = td;
 
     return EXIT_SUCCESS;
@@ -73,25 +69,17 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
 
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
 
-    if (id == 0) {
-        while (td->thread_idx.load(std::memory_order_acquire) < 1) __asm__ volatile("yield");
-        uint32_t prev = 0, stable = 0;
-        while (stable < 3) {
-            uint32_t cur = td->thread_idx.load(std::memory_order_acquire);
-            if (cur == prev && cur > 1) stable++;
-            else { stable = 0; prev = cur; }
-            __asm__ volatile("yield");
-        }
-        td->num_threads.store(prev, std::memory_order_release);
-        td->ready.store(1, std::memory_order_release);
-    } else {
-        while (td->ready.load(std::memory_order_acquire) == 0) __asm__ volatile("yield");
-    }
-
-    uint32_t total_threads = td->num_threads.load(std::memory_order_acquire);
+    /* 线程总数取框架权威值 thread_count()（自动尊重 --cpuset、
+     * test.max_threads 与 OS 亲和性限制，每个线程取值一致）—— 与 NEON 侧
+     * 2731971 的修复相同。原“3 次稳定读数”启发式在 -n 1 下会永久自旋
+     * 挂死（cur > 1 永不成立，后面的线程数检查不可达），大规模并发下
+     * 又严重欠计；单线程运行现在按 memcpy_rewr 先例干净跳过。 */
+    uint32_t total_threads = thread_count();
     if (total_threads < 2) {
-        report_fail_msg("Requires at least 2 threads");
-        return EXIT_FAILURE;
+        log_skip(CpuTopologyIssueSkipCategory,
+                 "mesh_upi_sve_wide_sym requires at least 2 threads (inter-core test); "
+                 "skipping on this thread count");
+        return EXIT_SKIP;
     }
 
     std::mt19937 rng(std::random_device{}());
@@ -162,8 +150,21 @@ static int mesh_upi_sve_wide_sym_run(struct test *test, int cpu) {
                     break;
                 }
             }
-            // 原代码发现不一致时仅记录，最终会在全量校验时失败
-            (void)block_ok;
+            /* 写阶段的立即读回是本测试唯一逐字节的写入内容校验——读阶段
+             * 只做 store_buf 自一致性比较，不对照写入值，所以 block_ok
+             * 为假必须直接判失败，不能只记录（同 87ebc4b 的修法）。 */
+            if (!block_ok) {
+                fprintf(stderr, "mesh_upi_sve_wide_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, block,
+                        vals[0], vals[1], vals[2], vals[3],
+                        offset,
+                        td->data[offset], td->data[offset + 1],
+                        td->data[offset + 2], td->data[offset + 3],
+                        RED, RESET);
+                fflush(stderr);
+                report_fail_msg("mesh_upi_sve_wide_sym: write-phase immediate read-back mismatch (store/load corruption)");
+                return EXIT_FAILURE;
+            }
 
             (void)local_sum;  // 原版算了 local_sum 但未累加到 global_sum（字段保留未用）
             td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);

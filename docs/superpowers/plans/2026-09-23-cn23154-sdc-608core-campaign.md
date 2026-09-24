@@ -626,6 +626,15 @@ printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.t
 - [ ] **Step 3: 定稿 minimal-reproducer/：README（构建+运行+判定+预期现象+统计复现率）、自包含输入、校验脚本、绑定命令；由另一研究者可从零复现的自检清单**
 - [ ] **Step 4: 若全程无确认故障核（Branch B 延续）：不编造最小用例，报告"未获得稳定触发条件"+ 已达证据强度（spec 强制）**
 
+**适配记录（Task 10，2026-09-24 执行时）：**
+
+- **因子 1 "去 Si.ion（单段 SCF）" 字面不可行（源码实证）**：`src/preparation.cpp:47` 无条件读 `Si.ion`（`this->ion_file.read(fname + ".ion")`），程序无免 ion 运行模式（`local_run_rot.sh` 亦无）；且"单段"（XLSDFT_NELEMS 1 1 1）在全晶胞下内存不可行。适配为**分段维度缩减**（XLSDFT_NELEMS 部分缩减），移到输入参数类因子之后执行。
+- **执行顺序按可行性重排**：MAXIT_SCF（V1，job 1714310）→ FD_GRID → NSTATES/XLSDFT_NSTATES → NT 重编译递减 → NCOMMS → 分段缩减（原因子 1 适配版）。"每步只改一个因素"按**累进制**执行（V2 = V1 + 网格缩减），每版本与原版/上一版 A/B 对比失败率，不作"是否曾失败"判定。
+- **新增工具**：`RES/scripts/runmin.sh`（变体输入 runner，运行逻辑同 runrec.sh，运行目录与结果表移至 `RES/minimization/`）；版本输入目录 `RES/minimization/versions/<vid>/Si.inpt`。
+- **V1 设计（MAXIT_SCF 1000→3）**：依据 = 17 例崩溃全在 SCF iter 1-2（eigen 簇 87-140s = iter1 中段 density_matrix_solver；stencil/libomp 簇 345-355s = iter1 完成/iter2 起点），3 次迭代覆盖窗口且有余量，同时把无崩溃运行封顶 ~10 分钟。作业 1714310（cn23154-sdc-min-v1）：orig_F 锚 ×2 + v1_F ×5 + orig_C1 锚 ×1（TMO 1200 = 3× 故障窗口）+ v1_C1 ×5；原版基线另有历史 17/17。MAXIT_SCF 只截断循环次数，iter 1-2 时间线与原版逐位相同 → 预期不改变复现，作用是给后续因子提供短运行载体。
+- **V1 结果（2026-09-24 10:47 收官，job 1714310）**：F 5/5 崩（101-350s，全 rank3，byte-6 垃圾值 5/5 与历史 17 例签名一致）；C1 5/5 净（798-807s 自然完成，orig_C1 锚 1201.6s cap 无崩）；12/12 运行窗 cpu139/140 min=1998 MHz 全频。结论：MAXIT_SCF 1000→3 对复现中性，V1 成为后续阶梯短载体。runmin.sh 已参数化 AOUT/NT_THREADS（NT 重编译 rung 用）。
+- **V2 收官（job 1715007，2026-09-24 11:50 结束）：FD_GRID 网格缩减中性**。F 5/5 崩（89-171s，byte-6 签名 5/5，全 rank3）+ C1 5/5 净（356.6-361.6s，五 rep 物理量逐位一致 1.822e-01/1.518e-01/1.856e-02）+ 频率 12/12 窗全频（cpu139 min=1999/cpu140 min=1997）。v2d（FD_GRID 120 96 96）已提交（job 1716505，11:54 起）：v2_F/v2_C1 锚 + v2d_F×5 + v2d_C1×5。
+
 ---
 
 ### Task 11: 最终交付与收尾

@@ -21,17 +21,15 @@ struct TestData {
     std::atomic<uint64_t> global_sum;
     std::atomic<uint32_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
-    /* sense-reversal 轮次屏障（移植自 mesh_upi_avx2_asymm_int 的已验证
-     * 修复）：原读者侧 round_done/reader_count 协议有“快照欠计 + 非原子
-     * 重置”竞态（与 mesh_upi_sse_asymm_distrib_int 同款）—— reader_count
-     * 依赖读线程自注册，早到的读者可能在快照里欠计尚未注册的读者而独自
-     * 判定 done==total 并重置轮次；重置的多个 store 与其它读者的校验读
-     * 不原子，被抢占期间迟到读者会校验到跨轮混合数据 → sum 失配伪失败
-     * （伪 SDC）。改用 thread_count() 权威参与数 + arrived/epoch 世代
-     * 翻转屏障（写者也参与）。reset_lock 为遗留死字段（仅 init 写过），
-     * 一并移除。 */
-    std::atomic<uint32_t> arrived;       // 本轮已到达屏障的线程数（写者+读者）
-    std::atomic<uint32_t> epoch;         // 屏障世代（sense 反转）
+    /* sense-reversal 轮屏障（2731971 已验证模式）：原 round_done/
+     * reader_count 协议的完成判据 `done == reader_count` 以孵化期间仍在
+     * 单调增长的注册计数为目标——先到的读者群会把"部分 cohort"误判为
+     * "全体已完成"而提前复位轮次，写者随即重填，mid-verify 读者读到撕裂
+     * 数组 → 假阳性 FAIL（smoke p2_mesh 已观测同签名失败 1 例：
+     * expected_sum=0 + 旧 8 元轮和；详见 mesh_bug_proof.md）。
+     * reset_lock 为死字段（CAS 复位协议属 avx512 变体），一并移除。 */
+    std::atomic<uint32_t> arrived;        // 本轮已到达屏障的线程数（写者+读者）
+    std::atomic<uint32_t> epoch;          // 轮次代（sense 位）
 };
 
 static int mesh_upi_avx2_asymm_distrib_int_init(struct test *test) {
@@ -67,20 +65,13 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     bool is_writer = (id == 0);
 
-    /* 线程总数取框架权威值 thread_count()（自动尊重 --cpuset、
-     * test.max_threads 与 OS 亲和性限制，每个线程取值一致）—— 与
-     * mesh_upi_avx2_asymm_int / mesh_upi_sse_asymm_write_int 的修复
-     * 相同。原 reader_count 自注册计数在读线程尚未全部进入 test_run
-     * 时会被早到的读者欠计快照，轮次屏障参与者数目随之错误 → 轮次
-     * 隔离崩溃 → sum 失配伪失败。单线程（-n 1）按家族先例干净跳过
-     * （1 写 0 读无从校验，跑了也是 vacuous pass）。 */
+    /* 屏障参与者总数取框架权威值 thread_count()（自动尊重 --cpuset / -n /
+     * test.max_threads，每个线程取值一致；2731971 修法）。原协议以
+     * reader_count 为完成判据目标——它是"入场时才自增"的注册计数，
+     * 孵化窗口内仍在单调增长（无启动屏障），判据可被部分 cohort 提前
+     * 满足 → 假阳性复位 → 撕裂读（同 sse 姊妹，见 TestData 注释与
+     * mesh_bug_proof.md §2）。 */
     uint32_t total_threads = thread_count();
-    if (total_threads < 2) {
-        log_skip(CpuTopologyIssueSkipCategory,
-                 "mesh_upi_avx2_asymm_distrib_int requires at least 2 threads (inter-core test); "
-                 "skipping on this thread count");
-        return EXIT_SKIP;
-    }
 
     /* randomization hardening H14' (P17): framework RNG (per-thread
      * stream, -s reproducible) replaces std::mt19937; range [-1000000, 1000000). */
@@ -93,14 +84,10 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
     uint32_t my_epoch = 0;
     do {
         if (is_writer) {
-            /* 本轮状态已由上一轮 sense-reversal 屏障的最后到达线程在
-             * 全部线程（写者 + 读者）到达之后重置（第一轮由 init 重置），
-             * 写者无需再自旋等待“重置完成”—— 原先的
-             * allocated_blocks==0 && round_done==0 等待与读者侧的
-             * round_done/reader_count 协议共享同一个非原子重置窗口
-             * （欠计的早到读者可能提前触发重置、放行写者进入下一轮）。
-             * 每轮写 NUM_BLOCKS（=1）个块，填充不逐块消耗 fracture
-             * 预算（同 2731971 写者的无守卫填充）。 */
+            /* 写者：本轮状态已由上一轮 sense-reversal 屏障的最后到达者
+             * 复位（首轮由 init 复位）——原"等 allocated_blocks==0 且
+             * round_done==0"的顶屏障连同缺陷判据一并移除。填满仅有的
+             * 1 块（8 元，~µs），不消耗 fracture 预算。 */
             uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block < NUM_BLOCKS) {
                 // 生成随机数据并写入（8个 int32，分两个 NEON 向量）
@@ -123,11 +110,10 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
                 td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
             }
         } else {
-            /* 读核心：等待写者完成本轮写入。ttc 预算检查按 1024 自旋
-             * 一档节流 —— 原实现每次自旋都调 test_time_condition，是
-             * 8502e491 在三个同族文件里修掉的 fracture 预算饿死模式
-             * （读者在写者完成前耗尽预算提前退出 → 校验被跳过）。
-             * 预算耗尽走 out_of_budget 干净退出。 */
+            /* 读核心：等待本轮写入完成（NUM_BLOCKS=1，等待 ~µs 级）。
+             * 原实现每次自旋都调 test_time_condition（098d4aa 之前的
+             * 预算烧法），改为 1024 自旋一档节流（2731971/8502e491 既证
+             * 模式）：条件每自旋查，预算按档查，耗尽走 out_of_budget。 */
             uint32_t spin = 0;
             while (td->allocated_blocks.load(std::memory_order_seq_cst) < NUM_BLOCKS) {
                 if ((++spin & 1023u) == 0) {
@@ -167,15 +153,10 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
             }
         }
 
-        /* ---------- 轮次屏障：sense-reversal（写者也到达） ----------
-         * 最后到达的线程（第 thread_count() 个 = 写者 + 全部读者）在
-         * 此重置下一轮状态（global_sum/next_block/allocated_blocks）：
-         * fetch_add(acq_rel) 的到达计数保证所有线程都已完成本轮流量的
-         * 生产/校验（含写者完成填充），epoch 的 release 存储 + 等待侧
-         * acquire 加载保证重置先于任何线程的下一轮访问可见 —— 同时
-         * 消除原协议“done 判定与重置不原子”和“round_done!=0 自旋
-         * 错过瞬态”两个窗口。自旋按 1024 次一档节流 ttc 预算检查
-         * （理由同读者等待）。 */
+        /* ---------- 轮屏障：sense-reversal，写者与全体读者都到达 ----------
+         * 最后到达者复位下一轮状态后翻转 epoch：fetch_add(acq_rel) 到达链
+         * 保证复位时所有线程都已离开本轮填充/校验，epoch release 存储保证
+         * 复位先于任何线程下一轮访问可见（2731971 已验证模式）。 */
         {
             uint32_t done = td->arrived.fetch_add(1, std::memory_order_acq_rel) + 1;
             if (done == total_threads) {
@@ -185,9 +166,14 @@ static int mesh_upi_avx2_asymm_distrib_int_run(struct test *test, int cpu) {
                 td->arrived.store(0, std::memory_order_relaxed);
                 td->epoch.store(my_epoch + 1, std::memory_order_release);
             } else {
+                /* 自旋按 131072 一档节流预算检查：该等待必须覆盖实测
+                 * 2.7-6.7ms 的线程孵化偏斜（首轮早到者要等最晚到达者；
+                 * 1024 一档在 40 次预算下只覆盖 ~70µs），40 次 × 131072
+                 * 自旋 × ~1.7ns ≈ 8.9ms（8502e491 既证参数）；条件本身
+                 * 每自旋都查，响应不受影响。 */
                 uint32_t spin = 0;
                 while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
-                    if ((++spin & 1023u) == 0) {
+                    if ((++spin & 131071u) == 0) {
                         if (!test_time_condition(test)) goto out_of_budget;
                     } else {
                         __asm__ volatile("yield");

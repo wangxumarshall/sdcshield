@@ -339,9 +339,20 @@ l5_numa() {
 
 l5_per_domain() {
     [ -z "$L5_SUITE" ] && { log "L5 逐域：无套件，跳过"; return; }
-    local p
-    for p in p0 p1 p2 p3; do
-        run_bounded "l5_dom_${p}_c${CYCLE}" "$(DUR_S "$T_DOM")" 60 -e "$L5_SUITE" --cpuset="$p" "${FLAGS[@]}"
+    # 事件 #1 取证实测：pN 拓扑语法在本板匹配 0 个 CPU（PPTT 伪影 package ID=36/8442
+    # 而非 0/1；范围 0-31 亦不可解析）——改用 sysfs node cpulist 展开的逗号列表
+    local n cs i=0
+    for n in /sys/devices/system/node/node*; do
+        cs=$(python3 -c "
+spec = open('$n/cpulist').read().strip().split(',')
+out = []
+for part in spec:
+    if '-' in part:
+        a, b = map(int, part.split('-')); out += [str(x) for x in range(a, b + 1)]
+    else: out.append(part)
+print(','.join(out))")
+        run_bounded "l5_dom_node${i}_c${CYCLE}" "$(DUR_S "$T_DOM")" 60 -e "$L5_SUITE" --cpuset="$cs" "${FLAGS[@]}"
+        i=$((i + 1))
     done
 }
 

@@ -48,7 +48,10 @@ fi
 sdr_raw() { awk -F'|' -v s="$1" '$1 ~ s {v=$5; if (v ~ /^[ ]*$/) v=$2; gsub(/^ +| +$/,"",v); print v}' <<<"$SDR" | head -1; }
 sdr_val() { sdr_raw "$1" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1; }
 last_sel_id=""
+SEL_BASELINE_FILE="$MON_DIR/sel_baseline.txt"
+[ -f "$SEL_BASELINE_FILE" ] && last_sel_id=$(cat "$SEL_BASELINE_FILE")   # 跨重启保留 diff 基线
 sel_tick=0
+sel_fail=0
 bmc_fail=0
 thermal_paused=0
 thermal_hot=0
@@ -56,6 +59,7 @@ fan_bad=0
 SLEEP_NEXT=60
 SEL5M_CARRY=0
 PREVSTAT=""
+LAST_SNAP=0   # 10 分钟工况快照（用户指令 2026-09-24：每 10min 记录全量工况 + 偏移标记）
 
 paused_for() { [ -f "$PAUSE_FLAG" ] && grep -q "$1" "$PAUSE_FLAG" 2>/dev/null; }
 set_pause() { echo "$1: $2 ($(date '+%F %T'))" > "$PAUSE_FLAG"; alert "PAUSE: $2"; }
@@ -110,6 +114,73 @@ while :; do
     dp=$(df -P "$CAMPAIGN_DIR" | awk 'NR==2{gsub(/%/,"");print $5}')
     echo "$ts,${c1:-},${c2:-},${m1:-},${m2:-},${ot:-},${in_:-},${pw:-},${v1:-},${v2:-},${nv1:-},${nv2:-},${fx1:-},${fx2:-},${h1:-},${h2:-},${qa1:-},${qc1:-},${qa2:-},${qc2:-},${f2:-},${f3:-},${p1:-},${p2:-},${tz0:-},${tz1:-},${ua:-},${us0:-},${us1:-},${fmin:-},${favg:-},${fmax:-},${ma:-},${sw:-},${l1:-},${dp:-},${SEL5M_CARRY:-},$bmc" >> "$CSV"
 
+    # ---- 10 分钟工况快照 + 偏移标记（用户指令 2026-09-24）----
+    # 全量工况人读快照入 condition_10m.log；与上次快照比较，电压/频率/温度/SEL 等
+    # 偏移超阈值的字段以 ⚠ 标注（旧值→新值）。状态存 snap_state.json。
+    now_s=$(date +%s)
+    if [ $((now_s - LAST_SNAP)) -ge 600 ]; then
+        LAST_SNAP=$now_s
+        sel_total=$(cat "$SEL_EV"/*.txt 2>/dev/null | wc -l)
+        c1="$c1" c2="$c2" m1="$m1" m2="$m2" ot="$ot" in_="$in_" \
+        v1="$v1" v2="$v2" nv1="$nv1" nv2="$nv2" fx1="$fx1" fx2="$fx2" \
+        h1="$h1" h2="$h2" qa1="$qa1" qc1="$qc1" qa2="$qa2" qc2="$qc2" \
+        fmin="$fmin" favg="$favg" fmax="$fmax" f2="$f2" f3="$f3" pw="$pw" \
+        p1="$p1" p2="$p2" ma="$ma" sw="$sw" dp="$dp" ua="$ua" us0="$us0" us1="$us1" \
+        l1="$l1" sel_total="$sel_total" SEL5M_CARRY="$SEL5M_CARRY" \
+        SNAP_TS="$(date '+%F %T')" \
+        python3 - "$MON_DIR" <<'PYEOF' >> "$MON_DIR/condition_10m.log" 2>/dev/null
+import json, os, sys
+mon = sys.argv[1]
+env = os.environ
+def g(k): return env.get(k, "")
+TH = {  # 偏移阈值（数值字段）；不在表内 = 只记录不比较
+    "c1": 3, "c2": 3, "m1": 3, "m2": 3, "ot": 3, "in_": 3,
+    "v1": .01, "v2": .01, "nv1": .01, "nv2": .01, "fx1": .01, "fx2": .01,
+    "h1": .01, "h2": .01, "qa1": .01, "qc1": .01, "qa2": .01, "qc2": .01,
+    "fmin": 1, "favg": 1, "fmax": 1, "f2": 300, "f3": 300, "pw": 40,
+    "ma": 1048576, "sw": 1048576, "dp": 1,
+}
+LABEL = {"c1": "cpu1_°C", "c2": "cpu2_°C", "m1": "mem1_°C", "m2": "mem2_°C",
+         "ot": "outlet_°C", "in_": "inlet_°C", "v1": "VDDAVS_s0_V", "v2": "VDDAVS_s1_V",
+         "nv1": "N_VDDAVS_s0_V", "nv2": "N_VDDAVS_s1_V", "fx1": "VDDFIX_s0_V", "fx2": "VDDFIX_s1_V",
+         "h1": "HVCC_s0_V", "h2": "HVCC_s1_V", "qa1": "VDDQ_AB_s0_V", "qc1": "VDDQ_CD_s0_V",
+         "qa2": "VDDQ_AB_s1_V", "qc2": "VDDQ_CD_s1_V", "fmin": "freq_min_kHz", "favg": "freq_avg_kHz",
+         "fmax": "freq_max_kHz", "f2": "FAN2_rpm", "f3": "FAN3_rpm", "pw": "power_W",
+         "ma": "memavail_kB", "sw": "swap_used_kB", "dp": "disk_pct"}
+prev = {}
+try: prev = json.load(open(f"{mon}/snap_state.json"))
+except Exception: pass
+print(f"===== 工况快照 {os.environ.get('SNAP_TS', __import__('time').strftime('%F %T'))} =====")
+print(f"[温度°C] cpu1={g('c1')} cpu2={g('c2')} mem1={g('m1')} mem2={g('m2')} outlet={g('ot')} inlet={g('in_')}")
+print(f"[电压V] VDDAVS={g('v1')}/{g('v2')} N_VDDAVS={g('nv1')}/{g('nv2')} VDDFIX={g('fx1')}/{g('fx2')} "
+      f"HVCC={g('h1')}/{g('h2')} VDDQ_AB={g('qa1')}/{g('qa2')} VDDQ_CD={g('qc1')}/{g('qc2')}")
+print(f"[频率kHz] min={g('fmin')} avg={g('favg')} max={g('fmax')}（低于 2600000 = 节流）")
+print(f"[占用] util={g('ua')}% s0={g('us0')}% s1={g('us1')}% load1={g('l1')}")
+print(f"[风扇rpm] FAN2={g('f2')} FAN3={g('f3')}  [功耗] {g('pw')}W  prochot={g('p1')}/{g('p2')}")
+print(f"[内存] avail={g('ma')}kB swap={g('sw')}kB  [磁盘] {g('dp')}%")
+print(f"[SEL] 战役期累计={g('sel_total')} 条，近5min窗口={g('SEL5M_CARRY')}")
+dev = []
+for k, th in TH.items():
+    cur, old = g(k), str(prev.get(k, ""))
+    if not cur or not old: continue
+    try:
+        d = float(cur) - float(old)
+        if abs(d) >= th:
+            dev.append(f"⚠ {LABEL[k]}: {old} → {cur} ({'+' if d>0 else ''}{d:g})")
+    except ValueError: pass
+for k, lab in (("p1", "prochot_s0"), ("p2", "prochot_s1")):
+    cur = g(k)
+    if cur and cur != "0x00":
+        dev.append(f"⚠ {lab}: {prev.get(k,'')} → {cur}（断言！）")
+if prev and int(g("sel_total") or 0) > int(prev.get("sel_total", 0) or 0):
+    dev.append(f"⚠ SEL 新增 {int(g('sel_total')) - int(prev.get('sel_total', 0))} 条")
+print("----- 偏移标记（vs 上次快照）-----")
+print("\n".join(dev) if dev else "（无偏移）")
+state = {k: g(k) for k in list(TH.keys()) + ["p1", "p2", "sel_total", "ua", "us0", "us1", "l1"]}
+json.dump(state, open(f"{mon}/snap_state.json", "w"))
+PYEOF
+    fi
+
     # ---- 温度联锁（2026-09-24 08:21 实战事件后收紧：
     #      60s 采样 + 5 分钟升级曾让峰值持续 5 分钟 @105-106C（=Tjmax+1）。
     #      新规则：maxt>=88 时 20s 快采样；PAUSE 95 保持；KILL 条件 =
@@ -163,10 +234,13 @@ while :; do
     fi
 
     # ---- SEL 增量（每 5min；事件率风暴告警 + Critical Asserted 粘性暂停）----
+    # 2026-09-24 修复：基线持久化跨重启（08:31 重启曾吞掉整个风暴窗口的 diff）+
+    # 超时 20s→40s（风暴时 BMC 忙 + CPU 过载会拖慢 ipmitool）+ 采集失败可见化
     sel_tick=$((sel_tick+1))
     if [ $((sel_tick % 5)) -eq 1 ]; then
-        selout=$(timeout 20 ipmitool sel list 2>/dev/null)
+        selout=$(timeout 40 ipmitool sel list 2>/dev/null)
         if [ -n "$selout" ]; then
+            sel_fail=0
             lastid=$(tail -1 <<<"$selout" | awk -F'|' '{gsub(/ /,"",$1)}')
             if [ -n "$last_sel_id" ] && [ "$lastid" != "$last_sel_id" ]; then
                 evf="$SEL_EV/$(date +%Y%m%d-%H%M%S).txt"
@@ -180,16 +254,26 @@ while :; do
                 fi
             fi
             last_sel_id=$lastid
+            echo "$lastid" > "$SEL_BASELINE_FILE" 2>/dev/null
+        else
+            sel_fail=$((sel_fail + 1))
+            [ $((sel_fail % 6)) -eq 1 ] && alert "SEL 采集连续失败 ${sel_fail} 次（ipmitool 超时？）——事件窗口可能丢失，风暴后应人工核对 ipmitool sel list"
         fi
     fi
 
-    # ---- 命令代理 1: governor 阶跃（L5 di/dt；驱动写 request，root 应用）----
+    # ---- 命令代理 1: governor（用户指令 2026-09-24：所有 CPU 恒 performance/最高频率
+    #      ——只接受 performance 请求，其余拒绝并告警；驱动侧 di/dt 已改为纯负载阶跃）----
     if [ -f "$CMD_DIR/governor.request" ]; then
         g=$(cat "$CMD_DIR/governor.request")
-        for c in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            echo "$g" > "$c" 2>/dev/null
-        done
-        mv "$CMD_DIR/governor.request" "$CMD_DIR/governor.done.$(date +%s)"
+        if [ "$g" = "performance" ]; then
+            for c in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+                echo "$g" > "$c" 2>/dev/null
+            done
+            mv "$CMD_DIR/governor.request" "$CMD_DIR/governor.done.$(date +%s)"
+        else
+            mv "$CMD_DIR/governor.request" "$CMD_DIR/governor.rejected.$(date +%s)"
+            alert "governor 请求 '$g' 被拒绝（用户指令：全核恒 performance）"
+        fi
     fi
 
     # ---- 命令代理 2: root 取证快照（事件流水线；dmesg/SEL/SDR/DCMI）----

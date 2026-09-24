@@ -286,6 +286,8 @@ phase_l3() {
 }
 
 l5_dit() {
+    # 用户指令 2026-09-24：所有 CPU 恒 performance/最高频率——di/dt 不再切 governor
+    # （监控侧也会拒绝非 performance 请求），只做负载侧阶跃：空载间隙 + 满载突发
     local pv q=()
     pv=$(resolve 'power_virus*,arm64_sdc')
     if [ -n "$pv" ]; then q=(--quality=0); else pv=$(resolve 'fma*,cachebounce'); fi
@@ -294,11 +296,9 @@ l5_dit() {
     local i burst=$(( $(DUR_S "$T_L5") / 12 ))
     [ $burst -lt 60 ] && burst=60
     for i in $(seq 1 $rounds); do
-        gov powersave; sleep 30
-        gov performance
-        run_bounded "l5_dit_r${i}_c${CYCLE}" "$burst" 60 -e "$pv" "${q[@]}" "${FLAGS[@]}"
+        sleep 30                                   # 空载间隙（负载阶跃的下降沿）
+        run_bounded "l5_dit_r${i}_c${CYCLE}" "$burst" 60 -e "$pv" "${q[@]}" "${FLAGS[@]}"   # 满载突发（上升沿）
     done
-    gov performance   # 恢复
 }
 
 l5_heatsoak() {

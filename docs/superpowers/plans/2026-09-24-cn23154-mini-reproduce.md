@@ -44,10 +44,11 @@
 
 **Files (cluster):** Create: `$NEW/src/a.out`(构建产物, cp 到 `$NEW/a.out`), `$NEW/runs/`, `$NEW/job_selfval.sh`(#DSUB 一键: 构建+F×3+C1×1+verify)。
 
-- [ ] **Step 1**: 写 `job_selfval.sh` (#DSUB -n cn23154-mini-selfval / q_Test_20260903 / -nl cn23154 / -rpn 608 / -x job / -T 7200 / -o 绝对路径): freqmon 10s → `cd $NEW/src && taskset -c 0-607 make -f Makefile.xlsdft_920f NT=9` → sha256 记录 (期望 763c6843f504e1f7; 不符则如实记录并在后续 F×3 以复现率为准) → `cp a.out $NEW/` → F×3 (TMO 600) + C1×1 (TMO 900) via `taskset -c 0-607 $NEW/reproduce.sh` → 对 4 个 run dir 逐个 verify.sh (FREQ_CSV 用本作业 freqmon 输出) → 汇总判定表。
-- [ ] **Step 2**: dsub 提交, until 循环等完 (~40 min)。
-- [ ] **Step 3**: 自验证: F 3/3 `REPRO_CRASH_ATTRIBUTED` ∧ C1 1/1 `CLEAN_CONTROL_PASS` ∧ 零 <1500 红线核 → 自含性成立。任何不符 → 如实记录, 按 systematic-debugging 查因后再判。
-- [ ] **Step 4**: repo: 勾选 + commit + push。
+- [x] **Step 1**: 写 `job_selfval.sh` (#DSUB -n cn23154-mini-selfval / q_Test_20260903 / -nl cn23154 / -rpn 608 / -x job / -T 7200 / -o 绝对路径): freqmon 10s → `cd $NEW/src && taskset -c 0-607 make -f Makefile.xlsdft_920f NT=9` → sha256 记录 (期望 763c6843f504e1f7; 不符则如实记录并在后续 F×3 以复现率为准) → `cp a.out $NEW/` → F×3 (TMO 600) + C1×1 (TMO 900) via `taskset -c 0-607 $NEW/reproduce.sh` → 对 4 个 run dir 逐个 verify.sh (FREQ_CSV 用本作业 freqmon 输出) → 汇总判定表。
+- [x] **Step 2**: dsub 提交, until 循环等完 (~40 min)。
+- [x] **Step 3**: 自验证: F 3/3 `REPRO_CRASH_ATTRIBUTED` ∧ C1 1/1 `CLEAN_CONTROL_PASS` ∧ 零 <1500 红线核 → 自含性成立。任何不符 → 如实记录, 按 systematic-debugging 查因后再判。
+- [x] **Step 4**: repo: 勾选 + commit + push。
+  - **完成 2026-09-24 23:05 (job 1722492)**: BINHASH_MATCH=YES (763c6843f504e1f7, 自含构建 16 分钟); F 3/3 `REPRO_CRASH_ATTRIBUTED` (rc=139, rank3, crash-psr=139, canonical_3fff/3ffd/3ffb, cpu139_min=1999 VALID, 98.6/89.6/76.4s); C1 1/1 `CLEAN_CONTROL_PASS` (rc=0, E3=-206.726163764884 差 5e-12<1e-10, scf_lines=3, cpu140_min=1999 VALID, 199.5s); 零 REDLINE 行。**自含性成立**。诚实偏差: Step 2 的 until 循环等待改为 cron 唤醒短查——reach 通道对后台命令 ~2-3 分钟必死 (Monitor 3 次实证 exit 125, 45s 心跳亦死), 首个 Monitor 的 "djob 缺席" 假阳性系通道濒死时 CLI 失败产物 (job 实际一直 RUNNING)。
 
 ### Task 4: 608 全核逐核探针对比验证
 

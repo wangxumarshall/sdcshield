@@ -35,10 +35,10 @@
 
 **Files (cluster):** Create: `cn23154-mini-reproduce/`: `src/`(完整源码树, 去 .o/旧二进制), `Si.inpt`/`Si.ion`/`Si.psp8`(v6d 最小输入), `rf_nc16_F.txt`/`rf_nc16_C1.txt`, `lib/libomp.so`, `reproduce.sh`/`verify.sh`/`freqmon.sh`(自相对路径, 原样可用)。
 
-- [ ] **Step 1**: `mkdir $NEW; cp -r <材料>/src $NEW/src`; 在副本内删除构建产物 (`*.o`, `a.out`, `transpose_chefsi_ut`, `untile_16_ut`, `verify_untile_sim_dump`, `run_sim` — 保留其 .cpp 源码与全部 Makefile*/include/objects.mk)。**严禁在原 src/ 里 clean** (原 NT36 a.out 是历史证物)。
-- [ ] **Step 2**: 从 `$RES/minimal-reproducer/` 复制 Si.inpt/Si.ion/Si.psp8/rf_nc16_F.txt/rf_nc16_C1.txt/lib/libomp.so/reproduce.sh/verify.sh/freqmon.sh → `$NEW/`。
-- [ ] **Step 3**: 自验证: sha256 前 16 位逐一比对 (Si.inpt=b1b1467fdfc44803, Si.ion=d008da13b9acb2cd, Si.psp8=2ee90e1b2d080fc5, rf_F=50f500680ddd2cfb, rf_C1=5ce1fce97f9c1f1e, libomp=ddebdbb2ac1f4b85); `bash -n` 三个脚本; 源码文件计数; 目录树落盘 `extraction_manifest.txt`。
-- [ ] **Step 4**: repo: 勾选 Task 2 + commit + push。
+- [x] **Step 1**: `mkdir $NEW; cp -r <材料>/src $NEW/src`; 在副本内删除构建产物 (`*.o`, `a.out`, `transpose_chefsi_ut`, `untile_16_ut`, `verify_untile_sim_dump`, `run_sim` — 保留其 .cpp 源码与全部 Makefile*/include/objects.mk)。**严禁在原 src/ 里 clean** (原 NT36 a.out 是历史证物)。
+- [x] **Step 2**: 从 `$RES/minimal-reproducer/` 复制 Si.inpt/Si.ion/Si.psp8/rf_nc16_F.txt/rf_nc16_C1.txt/lib/libomp.so/reproduce.sh/verify.sh/freqmon.sh → `$NEW/`。
+- [x] **Step 3**: 自验证: sha256 前 16 位逐一比对 (Si.inpt=b1b1467fdfc44803, Si.ion=d008da13b9acb2cd, Si.psp8=2ee90e1b2d080fc5, rf_F=50f500680ddd2cfb, rf_C1=5ce1fce97f9c1f1e, libomp=ddebdbb2ac1f4b85); `bash -n` 三个脚本; 源码文件计数; 目录树落盘 `extraction_manifest.txt`。
+- [x] **Step 4**: repo: 勾选 Task 2 + commit + push。
 
 ### Task 3: 纯目录构建 + F/C1 自含复现
 

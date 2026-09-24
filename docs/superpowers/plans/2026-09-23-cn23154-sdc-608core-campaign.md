@@ -651,12 +651,12 @@ printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.t
 - Create (cluster): `RES/{README.md, environment-report.md, experiment-plan.md, final-summary.md, summary/admin_requests.md}`；更新 `RES/status.md` 终态
 - Create (repo): `docs/cases/cn23154-sdc-campaign-2026-09-23/final-report.md`
 
-- [ ] **Step 1: RES/README.md** — 构建/运行/复现/全扫/报告生成方法、权限、已知限制。
-- [ ] **Step 2: environment-report.md / experiment-plan.md** — 从 Task 2 快照与本计划整理（假设、自变量、对照、重复策略、停止条件、SDC 判定标准）。
-- [ ] **Step 3: final-summary.md — 任务规范 12 问逐答**（哪些核稳定复现/失败率与置信区间/异常 NUMA 其他核/其余核/608 全覆盖集合相等证据/与 physical core-SMT-NUMA-socket-cache-内存的相关性/最可信微架构假设/支持证据/削弱反例/最小用例/最小用例复现率/当前结论限制），每答带 run_id 证据指针。
-- [ ] **Step 4: admin_requests.md** — 全部需管理员的精确命令 + 用途。
+- [x] **Step 1: RES/README.md** — 构建/运行/复现/全扫/报告生成方法、权限、已知限制。
+- [x] **Step 2: environment-report.md / experiment-plan.md** — 从 Task 2 快照与本计划整理（假设、自变量、对照、重复策略、停止条件、SDC 判定标准）。
+- [x] **Step 3: final-summary.md — 任务规范 12 问逐答**（哪些核稳定复现/失败率与置信区间/异常 NUMA 其他核/其余核/608 全覆盖集合相等证据/与 physical core-SMT-NUMA-socket-cache-内存的相关性/最可信微架构假设/支持证据/削弱反例/最小用例/最小用例复现率/当前结论限制），每答带 run_id 证据指针。
+- [x] **Step 4: admin_requests.md** — 全部需管理员的精确命令 + 用途。
 - [x] **Step 5: 收尾核验** — `djob` 确认无本战役遗留 RUNNING（有则 dkill）；`ls RES/raw | wc -l` 与 results.tsv 行数一致；cpu-results.csv 行数 = 608 + 窗口聚合数；status.md 终态。
-- [ ] **Step 6: repo final-report.md（12 问中文摘要 + RES 指针）commit + push**
+- [x] **Step 6: repo final-report.md（12 问中文摘要 + RES 指针）commit + push**
 
 ---
 

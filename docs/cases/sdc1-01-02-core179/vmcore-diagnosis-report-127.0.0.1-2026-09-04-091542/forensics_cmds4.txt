@@ -1,0 +1,6 @@
+sys
+set cpu 179
+bt
+ps -l 1154762
+workqueue
+quit

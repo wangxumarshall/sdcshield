@@ -1,0 +1,7 @@
+echo
+sys
+sym runqueues
+vtop ffffa29301d796c0
+vtop ffffa29301d797e0
+vtop ffff8000817dd6c0
+quit

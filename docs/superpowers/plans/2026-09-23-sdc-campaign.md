@@ -849,7 +849,7 @@ P4 全部 CYCLES 完成 + summary 生成。若中途出现 sdc_suspect：等战�
 - Create: `scripts/run/run_sdc_supplement.sh`（独立脚本，日志写同一 `$CAMPAIGN_DIR/logs/p6_*`，自建 p6 监测 CSV）
 
 **内容（三档，~3h，全部用现有二进制与测试）：**
-1. **多 seed 驻留（R2，对冲单轨迹 Bernoulli 漏检）**：4 负载（openblas_dgemm/sleef_neon/isal_igzip/pocketfft_fft）× 3 次独立 `--max-test-loop-count=0 -t 10m`（每次调用自动换轨迹）——替代单条 30m 轨迹的漏检风险（CORE179：部分 seed 零命中、超级 seed 11/11）
+1. **多 seed 驻留（R2+R4-1 合并修正，对冲单轨迹 Bernoulli 漏检）**：4 负载（openblas_dgemm/sleef_neon/isal_igzip/pocketfft_fft）× **6 次独立 `--max-test-loop-count=0 -t 5m`**（每次调用自动换轨迹）。依据 agent4 MeRLiN 分析：同等价类效应同质性 0.92-0.98，单 seed 30m 超饱和 4-10×；6 seed×5m 对输入敏感型缺陷期望检出 ~4×（1−(1−f)^k vs f），对时序竞争型无代价（优于 agent1 初版的 3×10m）
 2. **mesh_upi_sse_asymm_distrib_int NUMA 归因档**：× {node0 全 48 核 | node1 全 48 核（跨互连访存）| node0 前 24 核 | 跨 node 2 核 (cpu0,cpu48) | 全核对照} × 5m——区分 cache 一致性域内/跨互连触发（阿里一致性型画像 vs HCCS 互连）
 3. **值域配对档（R1 零代码近似）**：`-e eigen_gemm_double_dynamic_square`（[-1,1]）+ `-e openblas_dgemm`（[1e-6,2e-3]）+ `-e fma_patterns_avx512_ps`（[-1e6,1e6]）各 10m——三个数量级值域的显式对照（SEVI 245× 杠杆的现有手段近似）
 
@@ -870,7 +870,18 @@ P4 全部 CYCLES 完成 + summary 生成。若中途出现 sdc_suspect：等战�
 **依据**：SEVI 37% case 有位偏置（P(bit)>0.8）——Constant（全偏置）与全随机之间缺中间形态。
 **Files:** Create/Modify NEON FMA 测试加 `-O bias_mask=0x... -O bias_value=0/1`：操作数生成后按掩码强制位段，其余位保持随机（保留 toggle、注入偏置）。
 
-### Task 5: 输出报告（commit #3 → 顺延至 Task 5a 完成后执行）
+### Task 5e: mesh_upi_sse_asymm_distrib_int 竞态修复 + 复现矩阵验证（commit #8，主战役结束后）
+
+**依据**：根因分析报告 `~/sdc_campaign_2026-09-23/research/mesh_rootcause.md`（实证级 H1：测试协议竞态假阳性，非硬件 SDC）。铁证：两例 expected_sum 恰等于打印的 data[0..3] 之和（273,181 / 2,283,677）——读者在校验和加载瞬间读到写者部分重填的撕裂数组；40 条失败 ttf 100%∈[1.59,4.46]ms（恰为线程孵化偏斜窗口）、loop-count=0、同 seed 间歇（10-55%）、-n 1 全过、失败核散布两 node ≥16 个 L3 簇。轮次完成判据 `done == total_readers` 以孵化期仍在增长的 reader_count 为目标（mesh_upi_sse_asymm_distrib_int.cpp:195-197）。另：「60s 复跑挂 10 分钟」实为框架 retest-on-failure 默认同 seed 重试 10 次×60s。
+
+**步骤（主战役结束后的执行序）**：
+1. 保留旧二进制：`cp builddir/sdcshield ~/sdc_campaign_2026-09-23/sdcshield_pre_fix`（M1-M6 与补充相全部用旧二进制，保持与战役基线一致）
+2. **M1-M6 复现矩阵**（~3h，确认诊断）：M1 线程数扫描（H1 独家预测 **-n 2 永不失败**、-n 3/8/24/96 失败率单调升）→ M2 ttf 窗口检验（--max-test-loop-count=0 ×5）→ M3 = 补充相 S2 五档 NUMA（node0-only 也失败 + cross2 不失败 = 再确认）→ M4 失败 seed 定点重放 → M5 avx2 姊妹对照 → M6 fork 模式
+3. **修复**：测试加启动屏障或换 sense-reversal 固定参与者屏障（参照仓库已验证的 2731971 模式）；顺带修复写者 read-back 结果丢弃（:124-126）
+4. **M7 回归**：修复后重建 + 全核 30m 重跑 → 干净检验（真 SDC 若存在，此前被此噪声掩盖）
+5. commit + push（修复与矩阵结果并入输出报告）
+
+### Task 5: 输出报告（commit #3 → 顺延至 Task 5a/5e 完成后执行）
 
 **Files:**
 - Create: `docs/superpowers/output/2026-09-23-sdc-campaign-output.md`

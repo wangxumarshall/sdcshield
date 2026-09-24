@@ -39,12 +39,13 @@
 | V2 fdgrid | + FD_GRID 220 160 160→160 120 120 (每元素 16×15×15) | **5/5 崩** (89-171s, byte-6 签名 5/5) | **5/5 净** (357-362s, 五 rep 物理量逐位一致) | **网格缩减中性** (频率 12/12 窗全频) |
 | v2d | + FD_GRID→120 96 96 (每元素 12×12×12) | 5/5 崩但全 (nil) 空指针 (23-30s, comm1 齐崩, 迭代前) | **5/5 崩, 同 (nil)** | **rung 无效**: 软件自身 null-deref bug, 臂无关; 同作业 v2F 锚仍 byte-6 崩 (0xa1aaaaf9513400) + v2C1 锚净 — 网格轴 **floor = V2 (160 120 120)**, v2dd 作废 |
 | V3 nstates | + NSTATES 640→320 | 5×rc=65-67 (32-35s, 非崩溃) | 5×rc=65-66 (37-38s) | **rung 无效**: DSYGVD (m=320) 非 SPD/非收敛 — 320 态低于数值下限 (TOL_PSEUDOCHARGE 超限); NSTATES 640 必要 |
-| V4 nt18 | NT 36→18 重编译 (rankfile 同步) | 待跑 | 待跑 | — |
-| 后续 | NT 递减 9→4→2→1; NCOMMS 16→8; 分段缩减 | — | — | — |
+| V4 nt18 | NT 36→18 重编译 (rankfile 同步; binhash 6b336a92141c1e54) | 5 (67-98s, 全 rank3, byte-6 签名 5/5, 全 libomp 簇) | 0 (325-328s; SCF error 五 rep 逐位一致且同 NT36 值) | **NT 缩减中性**: 锚对照 (v2F 崩 0xa1_aaaad0977440 / v2C1 净 354s) + 逐窗 139/140 1999-2000MHz; 重编译不改变数值路径 |
+| V4B nt9 | NT 18→9 重编译 (job 1717122, 13:28 起) | 进行中 | 进行中 | — |
+| 后续 | NT 深度递减 (视 NT9 结果与时长评估); NCOMMS 16→8 (v5 输入已验证); 分段缩减 | — | — | — |
 
 V2 作业 (1715007) 内 v1F_anchor_1 亦崩 (rc=139, 0xad_4001c6b8aa80) — 前驱锚在同一作业内确认基线仍活。
 
-## 4. 最小化期间崩溃签名汇总 (12 例, 全部 byte-6 同故障)
+## 4. 最小化期间崩溃签名汇总 (20 例, 全部 byte-6 同故障; 含 V3/V4 作业内 v2F 锚 2 例)
 
 | run | si_addr | 垃圾 byte6 | 低 48 区域 |
 |-----|---------|-----------|-----------|
@@ -61,9 +62,16 @@ V2 作业 (1715007) 内 v1F_anchor_1 亦崩 (rc=139, 0xad_4001c6b8aa80) — 前�
 | v2_F_3 | 0xa5aaab072fb3c0 | 0xa5 | heap |
 | v2_F_4 | 0x9140015c5f1f80 | 0x91 | mmap |
 | v2_F_5 | 0xc440013e701680 | 0xc4 | mmap |
+| v2F_anchor_1 (V3 作业) | 0x98aaaae78eee40 | 0x98 | heap |
+| v2F_anchor_1 (V4 作业) | 0xa1aaaad0977440 | 0xa1 | heap |
+| v4nt18_F_1 | 0x94aaaab1444700 | 0x94 | heap |
+| v4nt18_F_2 | 0x140010517d400 | 0x14 | mmap |
+| v4nt18_F_3 | 0x624000ebc45540 | 0x62 | mmap |
+| v4nt18_F_4 | 0x76aaab28492d00 | 0x76 | heap |
+| v4nt18_F_5 | 0x76aaab0c389080 | 0x76 | heap |
 
-垃圾值 13 例全异、无重复模式 (非 stuck-at), 与历史 17 例特征一致 → 最小化复现的是同一故障, 不是新崩溃模式。
-频率合规 (两层语义): 归因核 cpu139/140 — 33/33 已核窗全 ≥1997 MHz (归因有效); results.tsv 聚合判决 GREY 系 rankfile 576 pin 核中 ~10-15 个非故障核负载下被钳 1501-1744 MHz (F/C1 两臂同集合同水平 = 受控常量)。用户红线 <1500: 阶梯期间零触发; 历史触发 (cpu304/240/497, cpu113/285/414) 已在 cpu-results.csv 按 runs_freq_excluded/mixed_freq_clean 记账。
+垃圾值 20 例全异、无重复模式 (非 stuck-at), 与历史 17 例特征一致 → 最小化复现的是同一故障, 不是新崩溃模式。results.md 的崩溃点分布表计 19 例 (不含 V3 作业 v2F 锚 — 地址已验 byte-6 但代码偏移未提取)。
+频率合规 (两层语义): 归因核 cpu139/140 — 33/33 已核窗全 ≥1997 MHz (归因有效); results.tsv 聚合判决 GREY 系 rankfile 576 pin 核中 ~10-15 个非故障核负载下被钳 1501-1744 MHz (F/C1 两臂同集合同水平 = 受控常量)。用户红线 <1500: 阶梯期间 (08:45 后) 零触发; 历史触发 (cpu304/240/497, cpu113/285/414) 已在 cpu-results.csv 按 runs_freq_excluded/mixed_freq_clean 记账; V4 作业内新增 cpu17 (min 1485) / cpu42 (min 1487) 越线 (rank0 非归因核, 记录在案不研究, 归因核 139/140 全程 1999-2000)。
 
 ## 5. 最终最小复现物 (Step 3, 待阶梯收敛后回填)
 
@@ -75,5 +83,6 @@ V2 作业 (1715007) 内 v1F_anchor_1 亦崩 (rc=139, 0xad_4001c6b8aa80) — 前�
 - 2026-09-24 ~09:3x: awk 最小值 reference-creates-element 缺陷自捕 (min=0 伪值), 当场改 guard-first 模式重算; 已记 status.md
 - 2026-09-24 10:0x: "Failing at address" 伪值澄清 — 今日 7 例初看疑无 byte-6 签名, 实为读取了 OpenMPI handler 伪地址行; 改取 "Caught signal 11" 行后 7/7 签名成立 (analyze.sh 同步修正 + 注释)
 - 2026-09-24 12:2x: V3 双臂全 rc=65-67 应用层失败 (dsygvd_upper m=320 非 SPD) — NSTATES 640 必要, 轴关闭; V4-NT18 (job 1716728, v2 基底 + 前驱锚 + 构建守卫) 提交。
+- 2026-09-24 13:27: V4-NT18 收官 (job 1716728): NT 36→18 重编译中性 — F 5/5 byte-6 (0x94/0x14/0x62/0x76/0x76, 全 rank3, 67-98s, 全 libomp 簇) / C1 5/5 净 (325-328s, SCF error 五 rep 逐位一致且同 NT36 值) / 锚对完整 / 逐窗 139/140 1999-2000。NT18 binhash 6b336a92141c1e54。红线: cpu17/42 越线 (rank0 非归因核, 记录在案)。V4B-NT9 (job 1717122) 13:28 已投; NCOMMS 8-rank 设计定稿 (源码实证: col-major rank=i+(j+k*nj)*ni, 新 rank3 (1,1,0) ⊇ 旧 rank3 区域)。
 - 2026-09-24 12:1x: v2d 双臂全 (nil) 崩 — 首次 C1 臂崩, 判为输入尺寸 bug 界面而非 SDC (锚对照排除); 期间发现 results.tsv 聚合判决全为 GREY 的语义 (rankfile 全 pin 核取 min, 非故障核钳频), 33/33 窗 cpu139/140 全频复核后措辞修正为两层语义。
 - 2026-09-24 ~10:2x: results.md V2 行曾预写 "0/5 C1" 结论 (当时仅锚完成), 1 分钟内自捕改回 "跑着"; 记录于 status.md

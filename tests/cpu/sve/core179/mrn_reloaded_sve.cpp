@@ -1,0 +1,135 @@
+/**
+ * @copyright
+ * Copyright 2025 Intel Corporation.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * @test @b mrn_reloaded_sve
+ * @parblock
+ * SVE port of mrn_reloaded: store->immediate-reload at three widths
+ * (8/32/64-bit) on vector lanes (svst1/svld1 batches at matching widths),
+ * per-element verification exactly as the original.
+ * @endparblock
+ */
+
+#include "sandstone.h"
+#include <cstdint>
+#include <cstring>
+#include <cstdlib>
+
+#if defined(__aarch64__)
+#include <arm_sve.h>
+#include <sys/auxv.h>
+
+#ifndef HWCAP_SVE
+#define HWCAP_SVE (1 << 22)
+#endif
+#endif
+
+#define MRN_RELOADED_SVE_COUNT 256
+
+struct MrnReloadedSveData {
+    uint8_t *src8;
+    uint32_t *src32;
+    uint64_t *src64;
+};
+
+static int mrn_reloaded_sve_init(struct test *test)
+{
+#if defined(__aarch64__)
+    unsigned long hwcap = getauxval(AT_HWCAP);
+    if ((hwcap & HWCAP_SVE) == 0) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "to be implemented (placeholder): ARM SVE required for mrn_reloaded_sve");
+        return EXIT_SKIP;
+    }
+#endif
+    auto *data = static_cast<MrnReloadedSveData *>(malloc(sizeof(MrnReloadedSveData)));
+    data->src8  = static_cast<uint8_t  *>(aligned_alloc(64, MRN_RELOADED_SVE_COUNT * sizeof(uint8_t)));
+    data->src32 = static_cast<uint32_t *>(aligned_alloc(64, MRN_RELOADED_SVE_COUNT * sizeof(uint32_t)));
+    data->src64 = static_cast<uint64_t *>(aligned_alloc(64, MRN_RELOADED_SVE_COUNT * sizeof(uint64_t)));
+    memset_random(data->src8,  MRN_RELOADED_SVE_COUNT * sizeof(uint8_t));
+    memset_random(data->src32, MRN_RELOADED_SVE_COUNT * sizeof(uint32_t));
+    memset_random(data->src64, MRN_RELOADED_SVE_COUNT * sizeof(uint64_t));
+    test->data = data;
+    return EXIT_SUCCESS;
+}
+
+#if defined(__aarch64__)
+static int mrn_reloaded_sve_run(struct test *test, int cpu)
+{
+    (void)cpu;
+    auto *data = static_cast<MrnReloadedSveData *>(test->data);
+
+    uint8_t  *temp8  = static_cast<uint8_t  *>(aligned_alloc(64, MRN_RELOADED_SVE_COUNT * sizeof(uint8_t)));
+    uint32_t *temp32 = static_cast<uint32_t *>(aligned_alloc(64, MRN_RELOADED_SVE_COUNT * sizeof(uint32_t)));
+    uint64_t *temp64 = static_cast<uint64_t *>(aligned_alloc(64, MRN_RELOADED_SVE_COUNT * sizeof(uint64_t)));
+
+    TEST_LOOP(test, 1 << 8) {
+        /* 8-bit 批 */
+        for (size_t base = 0; base < MRN_RELOADED_SVE_COUNT; base += svcntb()) {
+            int n = (MRN_RELOADED_SVE_COUNT - base < (size_t)svcntb()) ? (int)(MRN_RELOADED_SVE_COUNT - base) : svcntb();
+            svbool_t pg = svwhilelt_b8((uint64_t)0, (uint64_t)n);
+            svst1_u8(pg, temp8 + base, svld1_u8(pg, data->src8 + base));
+            uint8_t got[64];
+            svst1_u8(pg, got, svld1_u8(pg, temp8 + base));
+            for (int i = 0; i < n; ++i)
+                if (got[i] != data->src8[base + i])
+                    report_fail_msg("mrn_reloaded_sve 1-byte miscompare at %d", (int)(base + i));
+        }
+        /* 32-bit 批 */
+        for (size_t base = 0; base < MRN_RELOADED_SVE_COUNT; base += svcntw()) {
+            int n = (MRN_RELOADED_SVE_COUNT - base < (size_t)svcntw()) ? (int)(MRN_RELOADED_SVE_COUNT - base) : svcntw();
+            svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)n);
+            svst1_u32(pg, temp32 + base, svld1_u32(pg, data->src32 + base));
+            uint32_t got[16];
+            svst1_u32(pg, got, svld1_u32(pg, temp32 + base));
+            for (int i = 0; i < n; ++i)
+                if (got[i] != data->src32[base + i])
+                    report_fail_msg("mrn_reloaded_sve 4-byte miscompare at %d", (int)(base + i));
+        }
+        /* 64-bit 批 */
+        for (size_t base = 0; base < MRN_RELOADED_SVE_COUNT; base += svcntd()) {
+            int n = (MRN_RELOADED_SVE_COUNT - base < (size_t)svcntd()) ? (int)(MRN_RELOADED_SVE_COUNT - base) : svcntd();
+            svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)n);
+            svst1_u64(pg, temp64 + base, svld1_u64(pg, data->src64 + base));
+            uint64_t got[8];
+            svst1_u64(pg, got, svld1_u64(pg, temp64 + base));
+            for (int i = 0; i < n; ++i)
+                if (got[i] != data->src64[base + i])
+                    report_fail_msg("mrn_reloaded_sve 8-byte miscompare at %d", (int)(base + i));
+        }
+    }
+
+    free(temp8);
+    free(temp32);
+    free(temp64);
+    return EXIT_SUCCESS;
+}
+#else
+static int mrn_reloaded_sve_run(struct test *test, int cpu)
+{
+    (void)test; (void)cpu;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): ARM SVE required for mrn_reloaded_sve");
+    return EXIT_SKIP;
+}
+#endif
+
+static int mrn_reloaded_sve_cleanup(struct test *test)
+{
+    auto *data = static_cast<MrnReloadedSveData *>(test->data);
+    if (data) {
+        free(data->src8);
+        free(data->src32);
+        free(data->src64);
+        free(data);
+    }
+    return EXIT_SUCCESS;
+}
+
+DECLARE_TEST(mrn_reloaded_sve, "SVE store->immediate-reload at 8/32/64-bit vector widths (port of mrn_reloaded)")
+    .test_init = mrn_reloaded_sve_init,
+    .test_run = mrn_reloaded_sve_run,
+    .test_cleanup = mrn_reloaded_sve_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST

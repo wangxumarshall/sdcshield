@@ -81,7 +81,143 @@ if host_machine.cpu_family() == 'aarch64'
         # golden pattern (init computes once, run recomputes and
         # byte-compares). n=128 calibrated at ~0.92ms/iter.
         'eigen/eigen_svd_bidiag_sve.cpp',
+        # kreg batch (7 ports of the 64-batch plan): software simulations of
+        # x86 AVX-512 k-register ops upgraded to REAL SVE predicate
+        # instructions — the only true k-register equivalent on ARM.
+        # kreg2: KSHIFTL/R -> svlsl/svlsr; kreg3: KORTEST/KTEST ->
+        # svptest_any; kreg5: KUNPCK/KNOT -> svzip1/sveor; kreg6/kreg8:
+        # mask expansion -> svsel; kreg9: KMOVB/W/D/Q -> vector/predicate
+        # lanes + svcntp; arm0102: trigger recipe on ldr z/str z with
+        # predicate compare expansion. Software references are now
+        # independent scalar goldens (the originals compared an
+        # expression with itself).
+        'kreg/kreg2_sve.cpp',
+        'kreg/kreg3_sve.cpp',
+        'kreg/kreg5_sve.cpp',
+        'kreg/kreg6_sve.cpp',
+        'kreg/kreg8_sve.cpp',
+        'kreg/kreg9_sve.cpp',
+        'kreg/arm0102_kreg_mask_sve.cpp',
+        # Batch 2 (12 NEON-direct replacements of the 64-test plan):
+        # vector/FPU/misc tests whose NEON intrinsics map 1:1 onto SVE
+        # instructions. Workload parameters preserved per original.
+        'fma2/neon_add_sve.cpp',
+        'fma2/fma_sve.cpp',
+        'fma2/fpu_special_values_sve.cpp',
+        'fma2/power_virus_dit_sve.cpp',
+        'fma2/movdq2q_sve.cpp',
+        'fma2/movq2dq_sve.cpp',
+        'fma2/movmskpspd_sve.cpp',
+        'fma2/fsu_byteexact_sve.cpp',
+        'vector2/kreg1_sve.cpp',
+        'vector2/kreg4_sve.cpp',
+        'vector2/kreg7_sve.cpp',
+        'vector2/swizzle_sve.cpp',
+        'vector2/insert_extract_sve.cpp',
+        # Batch 3 (2 conversions): fisttp on real svcvt lanes
+        # (round-toward-zero semantics verified); IEX opcode-combo with
+        # svclz (real instruction) + svtbl byte-reverse for rbit/rev
+        # (bit-exact vs software reference, 20k random vectors).
+        'arithmetic/fisttp_sve.cpp',
+        'arithmetic/iex_operand_combo_sve.cpp',
+        # Batch 4 (10): carry chains on svadd lanes with the serial carry
+        # fold (equivalence vs __int128 verified on 20k random chains);
+        # operand-space adds/muls (svmul low half; svmulh is SVE2 so the
+        # high half folds __int128 on the same operand stream); 512-bit
+        # bigint multiply on svmul partial products with an init-time
+        # cross-check against the schoolbook golden.
+        'arithmetic/adcx_sve.cpp',
+        'arithmetic/adox_sve.cpp',
+        'arithmetic/adcxlong_sve.cpp',
+        'arithmetic/adcx_arm_sve.cpp',
+        'arithmetic/adox_arm_sve.cpp',
+        'arithmetic/adcxlong_arm_sve.cpp',
+        'arithmetic/adcx_adox_interleaved_sve.cpp',
+        'arithmetic/adcx_adox_interleaved_arm_sve.cpp',
+        'arithmetic/operand_space_sve.cpp',
+        'arithmetic/bigint_mulx_sve.cpp',
+        # Batch 5 (21): core-179 dataflow family on SVE lanes — movbe byte-swap
+        # round-trips (svtbl [3,2,1,0], verified vs __builtin_bswap32 on 50k
+        # vectors), 11 probe variants (no-store/nops/SLF/global-store/NUMA/
+        # line-window/set-attack/line-sweep/no-op-ALU/param-nops), the mrn
+        # memory-renaming family, neon_rot_2src on z registers (asm ldr z/
+        # str z), and mite's constant chain with predicate branches.
+'core179/movbe_sve.cpp',
+'core179/movbe_dump_sve.cpp',
+'core179/movbe_dump_probe_a_sve.cpp',
+'core179/movbe_dump_probe_b_sve.cpp',
+'core179/movbe_dump_probe_c_sve.cpp',
+'core179/movbe_dump_probe_d_sve.cpp',
+'core179/movbe_dump_probe_e_sve.cpp',
+'core179/movbe_dump_probe_f_sve.cpp',
+'core179/movbe_dump_probe_g1_sve.cpp',
+'core179/movbe_dump_probe_g2_sve.cpp',
+'core179/movbe_dump_probe_h_sve.cpp',
+'core179/movbe_dump_probe_x_sve.cpp',
+'core179/movbe_dump_probe_xn_sve.cpp',
+'core179/mrn_nuke_sve.cpp',
+'core179/mrn_pairs_sve.cpp',
+'core179/mrn_flags_sve.cpp',
+'core179/mrn_reloaded_sve.cpp',
+'core179/mrn_rmw_sve.cpp',
+'core179/mrn_rmw_dump_sve.cpp',
+'core179/neon_rot_2src_sve.cpp',
+'core179/mite_sve.cpp',
+        # Batch 6 (first 2 of 7): partial-width predicated stores (the
+        # native SVE form of partial stores) with store-buffer partial-hit
+        # loads; AGU 2-source vector-load throughput with the rotating
+        # composition and the str z/ldr z/str z chain.
+        'mem/partial_store_forwarding_sve.cpp',
+        'mem/agu_stress_2src_sve.cpp',
+        # Batch 6 remainder (5): LSU store-forward with scalar asm micro-ops
+        # preserved (they ARE the tested forwarding window) and the 128-bit
+        # cross-line phase on svst1/svld1; L2C cross-line with ldxr/stxr/
+        # dc-civac preserved and the 16B forward vectorized; MMU alias/split
+        # with mmap/memfd logic intact and 128-bit stores vectorized; OoO
+        # pointer-chase asm ldr preserved (the dependency chain IS the
+        # test); arm64_sdc CRC/checksum detectors on svld1 scans with the
+        # fail-closed self-check kept verbatim.
+        'mem/lsu_store_forward_sve.cpp',
+        'mem/l2c_cross_cache_line_sve.cpp',
+        'mem/mmu_split_tlb_sve.cpp',
+        'mem/ooo_dep_chain_sve.cpp',
+        'mem/arm64_sdc_sve.cpp',
+        # Batch 7 (4): library-backed tests re-implemented on SVE —
+        # GMP big-add on the carry chain, GMP multiply on svmul partial
+        # products (bigint_mulx skeleton), compiler-rt soft-float kept as
+        # the tested integer path with an SVE probe, ACL GEMM on svmla
+        # micro-kernels vs the naive golden.
+        'arithmetic/gmp_bigadd_sve.cpp',
+        'arithmetic/gmp_bignum_sve.cpp',
+        'arithmetic/acl_gemm_sve.cpp',
     )
+
+    # compiler-rt soft-float test: needs libclang_rt.builtins (mirror of the
+    # arithmetic_arm crt block — same probe path, SVE probe added in init).
+    crt_builtins_path_sve = '/usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/libclang_rt.builtins.a'
+    if run_command('test', '-f', crt_builtins_path_sve, check: false).returncode() == 0
+        crt_builtins_lib_sve = declare_dependency(
+            link_args : ['-l:libclang_rt.builtins.a',
+                         '-L' + '/usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu'],
+        )
+        tests_sve_crt = static_library(
+            'tests_sve_crt',
+            sources: files('arithmetic/crt_builtins_sve.cpp'),
+            build_by_default: false,
+            include_directories: [framework_incdir],
+            dependencies: [boost_dep, crt_builtins_lib_sve],
+            cpp_args: [
+                debug_c_flags,
+                default_cpp_warn,
+                default_cpp_flags,
+                march_generic_flags,
+                '-march=armv8.2-a+sve',
+            ],
+        )
+        sandstone_tests += [tests_sve_crt]
+    else
+        message('libclang_rt.builtins not found — crt_builtins_sve not built (same gate as the arithmetic_arm original)')
+    endif
 
     # IPSec domain (24 ports). Two tiers:
     # - HMAC/SHA family (17): encryption stays on OpenSSL EVP, the MAC runs

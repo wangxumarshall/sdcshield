@@ -592,22 +592,26 @@ printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.t
 
 - [x] **Step 4: 缓存层级定位** — 工作集尺寸扫 {4KB(L1) 64KB(L2) 32MB(L3) 512MB(远端)} x 访问模式 {seq,stride64,random} x 数据位置 {本地 NUMA, 远端 NUMA(numactl)}，F vs C1；错位首次出现的工作集尺寸 → 层级结论。
 
-- [ ] **Step 5: perf 采集**（先 `perf list` 确认事件存在，仅自有进程）: instructions/cycles/IPC/branches,branch-misses/cache-{ref,misses},L1-dcache,stalled-cycles; F vs C1 差异只作相关性记录。
+- [x] **Step 5: perf 采集**（先 `perf list` 确认事件存在，仅自有进程）: instructions/cycles/IPC/branches,branch-misses/cache-{ref,misses},L1-dcache,stalled-cycles; F vs C1 差异只作相关性记录。
 
 - [x] **Step 6: 位签名映射** — XLSDFT 错误输出的错位模式（Task 5/8 记录）映射到源码计算路径（rg 定位该量在 src/ 的产生式）+ objdump 热函数（perf 定位）指令类别。
 
-- [ ] **Step 7: 频率/温度相关性** — 从 freqmon CSV 提取故障时刻前后 F 核频率轨迹；对照温度区间；只做观察式结论。
+- [x] **Step 7: 频率/温度相关性** — 从 freqmon CSV 提取故障时刻前后 F 核频率轨迹；对照温度区间；只做观察式结论。
 
-- [ ] **Step 8: diagnosis-report.md（repo + RES）：微架构根因假设（定位到模块：如"某执行单元在 fmax 附近间歇时序故障"/"某缓存阵列位固化"）、置信分级、被排除备选、频率温度依赖、一键复现命令、处置建议；受控调频/核隔离写入 admin_requests.md。commit + push**
+- [x] **Step 8: diagnosis-report.md（repo + RES）：微架构根因假设（定位到模块：如"某执行单元在 fmax 附近间歇时序故障"/"某缓存阵列位固化"）、置信分级、被排除备选、频率温度依赖、一键复现命令、处置建议；受控调频/核隔离写入 admin_requests.md。commit + push**
 
 ---
 
-**Task 9 鏈嶅姟杩涘害璁板綍 (2026-09-23, 鎵ц琛屼腑)**:
-- Step 1-3 瀹屾垚: bench_units 15 鍗曞厓脳8 鍥炬妗堢煩闃?job 1713002) + SVE-512 FMA (rdvl 灏忎鏁颁慨澶嶅悗, job 1713658) 鈥?F(139)/C1(140)/C2(252) 鍏ㄩ儴骞插噣, bitsig 涓虹┖銆?
-- Step 4 瀹屾垚 (閫傞厤: 鐢?bench_mem l1fill/l2stream/bigstream/svestream 浜ゅ弶鏍￠獙闃舵?浛浠ｑ函鏃跺欢娴嬮噺, job 1713774): 姣忓崟鍏?~300 浜垮瓧鏍￠獙, 鍏ㄢ豢 鈥?瓒宠抗瑕嗙洊鎺掗櫎 (L1 fill/L2 闃靛垪/DRAM+TLB 512MB/SVE 璁诲嚭鍏ㄨ帓闄?)銆?
-- Step 6 瀹屾垚: p5-crashmap.md 鈥?15/15 byte6(bits48-55) 闅忔満鍨冨溇+浣?48 浣嶅畬濂? 娲楁鏈? 鍚?SVE ld1d/ld1b銆丼ME za st1d銆丩ibomp 绾鏍囬噺 鈥?鎸囦护绫诲瀷鎺掗櫎; 娴嬬瘯鐮 4 涓?H 娣樺急鍖栥鏋勬瀯鍓╀疱 2 涓?BR/H-PRF)銆?
-- 鏂板-H-droop 瀹為獙 (job 1713961, 瀹為闄呮浇鍏虫潯浠堕悗琛ュ厖): 鍏ㄦ牤鍚?涔熷姞杞戒笅 139/140 鍙屽娴嬮噺 (l2stream 浜ゅ弱鏍￠獙) + 114-149 鍑?34 鏍哥噧鐑? 鈥?妫€獙"鍏ㄦ牤鍚戝彂璐熻浇+139 鎵ц琛?"缁勫悎鏉′欢鍋囪? (鎵?鏈?bench 鍧囤崟鏍歌┖闂茬⒓, XLSDFT 鏁寸?36 绾跨▼鎵撴弧, skip139 簹闂?139 绌洪棽鍗充笉宕? 鐨勪簨瀹炰笌涔嬭嚜娆)銆?
-- Step 5 (perf) 寰?droop 缁撴灉鍚庡喅瀹氭寮哄害; Step 7 棰戠巼娓╁害鐩稿叧鎬?/ Step 8 璇婃柇鎶ュ憡寰呭仛銆?
+**Task 9 服务进度适配记录 (2026-09-23/24, 已完成)**:
+- Step 1-3 完成: bench_units 15 单元x8 图案矩阵 (job 1713002) + SVE-512 FMA hammer/sweep (rdvl 修复后, job 1713658) — F(139)/C1(140)/C2(252) 全部干净, bitsig 为空。
+- Step 4 完成 (适配: 以 bench_mem l1fill/l2stream/bigstream/svestream 交叉校验代替纯时延测量, job 1713774): 每单元 ~300 亿字校验全绿 — 足迹覆盖排除 (L1 fill / L2 阵列 / DRAM+TLB 512MB / SVE 读出)。
+- Step 6 完成: p5-crashmap.md — 15/15 byte6(bits48-55) 随机垃圾 + 低 48 位完好; 崩溃簇覆盖 SVE ld1d/ld1b、SME za st1d、libomp 纯标量 — 指令类型排除。
+- 新增 H-droop (job 1713961) 与 H-dwell (job 1714041) 实验: 全核并发燃烧 + 139/140 双测量 (l2stream 交叉校验), park_l1/park_l2/park_reg 驻留 x {单独, +34 燃烧核} — 两假设均排除 (第 8/9 类)。
+- Step 5 完成 (perf 差分, job 1714017): perf stat -t <tid> 线程跟随 + :u 事件 (paranoid=2 下唯一可行); run_A 崩溃线程 tid=286183 恰为测量线程, 139 vs 140 六指标差 <=3% 且在复测波动带内 → 事件型故障。run_B 设计失误 (slot=115-150 仍含 139, P3 §0 陷阱重犯) 计作复现 + 140 复测, 差分仅立基于 run_A。
+- Step 7 完成: 17 次崩溃均 1998-2000MHz 满频, 139/140 全程 >=1996MHz; >=1600MHz 复现 / <=1550MHz 零复现 (P2 限频实验); 无 CPU 专属 thermal_zone, 满载 58.0°C vs 空闲 49-50°C — 非热致。
+- Step 8 完成: RES/diagnostics/diagnosis-report.md (权威) + repo docs/cases/cn23154-sdc-campaign-2026-09-23/P5-diagnosis.md (scp 直传); 发布前溯源核验自捕 3 处错误并修正 (虚构 repro 子命令 → 实测接口; 地址分区 12/5 → 11/6; P5 崩溃时刻改为 perf time-enabled 实测 281.3s/191.2s)。
+- 结论: cpu139 核私有 byte-lane-6(+7) 边际弱单元, 事件型 (perf 零计数器异常), 上下文依赖 (9 类合成负载全排除), 频率依赖; 具体阵列 (L1d/L2 vs LSU vs PRF) 未分离 → 移交 Task 10。
+- 编码事故披露: 本记录块的前身 (2026-09-23 中途版本) 被 PowerShell 追加时双重编码损坏并随 commit 0a6823a5 提交; 本块为按可查证事实 (job ID/结果/status.md) 重写的终态记录, 中途过程细节以集群 RES/status.md (heredoc 写入, 无损) 为准。
 ### Task 10: P6 最小化复现提取（条件：已确认故障核）
 
 **Files:**
@@ -634,7 +638,7 @@ printf 'skip139\t%s\t1\t10800\n' "$RES/fault_localization/rankfiles/rf_skip139.t
 - [ ] **Step 2: environment-report.md / experiment-plan.md** — 从 Task 2 快照与本计划整理（假设、自变量、对照、重复策略、停止条件、SDC 判定标准）。
 - [ ] **Step 3: final-summary.md — 任务规范 12 问逐答**（哪些核稳定复现/失败率与置信区间/异常 NUMA 其他核/其余核/608 全覆盖集合相等证据/与 physical core-SMT-NUMA-socket-cache-内存的相关性/最可信微架构假设/支持证据/削弱反例/最小用例/最小用例复现率/当前结论限制），每答带 run_id 证据指针。
 - [ ] **Step 4: admin_requests.md** — 全部需管理员的精确命令 + 用途。
-- [ ] **Step 5: 收尾核验** — `djob` 确认无本战役遗留 RUNNING（有则 dkill）；`ls RES/raw | wc -l` 与 results.tsv 行数一致；cpu-results.csv 行数 = 608 + 窗口聚合数；status.md 终态。
+- [x] **Step 5: 收尾核验** — `djob` 确认无本战役遗留 RUNNING（有则 dkill）；`ls RES/raw | wc -l` 与 results.tsv 行数一致；cpu-results.csv 行数 = 608 + 窗口聚合数；status.md 终态。
 - [ ] **Step 6: repo final-report.md（12 问中文摘要 + RES 指针）commit + push**
 
 ---

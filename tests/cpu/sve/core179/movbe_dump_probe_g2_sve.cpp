@@ -88,7 +88,11 @@ static int movbe_dump_probe_g2_sve_run(struct test *test, int cpu)
 
             /* store swapped (向量 store/reload 路径) */
             /* PROBE G2: store 到 16 个不同 128B 行 — svst1 直打堆 */
-            svst1_u8(pg, (uint8_t *)(data->swapped + ((base / lanes) & 15) * (128 / 4)), vswapped);
+            /* gcc-10 (22.03/20.03 CI, run 35977342136) 对 svst1 地址式内含
+               "& 常数" 在 RTL expand ICE;地址先落入局部指针再传,
+               语义不变 (probe_h 的 line_idx 先例)。 */
+            uint8_t *dst = (uint8_t *)(data->swapped + ((base / lanes) & 15) * (128 / 4));
+            svst1_u8(pg, dst, vswapped);
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */
             svuint8_t vrestored = svtbl_u8(vswapped, vidx);   /* 寄存器直连: 原版 bswap 作用于寄存器值, 这些 probe 被测的是 store 侧效应 */

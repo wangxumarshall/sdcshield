@@ -92,7 +92,11 @@ static int movbe_dump_probe_g1_sve_run(struct test *test, int cpu)
             /* PROBE G1: store 到 16 个 256KB 间隔地址之一 (单 LLC set 攻击) — svst1 直打堆 */
             {
                 const size_t slot_scale = (256 * 1024) / 4;
-                svst1_u8(pg, (uint8_t *)(data->swapped + ((base / lanes) & 15) * slot_scale), vswapped);
+                /* gcc-10 (22.03/20.03 CI, run 35977342136) 对 svst1 地址式内含
+                   "& 常数" 在 RTL expand ICE;地址先落入局部指针再传,
+                   语义不变 (probe_h 的 line_idx 先例)。 */
+                uint8_t *dst = (uint8_t *)(data->swapped + ((base / lanes) & 15) * slot_scale);
+                svst1_u8(pg, dst, vswapped);
             }
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */

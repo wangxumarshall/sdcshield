@@ -93,9 +93,11 @@ static int movbe_dump_probe_f_sve_run(struct test *test, int cpu)
                 uint32_t first = 0;
                 memcpy(&first, &vswapped, 4);   /* 取首元素 (编译器协助) */
                 svbool_t pg1 = svwhilelt_b32((uint64_t)0, (uint64_t)1);
-                svst1_u32(pg1, &line_window[(base / lanes) & 15],
-                          svdup_u32(((uint32_t *)&vswapped)[0]));
-                (void)first;
+                /* gcc-10 (22.03/20.03 CI, run 35977342136) 对 svst1 地址式内含
+                   "& 常数" 在 RTL expand ICE;地址与首元素先落入局部变量再传,
+                   语义不变 (probe_h 的 line_idx 先例)。 */
+                uint32_t *win = &line_window[(base / lanes) & 15];
+                svst1_u32(pg1, win, svdup_u32(first));
             }
 
             /* 再交换一次还原 (同一索引表, svtbl 可逆) */

@@ -34,9 +34,13 @@ jobs:
         pipx install codespell
         codespell
     - name: Install actionlint
-      run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bpf)
+      run: |
+        # 官方脚本装到 $(pwd);先落盘再执行,否则 bash <(curl ...) 会吞掉
+        # curl 的退出码(404 也显示绿),下一步才以 127 挂掉
+        curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash -o /tmp/install-actionlint.sh
+        bash /tmp/install-actionlint.sh
     - name: Run actionlint
-      run: actionlint -shellcheck= -pyflakes= .github/workflows .github/actions
+      run: ./actionlint -shellcheck= -pyflakes= .github/workflows .github/actions
 
   git-sanity:
     runs-on: ubuntu-latest

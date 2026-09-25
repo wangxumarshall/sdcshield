@@ -40,10 +40,9 @@ jobs:
     strategy:
       matrix:
         include:
-        - { name: GCC-x86_64, unittests: "unittests", selftests: "selftests" }
-        - { name: GCC-x86_64-NoLogging, unittests: "unittests", meson_args: "-Dlogging_format=no_output" }
-        - { name: Clang-x86_64, unittests: "unittests", env: "CC=clang-19 CXX=clang++-19" }
-        - { name: GCC-arm64, archsuffix: "-arm", selftests: "selftests" }
+        # arm64-only 项目:x86/Windows/GPU/IDXD 目标构建已移除(2026-09-25 决定),
+        # unittests 覆盖随 x86 项删除移到本项。
+        - { name: GCC-arm64, archsuffix: "-arm", unittests: "unittests", selftests: "selftests" }
     steps:
       - name: Checkout the PR merge point
         uses: actions/checkout@v6
@@ -100,97 +99,6 @@ jobs:
           path: |
             *.yaml
           retention-days: 3
-
-  build-cpu-win:
-    name: Build binary for CPU (Windows)
-    needs: [ lint, git-sanity ]
-    runs-on: windows-latest
-    steps:
-      - name: Checkout the PR merge point
-        uses: actions/checkout@v6
-      - name: Build for CPU (Windows)
-        uses: ./.github/actions/build-cpu-win
-      - name: verify selftests
-        shell: msys2 {0}
-        run: |
-          set -x
-          set selftest_skip \
-              $(builddir-windows/sdcshield --selftests --list-tests | grep selftest_log_skip) \
-              '@positive'
-          for t; do
-            builddir-windows/sdcshield --quick --selftests -e "$t" -o -
-          done
-          builddir-windows/sdcshield --quick --selftests -e selftest_failinit && exit 1 || [[ $? = 1 ]]
-      - name: run selftests
-        shell: msys2 {0}
-        run: SANDSTONE_BIN=builddir-windows/sdcshield.exe bats-core/bin/bats -t bats/sanity-check
-      - name: run tests quickly
-        shell: msys2 {0}
-        run: |
-          nproc=`nproc`
-          nproc=$((nproc > 4 ? 4 : nproc))
-          builddir-windows/sdcshield --quick -n$nproc --retest-on-failure=0 -o -
-      - name: upload test run logs
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-windows-logs
-          if-no-files-found: ignore
-          path: |
-            *.yaml
-          retention-days: 3
-
-  build-gpu:
-    name: Build binary for GPU
-    needs: [ lint, git-sanity ]
-    runs-on: ubuntu-24.04${{ matrix.archsuffix }}
-    container: debian:sid
-    strategy:
-      matrix:
-        include:
-        - { name: GCC, unittests: "unittests" }
-        - { name: GCC-NoLogging, unittests: "unittests", meson_args: "-Dlogging_format=no_output" }
-    steps:
-      - name: Checkout the PR merge point
-        uses: actions/checkout@v6
-      - name: Build for GPU
-        uses: ./.github/actions/build-gpu
-        with:
-            name: ${{ matrix.name }}
-            env: ${{ matrix.env }}
-            meson_args: ${{ matrix.meson_args }}
-            unittests: ${{ matrix.unittests }}
-      - name: run unittests
-        if: ${{ matrix.unittests }}
-        shell: bash
-        run: |
-          ./builddir/unittests
-
-  build-idxd:
-    name: Build binary for IDXD
-    needs: [ lint, git-sanity ]
-    runs-on: ubuntu-24.04
-    container: debian:sid
-    strategy:
-      matrix:
-        include:
-        - { name: GCC, unittests: "unittests" }
-        - { name: GCC-NoLogging, unittests: "unittests", meson_args: "-Dlogging_format=no_output" }
-    steps:
-      - name: Checkout the PR merge point
-        uses: actions/checkout@v6
-      - name: Build for IDXD
-        uses: ./.github/actions/build-idxd
-        with:
-            name: ${{ matrix.name }}
-            env: ${{ matrix.env }}
-            meson_args: ${{ matrix.meson_args }}
-            unittests: ${{ matrix.unittests }}
-      - name: run unittests
-        if: ${{ matrix.unittests }}
-        shell: bash
-        run: |
-          ./builddir/unittests
 
   # multi-version:在 openEuler 多版本容器里构建+纯净验证,作 polyfill/sed 适配层的
   # 回归哨兵。PR 跑"角落三"(最老 toolchain + 基准),覆盖适配层被源码改动带歪的情况。

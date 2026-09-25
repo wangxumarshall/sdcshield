@@ -296,7 +296,7 @@ jobs:
     permissions:
       contents: write            # auto-push 到 gh-pages
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8
@@ -312,7 +312,7 @@ jobs:
       - uses: benchmark-action/github-action-benchmark@v1
         with:
           name: sdcshield benchmark (24.03-LTS-SP3)
-          tool: custom
+          tool: customSmallerIsBetter
           output-file-path: bench/benchmark.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true

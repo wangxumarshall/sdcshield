@@ -84,6 +84,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: false
+          persist-credentials: false
 
       # ---- 源码构建(镜像内已装全部依赖,直接 meson+ninja) ----
       # 不用 actions/cache 缓存 vendored install/:它是 glibc 耦合产物(20.03/22.03/24.03
@@ -267,6 +268,8 @@ jobs:
     steps:
       - name: Checkout (for scripts/gha/report-summary.py)
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Download all artifacts (keep per-image dirs)
         uses: actions/download-artifact@v8
         with:

@@ -81,7 +81,7 @@ jobs:
       # 原生容器模式:checkout 即把源码克隆进容器工作目录(容器内已预置 git)。
       # 子模块(rpms)不 checkout —— 构建镜像已烘焙全部依赖 + 20.03 工具集。
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: false
           persist-credentials: false
@@ -267,7 +267,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for scripts/gha/report-summary.py)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Download all artifacts (keep per-image dirs)

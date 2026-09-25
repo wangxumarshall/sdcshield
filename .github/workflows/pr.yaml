@@ -18,12 +18,12 @@ jobs:
     timeout-minutes: 10
     steps:
     - name: Checkout target branch (${{ github.base_ref }})
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         ref: ${{ github.base_ref }}
         persist-credentials: false
     - name: Checkout PR
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         ref: ${{ github.sha }}
         persist-credentials: false
@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 10
     steps:
     - name: Checkout the PR merge point
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0
         persist-credentials: false
@@ -64,7 +64,7 @@ jobs:
         - { name: GCC-arm64, archsuffix: "-arm", unittests: "unittests", selftests: "selftests" }
     steps:
       - name: Checkout the PR merge point
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Build for CPU (Linux)
@@ -138,7 +138,7 @@ jobs:
         - { series: "24.03", sp: "SP3" }   # 基准版本
     steps:
       - name: Checkout PR + submodules(RPM 树)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
           persist-credentials: false

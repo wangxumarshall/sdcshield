@@ -76,6 +76,7 @@
 - [x] **Step 5**: A5/A6 引证不重跑: A5 二进制同一性 binhash=763c6843f504e1f7 (本轮两次运行同值 = Task 3 = 战役包); A6 NCOMMS<16 死锁 (战役 v5nc8 rc=134, 集群 fabric 下限, 引证)。
 - [x] **Step 6**: repo: 勾选 + commit + push (e565582f: 首轮 A2 证伪/A4 过/A3 跳过根因; 本笔: A3 权限墙证据链关闭)。Task 5 关闭: A1 ✓ A2 证伪有果 ✓ A3 不可行有据 ✓ A4 ✓ A5/A6 引证 ✓。
 ### Task 6: 目录内双报告 + 收尾
+> 预填进度 (2026-09-25 08:40, 全扫 1724877 进行中): 不依赖全扫结果的定案内容已写入两报告。README: 目录树与 §7 探针设计/命令改为 v2 实况 (probes2/, SOLO 串行, TMO 360, job_probe_pilot2/all2, v1 四件套标注证伪存档); §8 消融实测判定 (A2 预期证伪仍复现 / A3 环境不可行三作业证据链 / A4 规模无关) + FREQ_CSV env 传参注; §9 扩为六坑 (+v1 形式勿用 / cpufreq root-only / NFS 陈旧混合页); §11 溯源清单更新。复盘报告: §2 任务表 3/4a/5 行定案、4b 行改 v2 描述; §5 v1 证伪原文 + v2 C1-swap 设计 + 先导 4/4 判定行; §6 A1-A5 实测/判定两列全部填入; §9 +2 教训 (v1 形式证伪、A3 权限墙); §10 交付物勘误。剩余标记均为全扫依赖: 复盘报告 5 处 (4b/6 行、§5 全扫计数、§5 结论、§7 总结论) + README 2 处 (§0 一句话、§7 计数)。约束: 全扫期间不得改动其运行时读取的脚本 (reproduce.sh / probe_run2.sh / gen_rf_probe2.sh / verify*.sh / freqmon.sh / analyze_probes.sh / job_probe_all2.sh)。
 
 - [ ] **Step 1**: `$NEW/README.md` 手把手复现方法: 前提(账号/队列/HPCKit/LVTX) → 构建 → F/C1 运行 → 判定标准与预期值 → 全核探针方法 → 消融方法 → 故障排查 (taskset/setvars 位置参数/tag-output 三坑) → 自检清单。
 - [ ] **Step 2**: `$NEW/复盘报告.md`: 战役复盘 (目标/方法/全部数据表: 自含验证 4 runs、608 探针、消融 4 因子/结论/与前置战役一致性/诚实边界)。

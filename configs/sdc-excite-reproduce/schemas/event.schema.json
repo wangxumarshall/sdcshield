@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sdcshield.local/schemas/sdc-excite-reproduce/event.schema.json",
   "title": "SDC canonical event",
-  "description": "Declarative transcription of the v5 spec §5.3 canonical event schema. Types, enums and `required` mirror tools/telemetry/sdc_event.py::validate_event exactly; this file is documentation, the stdlib validator is the enforcement point.",
+  "description": "Declarative transcription of the v5 spec §5.3 canonical event schema. Types, enums and `required` mirror tools/telemetry/sdc_event.py::validate_event, with `time` nullable and hex fields accepted per the validator's str() coercion (schema string/pattern is stricter than the validator); this file is documentation, the stdlib validator is the enforcement point.",
   "type": "object",
   "required": [
     "schema_version",
@@ -94,8 +94,8 @@
       }
     },
     "time": {
-      "type": "object",
-      "description": "五元时间（v5 §4.2）；禁硬编码频率假设，cntfrq_hz 必须实测",
+      "type": ["object", "null"],
+      "description": "五元时间（v5 §4.2）；禁硬编码频率假设，cntfrq_hz 必须实测。null = legacy 事件缺五元数据（校验器同此宽限）",
       "properties": {
         "realtime_ns": {"type": "integer"},
         "monotonic_raw_ns": {"type": "integer"},

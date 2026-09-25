@@ -1,0 +1,22 @@
+command-line: 'sdcshield -T 1800s -t 60s --strict-runtime -e memcpy_rewr,cachebounce,lockgen,lock_instr,lockless_cmpxchg,lockless_cmpxchg8b,lockless_cmpxchg16b,locks,locks_ccb,locks_ccb_xch_only,locks_xch_only,atomic_simd_128,atomic_simd_256,atomic_simd_512,fma,fma_patterns_avx512_pd,fma_patterns_avx512_ps,fma_tail_avx2,fma_tail_avx512,fmatail_avx2,fmatail_avx512,fmatail_double_nested_avx2,fmatail_double_nested_avx512,fmatail_nested_avx2,fmatail_nested_avx512,fma_tail_sve,fma_tail_sve_wide,fmatail_sve,fmatail_sve_wide,fmatail_nested_sve,fmatail_nested_sve_wide,fmatail_double_nested_sve,fmatail_double_nested_sve_wide,fma_patterns_sve_wide_ps,fma_patterns_sve_wide_pd,fma_sve,crc32,openblas_dgemm,sleef_neon,pocketfft_fft,isal_igzip,zstd19,openssl_sha,openssl_sm3sm4,acl_gemm --on-crash=context --on-hang=kill --ignore-timeout --ignore-os-errors --retest-on-failure=3 --temperature-threshold=95000 -o /home/sdc/sdc-campaign/logs/20260925/082136-cold_c4.yaml'
+version: sdcshield-6c76ea63a7a9-dirty
+tests:
+- test: memcpy_rewr
+  result: crash
+  result-details: { crashed: true, core-dump: false, code: 9, reason: 'Killed' }
+  fail: { cpu-mask: null, time-to-fail: null, seed: 'AES:87cbf86cb7f2e560cdde91853478f78278340793480d1a9f32216e7acb87087d'}
+  threads:
+  - thread: main
+    runtime: 325.767
+    resource-usage: { utime: 5596.368, stime: 1228.443, cpuavg: 2095.0, maxrss: 1248684, majflt: 0, minflt: 230864, voluntary-cs: 2701, involutary-cs: 20 }
+- test: cachebounce
+  result: crash
+  result-details: { crashed: true, core-dump: false, code: 9, reason: 'Killed' }
+  fail: { cpu-mask: null, time-to-fail: null, seed: 'AES:be916f056e8280c64c87439b8f7f1b8b78340793480d1a9f32216e7acb87087d'}
+  threads:
+  - thread: main
+    runtime: 87.842
+    resource-usage: { utime: 4.955, stime: 4.905, cpuavg: 11.2, maxrss: 3460, majflt: 0, minflt: 171, voluntary-cs: 137, involutary-cs: 0 }
+  - thread: main 3
+    runtime: 90.712
+    resource-usage: { utime: 3.946, stime: 3.917, cpuavg: 8.7, maxrss: 3736, majflt: 0, minflt: 283, voluntary-cs: 126, involutary-cs: 0 }

@@ -6,7 +6,7 @@
 #   ./collect_inventory.sh [输出根目录]                       # 若已配置 sudo -n 则免密
 #   ./collect_inventory.sh [输出根目录]                       # 无 root → 降级非root采集并记录缺口
 #
-# 产物: <输出根目录>/<系统SN>-<日期>/{00_gaps.txt,01..15_*.txt}
+# 产物: <输出根目录>/<系统SN>-<日期>/{00_gaps.txt,01..16_*.txt}（16 另拷贝数据根 capabilities.env）
 # 规格同构: docs/superpowers/inventory/2102312YVY10M6000038-2026-09-23/
 # 依据 plan: docs/superpowers/plans/2026-09-23-2102312YVY10M6000038-sdc-7x24-stress-plan.md Task 4
 set -u
@@ -123,6 +123,36 @@ for i in 1 2 3; do
     tr -d '\r' < "$TMPD/b$i.txt" >> "$OUT/15_baseline_samples.txt"
     [ $i -lt 3 ] && sleep 10
 done
+
+# ---------------- v2: capabilities.env（16，v5 §7.4/§16.2 四轴能力探测·只读）----------------
+# 沿用本脚本既有变量：$OUT（输出目录 <SN>-<日期>）、$ROOT_MODE（root 三级通道）、$GAPS
+CAP="$OUT/16_capabilities.env"
+cpu0f=/sys/devices/system/cpu/cpu0/cpufreq
+{
+  echo "# capabilities.env — collect_inventory v2 生成（消费方: M1 采集器/控制器）"
+  echo "NPROC=$(nproc)"
+  echo "HAS_CPUFREQ=$([ -d "$cpu0f" ] && echo yes || echo no)"
+  echo "CPUFREQ_DRIVER=$(readlink -f "$cpu0f" 2>/dev/null | xargs -r basename)"
+  echo "GOVERNOR=$(cat "$cpu0f/scaling_governor" 2>/dev/null || echo none)"
+  echo "HAS_TIME_IN_STATE=$([ -f "$cpu0f/stats/time_in_state" ] && echo yes || echo no)"
+  echo "GOVERNOR_RESPONSE_VERIFIED=unknown  # R1 写入实验需用户批准后单做（v5 §7.4.1）"
+  echo "HAS_OEM_VOLTAGE=no  # 2026-09-24 全量探测定案: 0x30 0x91-0x98 被 0xD6 封印（v5 附录 B）"
+  echo "CPU_ONLINE_WRITABLE=$([ "$ROOT_MODE" != none ] && [ -w /sys/devices/system/cpu/cpu1/online ] && echo yes || echo unknown)"
+  echo "PMU_L3C_COUNT=$(ls -d /sys/bus/event_source/devices/hisi_sccl*_l3c* 2>/dev/null | wc -l)"
+  echo "PMU_HHA_COUNT=$(ls -d /sys/bus/event_source/devices/hisi_sccl*_hha* 2>/dev/null | wc -l)"
+  echo "PMU_DDRC_COUNT=$(ls -d /sys/bus/event_source/devices/hisi_sccl*_ddrc* 2>/dev/null | wc -l)"
+  echo "EDAC_MC_COUNT=$(ls -d /sys/devices/system/edac/mc/mc* 2>/dev/null | wc -l)"
+  echo "RASDAEMON_ACTIVE=$(systemctl is-active rasdaemon 2>/dev/null || echo unknown)"
+  for t in BERT EINJ HEST ERST; do
+    echo "ACPI_HAS_$t=$(ls /sys/firmware/acpi/tables/ 2>/dev/null | grep -cq "^$t" && echo yes || echo no)"
+  done
+  # MEM_NODES = 有本地内存的 node（MemTotal>0，同 v1 战役 sdc_machine_scan 语义）。不能用
+  # [ -f meminfo ]：本机 memoryless node0/2 同样有 meminfo 文件（MemTotal: 0 kB）。
+  echo "MEM_NODES=\"$(for n in /sys/devices/system/node/node*; do mt=$(awk '/MemTotal/{print $4}' "$n/meminfo" 2>/dev/null); [ "${mt:-0}" -gt 0 ] && basename "$n" | tr -d a-z; done | tr '\n' ' ' | sed 's/ $//')\""
+} > "$CAP"
+cp "$CAP" "${SDC_EXCITE_REPRODUCE_DIR:-$HOME/sdc-excite-reproduce}/capabilities.env" 2>/dev/null \
+  || echo "note: 数据根不存在，capabilities.env 仅存于画像目录" >&2
+echo "16_capabilities.env 完成: $(wc -l < "$CAP") 行"
 
 # ---------------- 汇总 ----------------
 echo "=== 画像完成: $OUT"

@@ -84,4 +84,7 @@ def main(argv=None):
     cls(period_s=period).run()
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    # __main__ 双导入陷阱（C1）：直接 main() 时子模块 from sdc_collector import register
+    # 会导入第二份模块副本，注册表写进副本、分派读原表恒空。委托给 canonical 模块：
+    from sdc_collector import main as _main
+    _main(sys.argv[1:])

@@ -21,3 +21,29 @@ def test_dispatch_unknown_raises():
     import pytest
     with pytest.raises(SystemExit):
         sc.main(["nosuch"])
+
+def test_main_entry_dispatches_registered_submodule(tmp_path, monkeypatch):
+    # C1 回归：脚本作为 __main__ 运行时，子模块的 register 必须到达分派表。
+    # stub 首个周期后 SystemExit(0) 自然退出（BaseException 不被基类 except Exception 吞）。
+    # 隔离运行（对裁定测试的两处必要修正）：
+    #  (a) main() 只 import 固定三名 percore/pmu/ras，桩必须占用其一，否则永远不被导入；
+    #  (b) 入口按当前字节复制到 tmp_path 执行——脚本目录优先于 PYTHONPATH，若直接跑仓库
+    #      脚本，Task 4-6 落地真 sdc_collector_percore.py 后会遮蔽桩，本测试将来误报。
+    import os, shutil, subprocess, sys
+    shutil.copy(os.path.join(os.path.dirname(os.path.dirname(__file__)), "sdc_collector.py"),
+                tmp_path / "sdc_collector.py")
+    stub = tmp_path / "sdc_collector_percore.py"
+    stub.write_text(
+        "from sdc_collector import SdcCollector, register\n"
+        "@register\n"
+        "class T(SdcCollector):\n"
+        "    NAME, HEADER = 'stubtest', ['ts']\n"
+        "    DEFAULT_PERIOD_S = 0.01\n"
+        "    def collect_once(self):\n"
+        "        raise SystemExit(0)\n")
+    env = dict(os.environ, PYTHONPATH=str(tmp_path),
+               SDC_EXCITE_REPRODUCE_DIR=str(tmp_path / "data"))
+    p = subprocess.run([sys.executable, str(tmp_path / "sdc_collector.py"),
+                        "stubtest", "--period-s", "0.01"],
+                       capture_output=True, text=True, cwd=str(tmp_path), env=env, timeout=30)
+    assert p.returncode == 0, f"exit={p.returncode} stderr={p.stderr}"

@@ -15,22 +15,22 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-static void *alloc_jit(size_t size) {
+[[maybe_unused]] static void *alloc_jit(size_t size) {
     void *mem = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     return (mem == MAP_FAILED) ? nullptr : mem;
 }
 
-static void make_executable(void *mem, size_t size) {
+[[maybe_unused]] static void make_executable(void *mem, size_t size) {
     mprotect(mem, size, PROT_READ | PROT_EXEC);
 }
 
-static void flush_icache(void *mem, size_t size) {
+[[maybe_unused]] static void flush_icache(void *mem, size_t size) {
 #if defined(__aarch64__)
     __builtin___clear_cache(static_cast<char*>(mem), static_cast<char*>(mem) + size);
 #endif
 }
 
-static void free_jit(void *mem, size_t size) {
+[[maybe_unused]] static void free_jit(void *mem, size_t size) {
     munmap(mem, size);
 }
 

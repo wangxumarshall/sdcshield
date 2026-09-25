@@ -71,10 +71,10 @@
 
 - [x] **Step 1**: A1 核心对照 (引 Task 3 数据): F vs C1 唯一差异 139↔140 → 崩 vs 净。
 - [x] **Step 2**: A2 去 taskset (F_20260925T080650): **预期被证伪 — 照常复现**。rc=139, 91s(段间), rank=3, crash_psr_last=139, class=canonical_3ffb (0x3ffb3ad21480), cpu139_min=1996 VALID。机理: mpirun --allow-run-as-root 以 root 运行, hwloc/sched_setaffinity 可把亲和自放宽回 cgroup 全 608 核 cpuset, 启动器 16 核掩码拦不住 (认知修正: 16 核陷阱只困朴素非 root 启动, 不困 root+mpirun+rankfile 显式绑定)。结论: taskset 包装非复现必要条件 — 如实记录; 脚本仍统一保留 taskset (与已证 F 形一致)。
-- [ ] **Step 3**: A3 频率消融 (补跑 job_ablation_a3.sh): setspeed 1550000 + 读回 (cur≤1600000 方为生效) → F×1 预期**不崩** (rc=0 + scf1≈7.796e-01 + E3≈-206.726163764879 ±1e-10) → setspeed 2000000 + 读回 (cur≥1950000) → F×1 预期崩 (REPRO_CRASH_ATTRIBUTED) → 终态读回 (回 ~2.0GHz)。freqmon 全程, verify 用 FREQ_CSV env。
+- [x] **Step 3**: A3 频率消融 — **干预式环境不可行, 以证据链关闭 (2026-09-25 08:22)**。三轮证据: (1) job 1724844 首轮 SKIPPED (scaling_available_frequencies 为空); (2) job 1724866 补跑 CAP 门控正确拦截: scaling_setspeed Permission denied, 零状态写入 (cpu139 全程 ~1998MHz, 无需恢复); (3) job 1724872 诊断定案: 作业身份 uid=28370(suke) 无有效 cap (CapEff=0), sudo 需密码, scaling_governor/setspeed 均 root-only (rw-r--r-- root root), 双写测试均拒; 且 **scaling_min_freq=scaling_max_freq=2000000 — cpu139 频率被 root tuned 守护钉死在 2.0GHz** (mtime Sep 23 15:58, 早于战役起点) — 即使有 root 写权限也需先降 min_freq。频率依赖性以引证+门控记录: 用户原始观察 (~1.55GHz 不复现, 早于钉频), 战役 P4 文档, bundle 频率门控 (归因崩溃要求 cpu139_min≥1800 VALID; 今日 3 次归因崩溃 P139/A2/A4 均 1996-1999MHz)。root 特权干预式 A3 需管理员配合 (降 scaling_min_freq + setspeed 或改 tuned profile) — README 备注供后续。
 - [x] **Step 4**: A4 输入规模 (F_20260925T080829): v6c 128 元素, inputhash=8042d625d0b711cd ✓ → rc=139, 52s, rank=3, psr=139, class=byte6-highva_fb (0xfbaaab01c4fc40), cpu139_min=1996 VALID → 规模无关性确认 (与战役 NELEMS 阶梯 16→640 全崩一致)。
 - [x] **Step 5**: A5/A6 引证不重跑: A5 二进制同一性 binhash=763c6843f504e1f7 (本轮两次运行同值 = Task 3 = 战役包); A6 NCOMMS<16 死锁 (战役 v5nc8 rc=134, 集群 fabric 下限, 引证)。
-- [ ] **Step 6**: repo: 勾选 + commit + push (含 A2 证伪记录 + A3 补跑结果)。
+- [x] **Step 6**: repo: 勾选 + commit + push (e565582f: 首轮 A2 证伪/A4 过/A3 跳过根因; 本笔: A3 权限墙证据链关闭)。Task 5 关闭: A1 ✓ A2 证伪有果 ✓ A3 不可行有据 ✓ A4 ✓ A5/A6 引证 ✓。
 ### Task 6: 目录内双报告 + 收尾
 
 - [ ] **Step 1**: `$NEW/README.md` 手把手复现方法: 前提(账号/队列/HPCKit/LVTX) → 构建 → F/C1 运行 → 判定标准与预期值 → 全核探针方法 → 消融方法 → 故障排查 (taskset/setvars 位置参数/tag-output 三坑) → 自检清单。

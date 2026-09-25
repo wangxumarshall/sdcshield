@@ -8,7 +8,8 @@ per-DIMM 宽稀疏列设计（v5 12 维矩阵 #9 路由项）：HEADER 除 ts/mc
 为 __init__ 时发现式枚举到的每个 EDAC dimm 追加 dimm_mc<N>_<idx>_ce/_ue 两列
 （按 mc 号、dimm 号数值排序）；每行（每 mc 一行）只填本 mc 名下 dimm 的当前值，
 其余 dimm 列与文件缺失的计数列留空——列集在进程生命周期内固定，dimm 热插拔
-需重启采集器才会进列集（重启列头防御会拒绝列集漂移拼接）。
+需重启采集器才会进列集；重启时 __init__ 比对既有文件列头（percore 模式），
+列集漂移 → stderr 一行 + exit 1 拒绝拼接，绝不静默错位续写。
 """
 import datetime, glob, os, re, shutil, subprocess, sys
 from sdc_collector import SdcCollector, register
@@ -56,6 +57,13 @@ class RasCollector(SdcCollector):
         # v5 §6.6 产物名为 ras_edac.csv（基类默认按 NAME 派生成 ras.csv，此处显式对齐计划接口）
         self.csv_path = os.path.join(os.path.dirname(self.csv_path), "ras_edac.csv")
         self._init_csv()
+        # 重启列头防御（I-1，percore 模式移植）：既有文件列头与本次列集不符（dimm 拓扑
+        # 跨重启漂移）时，追加会静默错位拼进旧列头——首轮即拒绝启动
+        _hdr = open(self.csv_path).readline().rstrip("\n") if os.path.getsize(self.csv_path) else ""
+        if _hdr and _hdr != ",".join(self.HEADER):
+            print(f"[{self.NAME}] CSV 列头不一致（EDAC dimm 拓扑漂移？）: {self.csv_path}\n"
+                  f"  已有: {_hdr}\n  待写: {','.join(self.HEADER)}", file=sys.stderr, flush=True)
+            sys.exit(1)
         self._last_since = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._journal = open(os.path.join(os.path.dirname(self.csv_path), "journal_watch.log"), "a")
         self._last_daemon = 0.0

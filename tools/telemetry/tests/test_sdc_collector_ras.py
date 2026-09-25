@@ -1,4 +1,4 @@
-import os, subprocess, sys
+import os, subprocess, sys, pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import sdc_collector_ras as ras
 
@@ -40,4 +40,25 @@ def test_perdimm_columns_and_journalctl_robustness(tmp_path, monkeypatch):
     since0 = c._last_since
     assert c.collect_once() and c._last_since == since0            # 失败不推进（EDAC 行照常产出）
     assert "journalctl rc=1" in (tmp_path / "out" / "journal_watch.log").read_text()
+
+def test_header_drift_rejected(tmp_path, monkeypatch):
+    # I-1 回归：dimm 拓扑跨重启漂移 → 列头不一致必须 exit 1 而非静默错位拼接
+    # （假树同上例：EDAC_ROOT 直指含 mc/ 的目录，glob 为 EDAC_ROOT/mc/mc*）
+    mc = tmp_path / "mc" / "mc0"
+    (mc / "dimm0").mkdir(parents=True)
+    (mc / "ce_count").write_text("0")
+    (mc / "ue_count").write_text("0")
+    (mc / "dimm0" / "dimm_ce_count").write_text("0")
+    (mc / "dimm0" / "dimm_ue_count").write_text("0")
+    monkeypatch.setattr(ras, "EDAC_ROOT", str(tmp_path))
+    c1 = ras.RasCollector(period_s=1, out_dir=str(tmp_path / "o"),
+                          selfmon_path=str(tmp_path / "s.csv"), max_cycles=1)
+    c1.run()                                     # 写入含 dimm_mc0_0 列的文件
+    (mc / "dimm1").mkdir()
+    (mc / "dimm1" / "dimm_ce_count").write_text("0")
+    (mc / "dimm1" / "dimm_ue_count").write_text("0")   # 拓扑漂移：+dimm1
+    with pytest.raises(SystemExit) as ei:
+        ras.RasCollector(period_s=1, out_dir=str(tmp_path / "o"),
+                         selfmon_path=str(tmp_path / "s.csv"))
+    assert ei.value.code == 1
 

@@ -1,4 +1,4 @@
-import json, os, sys
+import json, os, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import sdc_event
 
@@ -50,3 +50,15 @@ def test_make_event_defaults():
                               **{"sdc-excite-reproduce_id": "c1", "run_id": "r1"})
     assert ev["schema_version"] == "1.0" and ev["artifacts"] == []
     assert sdc_event.validate_event(ev) == []
+
+def test_cli_validate_jsonl_stdin():
+    """CLI 子进程回归：validate-jsonl 从 stdin 读（曾把 TextIOWrapper 传给 open() 崩溃）。"""
+    cli = os.path.join(os.path.dirname(__file__), "..", "sdc_event.py")
+    good = "\n".join(json.dumps(VALID) for _ in range(2)) + "\n"
+    r = subprocess.run([sys.executable, cli, "validate-jsonl"],
+                       input=good, capture_output=True, text=True)
+    assert r.returncode == 0, f"rc={r.returncode} stderr={r.stderr}"
+    bad = good + "{not-json\n"
+    r2 = subprocess.run([sys.executable, cli, "validate-jsonl"],
+                        input=bad, capture_output=True, text=True)
+    assert r2.returncode != 0 and r2.stderr != ""

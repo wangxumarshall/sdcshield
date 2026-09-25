@@ -261,3 +261,66 @@
 
 - [ ] 确认 docs/research/ 是否入库（分支 + commit + push）
 - [ ] （用户如有后续研究方向待补充）
+
+---
+
+## 2026-09-25/26（会话：GitHub 特性调研 + CI 全线修复）
+
+### 完成内容
+
+1. **GitHub 特性面调研**：对照仓库 nav 全 tab 出具报告（本会话内交付用户）。
+2. **仓库设置**（API 完成）：description + 10 个 topics；Dependabot alerts + security
+   updates + 私有漏洞报告开启；标签 arm64-port/framework/test + milestone
+   「ARM64 移植补全」+ issue #2/#6/#7 归类；21 个 CodeQL 误报（3DES 为故意
+   测试内容）dismiss，2 个 integer-multiplication-cast 告警保留待查。
+3. **CI 修复 6 个 PR 全部合入**（#175/#176/#177/#178/#179/#181）：pr.yaml 的
+   actionlint 安装与调用三重 bug；build-cpu 复合 action 元数据（type 键非法、
+   description 缺失、matrix 键未定义）；security.yaml 的 action 版本、osv v2
+   参数、zizmor SARIF 权限；zizmor.yml 更名（点文件不被 v1.30 发现）；
+   codeql.yaml 切 x86 机群 + concurrency + $PWD 绝对路径 + plain 构建；
+   multi-os-verify 的 benchmark tool 值 + checkout v7。
+4. **仓库真实缺陷修复**（CI 首次真跑暴露）：unittests `-march=haswell` 加
+   x86 守卫；x87 语义 2 单测守卫 x86（#180）；bats 架构专属用例按存在性
+   跳过、AES 种子断言改格式（OpenSSL 版本依赖）；mite/movdq2q/
+   spinlock_unaligned 迁入 aarch64 守卫（x86 编译断）；sve512 家族加
+   512-bit VL 门控（#182）。
+5. **multi-os-verify 全绿**（smoke dispatch 36171807875）：benchmark-trend
+   修复生效；gh-pages 首建并清理污染树；**Pages 上线**
+   （https://wangxumarshall.github.io/sdcshield/，图表在 /dev/bench/）。
+6. **main 分支保护**：10 个必过检查；enforce_admins=false；CodeQL analyze
+   暂不设硬门（平台侧 runner 回收未稳，见下）。
+7. **本机 .bashrc**：GITHUB_PERSONAL_ACCESS_TOKEN/GHCR_TOKEN 补 export
+   （备份 ~/.bashrc.bak-20260925-claude）。
+
+### 实证记录（当天真实运行）
+
+- 本地 actionlint 1.7.12 无参数模式 → `exit=0`（CI lint 绿的前置验证）
+- 本地 zizmor v1.30.1：`.zizmor.yml` 更名前 47 findings / 更名后
+  `No findings to report`
+- 本机 aarch64 全量 ninja（470 targets）+ zstd19 回归多次 `exit: pass`
+- unittests 本地 101/101（CI 同款过滤）
+- 同 AES 种子本地输出 `I> 370546198 123984908 1106120622 309198093` ≠
+  bats 硬编码 `I> 1242137224 ...`（AES 派生值依赖 OpenSSL 构建的实锤）
+- multi-os smoke：15 verify + report + benchmark-trend 全 success
+- Pages builds/latest → `built`；站点 HTTP 200 + BENCHMARK_DATA 实数据
+
+### 环境状态
+
+- main @ 2a05c23f 起含全部修复；分支保护生效
+- **平台侧事件**：GitHub 托管 runner 今晚对 ~10 分钟重负载构建连续回收
+  （x86×3 + arm 大量，均 "The runner has received a shutdown signal"，
+  无编译错误、其余短 job 全绿；#179 评论有证据链）。CodeQL main push
+  的 attempt 2 进行中，平台恢复后自愈。
+- 遗留 issue：#180（Float80 aarch64 适配）、#182（sve512 非 512-VL 失配
+  根因）、#183（random_access_sweep 在 debian:sid 容器静默 abort，PR quick
+  暂禁用）；CodeQL 2 个 integer-cast 告警待查
+- build-cpu action 内 checkout@v6 / upload-artifact@v4 残留（dependabot
+  周一会开 PR，未动）
+
+### 下一步
+
+- [ ] 观察明日 04:00 UTC cron 的 multi-os：gh-pages 是否再次被污染
+      （若复现，benchmark-trend 改最小 checkout 或定期清理）
+- [ ] 平台回收稳定后把 `analyze (cpp)` 加入分支保护必过检查
+- [ ] #183 在 debian:sid arm64 容器复现 + core 取证
+- [ ] CodeQL integer-multiplication-cast 2 告警排查（eigen_svd common 头）

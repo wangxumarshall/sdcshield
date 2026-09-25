@@ -233,7 +233,10 @@ int Kunpeng920EccDetector::read_edac_errors(memory_error_stats *stats, int cpu)
         stats->ce_count += local_ce;
         stats->ue_count += local_ue;
         if (controller_count == 0) {
-            snprintf(stats->dimm_name, sizeof(stats->dimm_name), "EDAC_%s", entry->d_name);
+            /* d_name 最长 255,"EDAC_" 前缀 + NUL 后放不下全名 —— 精度限制到
+             * 字段恰好装满(256-5-1=250),消 -Wformat-truncation 且不失信息上限 */
+            snprintf(stats->dimm_name, sizeof(stats->dimm_name), "EDAC_%.*s",
+                     (int)sizeof(stats->dimm_name) - 6, entry->d_name);
             snprintf(stats->dimm_id, sizeof(stats->dimm_id), "%s", entry->d_name);
         }
         ++controller_count;

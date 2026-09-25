@@ -67,7 +67,7 @@ jobs:
         include:
         # arm64-only 项目:x86/Windows/GPU/IDXD 目标构建已移除(2026-09-25 决定),
         # unittests 覆盖随 x86 项删除移到本项。
-        - { name: GCC-arm64, archsuffix: "-arm", unittests: "unittests", selftests: "selftests" }
+        - { name: GCC-arm64, archsuffix: "-arm", env: "", meson_args: "", unittests: "unittests", selftests: "selftests" }
     steps:
       - name: Checkout the PR merge point
         uses: actions/checkout@v7

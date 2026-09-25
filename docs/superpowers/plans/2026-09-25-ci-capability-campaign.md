@@ -4,6 +4,21 @@
 
 **Goal:** 补全 SDCShield 仓库的 GitHub Actions 能力——4 批 18 任务:快赢、正确性闸门、安全扫描、无人值守闭环与趋势,每项独立 commit,每批一个 feature 分支 + PR。
 
+> **执行状态速览(2026-09-25 14:00 更新)**
+>
+> | 任务 | 状态 | 落点 |
+> |---|---|---|
+> | T0 x86 移除 | ✅ merged | PR#159 |
+> | T5 警告清零(~30 处/11 commits) | ✅ merged | PR#162 |
+> | 批 1: T1 timeout+concurrency / 死文件清理 / typo+codespell / actionlint / T4 issue 模板 | ✅ 6 commits | 分支 `ci/quickwins` |
+> | 批 3: T9-T15 zizmor/persist-credentials/权限收紧/gitleaks/osv/codeql/dependabot | ✅ 6 commits,zizmor 全绿 | 分支 `ci/security-scanning`(叠 quickwins) |
+> | 批 4: T16 PR 结果矩阵 / T17 benchmark 趋势 / T18 docs+网页清单 | ✅ 4 commits | 分支 `ci/loop-and-trends`(叠 security) |
+> | 批 2: T6 --werror 门禁 / T7 sanitizer / T8 paths-filter | ⬜ 待做(T6 前提 T5 已就绪) | — |
+>
+> 顺序 merge:quickwins → security-scanning → loop-and-trends(分支相叠,无冲突)。
+> T6/T7/T8 待 main 的既有红(build-cpu GCC-arm64 / multi-version 20.03+22.03 / nightly 10 job)修复后进行——CI 红期间挂 werror/sanitizer 门禁只会叠加噪声。
+> API 配额耗尽(匿名 60/h)致远程诊断中断;本机无 podman 无法复现容器构建。
+
 **Architecture:** 全部改动限于 `.github/`(workflows、composite actions、模板、dependabot)与少量 framework 警告清理。不触碰 x86-64 逻辑(mesh_*.cpp 仅删未用变量,属维护性修复)。CI 改动的验证回路 = feature 分支 push → 开 draft PR → Actions 真跑 → 绿了才 merge。
 
 **Tech Stack:** GitHub Actions(composite actions、matrix、concurrency、job 级 permissions)、codespell 2.4、zizmor 1.30、actionlint、gitleaks-action、osv-scanner-action、CodeQL(cpp)、Dependabot、dorny/paths-filter、benchmark-action/github-action-benchmark。

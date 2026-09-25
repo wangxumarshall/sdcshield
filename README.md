@@ -151,6 +151,14 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 
 详见 [docs/multi-version-build-deploy.md](docs/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
 
+### PR CI 门禁、安全扫描与基准趋势
+
+PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历史/DCO → `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，quick 结果以「用例 × 结果[耗时]」矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3，源码/适配层改动才跑，docs-only PR 自动跳过）。同 PR 推新 commit 自动取消旧 run；所有 job 有超时上限。
+
+安全（`security.yaml` + `codeql.yaml`，每周一全量 + PR 增量）：zizmor（workflow 自身安全，噪声策略见 `.zizmor.yml`）、gitleaks（全历史凭据扫描）、osv-scanner（vendored 依赖 CVE）、CodeQL cpp（arm64 构建，排除 `third-party/`）。全部 checkout `persist-credentials: false`；Dependabot 管 action 版本（分组 + 7 天冷却）。
+
+基准趋势：nightly 的 24.03-LTS-SP3 `benchmark.tsv` 由 `benchmark-trend` job 转换后经 github-action-benchmark 推到 gh-pages 分支，出跨 commit 趋势图 + 150% 回归告警（观测期不硬门）。网页侧操作清单（原生失败通知、分支保护、Code scanning 确认）见 [docs/build-deploy/ci-web-operations.md](docs/build-deploy/ci-web-operations.md)。
+
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
 本地 podman 上的**最严格**验证入口（GHA 日报的本地超集,29 条目选项矩阵 × 全部测试用例,含 `--quality=-1` SKIP 级、三 RNG 引擎、cpuset 跨 NUMA、全部 `-O` 测试旋钮、selftests、`--on-crash=context` 等）:

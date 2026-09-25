@@ -14,6 +14,11 @@ on:
   schedule:
     - cron: '37 2 * * 1'   # 每周一 UTC 02:37 = 北京 10:37
 
+# 合并批次曾 3 分钟连发 7 个 run;同 ref 只留最新,PR 推新时取消旧 run 省配额
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

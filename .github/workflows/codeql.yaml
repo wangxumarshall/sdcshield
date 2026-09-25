@@ -1,8 +1,11 @@
 name: CodeQL
 
 # C/C++ 静态分析,排除 third-party/ vendored 代码去噪。
-# meson 项目 autobuild 不可靠,显式 meson 构建供注入(arm64,与仓库唯一
-# 支持目标一致;eigen5 为 in-repo vendored,无需 submodule)。
+# meson 项目 autobuild 不可靠,显式 meson 构建供注入(eigen5 为 in-repo
+# vendored,无需 submodule)。
+# 跑 x86 机群:托管 ubuntu-24.04-arm 裸 VM 曾被平台侧随机关机(2026-09-25
+# 当天 16/19 个 run 构建中途收 SIGTERM);aarch64 专属测试(SVE 等)在 x86
+# 被 meson 守卫排除,其编译覆盖由 multi-os-verify 每日 ARM 构建承担。
 
 on:
   push:
@@ -17,7 +20,7 @@ permissions:
 jobs:
   analyze:
     name: analyze (cpp)
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       security-events: write    # 上传 SARIF 到 Security and quality 页

@@ -1606,7 +1606,8 @@ void TopologyDetector::detect(const LogicalProcessorSet &enabled_cpus)
     detect_family_via_cpuid();
 
     int count = sApp->device_count;
-    [[assume(count > 0)]];
+    if (count <= 0)
+        __builtin_unreachable(); // [[assume(count > 0)]] 的 GCC12 兼容等价式(不支持该属性)
 
     // fill in device_info first
     {
@@ -1643,7 +1644,8 @@ void TopologyDetector::detect(const LogicalProcessorSet &enabled_cpus)
     auto detect = [](void *ptr) -> void * {
         auto self = static_cast<TopologyDetector *>(ptr);
         int count = sApp->device_count;
-        [[assume(count > 0)]];
+        if (count <= 0)
+            __builtin_unreachable(); // [[assume(count > 0)]] 的 GCC12 兼容等价式(不支持该属性)
         for (Topology::Thread &cpu : std::span(device_info, count)) {
             pin_to_logical_processor(LogicalProcessor(cpu.cpu_number));
             self->detect_via_cpuid(&cpu);

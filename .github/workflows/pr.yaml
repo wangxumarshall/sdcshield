@@ -27,6 +27,10 @@ jobs:
         ref: ${{ github.sha }}
     - name: Check if the PR adds tabs in source files
       run: .github/scripts/check-no-tabs.sh origin/${{ github.base_ref }} HEAD
+    - name: Run codespell
+      run: |
+        pipx install codespell
+        codespell
 
   git-sanity:
     runs-on: ubuntu-latest

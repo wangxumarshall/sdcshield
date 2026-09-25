@@ -1,0 +1,13 @@
+[codespell]
+# docs/ 不扫:翻译/研究大树,实测 2491 行误报(德语 ist、缩写 UE 等),信噪比不可治;
+# 后续如需治理 docs 另立专项。构建产物与 vendored 树同样跳过。
+# framework/device/{gpu,idxd}、tests/gpu:x86-only 遗留设备目录(arm64-only 项目不构建,
+# 遵循 x86-64 untouched 不动其内容)。
+skip = .git,third-party,builddir*,compile_commands.json,*.tsv,docs,campaign_*,*device/gpu*,*device/idxd*,*tests/gpu*
+# 术语/标识符白名单:sme=ARM SME;UE/ue=EDAC uncorrected error;AER=PCIe Advanced
+# Error Reporting;VAs=virtual addresses 复数;vor/adn=SVE 结果变量名;padd=SVE/NEON
+# 指令名风格;addin=NIST SP800-90 additional input;ist=德语;unx=URL 片段;
+# preverse=Eigen API;ot=Outlet Temp 变量;te=自测 fixture 测试名;
+# unpacket=Eigen unpacket_traits
+ignore-words-list = sme,ist,unx,UE,ue,AER,aer,VAs,vor,adn,padd,addin,preverse,ot,te,unpacket
+count =

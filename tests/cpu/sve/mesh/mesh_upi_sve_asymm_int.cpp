@@ -62,6 +62,13 @@ static int mesh_upi_sve_asymm_int_init(struct test *test) {
     return EXIT_SUCCESS;
 }
 
+/* gcc-16.2 (debian:sid, 2026-09) 对本函数在 -O2+ RTL expand ICE(internal
+ * compiler error: Segmentation fault);与 core179 三 probe 的 gcc-10 ICE 同族
+ * (SVE 循环内 svst1 模式 × 优化器)。注意:函数级 O1 对 gcc-16 此处无效
+ * (gcc-10 的 probe 用 O1 即可,gcc-16 需 O0 才完全规避)。SDC 激励为显式
+ * intrinsics 与原子操作,不依赖优化器;自旋屏障在 O0 下语义不变,仅自旋
+ * 速度略降(原子条件本身每次都真实读)。 */
+__attribute__((optimize("O0")))
 static int mesh_upi_sve_asymm_int_run(struct test *test, int cpu) {
     (void)cpu;
     auto *td = static_cast<TestData*>(test->data);

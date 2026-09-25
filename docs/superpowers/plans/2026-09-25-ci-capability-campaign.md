@@ -13,11 +13,27 @@
 > | 批 1: T1 timeout+concurrency / 死文件清理 / typo+codespell / actionlint / T4 issue 模板 | ✅ 6 commits | 分支 `ci/quickwins` |
 > | 批 3: T9-T15 zizmor/persist-credentials/权限收紧/gitleaks/osv/codeql/dependabot | ✅ 6 commits,zizmor 全绿 | 分支 `ci/security-scanning`(叠 quickwins) |
 > | 批 4: T16 PR 结果矩阵 / T17 benchmark 趋势 / T18 docs+网页清单 | ✅ 4 commits | 分支 `ci/loop-and-trends`(叠 security) |
-> | 批 2: T6 --werror 门禁 / T7 sanitizer / T8 paths-filter | ⬜ 待做(T6 前提 T5 已就绪) | — |
+> | 批 2: T6 --werror 门禁 / T7 sanitizer / T8 paths-filter | ⬜ 待做(T6 前提 T5 已就绪;T7 见下方探路结论) | — |
 >
 > 顺序 merge:quickwins → security-scanning → loop-and-trends(分支相叠,无冲突)。
 > T6/T7/T8 待 main 的既有红(build-cpu GCC-arm64 / multi-version 20.03+22.03 / nightly 10 job)修复后进行——CI 红期间挂 werror/sanitizer 门禁只会叠加噪声。
 > API 配额耗尽(匿名 60/h)致远程诊断中断;本机无 podman 无法复现容器构建。
+>
+> **T7 sanitizer 本地探路结论(2026-09-25)**:本机 GCC 12.3 对
+> tests/cpu/sve/core179/(21 文件)× 任意 -fsanitize 组合 **编译器自身 ICE**
+> (ASan 死于 asan_expand_mark_ifn asan.cc:3749;UBSan-only 同样
+> Segmentation fault,命中文件 b/g1/movbe/xn/c/e/h/x/f 等)——GCC-12 的
+> sanitizer×SVE 已知缺陷族,非本仓代码 bug(同代码无 sanitizer 构建全绿,
+> werror 亦绿)。⇒ T7 的"本地先证可行"在本机不可行;须等 main 修绿后在
+> CI(gcc-15/sid)上以分支实跑验证,或 CI 项降为 UBSan-only。
+>
+> **main 既有红的诊断状态(2026-09-25)**:PR run 时间线显示 9-20
+> (sve-port-avx53 活动期)起几乎全红(含 docs-only PR)⇒ 根因画像为
+> sve/core179 新代码在非 gcc-12 工具链下的编译失败:20.03/22.03(gcc-10)
+> 在 PR#158 修 3 文件后仍红(svst1-AND 模式静态复查已清零 ⇒ 别的炸点);
+> build-cpu GCC-arm64(sdebian:sid gcc-15)3.9min 早夭疑似同类。
+> 定位需 CI 日志(匿名 API 403 + 配额 8h 耗尽 + 本机无 podman)——
+> 等用户:gh auth login / 贴日志尾部 / sudo dnf install podman 三选一。
 
 **Architecture:** 全部改动限于 `.github/`(workflows、composite actions、模板、dependabot)与少量 framework 警告清理。不触碰 x86-64 逻辑(mesh_*.cpp 仅删未用变量,属维护性修复)。CI 改动的验证回路 = feature 分支 push → 开 draft PR → Actions 真跑 → 绿了才 merge。
 

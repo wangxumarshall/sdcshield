@@ -101,11 +101,11 @@ static int arm0102_kreg_mask_sve_init(struct test *test) {
     memset_random(data->srcB, ARM0102_KREG_MASK_SVE_COUNT * sizeof(uint32_t));
 
     /* golden: 同一旋转组合, 在相同 SVE 单元上预计算 */
-    svbool_t pg = svptrue_b32();
+    [[maybe_unused]] svbool_t pg = svptrue_b32();
     const int lanes = svcntw();
     for (int base = 0; base < ARM0102_KREG_MASK_SVE_COUNT; base += lanes) {
         int n = (ARM0102_KREG_MASK_SVE_COUNT - base < lanes) ? (ARM0102_KREG_MASK_SVE_COUNT - base) : lanes;
-        svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
+        [[maybe_unused]] svbool_t pgn = svwhilelt_b32((uint64_t)0, (uint64_t)n);
         /* 与 run 完全相同的 4 元素子块结构 + 相位 (base+sub)%4 */
         for (int sub = 0; sub < n; sub += 4) {
             int phase = (base + sub) % 4;

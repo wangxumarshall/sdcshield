@@ -111,8 +111,8 @@ static int mesh_upi_avx2_asymm_int_run(struct test *test, int cpu) {
                 // 一致性测试（自身写入后读回）
                 int32x4_t loaded0 = vld1q_s32(td->data + offset);
                 int32x4_t loaded1 = vld1q_s32(td->data + offset + VECTOR_SIZE);
-                uint32x4_t cmp0 = vceqq_s32(v0, loaded0);
-                uint32x4_t cmp1 = vceqq_s32(v1, loaded1);
+                [[maybe_unused]] uint32x4_t cmp0 = vceqq_s32(v0, loaded0);
+                [[maybe_unused]] uint32x4_t cmp1 = vceqq_s32(v1, loaded1);
                 // 检查所有元素是否相等（忽略，因为后续读者会校验）
 
                 td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);

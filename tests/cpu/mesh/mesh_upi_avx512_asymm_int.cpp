@@ -91,7 +91,7 @@ static int mesh_upi_avx512_asymm_int_run(struct test *test, int cpu) {
                 __sync_synchronize();   // 确保写入对其他核心可见
 
                 // 一致性测试：写入后立即读回比较
-                bool block_ok = true;
+                [[maybe_unused]] bool block_ok = true;
                 for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
                     int32x4_t written = vld1q_s32(vals + v * NEON_VECTOR_SIZE);
                     int32x4_t loaded = vld1q_s32(td->data + offset + v * NEON_VECTOR_SIZE);

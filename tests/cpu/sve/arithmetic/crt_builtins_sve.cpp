@@ -96,19 +96,25 @@ static int crt_builtins_sve_run(struct test *test, int cpu)
             float mul = __mulsf3(data->a[i], data->b[i]);
             float div = __divsf3(data->a[i], data->b[i]);
             if (memcmp(&add, &data->golden_add[i], sizeof(float)) != 0) {
+                unsigned int abits, gbits;
+                memcpy(&abits, &add, sizeof(abits));
+                memcpy(&gbits, &data->golden_add[i], sizeof(gbits));
                 report_fail_msg("crt __addsf3 mismatch at %zu: 0x%08x vs 0x%08x",
-                                i, *(unsigned int *)&add,
-                                *(unsigned int *)&data->golden_add[i]);
+                                i, abits, gbits);
             }
             if (memcmp(&mul, &data->golden_mul[i], sizeof(float)) != 0) {
+                unsigned int mbits, gbits;
+                memcpy(&mbits, &mul, sizeof(mbits));
+                memcpy(&gbits, &data->golden_mul[i], sizeof(gbits));
                 report_fail_msg("crt __mulsf3 mismatch at %zu: 0x%08x vs 0x%08x",
-                                i, *(unsigned int *)&mul,
-                                *(unsigned int *)&data->golden_mul[i]);
+                                i, mbits, gbits);
             }
             if (memcmp(&div, &data->golden_div[i], sizeof(float)) != 0) {
+                unsigned int dbits, gbits;
+                memcpy(&dbits, &div, sizeof(dbits));
+                memcpy(&gbits, &data->golden_div[i], sizeof(gbits));
                 report_fail_msg("crt __divsf3 mismatch at %zu: 0x%08x vs 0x%08x",
-                                i, *(unsigned int *)&div,
-                                *(unsigned int *)&data->golden_div[i]);
+                                i, dbits, gbits);
             }
         }
     } while (test_time_condition(test));

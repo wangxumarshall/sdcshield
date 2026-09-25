@@ -102,7 +102,7 @@ static int mesh_upi_sve_wide_asymm_write_only_int_run(struct test *test, int cpu
                 __sync_synchronize();   // 确保写入对其他核心可见
 
                 // 一致性测试：立即读回比较
-                bool block_ok = true;
+                [[maybe_unused]] bool block_ok = true;
                 for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
                     svbool_t pg = svwhilelt_b32((uint64_t)0, (uint64_t)NEON_VECTOR_SIZE);
 

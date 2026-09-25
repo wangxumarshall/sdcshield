@@ -90,25 +90,13 @@ inline void axis_generic_16x2(
     const svbool_t ptrue, const double* coeff,
     svfloat64_t& res0, svfloat64_t& res1)
 {
-    svfloat64_t  temp = res0;
-        temp = res0;
-        temp = res0;
-        temp = res0;
 #if defined(__clang__)
 #pragma clang loop unroll(full)
 #endif
     for (size_t r = 1; r <= RADIUS; ++r) {
         const ptrdiff_t off = static_cast<ptrdiff_t>(r * stride) * B_TILE;
-    //svfloat64_t  temp = res0;
-        temp = res0;
-        temp = res0;
-        temp = res0;
         const svfloat64_t c = svdup_f64(coeff[r]);
 
-    //svfloat64_t  temp = res0;
-        temp = res0;
-        temp = res0;
-        temp = res0;
         if (coord >= r) {
             const double* n = s_base - off;
             res0 = svmla_x(ptrue, res0, svld1(ptrue, n), c);

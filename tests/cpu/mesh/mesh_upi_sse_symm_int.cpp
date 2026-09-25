@@ -108,7 +108,7 @@ static int mesh_upi_sse_symm_int_run(struct test *test, int cpu) {
 
             // 一致性测试（自身写入后立即读回，忽略结果）
             int32x4_t loaded = vld1q_s32(td->data + offset);
-            uint32x4_t cmp = vceqq_s32(v, loaded);
+            [[maybe_unused]] uint32x4_t cmp = vceqq_s32(v, loaded);
             // 检查但不使用结果（原代码也忽略）
 
             td->global_sum.fetch_add(local_sum, std::memory_order_seq_cst);

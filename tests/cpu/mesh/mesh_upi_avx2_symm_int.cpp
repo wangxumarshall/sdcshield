@@ -109,8 +109,8 @@ static int mesh_upi_avx2_symm_int_run(struct test *test, int cpu) {
             __sync_synchronize();  // 类似 _mm_sfence
 
             // 一致性测试（自身写入后读回，忽略结果）
-            int32x4_t loaded0 = vld1q_s32(td->data + offset);
-            int32x4_t loaded1 = vld1q_s32(td->data + offset + VECTOR_SIZE);
+            [[maybe_unused]] int32x4_t loaded0 = vld1q_s32(td->data + offset);
+            [[maybe_unused]] int32x4_t loaded1 = vld1q_s32(td->data + offset + VECTOR_SIZE);
             // 仅检查，不存储结果（原代码也忽略 mask）
             // 可保留空操作
 

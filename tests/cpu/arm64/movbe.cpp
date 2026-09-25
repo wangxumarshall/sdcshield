@@ -52,7 +52,7 @@ static int movbe_run(struct test *test, int cpu)
 
             // Check if we got the original value back
             if (val != data->input[i]) {
-                report_fail_msg("MovBE: Round-trip failed at index %u", i);
+                report_fail_msg("MovBE: Round-trip failed at index %zu", i);
             }
         }
     }

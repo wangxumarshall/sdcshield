@@ -954,8 +954,12 @@ void logging_print_header(int argc, char **argv, ShortDuration test_duration, Sh
 #endif
         if (pos != std::string::npos)
             cmdline = cmdline.substr(pos+1);
-        for (int i = 1; i < argc; i++)
-            cmdline += " " + std::string(argv[i]);
+        for (int i = 1; i < argc; i++) {
+            /* 拆开追加, 避免 GCC12 对 `s += std::string(...)` 的 -Wrestrict 误判;
+             * 语义不变且少一次临时 string 分配 */
+            cmdline += ' ';
+            cmdline += argv[i];
+        }
     }
 
     switch (current_output_format()) {

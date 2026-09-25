@@ -90,7 +90,7 @@ static int movbe_dump_probe_d_sve_run(struct test *test, int cpu)
             svst1_u8(pg, (uint8_t *)(data->swapped + base), vswapped);
             /* PROBE D: store to a constant global (not input/swapped) */
             {
-                static uint32_t probe_d_sink;
+                [[maybe_unused]] static uint32_t probe_d_sink;
                 probe_d_sink = (uint32_t)(base + 0x5A5A);
             }
 

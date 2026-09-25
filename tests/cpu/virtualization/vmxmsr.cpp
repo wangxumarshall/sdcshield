@@ -15,7 +15,7 @@ struct TestData {
 };
 
 // 读取 ARM64 系统寄存器（用户态可读）
-static bool read_midr_el1(int cpu, uint64_t *val) {
+[[maybe_unused]] static bool read_midr_el1(int cpu, uint64_t *val) {
     (void)cpu;  // ARM64 上读取系统寄存器与 CPU 无关，但保留参数用于日志
     // 使用内联汇编读取 MIDR_EL1
     uint64_t reg;

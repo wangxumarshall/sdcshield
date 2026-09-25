@@ -669,7 +669,12 @@ static void __attribute__((noinline, noclone)) test_start()
     assembly_marker<Test, Start>();
 }
 
+#if defined(__x86_64__)
+// sysv_abi 是 x86-64 调用约定属性,arm64(AAPCS64)上被 GCC 忽略并告警,故仅 x86_64 应用。
 static void __attribute__((noinline, noclone, sysv_abi)) test_end(ThreadState state)
+#else
+static void __attribute__((noinline, noclone)) test_end(ThreadState state)
+#endif
 {
     using namespace AssemblyMarker;
     assembly_marker<Test, End>(state);

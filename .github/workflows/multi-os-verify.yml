@@ -283,6 +283,43 @@ jobs:
           python3 scripts/gha/report-summary.py >> "$GITHUB_STEP_SUMMARY"
           echo "report done"
 
+  # ---- 基准趋势:只取 24.03-LTS-SP3(基准版本)的 benchmark.tsv 上 gh-pages。
+  # 独立非容器 job(避免 container 内 git push 兼容问题);benchmark-action
+  # auto-push 自动创建/更新 gh-pages 分支。共享 runner 噪声大,先观测告警
+  # 不硬门(fail-on-alert: false),趋势稳定后再评估收紧。----
+  benchmark-trend:
+    name: benchmark trend (gh-pages)
+    needs: verify
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write            # auto-push 到 gh-pages
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: verify-24.03-LTS-SP3
+          path: bench
+          merge-multiple: true
+      - name: Convert to benchmark JSON
+        run: |
+          tsv=$(ls bench/benchmark/benchmark.tsv 2>/dev/null || ls bench/*/benchmark/benchmark.tsv 2>/dev/null | head -1)
+          [ -n "$tsv" ] || { echo "no benchmark.tsv (unexpected) — skip trend update"; exit 0; }
+          python3 scripts/gha/benchmark-to-json.py "$tsv" bench/benchmark.json
+      - uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: sdcshield benchmark (24.03-LTS-SP3)
+          tool: custom
+          output-file-path: bench/benchmark.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+
   # ---- Release 永久保存(人工选择):workflow_dispatch 勾选 publish_release 时,
   # 把本次 15 个 built/ tarball 从 artifact 下载后作为 Release 资产上传。
   # Release 资产永久保留(除非手动删),公开仓免费,单资产上限 2GB。

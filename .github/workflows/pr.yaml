@@ -110,7 +110,21 @@ jobs:
           ulimit -St 120
           nproc=`nproc`
           nproc=$((nproc > 4 ? 4 : nproc))
-          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 -o -
+          # 落盘 allquality 型日志(-o 指定的文件全过也保留);
+          # 供下方 report-summary.py 出「用例 × 结果[耗时]」矩阵
+          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 -o quick.yaml
+      # quick 结果矩阵进 PR 页 step summary(复用 nightly 的 report-summary.py;
+      # 目录名 verify-<matrix.name> 对齐其 all-results/verify-*/results/allquality.yaml
+      # glob,零脚本改动;失败时 -o 文件同样保留,失败现场也出矩阵)。
+      - name: test-result matrix summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ -f quick.yaml ]; then
+            mkdir -p "all-results/verify-${{ matrix.name }}/results"
+            cp quick.yaml "all-results/verify-${{ matrix.name }}/results/allquality.yaml"
+            python3 scripts/gha/report-summary.py >> "$GITHUB_STEP_SUMMARY" || true
+          fi
       - name: upload test run logs
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

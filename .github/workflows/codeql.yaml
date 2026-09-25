@@ -1,0 +1,48 @@
+name: CodeQL
+
+# C/C++ 静态分析,排除 third-party/ vendored 代码去噪。
+# meson 项目 autobuild 不可靠,显式 meson 构建供注入(arm64,与仓库唯一
+# 支持目标一致;eigen5 为 in-repo vendored,无需 submodule)。
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  schedule:
+    - cron: '37 2 * * 1'   # 每周一 UTC 02:37 = 北京 10:37
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (cpp)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      security-events: write    # 上传 SARIF 到 Security and quality 页
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: cpp
+          config: |
+            paths-ignore:
+              - third-party
+              - bats
+              - scripts
+      - name: Install build deps
+        run: |
+          sudo apt-get -y update -qq
+          sudo apt-get -y install -qq meson ninja-build libboost-dev libeigen3-dev \
+            libgtest-dev libhwloc-dev libssl-dev libzstd-dev zlib1g-dev
+      - name: Build (meson, for CodeQL injection)
+        run: |
+          # arm64 用 vendored eigen5(CLAUDE.md:系统 3.3.x 在 GCC12+ 断);
+          # 其余 vendored 依赖缺席时 meson 优雅降级,足够静态分析覆盖面。
+          PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
+          ninja -C builddir
+      - uses: github/codeql-action/analyze@v3

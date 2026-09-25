@@ -7,9 +7,15 @@ on:
 permissions:
   contents: read
 
+# 推新 commit 取消同 PR 旧 run(本 workflow 仅 pull_request 触发,synchronize 必为新 push)
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - name: Checkout target branch (${{ github.base_ref }})
       uses: actions/checkout@v6
@@ -24,6 +30,7 @@ jobs:
 
   git-sanity:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - name: Checkout the PR merge point
       uses: actions/checkout@v6
@@ -36,6 +43,7 @@ jobs:
     name: Build binary for CPU (Linux)
     needs: [ lint, git-sanity ]
     runs-on: ubuntu-24.04${{ matrix.archsuffix }}
+    timeout-minutes: 45          # 实测 ~4min(arm64 4 核,apt+构建+unittests+selftests+quick),宽放
     container: debian:sid
     strategy:
       matrix:
@@ -107,6 +115,7 @@ jobs:
     name: Multi-version (${{ matrix.series }}-${{ matrix.sp }})
     needs: [ lint, git-sanity ]
     runs-on: ubuntu-24.04-arm   # GitHub hosted arm64;换 self-hosted 见注释
+    timeout-minutes: 90         # 实测 ~7-8min(镜像烘焙+构建+smoke),宽放
     strategy:
       fail-fast: false
       matrix:

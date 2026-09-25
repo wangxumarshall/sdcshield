@@ -47,3 +47,21 @@ def test_main_entry_dispatches_registered_submodule(tmp_path, monkeypatch):
                         "stubtest", "--period-s", "0.01"],
                        capture_output=True, text=True, cwd=str(tmp_path), env=env, timeout=30)
     assert p.returncode == 0, f"exit={p.returncode} stderr={p.stderr}"
+
+def test_sigterm_prompt_exit_long_period(tmp_path):
+    # 长周期下 SIGTERM 应 ~1-2s 退出（分片睡），而非睡满 60s 撞 TimeoutStopSec
+    import os, subprocess, sys
+    here = os.path.dirname(os.path.dirname(__file__))
+    code = ("import sys, time, threading, os\n"
+            f"sys.path.insert(0, {here!r})\n"
+            "import sdc_collector as sc\n"
+            "class Long(sc.SdcCollector):\n"
+            "    NAME, HEADER = 'longsleep', ['ts']\n"
+            "    def collect_once(self):\n"
+            "        return [[self.now_iso()]]\n"
+            f"c = Long(period_s=60, out_dir={str(tmp_path)!r}, selfmon_path={str(tmp_path / 'self.csv')!r})\n"
+            "threading.Timer(1.0, lambda: os.kill(os.getpid(), 15)).start()\n"
+            "t0 = time.monotonic(); c.run(); print(int(time.monotonic() - t0))\n")
+    p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr
+    assert int(p.stdout.strip()) <= 3    # 修复前睡满 60s（本测试 timeout=30 会先杀掉它）

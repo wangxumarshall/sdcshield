@@ -62,7 +62,11 @@ class SdcCollector:
                 ok = False
             self._selfmon(time.monotonic() - t0, ok)
             cycles += 1
-            time.sleep(max(0.0, self.period_s - (time.monotonic() - t0)))
+            # 分片睡：SIGTERM 后 ≤1s 内退出（PEP 475 会续睡剩余时长，长周期会撞模板 TimeoutStopSec=30 被 SIGKILL）
+            remain = self.period_s - (time.monotonic() - t0)
+            while remain > 0 and not self._stop:
+                time.sleep(min(1.0, remain))
+                remain = self.period_s - (time.monotonic() - t0)
 
 _REGISTRY = {}
 def register(cls):

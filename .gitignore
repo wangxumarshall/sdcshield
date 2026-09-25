@@ -23,3 +23,5 @@ tags
 # Claude Code local artifacts (session state, agent memory)
 /.claude/
 /memory/
+# pytest cache (rootdir is repo root, see tools/telemetry/)
+.pytest_cache/

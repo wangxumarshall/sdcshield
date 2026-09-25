@@ -442,9 +442,12 @@ Prometheus label 只使用 `machine_id`、`cpu`、`socket`、`metric_group`、`t
 
 ```
 monitor/monitor.csv        v3：全部模拟传感器（发现式 ~60 列）+ OS 聚合 + EDAC + vmstat    ~0.5MB/天
-monitor/percore.csv        ts + 128×util% + 128×freq_kHz（257 列）                        ~4-10MB/天
-monitor/pmu_core.csv       每 interval 一行 × 641 列（ts + 128核×5事件）@20s              ~22MB/天
-monitor/pmu_uncore.csv     每 interval 一行 × 449 列（ts + 448 设备×事件值，81 机 385）@20s    ~17MB/天
+monitor/percore.csv        ts + 128×util% + 128×freq_kHz（257 列）@60s                     ~2.4MB/天（实测 1.6KB/行）
+monitor/pmu_core.csv       每核一行 × 22 列并集（ts+group+core+percent_covered+18 事件列，3 轮换组菜单并集）@20s
+                                                                            实测 ~119B/行 × 128核×4320窗 ≈ 66MB/天
+monitor/pmu_uncore.csv     每设备一行 × 15 列并集（ts+group+device+percent_covered+11 事件列）@20s、10min 组轮换
+                                                                            实测 ~72B/行 × 56 设备×1440 窗 ≈ 6MB/天
+monitor/collector_self.csv 采集器自监控（每周期一行，5 行/min）                            ~0.5MB/天
 monitor/ras_edac.csv       ts + mc ce/ue/ce_noinfo + per-DIMM（发现式）@60s               <0.5MB/天
 monitor/journal_watch.log  RAS 关键字流 + spurious canary 计数                              小
 monitor/discrete_events.log 全量离散态转移事件                                              小
@@ -454,7 +457,9 @@ monitor/condition_10m.log  全量工况快照（含偏移段）
 logs/YYYYMMDD/*.yaml|.out  sdcshield 输出（每日 gzip）
 events/<时间戳>-<label>-rc<N>/  事件目录（提取式取证 + classification.txt + bisect/ + 切片 + PMU 深采）
 events/ledger.csv / stressng/  台账 / 补充层
-合计 raw ~50MB/天 → 小时级 gzip 后 ~6-8MB/天；保留窗口参数化（默认 14 天 gz）
+合计 raw ≈75MB/天（pmu_core 66 + uncore 6 + percore 2.4 + self 0.5 + ras/日志 <1；2026-09-26 实测外推）
+——超原 ~50MB/天 raw 预算，如实标注；轮转/压缩（原假设"小时级 gzip 后 6-8MB/天"）当前未配置，
+记为 M1b/M2 项；保留窗口参数化（默认 14 天 gz）
 ```
 
 磁盘联锁：85% 告警 / 95% 停新日志；本机当前 88% → **部署深度档前先清理至 <85%**（用户决策）；81 机磁盘充裕无此问题。〔v2〕事件原始文件 append-only + 分片校验和 + 完成标记；解析器输出带 source artifact hash，后续重解析不覆盖原始结果；保留策略建议：常态 1 秒时序 30-90 天、聚合指标 1 年、RED/BLACK 事件和复现胶囊长期保留。
@@ -505,7 +510,7 @@ events/ledger.csv / stressng/  台账 / 补充层
 
 ### 6.2 TSV110 PMU 分组〔v2〕
 
-TSV110 单核可用通用计数器数量有限（armv8_pmuv3 每核 ≤6），不能假设所有事件可以同时无复用地测量。按阶段轮换事件组，每次记录事件编码、PMU 类型、`time_enabled`、`time_running`、缩放值和原始值。当 `time_running/time_enabled` 低于配置阈值（建议初始 0.8）时，该窗口标记为 `multiplex_degraded`，不得直接和非复用窗口比较。平台上线前用 `perf list`、`perf stat -v` 和 PMU sysfs 能力探测校验 raw 编码，事件不存在时降级而非伪造零值。**PMU 是证据不是判据**（PinDrop：PMC 特征不稳定）。
+TSV110 单核可用通用计数器数量有限（本机实测 12 通用+1 cycle——dmesg 13 counters、12/13 边界双证，2026-09-25；≤6 为 armv8 通用下界假设），不能假设所有事件可以同时无复用地测量。按阶段轮换事件组，每次记录事件编码、PMU 类型、`time_enabled`、`time_running`、缩放值和原始值。当 `time_running/time_enabled` 低于配置阈值（建议初始 0.8）时，该窗口标记为 `multiplex_degraded`，不得直接和非复用窗口比较。平台上线前用 `perf list`、`perf stat -v` 和 PMU sysfs 能力探测校验 raw 编码，事件不存在时降级而非伪造零值。**PMU 是证据不是判据**（PinDrop：PMC 特征不稳定）。
 
 | 组 | 事件（TSV110 raw 码） | 目的 / 指向 |
 |---|---|---|
@@ -636,7 +641,7 @@ BMC 传感器名称因固件版本而变化，采集器同时保留 `raw_name`�
 
 不预设"监控固定消耗 X%"。每种机器、内核、计数器组和采样配置执行三组 A/B：无监控、常态监控、事件 burst，至少比较 SDCShield 吞吐、p50/p99/p99.9 延迟、cycles、系统 CPU、上下文切换和 I/O。
 
-**计数模式 vs 采样模式**（as-built 裁定，〔通用〕）：文献与实测一致——计数模式对系统性能影响微乎其微；采样模式随事件数与频率显著增长（研究实测：48 并发进程监听 16 事件，采样模式平均开销达几十百分点）。**本方案全部走计数模式**：持久 `perf stat -x, -a` 进程 @20s 读出，核事件组 ≤6 计数器零多路复用，uncore 每设备超预算分组 10min 轮换（coverage 列可见）。
+**计数模式 vs 采样模式**（as-built 裁定，〔通用〕）：文献与实测一致——计数模式对系统性能影响微乎其微；采样模式随事件数与频率显著增长（研究实测：48 并发进程监听 16 事件，采样模式平均开销达几十百分点）。**本方案全部走计数模式**：持久 `perf stat -x, -a` 进程 @20s 读出，核事件组 12 通用+1 cycle 零多路复用（本机实测——dmesg 13 counters、12/13 边界双证，2026-09-25；≤6 为 armv8 通用下界假设），uncore 每设备超预算分组 10min 轮换（coverage 列可见）。
 
 初始工程预算：
 

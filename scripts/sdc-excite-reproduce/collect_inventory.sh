@@ -142,7 +142,10 @@ cpu0f=/sys/devices/system/cpu/cpu0/cpufreq
   echo "PMU_HHA_COUNT=$(ls -d /sys/bus/event_source/devices/hisi_sccl*_hha* 2>/dev/null | wc -l)"
   echo "PMU_DDRC_COUNT=$(ls -d /sys/bus/event_source/devices/hisi_sccl*_ddrc* 2>/dev/null | wc -l)"
   echo "EDAC_MC_COUNT=$(ls -d /sys/devices/system/edac/mc/mc* 2>/dev/null | wc -l)"
-  echo "RASDAEMON_ACTIVE=$(systemctl is-active rasdaemon 2>/dev/null || echo unknown)"
+  # systemctl 非 active 时打印 "inactive" 且退出码非 0，`|| echo` 会追加第二行
+  # "unknown" 破坏 env 文件的可 source 性 —— 先捕获再兜底单行值
+  rda=$(systemctl is-active rasdaemon 2>/dev/null || true)
+  echo "RASDAEMON_ACTIVE=${rda:-unknown}"
   for t in BERT EINJ HEST ERST; do
     echo "ACPI_HAS_$t=$(ls /sys/firmware/acpi/tables/ 2>/dev/null | grep -cq "^$t" && echo yes || echo no)"
   done

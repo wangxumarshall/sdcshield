@@ -8,7 +8,7 @@
 #include <sandstone.h>
 
 #include <cstdint>
-#include <numeric> // for std::accummulate
+#include <numeric> // for std::accumulate
 #include <optional>
 #include <vector>
 

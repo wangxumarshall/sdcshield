@@ -245,7 +245,7 @@ target_deps = []
 
 boost_dep = dependency('boost', version : '>=1.69', required : false)
 # Check for required headers
-# (Also accomodates distributions which do not package a pkg-config file for boost)
+# (Also accommodates distributions which do not package a pkg-config file for boost)
 boost_has_hdrs = cpp.check_header('boost/algorithm/string.hpp') and cpp.check_header('boost/type_traits/is_complex.hpp')
 has_boost = boost_dep.found() or boost_has_hdrs
 

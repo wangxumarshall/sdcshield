@@ -199,7 +199,7 @@ TEST(ProgramOptionsParser, wrong_arguments_cause_print_help)
     };
     auto ret = opts.parse(6, argv, &cfg);
     EXPECT_EQ(ret, EX_USAGE);
-    // this is default action which was not overriden due to unrecognized option error
+    // this is default action which was not overridden due to unrecognized option error
     EXPECT_EQ(opts.action, Action::run);
     sb.check_eq("Try 'foo-bar --help' for more information.", false); // from suggest_help();
 }

@@ -111,7 +111,7 @@ static bool load_test_file(int dfd, int batch_fd, struct test *test, ifs_test_t 
             return false;
         }
 
-        /* when reached the latest image available, start from the begining */
+        /* when reached the latest image available, start from the beginning */
         log_info("Test file %s, does not exist. Starting over from 0x%x", ifs_info->image_id, DEFAULT_TEST_ID);
         sprintf(ifs_info->image_id, "%#x", DEFAULT_TEST_ID);
         if (write_file(dfd, "current_batch", ifs_info->image_id))

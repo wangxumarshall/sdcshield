@@ -842,7 +842,7 @@ static bool print_signal_info(const CrashContext::Fixed &ctx)
     auto sigbus_code_string = [](int code) {
         switch (code) {
         case BUS_ADRALN: return "BUS_ADRALN";        // Invalid address alignment.
-        case BUS_ADRERR: return "BUS_ADRERR";        // Non-existant physical address.
+        case BUS_ADRERR: return "BUS_ADRERR";        // Non-existent physical address.
         case BUS_OBJERR: return "BUS_OBJERR";        // Object specific hardware error.
 #ifdef BUS_MCEERR_AR
         case BUS_MCEERR_AR: return "BUS_MCEERR_AR";  // Hardware memory error: action required.

@@ -1643,7 +1643,7 @@ static ShortDuration test_duration(const test_cfg_info &test_cfg)
 {
     const struct test *test = test_cfg.test;
 
-    /* Start with the test prefered default time */
+    /* Start with the test preferred default time */
     ShortDuration target_duration(test->desired_duration);
     ShortDuration min_duration(test->minimum_duration);
     ShortDuration max_duration(test->maximum_duration);

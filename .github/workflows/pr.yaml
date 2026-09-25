@@ -40,7 +40,9 @@ jobs:
         curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash -o /tmp/install-actionlint.sh
         bash /tmp/install-actionlint.sh
     - name: Run actionlint
-      run: ./actionlint -shellcheck= -pyflakes= .github/workflows .github/actions
+      # 目录不能作参数(actionlint 当文件读 → "is a directory" exit 3);
+      # 无参数 = 自动收集仓库全部 workflows,本地复合 action 经 uses 引用时校验
+      run: ./actionlint -shellcheck= -pyflakes=
 
   git-sanity:
     runs-on: ubuntu-latest

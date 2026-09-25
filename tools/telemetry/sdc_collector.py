@@ -77,8 +77,8 @@ def main(argv=None):
     for m in ("sdc_collector_percore", "sdc_collector_pmu", "sdc_collector_ras"):
         try:
             __import__(m)                                 # 触发 @register；未交付的子模块跳过
-        except ImportError:
-            pass
+        except ImportError as e:                          # T3①：不吞细节——留一行现场再继续
+            print(f"子模块 {m} 导入失败: {e}", file=sys.stderr, flush=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("name", choices=sorted(_REGISTRY))
     ap.add_argument("--period-s", type=float, default=None)

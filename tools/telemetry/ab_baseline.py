@@ -35,6 +35,9 @@ def main():
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     runs = [{"loop_total": run_once(a.sdc_bin, a.t_ms, a.n)} for _ in range(a.runs)]
+    # 零值防御（T2⑤）：run_once 已拒绝 0，此处兜底防其被弱化——0 锚点会让 A/B 比较假 PASS
+    if any(r["loop_total"] <= 0 for r in runs):
+        raise RuntimeError(f"loop_total 含非正值 {[r['loop_total'] for r in runs]}——锚点不可用（防假 PASS）")
     doc = {"config": {"t_ms": a.t_ms, "n": a.n, "runs": a.runs},
            "runs": runs, "median_loop_total": statistics.median(r["loop_total"] for r in runs)}
     os.makedirs(os.path.dirname(a.out), exist_ok=True)

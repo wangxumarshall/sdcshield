@@ -52,25 +52,29 @@
 
 ### Task 4: 608 全核逐核探针对比验证
 
-**Files (cluster):** Create: `$NEW/gen_probe_rf.sh`(探针 rankfile 生成器), `$NEW/probe_run.sh`(单探针运行器), `$NEW/verify_probe.sh`(探针判定器), `$NEW/job_probe_pilot.sh`, `$NEW/job_probe_all.sh`, `$NEW/probes/`(结果), `$NEW/analyze_probes.sh`。
+**Files (cluster):** `$NEW/gen_probe_rf.sh`+`probe_run.sh`+`job_probe_pilot.sh`(象限形 v1, 已证伪留档), `$NEW/gen_rf_probe2.sh`+`probe_run2.sh`+`job_probe_pilot2.sh`+`job_probe_all2.sh`(修正形 v2), `$NEW/verify_probe.sh`(共用判定器), `$NEW/analyze_probes.sh`, `$NEW/probes/`(v1 伪证证据), `$NEW/probes2/`(v2 结果), `$NEW/probes/QUARTER_FORM_FALSIFIED.md`(伪证记录)。
 
-设计: 四象限 Q0=0-151 / Q1=152-303 / Q2=304-455 / Q3=456-607 (各 152 核, NUMA 对齐 4×38); 每探针 = 16 rank × 9 线程全部落在 c 所在象限内; **rank3 = 8 个填充核 + 探针核 c 于 thread-8 末位**; c≠139 时 139 从全部 144 槽位剔除 (探针不受污染); 生成器算法统一无特例。四象限并发 (4×144=576 线程), 象限内串行, 断点续跑 (跳过 probes tsv 已有核)。
+**设计 v1(象限形, 已证伪 2026-09-24 23:14, pilot job 1722694):** 四象限 16 rank × 9 线程全落 c 所在象限、rank3 = 8 填充核 + c 末位、4 路并发。证伪三重独立证据: (i) 归因断裂 — rep1 byte6 崩溃(rank3)但解引用线程 psr=137 填充核而非探针核 139; (ii) 4 路并发撞作业内存上限(峰值 37.5GB, 173.1s 同步 signal-9 ×4, 受害 rank 14/14/14/3/15 = cgroup OOM 特征) — 并发与形式无关地不可行; (iii) rep2 单跑 55.7s 静默非零退出(139-SDC 内部检查型表象, 与 SIGSEGV 路径竞速; rep1 活过 55.7s 证明非确定性伪影)。附带澄清: `TOL_PSEUDOCHARGE 9.34e-13` 行在包括干净 C1/F 在内的**所有**运行中同值打印 — 良性警告, 非死因(早前误判已纠正)。
 
-- [ ] **Step 1**: 写 4 个脚本 + 生成器 (生成器: 象限核表 − {c} − {139 if c≠139} → 15 个非 3 rank 各取 9 连续核, rank3 取剩余头 8 核 + c 末位; 输出 OpenMPI rankfile 格式; c=139 时同算法无特例)。`bash -n` 全部。
-- [ ] **Step 2**: 试点作业 job_probe_pilot.sh (-T 3600): (a) 原版 rf_nc16_F 全节点跑 1 次 (锚点, 期望崩); (b) 象限形 c=139 ×2 (设计验证, 期望崩+归因 psr=139); (c) c=140/200/427/583 四象限并发各 1 次 (期望 rc=0, 同时验证 4 路并发无害)。判定: (a) 崩 ∧ (b) 2/2 崩归因 ∧ (c) 4/4 净 → 设计成立; 否则 STOP 按 systematic-debugging 复盘, 回退方案 = 全节点形串行探针 (37h, 分 6 作业)。
-- [ ] **Step 3**: 全量作业 job_probe_all.sh (-T 43200): freqmon 10s + 4 象限并发循环 (TMO 400/探针) + 每 20 探针打印进度 (通道保活) + 断点续跑; 预计 ~9-10h, 超 T 中断则原脚本重投续跑。
-- [ ] **Step 4**: analyze_probes.sh: 合并四象限 tsv → probe_analysis.tsv (per-core: verdict / rc / crash-psr / addr class / freq verdict); 期望 **1 崩 (c=139) + 607 净 (含 EXCLUDED_FREQ/GREY 标注)**; 频率 <1500 的探针核照跑压力但判 EXCLUDED (用户规则)。
+**设计 v2(修正形 = bundle 自证 F/C1 换槽对的推广, 2026-09-24 23:35):** F: rank3=131-139(139 末位热槽)→ 14/14 崩 psr=139; C1: rank3=131-138,140(139 闲置)→ 8/8 净 E3 golden。每探针核 c: **rank3 = 131-138 + c 末位热槽; 139 全程闲置(C1 已证安全); c 若为 F 活跃核则其原 rank 以本域首个 F-spare 就位回填(域 3 用 140), 每 rank 槽位数与掩码宽度与 F/C1 完全一致(已证干净布局, 无数值伪影)**。c=139 逐字节≡rf_nc16_F, c=140 逐字节≡rf_nc16_C1(双 diff 端点已过); **仅串行**(内存封顶), 608 × ~205s ≈ 35h, 分 3 个 -T 43200 链式重投, 断点续跑(probes2/rows/P<C>.tsv 存在即跳过)。
+
+- [x] **Step 1 (v1)**: 象限形 4 脚本 + 生成器(13/13 功能测试) — 已完成并被 Step 1b 证伪, 留档。
+- [x] **Step 2 (v1)**: pilot 1722694 — (a) 锚点 F `REPRO_CRASH_ATTRIBUTED` ✓; (b) P139×2: rep1 崩但归因断裂(psr=137), rep2 静默退出; (c) 四路并发 OOM 型同步死亡。判定 = 设计不成立 → 走计划内回退(全节点串行)精化为 v2。
+- [x] **Step 1b (v2)**: gen_rf_probe2.sh + probe_run2.sh: c=139≡F / c=140≡C1 双 diff PASS; 16 边缘核不变量全过(无重复/139 缺席/c 末位/16 行/549 唯一槽)。
+- [x] **Step 2b (v2)**: pilot2 作业 job_probe_pilot2.sh (-T 2400, job 1722873, SUCCEEDED 23:37→23:50): (a) P139(≡F, 期望崩+归因 c=139) + (b) P0(回填类, 期望净) + (c) P131(填充换类, 期望净) + (d) P114(域 3 spare 类, 期望净) + 锚点 F 红线补扫(修 v1 pilot 的 FREQ_CSV 传参 bug)。全过 → 提交全量; 任一失败 → STOP systematic-debugging。**4/4 全过 (2026-09-24 23:50)**: 锚点 F 红线补扫 VERDICT F_20260924T230818 REPRO_CRASH_ATTRIBUTED(FREQ_CSV 修正生效); P139 rc=139 dur=92.5s(67-187s 带内) PROBE_CRASH_ATTRIBUTED(c=139 class=canonical_3ffe sig=11), 签名 rank[1,3]+0x3ffe28baa280(0x3ffX 家族)+a.out+0x258f00+cpsr=139+freq_min=1999 VALID; P0/P131/P114 全 PROBE_CLEAN(E3ok=YES scf1=YES), E3=-206.726163764843/-880/-858, freq_min=1998-1999 VALID。v2 C1-swap 形式定案, 全量扫描放行。
+- [x] **Step 3 (v2)**: job_probe_all2.sh (-T 43200 × 3 链): freqmon 10s + 串行 608 探针(TMO 360) + 每探针进度行 + 断点续跑; 预计 ~35h。TMO 300→360: pilot2 实测最慢干净探针 P0=235.5s, 300s 仅 65s 裕量, 假 TIMEOUT 会污染 verdict 表(360s 仅在真挂起时才生效); 提交门控 = Task 5 消融全过(cron 状态机执行)。**已提交并 RUNNING: job 1724877 (2026-09-25 08:24:23 起)**; pilot2 已入账的 P0/P114/P131/P139 四行由断点续跑逻辑跳过。
+- [ ] **Step 4**: analyze_probes.sh(v2 路径): 合并 probes2/rows → per-core verdict; 期望 **1 崩(c=139) + 607 净(含 EXCLUDED_FREQ/GREY 标注)**; 频率 <1500 探针核照跑压力但判 EXCLUDED(用户规则); 139 闲置探针中其自身低频为预期(不活跃), 不计入红线排除。(analyze_probes.sh 已切 probes2 路径 + bash -n 过, 2026-09-25; v1 probes/ 留作伪证档案。)
 - [ ] **Step 5**: repo: 勾选 + commit + push。
-
 ### Task 5: 消融实验 (每因子一小节, 全部自含目录内)
 
-- [ ] **Step 1**: A1 核心对照 (引 Task 3 数据): F vs C1 唯一差异 139↔140 → 崩 vs 净。
-- [ ] **Step 2**: A2 去 taskset: F 形不带 taskset 包装跑 1 次 → 如实记录 (预期: 绑定失败或 139 不在亲和集 → 不崩/报错; 证 taskset 必要性)。
-- [ ] **Step 3**: A3 频率消融: 作业内 (userspace governor) 将 cpu139 scaling_setspeed=1550000 → F×1 (预期**不崩**, ≤1.55GHz 规则) → 恢复 2000000 → F×1 (预期崩) → 恢复确认。freqmon 全程。
-- [ ] **Step 4**: A4 输入规模: 复制战役 v6c 输入 (128 元素) 入 `$NEW/ablation/`; F 形 ×1 (预期崩 — 规模无关性向上; 阶梯 16→640 全崩的独立目录复核)。
-- [ ] **Step 5**: A5/A6 引证不重跑: A5 二进制同一性 (Task 3 sha256 = 763c6843f504e1f7 = 战役包); A6 NCOMMS<16 死锁 (战役 v5nc8 rc=134, 集群 fabric 下限, 引证)。
-- [ ] **Step 6**: repo: 勾选 + commit + push。
+首轮作业 1724844 (2026-09-25 08:05:39-08:09:32, SUCCEEDED): A2/A4 有果, A3 被跳过 — 本板 cpu139 的 scaling_available_frequencies 为空 (cpufreq 驱动不暴露), 原 CAP 逻辑要求目标频率在列表中 → 过于保守; 且 governor 本就是 userspace, 直接 scaling_setspeed 即可。跳过路径未写任何系统状态 (freq CSV: cpu139 全程 1996)。补跑 job_ablation_a3.sh (直接 setspeed + 读回校验 + env 传参 verify) 接力。附带 bug 记录: 首轮 verify 调用把 $FCSV 当第二位置参 → verify.sh 对 "$@" 逐个当 rundir → 产生 VERDICT freq-20260924.csv UNCLASSIFIED 噪音行 (各段首个 verdict 不受影响); 补跑改用 FREQ_CSV env 模式 (与 pilot2 一致)。
 
+- [x] **Step 1**: A1 核心对照 (引 Task 3 数据): F vs C1 唯一差异 139↔140 → 崩 vs 净。
+- [x] **Step 2**: A2 去 taskset (F_20260925T080650): **预期被证伪 — 照常复现**。rc=139, 91s(段间), rank=3, crash_psr_last=139, class=canonical_3ffb (0x3ffb3ad21480), cpu139_min=1996 VALID。机理: mpirun --allow-run-as-root 以 root 运行, hwloc/sched_setaffinity 可把亲和自放宽回 cgroup 全 608 核 cpuset, 启动器 16 核掩码拦不住 (认知修正: 16 核陷阱只困朴素非 root 启动, 不困 root+mpirun+rankfile 显式绑定)。结论: taskset 包装非复现必要条件 — 如实记录; 脚本仍统一保留 taskset (与已证 F 形一致)。
+- [x] **Step 3**: A3 频率消融 — **干预式环境不可行, 以证据链关闭 (2026-09-25 08:22)**。三轮证据: (1) job 1724844 首轮 SKIPPED (scaling_available_frequencies 为空); (2) job 1724866 补跑 CAP 门控正确拦截: scaling_setspeed Permission denied, 零状态写入 (cpu139 全程 ~1998MHz, 无需恢复); (3) job 1724872 诊断定案: 作业身份 uid=28370(suke) 无有效 cap (CapEff=0), sudo 需密码, scaling_governor/setspeed 均 root-only (rw-r--r-- root root), 双写测试均拒; 且 **scaling_min_freq=scaling_max_freq=2000000 — cpu139 频率被 root tuned 守护钉死在 2.0GHz** (mtime Sep 23 15:58, 早于战役起点) — 即使有 root 写权限也需先降 min_freq。频率依赖性以引证+门控记录: 用户原始观察 (~1.55GHz 不复现, 早于钉频), 战役 P4 文档, bundle 频率门控 (归因崩溃要求 cpu139_min≥1800 VALID; 今日 3 次归因崩溃 P139/A2/A4 均 1996-1999MHz)。root 特权干预式 A3 需管理员配合 (降 scaling_min_freq + setspeed 或改 tuned profile) — README 备注供后续。
+- [x] **Step 4**: A4 输入规模 (F_20260925T080829): v6c 128 元素, inputhash=8042d625d0b711cd ✓ → rc=139, 52s, rank=3, psr=139, class=byte6-highva_fb (0xfbaaab01c4fc40), cpu139_min=1996 VALID → 规模无关性确认 (与战役 NELEMS 阶梯 16→640 全崩一致)。
+- [x] **Step 5**: A5/A6 引证不重跑: A5 二进制同一性 binhash=763c6843f504e1f7 (本轮两次运行同值 = Task 3 = 战役包); A6 NCOMMS<16 死锁 (战役 v5nc8 rc=134, 集群 fabric 下限, 引证)。
+- [x] **Step 6**: repo: 勾选 + commit + push (e565582f: 首轮 A2 证伪/A4 过/A3 跳过根因; 本笔: A3 权限墙证据链关闭)。Task 5 关闭: A1 ✓ A2 证伪有果 ✓ A3 不可行有据 ✓ A4 ✓ A5/A6 引证 ✓。
 ### Task 6: 目录内双报告 + 收尾
 
 - [ ] **Step 1**: `$NEW/README.md` 手把手复现方法: 前提(账号/队列/HPCKit/LVTX) → 构建 → F/C1 运行 → 判定标准与预期值 → 全核探针方法 → 消融方法 → 故障排查 (taskset/setvars 位置参数/tag-output 三坑) → 自检清单。

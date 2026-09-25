@@ -36,7 +36,7 @@ template <typename T>
 static void expand_mask_sve(void *out_raw, uint64_t mask, int el_bits, int els) {
     T *out = static_cast<T *>(out_raw);
     const int lanes = 64 / el_bits;   /* 一次谓词能覆盖的元素数由宽度定, 但按 svcnt 分批 */
-    T bits[64], vals[64];
+    [[maybe_unused]] T bits[64], vals[64];
     for (int i = 0; i < els; ++i) {
         bits[i] = static_cast<T>((mask >> i) & 1);
         vals[i] = static_cast<T>(~static_cast<T>(0));

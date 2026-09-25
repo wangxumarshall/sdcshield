@@ -46,6 +46,7 @@ runs:
             libboost-dev \
             libeigen3-dev \
             libgtest-dev \
+            libgmp-dev \
             libhwloc-dev \
             libssl-dev \
             libzstd-dev \

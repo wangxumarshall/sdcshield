@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """sdc_topology.py — 拓扑快照（v5 §4.3）。不假设 package/cluster 连续或从 0 起（PPTT 伪影）。"""
 import glob, json, os
+import re as _re
 
 _SYS_CPU = "/sys/devices/system/cpu"
 
@@ -20,16 +21,19 @@ def _expand(cpulist):
             out.append(int(part))
     return out
 
-def _node_has_memory(node_dir):
-    # 行格式（内核 ABI，drivers/base/node.c）: "Node <id> MemTotal:  <kB> kB"
-    # 故用 "MemTotal:" in line 而非 startswith；值在 split()[3]（[1] 是节点号）。
+def _memtotal_kb(node_dir):
+    """正则口径：对前缀变体（Node <id> MemTotal: / MemTotal:）免疫。"""
     try:
         for line in open(f"{node_dir}/meminfo"):
-            if "MemTotal:" in line:
-                return int(line.split()[3]) > 0
+            m = _re.search(r"MemTotal:\s+(\d+)", line)
+            if m:
+                return int(m.group(1))
     except OSError:
         pass
-    return False
+    return 0
+
+def _node_has_memory(node_dir):
+    return _memtotal_kb(node_dir) > 0
 
 def snapshot():
     possible = _expand(_read(f"{_SYS_CPU}/possible"))

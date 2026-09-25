@@ -20,3 +20,16 @@ def test_interpolate_midpoint():
     b = {"realtime_ns": 2000, "cntvct": 3000, "mapping_error_ns": 0}
     est, err = sdc_time.interpolate([a, b], 1000)
     assert est == 2000 and err >= 0
+
+def test_interpolate_zero_span_raises():
+    import pytest
+    a = {"realtime_ns": 100, "cntvct": 5, "mapping_error_ns": 0}
+    with pytest.raises(ValueError):
+        sdc_time.interpolate([a, dict(a)], 100)
+
+def test_interpolate_extrapolation_error_grows():
+    a = {"realtime_ns": 1000, "cntvct": 100, "mapping_error_ns": 0}
+    b = {"realtime_ns": 2000, "cntvct": 300, "mapping_error_ns": 0}
+    _, err_in = sdc_time.interpolate([a, b], 1500)
+    _, err_out = sdc_time.interpolate([a, b], 500)   # 越界外推
+    assert err_out > err_in >= 0

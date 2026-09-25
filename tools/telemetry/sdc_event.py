@@ -67,9 +67,18 @@ def load_jsonl(path):
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "validate"
-    # load_jsonl 只接受路径；stdin 是已打开的 TextIOWrapper，直接逐行解析
-    data = [json.load(sys.stdin)] if mode == "validate" else \
-        [json.loads(l) for l in sys.stdin if l.strip()]
+    if mode == "validate":
+        data = [json.load(sys.stdin)]
+    else:
+        data = []
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            try:
+                data.append(json.loads(line))
+            except json.JSONDecodeError as e:
+                print(f"INVALID json line {e.lineno}: {e.msg}", file=sys.stderr)
+                sys.exit(1)
     bad = 0
     for ev in data:
         errs = validate_event(ev)

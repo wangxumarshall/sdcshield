@@ -62,3 +62,10 @@ def test_cli_validate_jsonl_stdin():
     r2 = subprocess.run([sys.executable, cli, "validate-jsonl"],
                         input=bad, capture_output=True, text=True)
     assert r2.returncode != 0 and r2.stderr != ""
+
+def test_cli_bad_json_graceful():
+    import subprocess, sys, os
+    p = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "..",
+        "sdc_event.py"), "validate-jsonl"], input="{oops\n", capture_output=True, text=True)
+    assert p.returncode == 1
+    assert "INVALID" in p.stderr and "Traceback" not in p.stderr

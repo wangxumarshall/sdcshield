@@ -5,7 +5,7 @@ M0 范围（诚实声明，偏离 v5 M0 退出标准的部分）：CORE179 仓�
 叙述性报告（docs/cases/sdc1-01-02-core179/），机器可读时间线重建属 M4 报告
 工具；本适配器覆盖 ledger.csv + 事件目录 + YAML 失败块（当前数据全量）。
 """
-import csv, json, os, re, sys, time
+import csv, hashlib, json, os, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sdc_event
 
@@ -13,7 +13,7 @@ _NOTE_RESOLVED = ("定案", "定性", "伪事件", "已修复")
 _TEST_RACE_KEYS = ("竞态", "test_bug", "伪SDC", "伪 SDC")
 
 def _ts_to_ns(ts):  # "2026-09-24 09:14:10"（本地时区）→ realtime_ns
-    return int(time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S")) * 1e9)
+    return int(time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S"))) * 10**9
 
 
 def _kv(field):  # "rc=137" / "test=mesh..." / "seed=AES:.."
@@ -69,8 +69,8 @@ def parse_event_dir(path):
 
 def convert_ledger(path, sdc_id):
     events = []
-    for i, row in enumerate(parse_ledger(path), 1):
-        rc = (row.get("rc") or "").replace("rc=", "")
+    for row in parse_ledger(path):
+        rc = row.get("rc") or ""
         is_fail = row.get("test") and rc in ("1", "134", "137", "139")
         etype = ("sdc_mismatch" if is_fail else
                  "interlock_action" if "drill" in row["label"] else "note")
@@ -78,8 +78,11 @@ def convert_ledger(path, sdc_id):
         status = "resolved" if any(k in note for k in _NOTE_RESOLVED) else "open"
         primary = ("test_race" if any(k in note for k in _TEST_RACE_KEYS)
                    else "candidate_hardware_sdc" if is_fail else "operational")
+        rid = hashlib.sha1(("|".join([row["ts"], row["label"], row.get("rc", ""),
+                                       row.get("test", ""), row.get("seed", ""),
+                                       row.get("note", "")])).encode()).hexdigest()[:12]
         ev = sdc_event.make_event(
-            event_id=f"legacy-{i:04d}", event_type=etype,
+            event_id=f"legacy-{rid}", event_type=etype,
             severity="red" if is_fail else "green",
             confidence="observed",
             **{"sdc-excite-reproduce_id": sdc_id, "run_id": row["label"]},

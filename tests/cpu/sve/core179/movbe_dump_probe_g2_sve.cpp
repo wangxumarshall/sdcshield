@@ -60,6 +60,12 @@ static int movbe_dump_probe_g2_sve_init(struct test *test)
 }
 
 #if defined(__aarch64__)
+/* gcc-10 (22.03/20.03) 对本函数在 -O2+ 的 RTL expand 确定性 ICE(internal
+ * compiler error: Segmentation fault,run 35977342136/36078386244 两轮修复
+ * 均无效)。rootfs gcc-10.3.1 二分定位:-O0/-O1 过、-O2 起崩,非向量化类
+ * (-fno-tree-vectorize 等不救);函数级降 O1 稳定通过。SVE intrinsics 为
+ * 显式生成,不依赖优化器;probe 测 store 侧效应而非吞吐,O1 无语义影响。 */
+__attribute__((optimize("O1")))
 static int movbe_dump_probe_g2_sve_run(struct test *test, int cpu)
 {
     (void)cpu;

@@ -20,6 +20,13 @@ function setup_file() {
 function run_min_cpu_test() {
     local test=$1
 
+    # @test_hw_features 组跨架构都有成员(ARM 上是 arm_*),setup_file 的整组
+    # 检查区分不了个体:x86 CPU 型号专属自测(hsw/bdw/.../dmr)在 aarch64
+    # 构建中不存在,按名字存在性跳过而非 "Cannot find matching tests" 失败
+    if ! grep -qx "$test" <<< "$cpu_features_tests"; then
+        skip "selftest '$test' not in this build"
+    fi
+
     declare -A yamldump
     sandstone_selftest -e $test
 

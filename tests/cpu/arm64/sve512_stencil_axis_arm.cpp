@@ -118,6 +118,16 @@ static int sve512_stencil_axis_arm_init(struct test *test)
                  "ARM64 SVE not available; sve512_stencil_axis_arm requires SVE");
         return EXIT_SKIP;
     }
+
+    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
+     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
+    if (svcntb() != 64) {
+        log_skip(CpuNotSupportedSkipCategory,
+                 "SVE vector length is not 512-bit on this CPU; the sve512 "
+                 "family is designed and validated at 512-bit VL only "
+                 "(HiSilicon 0xd22, see issue #182)");
+        return EXIT_SKIP;
+    }
     if (svcntd() != 8) {
         log_skip(CpuNotSupportedSkipCategory,
                  "sve512_stencil_axis_arm requires a 512-bit SVE vector "

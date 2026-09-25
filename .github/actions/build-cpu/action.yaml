@@ -1,21 +1,18 @@
 name: Build for CPU (Linux)
+description: Meson/ninja build of the sdcshield binary (Linux container)
 
 inputs:
   name:
     description: Name of target
-    type: string
     required: true
   env:
     description: Environment for the build
-    type: string
     required: true
   meson_args:
     description: Meson arguments for the build
-    type: string
     required: true
   unittests:
     description: Unittests
-    type: string
     required: true
 
 # https://github.com/orgs/community/discussions/18597

@@ -34,9 +34,15 @@ jobs:
         pipx install codespell
         codespell
     - name: Install actionlint
-      run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bpf)
+      run: |
+        # 官方脚本装到 $(pwd);先落盘再执行,否则 bash <(curl ...) 会吞掉
+        # curl 的退出码(404 也显示绿),下一步才以 127 挂掉
+        curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash -o /tmp/install-actionlint.sh
+        bash /tmp/install-actionlint.sh
     - name: Run actionlint
-      run: actionlint -shellcheck= -pyflakes= .github/workflows .github/actions
+      # 目录不能作参数(actionlint 当文件读 → "is a directory" exit 3);
+      # 无参数 = 自动收集仓库全部 workflows,本地复合 action 经 uses 引用时校验
+      run: ./actionlint -shellcheck= -pyflakes=
 
   git-sanity:
     runs-on: ubuntu-latest
@@ -61,7 +67,7 @@ jobs:
         include:
         # arm64-only 项目:x86/Windows/GPU/IDXD 目标构建已移除(2026-09-25 决定),
         # unittests 覆盖随 x86 项删除移到本项。
-        - { name: GCC-arm64, archsuffix: "-arm", unittests: "unittests", selftests: "selftests" }
+        - { name: GCC-arm64, archsuffix: "-arm", env: "", meson_args: "", unittests: "unittests", selftests: "selftests" }
     steps:
       - name: Checkout the PR merge point
         uses: actions/checkout@v7
@@ -111,8 +117,17 @@ jobs:
           nproc=`nproc`
           nproc=$((nproc > 4 ? 4 : nproc))
           # 落盘 allquality 型日志(-o 指定的文件全过也保留);
-          # 供下方 report-summary.py 出「用例 × 结果[耗时]」矩阵
-          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 -o quick.yaml
+          # 供下方 report-summary.py 出「用例 × 结果[耗时]」矩阵。
+          # 云 runner 禁用集与 nightly(verify-params.py)一致:eigen 数值类
+          # (ULP flakiness,nightly 以 -n 1 专项覆盖)+ mesh_upi*/memcpy_rewr
+          # (需多 NUMA 真实硅);random_access_sweep 在 debian:sid 容器静默
+          # abort(issue #183)暂一并禁用。
+          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 \
+            --disable eigen_svd_double --disable eigen_sparse \
+            --disable eigen_svd_cdouble --disable eigen_svd_cdouble_sve \
+            --disable 'mesh_upi*' --disable memcpy_rewr \
+            --disable random_access_sweep \
+            -o quick.yaml
       # quick 结果矩阵进 PR 页 step summary(复用 nightly 的 report-summary.py;
       # 目录名 verify-<matrix.name> 对齐其 all-results/verify-*/results/allquality.yaml
       # glob,零脚本改动;失败时 -o 文件同样保留,失败现场也出矩阵)。

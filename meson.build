@@ -338,6 +338,13 @@ executable(
     ],
 )
 
+# unittests 是 native 目标(在构建机上跑)。x86 沿用上游 haswell 基线;
+# ARM 主机上 -march=haswell 非法(cc1plus: unknown value),置空即可。
+unittests_march = []
+if host_machine.cpu_family() == 'x86_64'
+    unittests_march = ['-march=haswell']
+endif
+
 executable(
     'unittests',
     files(
@@ -351,7 +358,7 @@ executable(
         framework_incdir,
     ],
     cpp_args: [
-        '-march=haswell',
+        unittests_march,
         debug_c_flags,
         default_cpp_warn,
         '-USANDSTONE',

@@ -669,10 +669,20 @@ tests_set_base.add(
         'spinlock/spinlock_stress_cmpxchg.cpp',
         'spinlock/spinlock_stress_cmpxchg16b.cpp',
         'spinlock/spinlock_stress_cmpxchg_even_odd.cpp',
-        'spinlock/spinlock_unaligned.cpp',
         'spinlock/spinlock_with_hle.cpp',
     )
 )
+
+# spinlock_unaligned 以 ARMv8.4 USCAT 为前提(非对齐单拷贝原子性;无 USCAT
+# 时非对齐 CAS 直接 SIGBUS),minimum_cpu = cpu_feature_uscat 是 aarch64
+# 专属枚举项,x86 构建因枚举缺失而编译失败——仅 aarch64 构建。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'spinlock/spinlock_unaligned.cpp',
+        )
+    )
+endif
 
 
 # JIT code-generation test suite. Each test mmaps executable memory and

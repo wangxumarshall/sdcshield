@@ -67,13 +67,14 @@
 - [ ] **Step 5**: repo: 勾选 + commit + push。
 ### Task 5: 消融实验 (每因子一小节, 全部自含目录内)
 
-- [ ] **Step 1**: A1 核心对照 (引 Task 3 数据): F vs C1 唯一差异 139↔140 → 崩 vs 净。
-- [ ] **Step 2**: A2 去 taskset: F 形不带 taskset 包装跑 1 次 → 如实记录 (预期: 绑定失败或 139 不在亲和集 → 不崩/报错; 证 taskset 必要性)。
-- [ ] **Step 3**: A3 频率消融: 作业内 (userspace governor) 将 cpu139 scaling_setspeed=1550000 → F×1 (预期**不崩**, ≤1.55GHz 规则) → 恢复 2000000 → F×1 (预期崩) → 恢复确认。freqmon 全程。
-- [ ] **Step 4**: A4 输入规模: 复制战役 v6c 输入 (128 元素) 入 `$NEW/ablation/`; F 形 ×1 (预期崩 — 规模无关性向上; 阶梯 16→640 全崩的独立目录复核)。
-- [ ] **Step 5**: A5/A6 引证不重跑: A5 二进制同一性 (Task 3 sha256 = 763c6843f504e1f7 = 战役包); A6 NCOMMS<16 死锁 (战役 v5nc8 rc=134, 集群 fabric 下限, 引证)。
-- [ ] **Step 6**: repo: 勾选 + commit + push。
+首轮作业 1724844 (2026-09-25 08:05:39-08:09:32, SUCCEEDED): A2/A4 有果, A3 被跳过 — 本板 cpu139 的 scaling_available_frequencies 为空 (cpufreq 驱动不暴露), 原 CAP 逻辑要求目标频率在列表中 → 过于保守; 且 governor 本就是 userspace, 直接 scaling_setspeed 即可。跳过路径未写任何系统状态 (freq CSV: cpu139 全程 1996)。补跑 job_ablation_a3.sh (直接 setspeed + 读回校验 + env 传参 verify) 接力。附带 bug 记录: 首轮 verify 调用把 $FCSV 当第二位置参 → verify.sh 对 "$@" 逐个当 rundir → 产生 VERDICT freq-20260924.csv UNCLASSIFIED 噪音行 (各段首个 verdict 不受影响); 补跑改用 FREQ_CSV env 模式 (与 pilot2 一致)。
 
+- [x] **Step 1**: A1 核心对照 (引 Task 3 数据): F vs C1 唯一差异 139↔140 → 崩 vs 净。
+- [x] **Step 2**: A2 去 taskset (F_20260925T080650): **预期被证伪 — 照常复现**。rc=139, 91s(段间), rank=3, crash_psr_last=139, class=canonical_3ffb (0x3ffb3ad21480), cpu139_min=1996 VALID。机理: mpirun --allow-run-as-root 以 root 运行, hwloc/sched_setaffinity 可把亲和自放宽回 cgroup 全 608 核 cpuset, 启动器 16 核掩码拦不住 (认知修正: 16 核陷阱只困朴素非 root 启动, 不困 root+mpirun+rankfile 显式绑定)。结论: taskset 包装非复现必要条件 — 如实记录; 脚本仍统一保留 taskset (与已证 F 形一致)。
+- [ ] **Step 3**: A3 频率消融 (补跑 job_ablation_a3.sh): setspeed 1550000 + 读回 (cur≤1600000 方为生效) → F×1 预期**不崩** (rc=0 + scf1≈7.796e-01 + E3≈-206.726163764879 ±1e-10) → setspeed 2000000 + 读回 (cur≥1950000) → F×1 预期崩 (REPRO_CRASH_ATTRIBUTED) → 终态读回 (回 ~2.0GHz)。freqmon 全程, verify 用 FREQ_CSV env。
+- [x] **Step 4**: A4 输入规模 (F_20260925T080829): v6c 128 元素, inputhash=8042d625d0b711cd ✓ → rc=139, 52s, rank=3, psr=139, class=byte6-highva_fb (0xfbaaab01c4fc40), cpu139_min=1996 VALID → 规模无关性确认 (与战役 NELEMS 阶梯 16→640 全崩一致)。
+- [x] **Step 5**: A5/A6 引证不重跑: A5 二进制同一性 binhash=763c6843f504e1f7 (本轮两次运行同值 = Task 3 = 战役包); A6 NCOMMS<16 死锁 (战役 v5nc8 rc=134, 集群 fabric 下限, 引证)。
+- [ ] **Step 6**: repo: 勾选 + commit + push (含 A2 证伪记录 + A3 补跑结果)。
 ### Task 6: 目录内双报告 + 收尾
 
 - [ ] **Step 1**: `$NEW/README.md` 手把手复现方法: 前提(账号/队列/HPCKit/LVTX) → 构建 → F/C1 运行 → 判定标准与预期值 → 全核探针方法 → 消融方法 → 故障排查 (taskset/setvars 位置参数/tag-output 三坑) → 自检清单。

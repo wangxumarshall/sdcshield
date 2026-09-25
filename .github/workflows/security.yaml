@@ -26,3 +26,33 @@ jobs:
         uses: zizmorcore/zizmor-action@v1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  gitleaks:
+    name: gitleaks (credential leaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # 全历史:本仓 fork 自 OpenDCDiag,历史长
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  osv:
+    name: osv-scanner (vendored CVEs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: google/osv-scanner-action/osv-scanner-action@v2
+        with:
+          scan-args: |-
+            -r
+            --skip-git
+            ./
+

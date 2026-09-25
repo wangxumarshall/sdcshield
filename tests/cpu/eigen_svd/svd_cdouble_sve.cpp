@@ -159,19 +159,6 @@ static int sve_probe_and_init(struct test *test)
                  "eigen_svd_cdouble_sve requires SVE (e.g. Kunpeng 930)");
         return EXIT_SKIP;
     }
-
-    /* quick 等短预算模式会覆盖 preinit 的计时(--quick: 1s duration /
-     * 20s timeout),而单次内存定维迭代需 iter_s 秒(N=4400 时约 244 s);
-     * 预算盖不住时诚实跳过,避免被 per-test CPU 限额以 crash 收场。 */
-    double iter_s = 243.4 * std::pow((double)g_dim / 4400.0, 3.0) + 1.0;
-    if ((double)test->desired_duration < iter_s * 1000.0 * 0.9) {
-        log_skip(TestResourceIssueSkipCategory,
-                 "eigen_svd_cdouble_sve: one memory-sized iteration takes "
-                 "about %.0f s (N=%d) but the effective duration budget is "
-                 "%d ms; use a longer -t or the nightly full flow",
-                 iter_s, g_dim, test->desired_duration);
-        return EXIT_SKIP;
-    }
     log_info("M_DIM %d (sized in preinit from memory; expected iteration "
              "%.1f s, desired_duration %d ms; override with -O "
              "eigen_svd_cdouble_sve.mdim=N)",

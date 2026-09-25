@@ -117,8 +117,17 @@ jobs:
           nproc=`nproc`
           nproc=$((nproc > 4 ? 4 : nproc))
           # 落盘 allquality 型日志(-o 指定的文件全过也保留);
-          # 供下方 report-summary.py 出「用例 × 结果[耗时]」矩阵
-          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 -o quick.yaml
+          # 供下方 report-summary.py 出「用例 × 结果[耗时]」矩阵。
+          # 云 runner 禁用集与 nightly(verify-params.py)一致:eigen 数值类
+          # (ULP flakiness,nightly 以 -n 1 专项覆盖)+ mesh_upi*/memcpy_rewr
+          # (需多 NUMA 真实硅);random_access_sweep 在 debian:sid 容器静默
+          # abort(issue #183)暂一并禁用。
+          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 \
+            --disable eigen_svd_double --disable eigen_sparse \
+            --disable eigen_svd_cdouble --disable eigen_svd_cdouble_sve \
+            --disable 'mesh_upi*' --disable memcpy_rewr \
+            --disable random_access_sweep \
+            -o quick.yaml
       # quick 结果矩阵进 PR 页 step summary(复用 nightly 的 report-summary.py;
       # 目录名 verify-<matrix.name> 对齐其 all-results/verify-*/results/allquality.yaml
       # glob,零脚本改动;失败时 -o 文件同样保留,失败现场也出矩阵)。

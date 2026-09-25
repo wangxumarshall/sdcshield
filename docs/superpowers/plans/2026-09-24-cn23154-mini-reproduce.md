@@ -62,8 +62,8 @@
 - [x] **Step 2 (v1)**: pilot 1722694 — (a) 锚点 F `REPRO_CRASH_ATTRIBUTED` ✓; (b) P139×2: rep1 崩但归因断裂(psr=137), rep2 静默退出; (c) 四路并发 OOM 型同步死亡。判定 = 设计不成立 → 走计划内回退(全节点串行)精化为 v2。
 - [x] **Step 1b (v2)**: gen_rf_probe2.sh + probe_run2.sh: c=139≡F / c=140≡C1 双 diff PASS; 16 边缘核不变量全过(无重复/139 缺席/c 末位/16 行/549 唯一槽)。
 - [x] **Step 2b (v2)**: pilot2 作业 job_probe_pilot2.sh (-T 2400, job 1722873, SUCCEEDED 23:37→23:50): (a) P139(≡F, 期望崩+归因 c=139) + (b) P0(回填类, 期望净) + (c) P131(填充换类, 期望净) + (d) P114(域 3 spare 类, 期望净) + 锚点 F 红线补扫(修 v1 pilot 的 FREQ_CSV 传参 bug)。全过 → 提交全量; 任一失败 → STOP systematic-debugging。**4/4 全过 (2026-09-24 23:50)**: 锚点 F 红线补扫 VERDICT F_20260924T230818 REPRO_CRASH_ATTRIBUTED(FREQ_CSV 修正生效); P139 rc=139 dur=92.5s(67-187s 带内) PROBE_CRASH_ATTRIBUTED(c=139 class=canonical_3ffe sig=11), 签名 rank[1,3]+0x3ffe28baa280(0x3ffX 家族)+a.out+0x258f00+cpsr=139+freq_min=1999 VALID; P0/P131/P114 全 PROBE_CLEAN(E3ok=YES scf1=YES), E3=-206.726163764843/-880/-858, freq_min=1998-1999 VALID。v2 C1-swap 形式定案, 全量扫描放行。
-- [ ] **Step 3 (v2)**: job_probe_all2.sh (-T 43200 × 3 链): freqmon 10s + 串行 608 探针(TMO 300) + 每探针进度行 + 断点续跑; 预计 ~35h。
-- [ ] **Step 4**: analyze_probes.sh(v2 路径): 合并 probes2/rows → per-core verdict; 期望 **1 崩(c=139) + 607 净(含 EXCLUDED_FREQ/GREY 标注)**; 频率 <1500 探针核照跑压力但判 EXCLUDED(用户规则); 139 闲置探针中其自身低频为预期(不活跃), 不计入红线排除。
+- [ ] **Step 3 (v2)**: job_probe_all2.sh (-T 43200 × 3 链): freqmon 10s + 串行 608 探针(TMO 360) + 每探针进度行 + 断点续跑; 预计 ~35h。脚本已写好并 bash -n 过(2026-09-25); TMO 300→360: pilot2 实测最慢干净探针 P0=235.5s, 300s 仅 65s 裕量, 假 TIMEOUT 会污染 verdict 表(360s 仅在真挂起时才生效); 提交门控 = Task 5 消融全过(cron 状态机执行)。
+- [ ] **Step 4**: analyze_probes.sh(v2 路径): 合并 probes2/rows → per-core verdict; 期望 **1 崩(c=139) + 607 净(含 EXCLUDED_FREQ/GREY 标注)**; 频率 <1500 探针核照跑压力但判 EXCLUDED(用户规则); 139 闲置探针中其自身低频为预期(不活跃), 不计入红线排除。(analyze_probes.sh 已切 probes2 路径 + bash -n 过, 2026-09-25; v1 probes/ 留作伪证档案。)
 - [ ] **Step 5**: repo: 勾选 + commit + push。
 ### Task 5: 消融实验 (每因子一小节, 全部自含目录内)
 

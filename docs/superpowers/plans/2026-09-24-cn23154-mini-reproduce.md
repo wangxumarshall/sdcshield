@@ -52,16 +52,19 @@
 
 ### Task 4: 608 全核逐核探针对比验证
 
-**Files (cluster):** Create: `$NEW/gen_probe_rf.sh`(探针 rankfile 生成器), `$NEW/probe_run.sh`(单探针运行器), `$NEW/verify_probe.sh`(探针判定器), `$NEW/job_probe_pilot.sh`, `$NEW/job_probe_all.sh`, `$NEW/probes/`(结果), `$NEW/analyze_probes.sh`。
+**Files (cluster):** `$NEW/gen_probe_rf.sh`+`probe_run.sh`+`job_probe_pilot.sh`(象限形 v1, 已证伪留档), `$NEW/gen_rf_probe2.sh`+`probe_run2.sh`+`job_probe_pilot2.sh`+`job_probe_all2.sh`(修正形 v2), `$NEW/verify_probe.sh`(共用判定器), `$NEW/analyze_probes.sh`, `$NEW/probes/`(v1 伪证证据), `$NEW/probes2/`(v2 结果), `$NEW/probes/QUARTER_FORM_FALSIFIED.md`(伪证记录)。
 
-设计: 四象限 Q0=0-151 / Q1=152-303 / Q2=304-455 / Q3=456-607 (各 152 核, NUMA 对齐 4×38); 每探针 = 16 rank × 9 线程全部落在 c 所在象限内; **rank3 = 8 个填充核 + 探针核 c 于 thread-8 末位**; c≠139 时 139 从全部 144 槽位剔除 (探针不受污染); 生成器算法统一无特例。四象限并发 (4×144=576 线程), 象限内串行, 断点续跑 (跳过 probes tsv 已有核)。
+**设计 v1(象限形, 已证伪 2026-09-24 23:14, pilot job 1722694):** 四象限 16 rank × 9 线程全落 c 所在象限、rank3 = 8 填充核 + c 末位、4 路并发。证伪三重独立证据: (i) 归因断裂 — rep1 byte6 崩溃(rank3)但解引用线程 psr=137 填充核而非探针核 139; (ii) 4 路并发撞作业内存上限(峰值 37.5GB, 173.1s 同步 signal-9 ×4, 受害 rank 14/14/14/3/15 = cgroup OOM 特征) — 并发与形式无关地不可行; (iii) rep2 单跑 55.7s 静默非零退出(139-SDC 内部检查型表象, 与 SIGSEGV 路径竞速; rep1 活过 55.7s 证明非确定性伪影)。附带澄清: `TOL_PSEUDOCHARGE 9.34e-13` 行在包括干净 C1/F 在内的**所有**运行中同值打印 — 良性警告, 非死因(早前误判已纠正)。
 
-- [ ] **Step 1**: 写 4 个脚本 + 生成器 (生成器: 象限核表 − {c} − {139 if c≠139} → 15 个非 3 rank 各取 9 连续核, rank3 取剩余头 8 核 + c 末位; 输出 OpenMPI rankfile 格式; c=139 时同算法无特例)。`bash -n` 全部。
-- [ ] **Step 2**: 试点作业 job_probe_pilot.sh (-T 3600): (a) 原版 rf_nc16_F 全节点跑 1 次 (锚点, 期望崩); (b) 象限形 c=139 ×2 (设计验证, 期望崩+归因 psr=139); (c) c=140/200/427/583 四象限并发各 1 次 (期望 rc=0, 同时验证 4 路并发无害)。判定: (a) 崩 ∧ (b) 2/2 崩归因 ∧ (c) 4/4 净 → 设计成立; 否则 STOP 按 systematic-debugging 复盘, 回退方案 = 全节点形串行探针 (37h, 分 6 作业)。
-- [ ] **Step 3**: 全量作业 job_probe_all.sh (-T 43200): freqmon 10s + 4 象限并发循环 (TMO 400/探针) + 每 20 探针打印进度 (通道保活) + 断点续跑; 预计 ~9-10h, 超 T 中断则原脚本重投续跑。
-- [ ] **Step 4**: analyze_probes.sh: 合并四象限 tsv → probe_analysis.tsv (per-core: verdict / rc / crash-psr / addr class / freq verdict); 期望 **1 崩 (c=139) + 607 净 (含 EXCLUDED_FREQ/GREY 标注)**; 频率 <1500 的探针核照跑压力但判 EXCLUDED (用户规则)。
+**设计 v2(修正形 = bundle 自证 F/C1 换槽对的推广, 2026-09-24 23:35):** F: rank3=131-139(139 末位热槽)→ 14/14 崩 psr=139; C1: rank3=131-138,140(139 闲置)→ 8/8 净 E3 golden。每探针核 c: **rank3 = 131-138 + c 末位热槽; 139 全程闲置(C1 已证安全); c 若为 F 活跃核则其原 rank 以本域首个 F-spare 就位回填(域 3 用 140), 每 rank 槽位数与掩码宽度与 F/C1 完全一致(已证干净布局, 无数值伪影)**。c=139 逐字节≡rf_nc16_F, c=140 逐字节≡rf_nc16_C1(双 diff 端点已过); **仅串行**(内存封顶), 608 × ~205s ≈ 35h, 分 3 个 -T 43200 链式重投, 断点续跑(probes2/rows/P<C>.tsv 存在即跳过)。
+
+- [x] **Step 1 (v1)**: 象限形 4 脚本 + 生成器(13/13 功能测试) — 已完成并被 Step 1b 证伪, 留档。
+- [x] **Step 2 (v1)**: pilot 1722694 — (a) 锚点 F `REPRO_CRASH_ATTRIBUTED` ✓; (b) P139×2: rep1 崩但归因断裂(psr=137), rep2 静默退出; (c) 四路并发 OOM 型同步死亡。判定 = 设计不成立 → 走计划内回退(全节点串行)精化为 v2。
+- [x] **Step 1b (v2)**: gen_rf_probe2.sh + probe_run2.sh: c=139≡F / c=140≡C1 双 diff PASS; 16 边缘核不变量全过(无重复/139 缺席/c 末位/16 行/549 唯一槽)。
+- [x] **Step 2b (v2)**: pilot2 作业 job_probe_pilot2.sh (-T 2400, job 1722873, SUCCEEDED 23:37→23:50): (a) P139(≡F, 期望崩+归因 c=139) + (b) P0(回填类, 期望净) + (c) P131(填充换类, 期望净) + (d) P114(域 3 spare 类, 期望净) + 锚点 F 红线补扫(修 v1 pilot 的 FREQ_CSV 传参 bug)。全过 → 提交全量; 任一失败 → STOP systematic-debugging。**4/4 全过 (2026-09-24 23:50)**: 锚点 F 红线补扫 VERDICT F_20260924T230818 REPRO_CRASH_ATTRIBUTED(FREQ_CSV 修正生效); P139 rc=139 dur=92.5s(67-187s 带内) PROBE_CRASH_ATTRIBUTED(c=139 class=canonical_3ffe sig=11), 签名 rank[1,3]+0x3ffe28baa280(0x3ffX 家族)+a.out+0x258f00+cpsr=139+freq_min=1999 VALID; P0/P131/P114 全 PROBE_CLEAN(E3ok=YES scf1=YES), E3=-206.726163764843/-880/-858, freq_min=1998-1999 VALID。v2 C1-swap 形式定案, 全量扫描放行。
+- [ ] **Step 3 (v2)**: job_probe_all2.sh (-T 43200 × 3 链): freqmon 10s + 串行 608 探针(TMO 300) + 每探针进度行 + 断点续跑; 预计 ~35h。
+- [ ] **Step 4**: analyze_probes.sh(v2 路径): 合并 probes2/rows → per-core verdict; 期望 **1 崩(c=139) + 607 净(含 EXCLUDED_FREQ/GREY 标注)**; 频率 <1500 探针核照跑压力但判 EXCLUDED(用户规则); 139 闲置探针中其自身低频为预期(不活跃), 不计入红线排除。
 - [ ] **Step 5**: repo: 勾选 + commit + push。
-
 ### Task 5: 消融实验 (每因子一小节, 全部自含目录内)
 
 - [ ] **Step 1**: A1 核心对照 (引 Task 3 数据): F vs C1 唯一差异 139↔140 → 崩 vs 净。

@@ -104,7 +104,7 @@ enum {
     alpha_option,
     beta_option,
 
-    // syntethic values to track which of conflicting opts is currently active
+    // synthetic values to track which of conflicting opts is currently active
     _duration_option,
     _max_cores_option,
     _max_loop_count_option,

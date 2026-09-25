@@ -16,7 +16,7 @@ extern "C" {
 
 #define PIPE_BUF        4096
 
-/* Extra POSIX fucntions we need */
+/* Extra POSIX functions we need */
 
 int pipe(int pipefd[2]);
 

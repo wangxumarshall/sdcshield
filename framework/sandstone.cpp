@@ -245,7 +245,7 @@ static void preinit_tests()
             }
         }
 
-        // Skip from group init has precendence over preinit.
+        // Skip from group init has precedence over preinit.
         if (!init_replaced && preinit_ret != EXIT_SUCCESS) {
             test->flags = test->flags | test_init_in_parent; // for -fexec
             if (SandstoneConfig::NoLogging) {
@@ -704,7 +704,7 @@ static void loadavg_windows_callback(PVOID, BOOLEAN)
     //
     // We divide by 100.0 to get value in range (0.0;1.0) instead of percents.
     //
-    // We also mutliply by number of cpus to make the metric behave more like the
+    // We also multiply by number of cpus to make the metric behave more like the
     // /proc/loadavg from Linux, so we get value from range (0.0;thread_count()), where
     // thread_count() value means all cores at 100% utilization.
     const double current_avg_cpu_usage = (vpt.doubleValue * thread_count() / 100.0);
@@ -907,7 +907,7 @@ static bool background_scan_wait()
     };
     using namespace SandstoneBackgroundScanConstants;
 
-    // move all timestaps except the oldest one
+    // move all timestamps except the oldest one
     auto array_data = sApp->background_scan.timestamp.data();
     std::move(array_data, array_data + sApp->background_scan.timestamp.size() - 1,
               array_data + 1);

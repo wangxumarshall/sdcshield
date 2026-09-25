@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 文档与用法
+    url: https://github.com/wangxumarshall/sdcshield/blob/main/docs/research/usage.md
+    about: 全部命令行选项(含未文档化项)见 docs/research/usage.md

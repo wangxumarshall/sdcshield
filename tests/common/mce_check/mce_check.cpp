@@ -8,7 +8,7 @@
  * @test @b mce_check
  * @parblock
  * This test just checks the number of Machine Check Events that the
- * system has reported and compares it agains the number reported at
+ * system has reported and compares it against the number reported at
  * the beginning of the sandstone run.  If there is a difference then
  * it reports an error.
  *
@@ -35,7 +35,7 @@
 #include <vector>
 
 namespace {
-// we can use globals as it's run for 0th cpu only (data won't be shared accross >1 threads)
+// we can use globals as it's run for 0th cpu only (data won't be shared across >1 threads)
 std::vector<uint32_t> mce_counts_start;
 uint64_t mce_count_last;
 uint64_t last_thermal_event_count;

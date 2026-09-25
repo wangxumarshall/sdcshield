@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "01:23"    # UTC,避开整点
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7       # 新版本冷却 7 天再升级(zizmor dependabot-cooldown)
+    groups:
+      actions-minor:
+        update-types:
+          - minor
+          - patch

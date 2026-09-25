@@ -2061,7 +2061,7 @@ void print_temperature_of_device()
 
     std::vector<int> temperatures = ThermalMonitor::get_all_socket_temperatures();
 
-    if (temperatures.empty()) return; // Cant find temperature files at all (probably on windows)
+    if (temperatures.empty()) return; // Cannot find temperature files at all (probably on windows)
 
     int highest_temp = *std::max_element(temperatures.begin(), temperatures.end());
 

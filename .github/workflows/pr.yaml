@@ -7,28 +7,46 @@ on:
 permissions:
   contents: read
 
+# 推新 commit 取消同 PR 旧 run(本 workflow 仅 pull_request 触发,synchronize 必为新 push)
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - name: Checkout target branch (${{ github.base_ref }})
       uses: actions/checkout@v6
       with:
         ref: ${{ github.base_ref }}
+        persist-credentials: false
     - name: Checkout PR
       uses: actions/checkout@v6
       with:
         ref: ${{ github.sha }}
+        persist-credentials: false
     - name: Check if the PR adds tabs in source files
       run: .github/scripts/check-no-tabs.sh origin/${{ github.base_ref }} HEAD
+    - name: Run codespell
+      run: |
+        pipx install codespell
+        codespell
+    - name: Install actionlint
+      run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bpf)
+    - name: Run actionlint
+      run: actionlint -shellcheck= -pyflakes= .github/workflows .github/actions
 
   git-sanity:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - name: Checkout the PR merge point
       uses: actions/checkout@v6
       with:
         fetch-depth: 0
+        persist-credentials: false
     - name: Run the git checks
       run: .github/scripts/check-git-history.sh ${{ github.base_ref }} ${GITHUB_SHA}
 
@@ -36,6 +54,7 @@ jobs:
     name: Build binary for CPU (Linux)
     needs: [ lint, git-sanity ]
     runs-on: ubuntu-24.04${{ matrix.archsuffix }}
+    timeout-minutes: 45          # 实测 ~4min(arm64 4 核,apt+构建+unittests+selftests+quick),宽放
     container: debian:sid
     strategy:
       matrix:
@@ -46,6 +65,8 @@ jobs:
     steps:
       - name: Checkout the PR merge point
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Build for CPU (Linux)
         uses: ./.github/actions/build-cpu
         with:
@@ -107,6 +128,7 @@ jobs:
     name: Multi-version (${{ matrix.series }}-${{ matrix.sp }})
     needs: [ lint, git-sanity ]
     runs-on: ubuntu-24.04-arm   # GitHub hosted arm64;换 self-hosted 见注释
+    timeout-minutes: 90         # 实测 ~7-8min(镜像烘焙+构建+smoke),宽放
     strategy:
       fail-fast: false
       matrix:
@@ -119,6 +141,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: recursive
+          persist-credentials: false
       - name: Install podman
         run: |
           sudo apt-get update -qq

@@ -13,7 +13,7 @@
 extern "C" {
 #endif
 
-/* Extra POSIX fucntions we need */
+/* Extra POSIX functions we need */
 int posix_fallocate(int fd, off_t offset, off_t len);
 
 #ifdef __cplusplus

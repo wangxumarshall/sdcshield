@@ -8,7 +8,7 @@
 #ifndef WIN32_SCHED_H
 #define WIN32_SCHED_H
 
-// implemened in cpu_affinity.cpp
+// implemented in cpu_affinity.cpp
 int sched_getcpu(void);
 
 #endif /* WIN32_SCHED_H */

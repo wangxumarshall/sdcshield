@@ -27,8 +27,8 @@ on:
         type: boolean
 
 permissions:
-  contents: write                # Release 创建/上传需要(release job);verify 作业仍只读用法
-  packages: read                 # 从 ghcr.io 拉私有镜像必需(公开镜像也可留)
+  contents: read                # 顶层最小化;写权限只给真正需要的 job(release)
+  packages: read                # verify job 拉 ghcr 镜像仍需
 
 # 并行度上限:GHA 免费版同仓并发 20 job,15 个镜像 job + 1 个 report 无压力;
 # 若换 self-hosted 小机器可调低(见 docs/multi-version-build-deploy.md GHA 章节)。
@@ -84,6 +84,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: false
+          persist-credentials: false
 
       # ---- 源码构建(镜像内已装全部依赖,直接 meson+ninja) ----
       # 不用 actions/cache 缓存 vendored install/:它是 glibc 耦合产物(20.03/22.03/24.03
@@ -267,6 +268,8 @@ jobs:
     steps:
       - name: Checkout (for scripts/gha/report-summary.py)
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Download all artifacts (keep per-image dirs)
         uses: actions/download-artifact@v8
         with:
@@ -290,6 +293,8 @@ jobs:
     needs: [verify, report]
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release == true }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write            # gh release create 需要;GitHub job 级权限覆盖顶层
     steps:
       - name: Download built/ tarballs
         uses: actions/download-artifact@v8

@@ -85,7 +85,7 @@
 #if defined(__APPLE__)
 /* Up until OS X 10.7, waitid(P_ALL, ...) will return success, but will not
  * fill in the details of the dead child. That means waitid is not useful to us.
- * Therefore, we only enable waitid() support if we're targetting OS X 10.8 or
+ * Therefore, we only enable waitid() support if we're targeting OS X 10.8 or
  * later.
  */
 #  include <Availability.h>

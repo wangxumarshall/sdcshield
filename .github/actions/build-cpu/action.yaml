@@ -56,6 +56,8 @@ runs:
             zlib1g-dev
         echo "::endgroup::"
     - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
     - name: meson setup
       shell: bash
       run: meson setup builddir -Dssl_link_type=dynamic -Dbuildtype=debugoptimized ${{ inputs.meson_args }}

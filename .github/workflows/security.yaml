@@ -18,6 +18,11 @@ jobs:
     name: zizmor (workflow security)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      # zizmor-action 内置 SARIF 上传步骤(codeql-action upload-sarif):
+      # 缺 security-events: write 时审计本身过码 0,上传 403 连坐整个 job
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v7
         with:

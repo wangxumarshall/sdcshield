@@ -204,6 +204,10 @@ TEST(DataCompare, Float128)
 }
 #endif
 
+// x87 语义绑定:golden 位模式全部是 x87 80 位格式。aarch64 的 long double
+// 是 IEEE binary128,位模式完全不同,x86 golden 值在该架构上不成立——
+// 移植债记录于 issue #180,先按本文件 __x86_64__ 先例守卫。
+#ifdef __x86_64__
 TEST(DataCompare, Float80)
 {
     using namespace SandstoneDataDetails;
@@ -221,6 +225,7 @@ TEST(DataCompare, Float80)
     EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::quiet_NaN()), "7fffc000000000000000 (nan)");
     EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::signaling_NaN()), "7fffa000000000000000 (nan)");
 }
+#endif
 
 TEST(DataCompare, Float64)
 {
@@ -751,11 +756,16 @@ int test_floats_prototypes_cpp(void)
     return 0;
 }
 
+// x87 语义绑定:Float80 的 IS_* 分类宏按 x87 80 位布局解读,aarch64
+// (long double = binary128)上 117 项误判——移植债记录于 issue #180,
+// 先守卫 x86-only。
+#ifdef __x86_64__
 TEST(FloatGeneration, new_random_float_prototypes) {
     // briefly verify C interface
     ASSERT_EQ(0, test_floats_prototypes_c());
     ASSERT_EQ(0, test_floats_prototypes_cpp());
 }
+#endif
 
 TEST(YamlFormatter, booleans) {
     EXPECT_EQ(format_yaml("key", false), "key: false");

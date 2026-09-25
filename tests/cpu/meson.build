@@ -227,7 +227,7 @@ tests_set_base.add(
     )
 )
 
-# Misc test suite (11 tests). Includes core-179 SDC trigger probes (mrn_*)
+# Misc test suite (9 tests). Includes core-179 SDC trigger probes (mrn_*)
 # — part of the research testbed for the real silent-data-corruption defect
 # observed on Kunpeng 920 core 179. The mrn_* files use
 # #if defined(__x86_64__) || defined(__i386__) ... #elif defined(__aarch64__)
@@ -238,10 +238,12 @@ tests_set_base.add(
 # The movbe_* byte-swap series (movbe, movbe_dump, 11 movbe_dump_probe_*)
 # moved to the arm64 suite (tests/cpu/arm64): they are the core-179 research
 # probes and are classified ARM64-only like the rest of that testbed.
+# mite.cpp / movdq2q.cpp are ARM-only implementations added by the port
+# (54fa36a7, no x86 branch despite the original comment): they are guarded
+# to aarch64 below — the x86 build broke on <arm_neon.h> / 'w0' registers
+# until this was guarded.
 tests_set_base.add(
     files(
-        'misc/mite.cpp',
-        'misc/movdq2q.cpp',
         'misc/partial_store_forwarding.cpp',
         'misc/movmskpspd.cpp',
         'misc/movq2dq.cpp',
@@ -264,6 +266,8 @@ if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
             'arm-0102/arm0102_kreg_mask.cpp',
+            'misc/mite.cpp',
+            'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',

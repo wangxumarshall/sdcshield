@@ -57,6 +57,7 @@ static void ssl_sha256(sha_elem *target)
     s_EVP_DigestInit_ex(mdctx, md, NULL);
     s_EVP_DigestUpdate(mdctx, &target->plain_text[0], PLAINTEXT_SIZE);
     s_EVP_DigestFinal_ex(mdctx, &target->sha256sum[0], &md_len);
+    s_EVP_MD_CTX_free(mdctx);
 }
 
 static void ssl_sha384(sha_elem *target)
@@ -72,6 +73,7 @@ static void ssl_sha384(sha_elem *target)
     s_EVP_DigestInit_ex(mdctx, md, NULL);
     s_EVP_DigestUpdate(mdctx, &target->plain_text[0], PLAINTEXT_SIZE);
     s_EVP_DigestFinal_ex(mdctx, &target->sha384sum[0], &md_len);
+    s_EVP_MD_CTX_free(mdctx);
 }
 
 static void ssl_sha512(sha_elem *target)
@@ -87,6 +89,7 @@ static void ssl_sha512(sha_elem *target)
     s_EVP_DigestInit_ex(mdctx, md, NULL);
     s_EVP_DigestUpdate(mdctx, &target->plain_text[0], PLAINTEXT_SIZE);
     s_EVP_DigestFinal_ex(mdctx, &target->sha512sum[0], &md_len);
+    s_EVP_MD_CTX_free(mdctx);
 }
 
 static int ssl_sha_init(struct test* test)

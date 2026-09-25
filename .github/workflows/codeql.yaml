@@ -49,8 +49,11 @@ jobs:
             libgtest-dev libhwloc-dev libssl-dev libzstd-dev zlib1g-dev
       - name: Build (meson, for CodeQL injection)
         run: |
-          # arm64 用 vendored eigen5(CLAUDE.md:系统 3.3.x 在 GCC12+ 断);
+          # eigen 一律用 vendored eigen5(aarch64: GCC12+ 下系统 3.3.x 断;
+          # x86: meson 走 pkg-config 找 eigen3)。必须用 $PWD 绝对路径:
+          # ninja -C builddir 时编译器 cwd 是 builddir,相对 -I 解析到
+          # builddir/third-party/eigen5 → "Eigen/Core: No such file"。
           # 其余 vendored 依赖缺席时 meson 优雅降级,足够静态分析覆盖面。
-          PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
+          PKG_CONFIG_PATH="$PWD/third-party/eigen5" meson setup builddir --buildtype=release
           ninja -C builddir
       - uses: github/codeql-action/analyze@v3

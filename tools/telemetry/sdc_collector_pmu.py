@@ -16,9 +16,14 @@ percent<80 → 该窗口 multiplex_degraded（宽表 percent_covered 列保留�
    TextIO 用户态缓冲，select+readline 实测 3 周期丢 11/256 核行 + 1/64 uncore 行；
    且轮换前先收完旧进程在途行——先 kill 再读会丢旧进程最后一个完整窗口；
 5. 子进程 EOF/读循环超时均 break（select 对 EOF 恒就绪，continue 会忙转）；
-6. run() 退出（max_cycles/SIGTERM）后 terminate+wait 子进程，不留孤儿 perf。
+6. run() 退出（max_cycles/SIGTERM）后 terminate+wait 子进程，不留孤儿 perf；
+7. 重启列头防御：__init__ 校验已有 pmu_core/uncore.csv 首行——与将写列头相同则复用
+   不重写（_hdr_written 初值由"文件已有列头"决定），不同则 stderr+exit 1（schema
+   漂移不允许静默拼接，同 percore 列头防御先例）；
+8. perf 死亡即重生：collect_once 开头 poll 到核表 perf 已退出 → 先收净在途行再 _spawn
+   （stderr 记一行"perf 死亡重生"）——Restart=always 只救采集器进程，救不了子进程。
 """
-import glob, os, select, subprocess, time
+import glob, os, select, subprocess, sys, time
 from sdc_collector import SdcCollector, register
 
 MUX_THRESHOLD = 80.0
@@ -41,6 +46,8 @@ UNCORE_ROTATION = ["l3c", "hha", "ddrc"]
 # 宽表列 = 轮换全组事件并集（固定 schema；group 列标示当前组，非本组列留空）
 CORE_COLUMNS = ["cycles"] + [k for g in CORE_ROTATION for k in RAW[g]]
 UNCORE_COLUMNS = [k for g in UNCORE_ROTATION for k in RAW[g]]
+CORE_HEADER = ",".join(["ts", "group", "core", "percent_covered"] + CORE_COLUMNS)
+UNCORE_HEADER = ",".join(["ts", "group", "device", "percent_covered"] + UNCORE_COLUMNS)
 
 def is_degraded(percent):
     return percent < MUX_THRESHOLD
@@ -107,9 +114,28 @@ class PmuCollector(SdcCollector):
         self._core_buf = self._uncore_buf = b""
         self._core_evname = {}
         self._rotate_at = 0.0
-        self._core_hdr_written = self._uncore_hdr_written = False
-        self._core_out = open(os.path.join(os.path.dirname(self.csv_path), "pmu_core.csv"), "a")
-        self._uncore_out = open(os.path.join(os.path.dirname(self.csv_path), "pmu_uncore.csv"), "a")
+        mon = os.path.dirname(self.csv_path)
+        # 重启列头防御（T5 评审）：_hdr_written 初值由"文件已有相同列头"决定——重启不重写
+        self._core_hdr_written = self._existing_header(os.path.join(mon, "pmu_core.csv"), CORE_HEADER)
+        self._uncore_hdr_written = self._existing_header(os.path.join(mon, "pmu_uncore.csv"), UNCORE_HEADER)
+        self._core_out = open(os.path.join(mon, "pmu_core.csv"), "a")
+        self._uncore_out = open(os.path.join(mon, "pmu_uncore.csv"), "a")
+
+    @staticmethod
+    def _existing_header(path, hdr):
+        """已有文件首行=列头：相同→True（复用不重写）；不同→stderr+exit 1；无/空文件→False。"""
+        try:
+            with open(path) as f:
+                first = f.readline().rstrip("\n")
+        except OSError:
+            return False
+        if first == hdr:
+            return True
+        if first:
+            print(f"[pmu] 拒绝启动: {path} 已有列头与本次不符（schema 漂移，不允许拼接）\n"
+                  f"  已有: {first}\n  待写: {hdr}", file=sys.stderr, flush=True)
+            sys.exit(1)
+        return False
     def _spawn(self):
         self._core_group = CORE_ROTATION[0] if not self._core_group else \
             CORE_ROTATION[(CORE_ROTATION.index(self._core_group) + 1) % len(CORE_ROTATION)]
@@ -140,8 +166,7 @@ class PmuCollector(SdcCollector):
         """收净两路在途行并落盘（核表 per-core 行形，uncore plain 行形）。"""
         nrows = 0
         if not self._core_hdr_written:
-            self._core_out.write(",".join(["ts", "group", "core", "percent_covered"]
-                                          + CORE_COLUMNS) + "\n")
+            self._core_out.write(CORE_HEADER + "\n")
             self._core_hdr_written = True
         lines, self._core_buf = _drain_lines(self._core_fd, self._core_buf)
         acc = {}
@@ -174,8 +199,7 @@ class PmuCollector(SdcCollector):
                     continue
                 uacc.setdefault((ts, parts[0]), {"pct": pct})[parts[1]] = val
             if not self._uncore_hdr_written and uacc:
-                self._uncore_out.write(",".join(["ts", "group", "device", "percent_covered"]
-                                                + UNCORE_COLUMNS) + "\n")
+                self._uncore_out.write(UNCORE_HEADER + "\n")
                 self._uncore_hdr_written = True
             for (ts, dev), d in sorted(uacc.items()):
                 self._uncore_out.write(",".join([self.now_iso(), self._uncore_group, dev,
@@ -183,12 +207,26 @@ class PmuCollector(SdcCollector):
             nrows += len(uacc)
         self.samples_total += nrows               # 直写专用文件；基类 samples_total 记行数
         self._core_out.flush(); self._uncore_out.flush()
+    def _sleep_first_window(self):
+        """分片睡等新进程首个 interval 行（总时长 period+0.5s，SIGTERM ≤1s 响应——同基类修法）。"""
+        deadline = time.monotonic() + self.period_s + 0.5
+        while True:
+            remain = deadline - time.monotonic()
+            if remain <= 0 or self._stop:
+                break
+            time.sleep(min(1.0, remain))
     def collect_once(self):
-        if self._p_core is None or time.monotonic() >= self._rotate_at:
+        if self._p_core is not None and self._p_core.poll() is not None:
+            print(f"[pmu] perf 死亡重生: core group={self._core_group} "
+                  f"rc={self._p_core.returncode}", file=sys.stderr, flush=True)
+            self._drain_write()                   # 收净死亡进程在途行再重生
+            self._spawn()
+            self._sleep_first_window()
+        elif self._p_core is None or time.monotonic() >= self._rotate_at:
             if self._p_core is not None:
                 self._drain_write()               # 轮换前收完旧进程在途行——不丢最后一个窗口
             self._spawn()
-            time.sleep(self.period_s + 0.5)       # 等新进程首个 interval 行
+            self._sleep_first_window()
         self._drain_write()
         return []                                 # 数据直写专用文件，不走基类 CSV
     def run(self):

@@ -1,9 +1,9 @@
 #!/bin/bash
 # status.sh — 战役状态一览（只读，无需 root）
-DIR="${SDC_CAMPAIGN_DIR:-$HOME/sdc-campaign}"
+DIR="${SDC_EXCITE_REPRODUCE_DIR:-$HOME/sdc-excite-reproduce}"
 echo "=== 服务状态 ==="
 printf "%-10s %s\n" monitor:  "$(systemctl is-active sdc-monitor.service 2>&1)"
-printf "%-10s %s\n" campaign: "$(systemctl is-active sdc-campaign.service 2>&1)"
+printf "%-10s %s\n" campaign: "$(systemctl is-active sdc-excite-reproduce.service 2>&1)"
 echo "=== 战役进度 ==="
 python3 -c "
 import json, os

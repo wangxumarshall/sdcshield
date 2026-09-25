@@ -1,8 +1,8 @@
 #!/bin/bash
-# sdc_campaign.sh — SDC 7×24 战役驱动（L0–L5 状态机 + 断点恢复 + 事件取证）
+# sdc-excite-reproduce.sh — SDC 7×24 战役驱动（L0–L5 状态机 + 断点恢复 + 事件取证）
 #
-# 用法: sdc_campaign.sh [smoke|full]     （默认 full；所有时长可 env 覆盖）
-# 由 sdc-campaign.service（User=sdc）托管；崩溃由 systemd Restart=always 拉起，
+# 用法: sdc-excite-reproduce.sh [smoke|full]     （默认 full；所有时长可 env 覆盖）
+# 由 sdc-excite-reproduce.service（User=sdc）托管；崩溃由 systemd Restart=always 拉起，
 # 进度存 state.json（断点续跑），SDC/崩溃事件进取证流水线后战役继续（普查模式）。
 # 依据 plan: docs/superpowers/plans/2026-09-23-2102312YVY10M6000038-sdc-7x24-stress-plan.md §4-§7
 set -u
@@ -46,8 +46,8 @@ if '-' in last:
     a, b = last.split('-'); print(','.join(str(x) for x in range(int(b) - 3, int(b) + 1)))
 else:
     print(last)")
-    cat > "$CAMPAIGN_DIR/campaign.env" <<EOF
-# 由 sdc_campaign.sh 首次运行探测生成（$(date -Is)）。删除本文件可重新生成。
+    cat > "$EXCITE_REPRODUCE_DIR/campaign.env" <<EOF
+# 由 sdc-excite-reproduce.sh 首次运行探测生成（$(date -Is)）。删除本文件可重新生成。
 # thermal_crit_milli=$crit（ACPI trip_point_0_temp 最大值）
 NPROC=$nproc
 THERMAL_PAUSE_MILLI=$((crit - 10000))
@@ -61,11 +61,11 @@ STRESSNG_CPUS=${stress_cpus:-}
 L3_DISABLE=eigen_svd_double,eigen_sparse
 DWELL_DEFAULT=openblas_dgemm,sleef_neon,pocketfft_fft,isal_igzip,openssl_sha
 EOF
-    log "campaign.env 生成: $(tr '\n' ' ' < "$CAMPAIGN_DIR/campaign.env")"
+    log "campaign.env 生成: $(tr '\n' ' ' < "$EXCITE_REPRODUCE_DIR/campaign.env")"
 }
-[ -f "$CAMPAIGN_DIR/campaign.env" ] || gen_env
+[ -f "$EXCITE_REPRODUCE_DIR/campaign.env" ] || gen_env
 # shellcheck disable=SC1090
-source "$CAMPAIGN_DIR/campaign.env"
+source "$EXCITE_REPRODUCE_DIR/campaign.env"
 
 # ---------------- sdcshield 旗标 feature-detect ----------------
 # 解析探测（--help 文本不完整，L0 实测）：<flag> -l 立即退出，rc=64=选项不存在
@@ -394,9 +394,9 @@ daily_summary() {
         echo "今日 YAML: $(find "$LOG_ROOT/$(date +%F | tr -d -)" -name '*.yaml' 2>/dev/null | wc -l)"
         echo "fail/crash 文件数: $(grep -lE 'result: *(fail|crash)' "$LOG_ROOT"/*/*.yaml "$LOG_ROOT"/spectrum_c*_files/*.yaml 2>/dev/null | wc -l)"
         echo "timeout/oserror 行数: $(grep -hE 'result: *(timeout|oserror)' "$LOG_ROOT"/*/*.yaml 2>/dev/null | wc -l)"
-        echo "阶段边界终止次数: $(grep -c '被阶段边界终止' "$CAMPAIGN_DIR/driver.log" 2>/dev/null || echo 0)（异常增多=疑似框架 hang）"
+        echo "阶段边界终止次数: $(grep -c '被阶段边界终止' "$EXCITE_REPRODUCE_DIR/driver.log" 2>/dev/null || echo 0)（异常增多=疑似框架 hang）"
         echo "最新工况: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null)"
-    } >> "$CAMPAIGN_DIR/daily_summary.log"
+    } >> "$EXCITE_REPRODUCE_DIR/daily_summary.log"
     # 磁盘保护：压缩昨日及更早的 YAML（实测 gzip 比 ≈12×；L3 体量 ~30GB/天原始 → ~2.5GB）
     local yday=$(date -d yesterday +%F | tr -d -) d
     for d in "$LOG_ROOT"/*/; do

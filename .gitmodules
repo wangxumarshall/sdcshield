@@ -1,9 +1,0 @@
-[submodule "third-party/rpms/openEuler-20.03"]
-	path = third-party/rpms/openEuler-20.03
-	url = git@github.com:wangxumarshall/sdcshield-rpm-20.03.git
-[submodule "third-party/rpms/openEuler-22.03"]
-	path = third-party/rpms/openEuler-22.03
-	url = git@github.com:wangxumarshall/sdcshield-rpm-22.03.git
-[submodule "third-party/rpms/openEuler-24.03"]
-	path = third-party/rpms/openEuler-24.03
-	url = git@github.com:wangxumarshall/sdcshield-rpm-24.03.git

@@ -113,7 +113,7 @@ jobs:
           builddir/sdcshield --quick -n$nproc --retest-on-failure=0 -o -
       - name: upload test run logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-linux-${{ matrix.name }}-logs
           if-no-files-found: ignore

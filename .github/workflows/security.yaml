@@ -23,7 +23,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Run zizmor
-        uses: zizmorcore/zizmor-action@v1
+        # 上游最高 tag 只有 v0.6.4,无 v1(写 v1 会 action 解析失败)
+        uses: zizmorcore/zizmor-action@v0.6.4
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -49,10 +50,13 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
-      - uses: google/osv-scanner-action/osv-scanner-action@v2
+      # 上游只有 v2.x.y tag,无裸 v2 tag/分支(写 v2 会 action 解析失败)。
+      # v2 CLI 是 scan source 子命令:--skip-git 已不存在("flag provided
+      # but not defined");本仓无 lockfile,空扫描用 --allow-no-lockfiles 通过
+      - uses: google/osv-scanner-action/osv-scanner-action@v2.6.0
         with:
           scan-args: |-
             -r
-            --skip-git
+            --allow-no-lockfiles
             ./
 

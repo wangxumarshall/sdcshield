@@ -1,0 +1,223 @@
+/*
+ * Copyright 2025 Intel Corporation.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef INC_CPU_DEVICE_H
+#define INC_CPU_DEVICE_H
+
+#include "cpu_features.h"
+
+#ifdef __cplusplus
+#include <string>
+#endif
+#include <string.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/// can be used in the clobber list of inline assembly to indicate
+/// that all the R registers have been modified by the assembly code.
+#define RCLOBBEREDLIST "r8",\
+                       "r9",\
+                       "r10",\
+                       "r11",\
+                       "r12",\
+                       "r13",\
+                       "r14",\
+                       "r15"
+
+/// can be used in the clobber list of inline assembly to indicate
+/// that all the MMX registers have been modified by the assembly code.
+#define MMCLOBBEREDLIST "mm0",\
+                        "mm1",\
+                        "mm2",\
+                        "mm3",\
+                        "mm4",\
+                        "mm5",\
+                        "mm6",\
+                        "mm7"
+
+/// can be used in the clobber list of inline assembly to indicate
+/// that all the XMM registers have been modified by the assembly code.
+#define XMMCLOBBEREDLIST "xmm0",\
+                         "xmm1",\
+                         "xmm2",\
+                         "xmm3",\
+                         "xmm4",\
+                         "xmm5",\
+                         "xmm6",\
+                         "xmm7",\
+                         "xmm8",\
+                         "xmm9",\
+                         "xmm10",\
+                         "xmm11",\
+                         "xmm12",\
+                         "xmm13",\
+                         "xmm14",\
+                         "xmm15"
+
+/// can be used in the clobber list of inline assembly to indicate
+/// that all the YMM registers have been modified by the assembly code.
+#define YMMCLOBBEREDLIST "ymm0",\
+                         "ymm1",\
+                         "ymm2",\
+                         "ymm3",\
+                         "ymm4",\
+                         "ymm5",\
+                         "ymm6",\
+                         "ymm7",\
+                         "ymm8",\
+                         "ymm9",\
+                         "ymm10",\
+                         "ymm11",\
+                         "ymm12",\
+                         "ymm13",\
+                         "ymm14",\
+                         "ymm15"
+
+/// can be used in the clobber list of inline assembly to indicate
+/// that all the ZMM registers have been modified by the assembly code.
+#define ZMMCLOBBEREDLIST "zmm0",\
+                         "zmm1",\
+                         "zmm2",\
+                         "zmm3",\
+                         "zmm4",\
+                         "zmm5",\
+                         "zmm6",\
+                         "zmm7",\
+                         "zmm8",\
+                         "zmm9",\
+                         "zmm10",\
+                         "zmm11",\
+                         "zmm12",\
+                         "zmm13",\
+                         "zmm14",\
+                         "zmm15",\
+                         "zmm16",\
+                         "zmm17",\
+                         "zmm18",\
+                         "zmm19",\
+                         "zmm20",\
+                         "zmm21",\
+                         "zmm22",\
+                         "zmm23",\
+                         "zmm24",\
+                         "zmm25",\
+                         "zmm26",\
+                         "zmm27",\
+                         "zmm28",\
+                         "zmm29",\
+                         "zmm30",\
+                         "zmm31"
+
+/// can be used in the clobber list of inline assembly to indicate
+/// that all the K registers have been modified by the assembly code.
+#define KMASKCLOBBEREDLIST "k0","k1","k2","k3","k4","k5","k6","k7"
+
+/// used to determine whether one or more CPU features are available at runtime.  f is a bitmask
+/// of cpu features as defined in the auto-generated cpu_features.h file.  For example, a test
+/// may call device_has_feature(cpu_feature_avx512f) to determine whether AVX-512 is available.
+/// Normally, cpuid detection is handle automatically by the framework via test's minimum_cpu field.
+/// This macro is provided in case tests need more fine grained control.
+#define device_has_feature(f)      ((device_compiler_features & (f)) == (f) || (device_features & (f)) == (f))
+/// Alias for legacy code.
+#define cpu_has_feature(f)         device_has_feature(f)
+
+/// Describes the field @c native_core_type in @ref cpu_info_t
+// use typed enums
+enum NativeCoreType
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+        : uint8_t
+#endif
+{
+    core_type_unknown = 0,
+    core_type_performance = 1,
+    core_type_efficiency = 2,
+};
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+typedef enum NativeCoreType NativeCoreType;     // C23 or newer
+#elif defined(__STDC_VERSION__)
+typedef uint8_t NativeCoreType;                 // C17 or older
+#endif
+
+/// used as follows: if instruction cache, only cache_instruction is valid; if
+/// data, only data is valid; if unified, both are set to the same value. In all
+/// the cases the value is the cache size in bytes.  A field is valid if it
+/// contains a value >= 0.  Fields with negative values are invalid.
+struct cache_info_t
+{
+    int cache_instruction;
+    int cache_data;
+    int16_t id;
+    bool is_unified;
+    int8_t _reserved;
+};
+
+/// cpu_info_t contains information about a logical CPU
+struct cpu_info_t
+{
+    uint64_t microcode;     ///! Microcode version read from /sys
+
+    /// Logical OS processor number.
+    /// On Unix systems, this is a sequential ID; on Windows, it encodes
+    /// 64 * ProcessorGroup + ProcessorNumber
+    int cpu_number;
+
+    // anonymous struct is a GCC extension
+    __extension__ struct __attribute__((packed)) {
+    /// Thread ID inside a core, usually 0 or 1 (-1 if not known).
+    int8_t thread_id;
+    /// Core ID inside of a package, -1 if not known.
+    int16_t core_id;
+    /// Module ID inside of a package, -1 if not known.
+    int16_t module_id;
+    /// Die ID inside of a package, -1 if not known.
+    int16_t die_id;
+    /// The core type, if known. See enum definition.
+    NativeCoreType native_core_type;
+    /// NUMA node ID in the system, -1 if not known.
+    int16_t numa_id;
+    /// Package ID in the system, -1 if not known.
+    int16_t package_id;
+    };
+
+    /// On x86, it's the APICID or x2APICID, if known; -1 if not.
+    int hwid;
+
+    struct cache_info_t cache[3]; ///! Cache info from OS
+
+#ifdef __cplusplus
+    int cpu() const;        ///! Internal CPU number
+#endif
+};
+
+// Alias for use in common framework code.
+typedef struct cpu_info_t device_info_t;
+
+/// device_info is an array of cpu_info_t structures.  Each element of the array
+/// contains information about a logical CPU that will be used to
+/// execute a test's test_run function.  The size of this array is
+/// equal to the value returned by device_count().
+extern struct cpu_info_t *device_info;
+// Interim alias for compatibility.
+extern struct cpu_info_t *cpu_info asm("device_info");
+
+#ifdef __cplusplus
+inline int cpu_info_t::cpu() const
+{
+    return this - ::device_info;
+}
+
+extern "C" {
+#endif // __cplusplus
+
+/// Keep num_cpus() defined for legacy reasons
+int num_cpus() __attribute__((pure));
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // INC_CPU_DEVICE_H

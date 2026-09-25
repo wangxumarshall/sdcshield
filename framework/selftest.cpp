@@ -1,0 +1,2778 @@
+/*
+ * Copyright 2022 Intel Corporation.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#define SANDSTONE_FAKE_FLOAT16
+
+#include <inttypes.h>
+#include <limits.h>
+#include <sched.h>
+#include <semaphore.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#ifdef __linux__
+#include <linux/kvm.h>
+#include <sys/ioctl.h>
+#endif
+#ifdef __unix__
+#include <sys/wait.h>
+#endif
+
+#include "sandstone.h"
+#ifndef _WIN32
+#include "sandstone_asm.h"
+#include "sandstone_kvm.h"
+#endif // _WIN32
+#include "sandstone_p.h"
+#include "topology.h"
+
+#include <exception>
+#include <unordered_map>
+
+#ifdef __x86_64__
+#  include "amx_common.h"
+#elif defined(__aarch64__)
+#  include <arm_neon.h>
+#endif
+
+#ifdef _WIN32
+#  include <windows.h>
+#endif
+
+using namespace std::chrono;
+using namespace std::chrono_literals;
+
+using long_double = long double;
+using uint128_t = __uint128_t;
+#define FOREACH_DATATYPE(F)         \
+    F(uint8_t, 0x55)                \
+    F(uint16_t, 0xaaaa)             \
+    F(uint32_t, 0x11111111)         \
+    F(uint64_t, UINT64_C(0x0102030405060708)) \
+    F(uint128_t, (uint128_t(UINT64_C(0x0102030405060708)) << 64) + UINT64_C(0x090a0b0c0d0e0f00)) \
+    F(Float16, -1.5f)               \
+    F(float, 0.5f)                  \
+    F(double, 65535.0)              \
+    F(long_double, 4294967296.0L)
+
+struct SelftestException : std::exception
+{
+    int thread;
+    SelftestException(int thread = -1) : thread(thread) {}
+    const char *what() const noexcept override
+    {
+        return "SDCShield C++ selftest exception";
+    }
+};
+
+static void check_is_main_process()
+{
+    if (!sApp->is_main_process()) {
+        fprintf(stderr, "Function appears to have run in the child process\n");
+        abort();
+    }
+}
+
+static int selftest_pass_init(struct test *test)
+{
+    printf("# This was printed from the test. YOU SHOULD NOT SEE THIS!\n");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_pass_run(struct test * test, int)
+{
+    printf("# This was printed from the test. YOU SHOULD NOT SEE THIS!\n");
+    return EXIT_SUCCESS;
+}
+
+template <useconds_t Usecs>
+static int selftest_timedpass_run(struct test *test, int)
+{
+    do {
+        if (Usecs)
+            usleep(Usecs);
+    } while (test_time_condition(test));
+    return EXIT_SUCCESS;
+}
+
+template <useconds_t Usecs>
+static int selftest_timedpass_whileloop_run(struct test *test, int)
+{
+    while (test_time_condition(test)) {
+        if (Usecs)
+            usleep(Usecs);
+    }
+    return EXIT_SUCCESS;
+}
+
+template <useconds_t Usecs>
+static int selftest_timedpass_noloop_run(struct test *test, int)
+{
+    if (Usecs)
+        usleep(Usecs);
+    return EXIT_SUCCESS;
+}
+
+template <auto Generator, int LoopCount>
+static int selftest_busywait_random_generation_run(struct test *test, int)
+{
+    TEST_LOOP(test, LoopCount) {
+        Generator();
+    }
+    return EXIT_SUCCESS;
+}
+
+static int selftest_preinit_preinit(struct test *test)
+{
+    check_is_main_process();
+    test->desired_duration = -1;
+    test->maximum_duration = 1; // 1ms only
+    return EXIT_SUCCESS;
+}
+
+static int selftest_preinit_init(struct test *test)
+{
+    // If this is an -fexec run, we can only check things in sApp->shmem for
+    // side-effects from the preinit function.
+
+    // test->desired_duration influences the loop counter (though
+    // --max-test-loop-count takes precedence...)
+    if (sApp->shmem->current_max_loop_count == INT_MAX)
+        report_fail_msg("test->desired_duration does not appear to have been taken into account");
+
+    // test->maximum_duration influences sApp->current_test_duration (so long
+    // as --force-test-time isn't used), but we can't access that so we check a
+    // side effect of the duration: the test end time
+    if (sApp->shmem->current_test_endtime - MonotonicTimePoint::clock::now() > 1ms)
+        report_fail_msg("test->maximum_duration appears not to have been taken into account");
+
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logs_init(struct test *test)
+{
+    log_debug("This is a debug message from init function");
+    log_info("This is a multiline info message from init function\nSecond line.");
+    log_warning("This is a warning message from init function ending in newline\n");
+    fputs("*** This was written to stderr ***\n*** in multiple lines ***", stderr);
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logs_run(struct test *test, int thread)
+{
+    log_debug("This is a debug message from cpu %d", thread);
+    log_info("This is a multiline info message from cpu %d\nSecond line.", thread);
+    log_warning("This is a warning message from cpu %d. Random number: %d'", thread, rand());
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logdata_run(struct test *test, int thread)
+{
+    char buf[] =
+            "0123456789" "0123456789" "0123456789"
+            "0123456789" "0123456789" "0123456789"
+            "0123456";
+    log_data("same", buf, sizeof(buf) - 1);
+
+    /* fill it with random data */
+    memset_random(buf, sizeof(buf));
+    log_data("random", buf, sizeof(buf));
+
+    return EXIT_SUCCESS;
+}
+
+static int selftest_log_platform_init(struct test *test)
+{
+    (void)test;
+    log_platform_message(SANDSTONE_LOG_INFO "This is an informational platform message");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_lograwyaml_run(struct test *test, int cpu)
+{
+    log_yaml(SANDSTONE_LOG_INFO,
+             stdprintf("Some details from the test\n"
+                       "cpu: %d\n"
+                       "random: 0h%016llx\n"
+                       "text: foo bar\n\n",
+                       cpu, (unsigned long long)random64()).c_str());
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logformattedyaml_run(struct test *test, int cpu)
+{
+    std::map<std::string, YamlFormatter::SimpleValue> map = {
+        { "cpu", cpu },
+        { "random", random64() },
+        { "text", std::string_view("foo bar") },
+        { "large_number", int64_t(LLONG_MAX) },
+        { "small_number", int64_t(LLONG_MIN) },
+    };
+    log_yaml(SANDSTONE_LOG_INFO, "Some details from the test", map);
+    return EXIT_SUCCESS;
+}
+
+#if SANDSTONE_DEVICE_CPU
+static int selftest_logs_l3cachesize_init(struct test *)
+{
+    const Topology &topology = Topology::topology();
+
+    size_t aggregate = 0;
+    std::string group_sizes;
+    for (const Topology::Package &pkg : topology.packages) {
+        for (const Topology::CoreGrouping &group : pkg.groups) {
+            if (group_sizes.size())
+                group_sizes += ", ";
+            group_sizes += std::to_string(group.l3_cache_size);
+        }
+        aggregate += pkg.l3_cache_size;
+    }
+
+    log_yaml(SANDSTONE_LOG_INFO,
+             stdprintf("L3 cache size for this topology\n"
+                       "l3-aggregate-size: %zu\n"
+                       "l3-group-sizes: [ %s ]\n\n",
+                       aggregate, group_sizes.c_str()).c_str());
+    return EXIT_SUCCESS;
+}
+#endif // SANDSTONE_DEVICE_CPU
+
+static int selftest_logs_options_init(struct test *test)
+{
+    const char *strvalue = get_testspecific_knob_value_string(test, "StringValue", "DefaultValue");
+    const char *nullstrvalue = get_testspecific_knob_value_string(test, "NullStringValue", nullptr);
+    uint64_t u64 = get_testspecific_knob_value_uint(test, "UIntValue", 0);
+    int64_t i64 = get_testspecific_knob_value_int(test, "IntValue", -1);
+    double f64 = get_testspecific_knob_value_double(test, "DoubleValue", 2.5);
+
+    // log them
+    log_info("StringValue = %s", strvalue);
+    if (nullstrvalue)
+        log_info("NullStringValue = %s", nullstrvalue);
+    if (u64 || i64 != -1)
+        log_info("Numbers: %" PRIu64 " %" PRId64, u64, i64);
+    if (f64 != 2.5)
+      log_info("Double: %.17g", f64);
+
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logs_getcpu_run(struct test *test, int)
+{
+    int cpu_number = sched_getcpu();
+    log_info("%d", cpu_number);
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logs_reschedule_init(struct test *test)
+{
+    // In order to always get the same result and avoid race conditions,
+    // we use semaphores to synchronize the access to reschedule()
+    int sem_size = thread_count() - 1;
+    sem_t *reschedule_sem = (sem_t *) calloc(sem_size, sizeof(sem_t));
+    for (int i = 0; i < sem_size; i++) {
+        sem_init(&reschedule_sem[i], 0, 0);
+    }
+
+    test->data = (void *) reschedule_sem;
+
+    return EXIT_SUCCESS;
+}
+
+static void deterministic_reschedule(struct test *test, int thread)
+{
+    sem_t *semaphores = (sem_t *) test->data;
+
+    // Let's wait unit previous CPU has finished
+    if (thread > 0)
+        sem_wait(&semaphores[thread-1]);
+
+    reschedule();
+
+    // When we finish, instruct next thread it can proceed
+    // unless we are the last one
+    if (thread < thread_count()-1)
+        sem_post(&semaphores[thread]);
+}
+
+static int selftest_logs_reschedule_run(struct test *test, int thread)
+{
+    int cpu_number = sched_getcpu();
+    log_info("%d", cpu_number);
+
+    deterministic_reschedule(test, thread);
+
+    cpu_number = sched_getcpu();
+    log_info("%d", cpu_number);
+
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logs_reschedule_cleanup(struct test *test)
+{
+    sem_t *reschedule_sem = (sem_t *) test->data;
+    for (int i = 0; i < thread_count() - 1; i++) {
+        sem_destroy(&reschedule_sem[i]);
+    }
+    free (reschedule_sem);
+    return EXIT_SUCCESS;
+}
+static int selftest_logs_random_init(struct test *test)
+{
+    // print 4 ints
+    int r1 = random();
+    int r2 = random();
+    int r3 = random();
+    int r4 = random();
+    log_info("%u %u %u %u", r1, r2, r3, r4);
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logs_random_run(struct test *test, int)
+{
+    return selftest_logs_random_init(test);
+}
+
+static int selftest_cxxthrowcatch_run(struct test *test, int thread)
+{
+    try {
+        throw SelftestException(thread);
+    } catch (SelftestException &e) {
+        memcmp_or_fail(&e.thread, &thread, 1);
+        return EXIT_SUCCESS;
+    }
+}
+
+static int selftest_skip_init(struct test *test)
+{
+    log_info("{\"packages\": %d, \"cpus\": %d}", num_packages(), thread_count());
+    log_info("Requesting skip (this message should be visible)");
+    return EXIT_SKIP;
+}
+
+static int selftest_skip_run(struct test *test, int)
+{
+    log_error("We should not reach here");
+    abort();
+    return EXIT_FAILURE;
+}
+
+static int selftest_log_skip_init(struct test *test)
+{
+    log_skip(SelftestSkipCategory, "This is a skip in init");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_skipmsg_success_cleanup(struct test *test)
+{
+    log_skip(SelftestSkipCategory, "SUCCESS after skipmsg from cleanup");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_skipmsg_skip_cleanup(struct test *test)
+{
+    log_skip(SelftestSkipCategory, "SKIP after skipmsg from cleanup");
+    return EXIT_SKIP;
+}
+
+static int selftest_skip_cleanup(struct test *test)
+{
+    log_info("SKIP returned silently from cleanup");
+    return EXIT_SKIP;
+}
+
+static int selftest_log_skip_preinit(struct test *test)
+{
+    check_is_main_process();
+    test->test_init = [](struct test *) {
+        log_skip(SelftestSkipCategory, "This is a skip from preinit");
+        return EXIT_SUCCESS;
+    };
+    test->flags = test->flags | test_init_in_parent;
+    return EXIT_SUCCESS;
+}
+
+static int selftest_true_skip_in_preinit(struct test *test)
+{
+    check_is_main_process();
+    log_skip(SelftestSkipCategory, "This is a true skip from preinit");
+    return EXIT_SKIP;
+}
+
+static int selftest_errno_cleanup(struct test *test)
+{
+    log_info("Unexpected OS error reported from cleanup");
+    errno = ENOMEM;
+    return -errno;
+}
+
+static int selftest_errormsg_success_cleanup(struct test *test)
+{
+    log_error("Error logged in cleanup");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_fail_cleanup(struct test *test)
+{
+    log_info("cleanup returns FAIL");
+    return EXIT_FAILURE;
+}
+
+static int selftest_logerror_cleanup(struct test *test)
+{
+    log_error("cleanup failure");
+    return EXIT_SUCCESS;
+}
+
+template <int PackageId> static int selftest_log_skip_socket_init(struct test *test)
+{
+    if (num_packages() == 1 && device_info[0].package_id == PackageId)
+        return selftest_log_skip_init(test);
+    return EXIT_SUCCESS;
+}
+
+template <int PackageId> static int selftest_log_skip_socket_run(struct test *test, int thread)
+{
+    if (num_packages() == 1 && device_info[0].package_id == PackageId)
+        return selftest_skip_run(test, thread);
+    return EXIT_SUCCESS;
+}
+
+static int selftest_log_skip_run_all_threads(struct test *test, int)
+{
+    log_skip(SelftestSkipCategory, "Skipping on all threads");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_log_skip_run_even_threads(struct test *test, int thread)
+{
+    if (thread % 2 == 0) {
+        log_skip(SelftestSkipCategory, "Skipping on even numbered threads");
+        return EXIT_SKIP;
+    }
+    return EXIT_SUCCESS;
+}
+
+static int selftest_log_skip_newline_init(struct test *test)
+{
+    log_skip(SelftestSkipCategory, "This is a skip in init \nwith a new line.\nWill it work?");
+    return EXIT_SKIP;
+}
+
+static int selftest_log_skip_newline_run(struct test *test, int)
+{
+    log_skip(SelftestSkipCategory, "This message should never be displayed");
+    return EXIT_FAILURE;
+}
+
+static std::atomic<int> selftest_sequential_last_thread = -1;
+static int selftest_check_sequential_init(struct test *test)
+{
+    selftest_sequential_last_thread = thread_num;      // -1
+    return EXIT_SUCCESS;
+}
+
+static int selftest_check_sequential_run(struct test *test, int thread)
+{
+    usleep(1'000 * (random() % 16u));   // sleep up to 16 ms
+    int n = selftest_sequential_last_thread.load(std::memory_order_relaxed);
+    log_debug("Last CPU was %d", n);
+    if (n != thread - 1)
+        report_fail_msg("Last CPU %d was not expected", n);
+    selftest_sequential_last_thread.store(thread, std::memory_order_relaxed);
+    return EXIT_SUCCESS;
+}
+
+static int selftest_uses_too_much_mem_run(struct test *, int)
+{
+    static constexpr int Size = 1024 * test_the_test_data<true>::MaxAcceptableMemoryUseKB * 2;
+    static constexpr int Count = Size / sizeof(uint32_t);
+    std::unique_ptr<uint32_t[]> data(new uint32_t[Count]);
+
+    // fault in the memory, in case the kernel didn't
+    for (int i = 0; i < Count; i += 4096)
+        data[i] = i;
+
+    // sleep a little so the other threads have a chance to catch up
+    usleep(200'000);
+
+    return EXIT_SUCCESS;
+}
+
+static int selftest_noreturn_run_inner(struct test *test, int)
+{
+    struct timespec forever = { LLONG_MAX, 0 };
+    nanosleep(&forever, NULL);
+    return EXIT_FAILURE;
+}
+
+static int selftest_noreturn_run(struct test *test, int device)
+{
+    std::string ctxt = stdprintf("timeout: %d, device: %d",
+                                 sApp->timeout_to_kill.count(),     // may be wrong with -fexec
+                                 device);
+    log_thread_context(ctxt);
+    return selftest_noreturn_run_inner(test, device);
+}
+
+static int adjust_cpu_for_isolate_socket(int cpu)
+{
+    // pretend we're running in test_schedule_isolate_socket
+    for (int cpu0 = cpu - 1; cpu0 >= 0; --cpu0) {
+        if (device_info[cpu0].package_id == device_info[cpu].package_id)
+            continue;
+        return cpu - cpu0 - 1;
+    }
+    // no adjustment necessary -- we are in test_schedule_isolate_socket
+    return cpu;
+}
+
+template <auto F> static int selftest_if_socket1_initcleanup(struct test *test)
+{
+    if (device_info[0].package_id == 1)
+        return F(test);
+    return EXIT_SUCCESS;
+}
+
+template <auto F> static int selftest_if_socket1_run(struct test *test, int thread)
+{
+    if (device_info[thread].package_id == 1)
+        return F(test, adjust_cpu_for_isolate_socket(thread));
+    return EXIT_SUCCESS;
+}
+
+static int selftest_50pct_freeze_fail_run(struct test *test, int thread)
+{
+    if (rand() & 1)
+        return selftest_noreturn_run(test, thread);
+    return EXIT_FAILURE;
+}
+
+static int selftest_randomprint_init(struct test *test)
+{
+    log_info("Random number: %#016" PRIx64, random64());
+    return EXIT_SUCCESS;
+}
+
+template <typename Ratio>
+static constexpr unsigned maskFromRatio()
+{
+    static_assert(Ratio::num == 1, "Numerator must be 1");
+    static_assert(__builtin_popcountll(Ratio::den) == 1, "Denominator must be a power of 2");
+    int BitPosition = __builtin_ctzll(Ratio::den);
+
+    // because this is constexpr, the following expression will check the range of BitPosition
+    return 1U << BitPosition;
+}
+
+template <initfunc F = selftest_pass_init>
+static int selftest_init_installcallback(struct test *test)
+{
+    // this ought to use the stateless callback
+    install_failure_callback([] {
+        log_warning("Callback in thread %d", thread_num);
+    });
+    return F(test);
+}
+
+template <typename Ratio>
+static int selftest_randomfail_run(struct test *test, int)
+{
+    constexpr unsigned Value = maskFromRatio<Ratio>();
+    unsigned ratio = (Value * sApp->thread_count);
+    return rand() % ratio ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+template <useconds_t Sleeptime, typename Ratio>
+static int selftest_timed_randomfail_run(struct test *test, int)
+{
+    constexpr unsigned Value = maskFromRatio<Ratio>();
+
+    int i = 0;
+    do {
+        usleep(Sleeptime);
+        ++i;
+        if (rand() % (Value * sApp->thread_count))
+            continue;
+        report_fail_msg("Randomly failing on iteration %d (TTF should be ~%u ms)",
+                        i, unsigned(Sleeptime) * i);
+    } while (test_time_condition(test));
+    return EXIT_SUCCESS;
+}
+
+static int selftest_fail_run(struct test *test, int)
+{
+    log_info("run returns FAIL");
+    return EXIT_FAILURE;
+}
+
+static int selftest_failinit_init(struct test *test)
+{
+    selftest_randomprint_init(test);
+    return EXIT_FAILURE;
+}
+
+static int selftest_failinit_run(struct test *test, int)
+{
+    log_error("We should not reach here");
+    abort();
+    return EXIT_SUCCESS;
+}
+
+static int selftest_failinit_and_logskip_init(struct test *test)
+{
+    selftest_randomprint_init(test);
+    log_skip(SelftestSkipCategory, "This is a skip in init");
+    return EXIT_FAILURE;
+}
+
+static int selftest_logerror_init(struct test *test)
+{
+    log_error("Error logged in init, test is not expected to run any threads");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logerror_and_logskip_init(struct test *test)
+{
+    log_error("This is an error message from init");
+    log_skip(SelftestSkipCategory, "This is a skip in init");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logerror_and_logskip_exitskip_init(struct test *test)
+{
+    log_error("This is an error message from init");
+    log_skip(SelftestSkipCategory, "This is a skip in init");
+    return EXIT_SKIP;
+}
+
+static int selftest_logskip_and_logerror_init(struct test *test)
+{
+    log_skip(SelftestSkipCategory, "This is a skip in init");
+    log_error("This is an error message from init");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logerror_run(struct test *test, int thread)
+{
+    log_error("This is an error message from CPU %d", thread);
+    log_error("This is an another error message");
+    return EXIT_SUCCESS;
+}
+
+static int selftest_logerror_lots_run(struct test *test, int thread)
+{
+    // using environment because get_testspecific_knob_value_int() doesn't work
+    // in -fexec mode
+    int count = 10;
+    if (const char *env = getenv("SELFTEST_LOGERROR_LOTS_COUNT"))
+        count = strtol(env, nullptr, 0);
+    for (int i = 0; i < count; ++i) {
+        log_info("This is log info message #%d", i);
+        log_error("This is log error message #%d", i);
+    }
+    return EXIT_SUCCESS;
+}
+
+static int selftest_reportfail_run(struct test *test, int)
+{
+    report_fail(test);
+    log_error("We should not reach here");
+    abort();
+    return EXIT_SUCCESS;
+}
+
+static int selftest_reportfailmsg_run(struct test *test, int thread)
+{
+    report_fail_msg("Failure message from thread %d", thread);
+    log_error("We should not reach here");
+    abort();
+    return EXIT_SUCCESS;
+}
+
+static int selftest_fail_after_reschedule_run(struct test *test, int thread)
+{
+    deterministic_reschedule(test, thread);
+    report_fail_msg("Failed after reschedule(), on cpu %d", sched_getcpu());
+    return EXIT_SUCCESS;
+}
+
+static int selftest_fail_after_reschedule_lowest_cpu_run(struct test *test, int thread)
+{
+    int n = thread_count();
+    n *= n;
+    while (n--) {
+        struct timespec ts = { 0, random() & 0x3ff };   // ~1 us
+        nanosleep(&ts, nullptr);    // yield CPU a little (we can ignore EINTR)
+
+        reschedule();
+        if (sched_getcpu() == device_info[0].cpu_number)
+            report_fail_msg("Failed after reschedule(), from thread %d", thread);
+        test_loop_condition(1);     // count loops
+    }
+    return EXIT_SUCCESS;
+}
+
+template <typename T> static T make_datacompare_value();
+#define MAKE_DATA_VALUE(Type, Value)    \
+    template<> Type make_datacompare_value() { return Value; }
+FOREACH_DATATYPE(MAKE_DATA_VALUE)
+#undef MAKE_DATA_VALUE
+
+static int selftest_datacomparefail_with_cb_init(struct test *test)
+{
+    // stateful callback
+    install_failure_callback([test] {
+        log_warning("Callback in thread %d for test %s", thread_num, test->id);
+    });
+    return EXIT_SUCCESS;
+}
+
+template <typename T> static int selftest_datacomparefail_run(struct test *, int thread)
+{
+    constexpr size_t Count = 16;
+    const char *type_name = SandstoneDataDetails::TypeToDataType<T>::name();
+    T values[Count + 1] = {};
+
+    int diff = (thread & (Count - 1));
+    values[diff] = make_datacompare_value<T>();
+
+    auto formatter = [&](ptrdiff_t idx) {
+        std::map<std::string, YamlFormatter::SimpleValue> map = {
+            { "rare", false },
+            { "modified_at", diff },
+            { "count", Count },
+        };
+        return stdprintf("data of type '%s' at index %td\n", type_name, idx)
+                + format_yaml(map);
+    };
+
+    if constexpr (std::is_same_v<T, uint8_t>) {
+        // stateless comparison with no description
+        memcmp_or_fail(values, values + 1, Count);
+    } else if constexpr (std::is_same_v<T, float>) {
+        // older, printf-like formatting
+        memcmp_or_fail(values, values + 1, Count,
+                       "data of type '%s'\n"
+                       "rare: false\n"
+                       "modified_at: %d\n"
+                       "count: %zu\n", type_name, diff, Count);
+    } else if constexpr (std::is_integral_v<T>) {
+        // use the C++ way with a lambda
+        memcmp_or_fail(values, values + 1, Count, formatter);
+    } else {
+        // use the C way
+        using FormatterType = decltype(formatter);
+        auto c_callback = [](void *token, ptrdiff_t idx) {
+            auto formatter = static_cast<FormatterType *>(token);
+            std::string result = std::move(*formatter)(idx);
+            return strdup(result.c_str());
+        };
+
+        // memcmp_or_fail_cb is only provided as a C macro (it uses C generics
+        // and __auto_type), so we must go straight to the callback.
+        DataType type = SandstoneDataDetails::TypeToDataType<T>::Type;
+        _memcmp_fail_report_cb(values, values + 1, Count * sizeof(T), type, c_callback, &formatter);
+    }
+
+    // won't be reached, but verify that it compiles
+    memcmp_or_fail(values, values + 1, Count, [] {
+        abort(); return std::string();
+    });
+    memcmp_or_fail(values, values + 1, Count);
+    return EXIT_SUCCESS;
+}
+
+template <typename Ratio, typename T = uint32_t>
+static int selftest_datacomparefailrare_run(struct test *, int)
+{
+    constexpr size_t Count = 16;
+    static_assert(Count * CHAR_BIT < std::numeric_limits<std::intmax_t>::max() / Ratio::den,
+            "Ratio will overflow");
+    static_assert(Ratio::num < RAND_MAX, "Ratio will underflow");
+
+    std::array<T, Count> expected;
+    if constexpr (std::is_floating_point_v<T>) {
+        for (T &value : expected)
+            value = frandom_scale(1);
+    } else {
+        memset_random(expected);
+    }
+
+    std::array actual = expected;
+
+    // Maybe make a perturbation. We want to have a Ratio chance of making a
+    // 1-bit flip in Count*CHAR_BIT bits, so create random number between 0 and
+    // Count * CHAR_BIT * Ratio::den / Ratio::num.
+    int r = rand();
+    int bitoffset = r * Ratio::den * CHAR_BIT * Count /
+            ((unsigned(RAND_MAX) + 1) / Ratio::num);
+    if (bitoffset < Count * CHAR_BIT) {
+        auto ptr = reinterpret_cast<uint8_t *>(actual.data());
+        ptr[bitoffset / CHAR_BIT] ^= 1 << (bitoffset % CHAR_BIT);
+    }
+
+    memcmp_or_fail(actual.data(), expected.data(), Count);
+    return EXIT_SUCCESS;
+}
+
+static int selftest_datacompare_nodifference_run(struct test *, int)
+{
+    uint8_t actual[16], expected[16];
+    memset_random(actual, sizeof(actual));
+    memcpy(expected, actual, sizeof(actual));
+
+    auto formatter = [&](ptrdiff_t idx) -> std::string {
+        assert(idx >= -1);
+        assert(idx < ptrdiff_t(sizeof(actual)));
+        std::string r = "random data\ndata: 0h";
+        for (uint8_t b : actual)
+            r += stdprintf("%02x", b);
+        return r;
+    };
+    memcmp_or_fail(actual, expected, sizeof(actual), formatter);    // won't fail
+    // now pretend we did see a failure and call the internal reporting function
+    _memcmp_fail_report(actual, expected, sizeof(actual), UInt8Data, nullptr);
+}
+
+static int selftest_cxxthrow_run(struct test *, int) noexcept(false)
+{
+    throw SelftestException();
+    log_error("We should not reach here");
+    abort();
+    return EXIT_SUCCESS;
+}
+
+template <auto F> static void run_crashing_function()
+{
+    F();
+    const char *f = strstr(__PRETTY_FUNCTION__, "[with auto F = ");
+    log_warning("Crashing function %s did return", f);
+}
+
+template <auto F> static int selftest_crash_initcleanup(struct test *)
+{
+    run_crashing_function<F>();
+    return EXIT_SUCCESS;
+}
+
+template <auto F>
+static int selftest_crash_run(struct test *test, int thread)
+{
+    if (thread == 1 || sApp->thread_count == 1) {
+        usleep(10000);
+        run_crashing_function<F>();
+    }
+
+    usleep(250'000);
+    return EXIT_SUCCESS;
+}
+
+static void cause_sigill()
+{
+    // some values for us to see in the register dump
+#ifdef __x86_64__
+    uint32_t random = random32();
+    int *errno_location = &errno;
+    int local_thread_num = thread_num;
+    long double ld1 = 1.0L;
+    long double ldpi = acosl(-1);
+    __m128i i = _mm_setr_epi32(42, 0xfeed, 0xdeadbeef, 0xc0ffee);
+    __m128 f = _mm_set_ps(1, 0, -1.5, std::numeric_limits<float>::infinity());
+    __m128d d1 = _mm_set_pd(1, std::numeric_limits<double>::epsilon());
+    __m128d d2 = _mm_set_pd(std::numeric_limits<double>::quiet_NaN(),
+                            -std::numeric_limits<double>::infinity());
+
+    __m128i one = _mm_set1_epi32(-1);
+#if SANDSTONE_DEVICE_CPU
+#ifndef __APX_F__
+    if (device_has_feature(cpu_feature_apx_f)) {
+        // force-init the APX state
+        asm ("movl %0, %%r17d" : : "i" (0x12345678));
+    }
+#endif
+#ifndef __clang__
+    if (device_has_feature(cpu_feature_avx)) {
+        // init the AVX state (using inline assembly to avoid vzeroupper)
+        if (device_has_feature(cpu_feature_avx512f)) {
+            // %gN: make zmm
+            asm ("vpternlogd $0xff, %g0, %g0, %g0" : "=x" (one));
+        } else {
+            // %tN: make ymm
+            asm ("vpcmpeqb %t0, %t0, %t0" : "=x" (one));
+        }
+    }
+#endif
+    if (device_has_feature(cpu_feature_amx_tile)) {
+        // init the AMX state
+        alignas(64) static struct amx_tileconfig cfg = {
+            .palette = 1,
+            .start_row = 0,
+            .colsb = { 64 },
+            .rows = { 1 },
+        };
+        asm ("ldtilecfg %0" : : "m" (cfg));
+        asm ("tileloadd (%0, %1, 1), %%tmm0" : : "r" (&cfg), "r" (ptrdiff_t(1)));
+    }
+#endif
+
+    // make sure there are no function calls between the instruction above and the one below
+
+    asm volatile(
+#if defined(__clang__) || defined(__APPLE__)
+                "ud2" : :           // clang's integrated assembler doesn't support ud1
+#else
+                "ud1 %0, %1" : :
+#endif
+                "m" (local_thread_num),
+                "a" (42),
+                "c" (0xfeed),
+                "d" (0xc0ffee),
+                "D" (random),
+                "S" (errno_location),
+                "f" (ld1),      // x87 register
+                "f" (ldpi),
+                "Yz" (d1),      // force XMM0
+                "x" (d2),
+                "x" (i),
+                "x" (f),
+                "x" (one)
+                );
+#elif defined(__aarch64__)
+    /* Pre-fill GPR and NEON/FPSIMD state so the crash-context dumper (which
+     * decodes mcontext.regs[] + the fpsimd_context in __reserved[]) has real
+     * non-zero values to report, mirroring what the x86 path does for
+     * SSE/AVX/AMX. UDF #0x1234 raises SIGILL. */
+    uint32_t rnd = random32();
+    int *errno_location = &errno;
+    int local_thread_num = thread_num;
+    double d1 = std::numeric_limits<double>::epsilon();
+    double d2 = std::numeric_limits<double>::quiet_NaN();
+    uint8x16_t v0 = vdupq_n_u8(0x42);
+    uint64x2_t v1 = vdupq_n_u64(0xdeadbeefULL);
+    /* Use the .inst pseudo-op (literal encoding of UDF #0x1234) rather than the
+     * `udf` mnemonic: older binutils (openEuler 20.03 ships 2.34) rejects `udf`
+     * as "unknown mnemonic", while .inst is supported uniformly across all
+     * binutils versions. Same machine encoding, same SIGILL. */
+    asm volatile(".inst 0x00001234"
+                 :
+                 : "x"(local_thread_num), "x"(rnd), "x"(errno_location),
+                   "w"(d1), "w"(d2), "w"(v0), "w"(v1)
+                 : "memory");
+#else
+    __builtin_trap();
+#endif
+}
+
+static void cause_sigfpe()
+{
+#ifdef __x86_64__
+    int r = 0;
+    asm volatile ("idivl %0, %0" : "+a" (r));
+#else
+    volatile int r = 0;
+    r = r/r;
+#endif
+}
+
+__attribute__((__no_sanitize_address__))
+static int force_memory_load(uintptr_t ptr)
+{
+    asm("" ::: "memory");
+    //    asm volatile ("movl (%1), %0" : "=r" (result) : "r" (ptr));
+    return *reinterpret_cast<volatile int *>(ptr);
+}
+
+__attribute__((__no_sanitize_address__))
+static void force_call(uintptr_t ptr)
+{
+    asm("" ::: "memory");
+    //    asm volatile ("jmp *%0" : : "r" (ptr));
+    reinterpret_cast<void (*)(void)>(ptr)();
+}
+
+static void cause_sigbus()
+{
+    // SIGBUS happens if memory can't be faulted in, instead of invalid
+    // addresses. We cause that by shrinkingi the file we've memory mapped.
+    int fd = open_memfd(MemfdCloseOnExec);
+    IGNORE_RETVAL(ftruncate(fd, 4096));
+    void *ptr = mmap(nullptr, 4096, PROT_READ, MAP_SHARED, fd, 0);
+    IGNORE_RETVAL(ftruncate(fd, 0));
+
+    int result = force_memory_load(uintptr_t(ptr));
+    (void) result;
+
+    munmap(ptr, 4096);
+    close(fd);
+}
+
+static void cause_sigsegv_null()
+{
+    // not exactly null, but first page
+    uintptr_t ptr = rand() & 0xfff;
+    int result = force_memory_load(ptr);
+    (void) result;
+}
+
+static void cause_sigsegv_kernel()
+{
+    uintptr_t ptr = ~uintptr_t(0) - 64 * 1024 * 1024;
+    ptr += rand() & 0xfff;
+    int result = force_memory_load(ptr);
+    (void) result;
+}
+
+static void cause_sigsegv_noncanonical()
+{
+    // even with Linear Address Masking (LAM), an address is non-canonical if
+    // bit 63 and bit 56 (5-level page tables) or bit 47 (4-level) don't match
+    uintptr_t ptr = UINT64_C(1) << 63;
+    ptr += rand() & 0xfff;
+    int result = force_memory_load(ptr);
+    (void) result;
+}
+
+static void cause_sigsegv_instruction()
+{
+    // Jump near a page boundary so that both the page containing the address
+    // and the adjacent page are unmapped.
+    uintptr_t ptr = 0xff0 + (rand() & 0xf);
+    force_call(ptr);
+}
+
+static void cause_sigill_partial()
+{
+    constexpr size_t page_size = 4096;
+    // Map writable first so we can write the instruction bytes.
+    auto *pages = static_cast<uint8_t *>(
+            mmap(nullptr, 2 * page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (pages == MAP_FAILED) {
+        log_skip(SelftestSkipCategory, "mmap failed: %s", strerror_for_mmap());
+        return;
+    }
+
+    // Write a guaranteed-crash instruction 8 bytes before the page boundary
+    // (offset 0xff8) so that RIP is valid/readable but the 8 bytes after it
+    // cross into PROT_NONE, producing a partial code dump.
+    uint8_t *insn = pages + page_size - 8;
+#if defined(__x86_64__)
+    insn[0] = 0x0f; insn[1] = 0x0b;    // UD2
+#elif defined(__aarch64__)
+    insn[0] = 0x00; insn[1] = 0x00; insn[2] = 0x00; insn[3] = 0x00;   // UDF #0
+#else
+    log_skip(SelftestSkipCategory, "unsupported architecture");
+    munmap(pages, 2 * page_size);
+    return;
+#endif
+
+    if (mprotect(pages, page_size, PROT_READ | PROT_EXEC) < 0
+            || mprotect(pages + page_size, page_size, PROT_NONE) < 0) {
+        log_skip(SelftestSkipCategory, "mprotect failed: %s", strerror_for_mmap());
+        munmap(pages, 2 * page_size);
+        return;
+    }
+    force_call(uintptr_t(insn));
+    munmap(pages, 2 * page_size);
+}
+
+static void cause_sigsegv_readable_unreadable()
+{
+    constexpr size_t page_size = 4096;
+    // First page readable, second PROT_NONE. Jump 4 bytes into the unreadable
+    // page: row 1 of the dump shows readable bytes then ??, row 2 is all ??.
+    auto *pages = static_cast<uint8_t *>(
+            mmap(nullptr, 2 * page_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (pages == MAP_FAILED || mprotect(pages, page_size, PROT_READ | PROT_EXEC) < 0) {
+        log_skip(SelftestSkipCategory, "mmap/mprotect failed: %s", strerror_for_mmap());
+        return;
+    }
+    force_call(uintptr_t(pages + page_size + 4));
+    munmap(pages, 2 * page_size);
+}
+
+static void cause_sigsegv_unreadable_readable()
+{
+    constexpr size_t page_size = 4096;
+    // First page PROT_NONE, second readable. Jump 4 bytes before the readable page.
+    auto *pages = static_cast<uint8_t *>(
+            mmap(nullptr, 2 * page_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (pages == MAP_FAILED || mprotect(pages + page_size, page_size, PROT_READ | PROT_EXEC) < 0) {
+        log_skip(SelftestSkipCategory, "mmap/mprotect failed: %s", strerror_for_mmap());
+        return;
+    }
+    force_call(uintptr_t(pages + page_size - 4));
+    munmap(pages, 2 * page_size);
+}
+
+static void cause_sigtrap_int3()
+{
+#ifdef __x86_64__
+    asm volatile("int3");
+#endif
+    raise(SIGTRAP);
+}
+
+#ifdef _WIN32
+static void raise_fastfail()
+{
+    asm volatile ("int %0" : : "i" (0x29), "c" (FAST_FAIL_FATAL_APP_EXIT));
+}
+#else
+static void raise_sigkill()
+{
+    raise(SIGKILL);
+
+}
+#endif
+
+static int selftest_malloc_fail(struct test *test, int)
+{
+    // ask for a very, very silly allocation size, which malloc can't possibly honor
+    size_t size = size_t(1) << 62;
+    // prevent malloc() from being optimized-out as a "built-in" function (clang issue)
+    void* volatile ptr = malloc(size);
+    int ret = (ptr == NULL ? EXIT_SUCCESS : EXIT_FAILURE);
+    free(ptr);
+    return ret;
+}
+
+static int selftest_oserror_run(struct test *test, int)
+{
+    _exit(EX_CONFIG);
+}
+
+#ifdef __unix__
+static int selftest_exit_on_termination_init(struct test *)
+{
+    signal(SIGQUIT, [](int) { _exit(EXIT_SUCCESS); });
+    return EXIT_SUCCESS;
+}
+
+static int selftest_ignore_termination_init(struct test *)
+{
+    signal(SIGQUIT, SIG_IGN);
+    return EXIT_SUCCESS;
+}
+
+template <runfunc ParentFunc, runfunc ChildFunc = ParentFunc>
+static int selftest_fork_run(struct test *test, int thread)
+{
+    int pid = fork();
+    if (pid < 0)
+        report_fail_msg("Failed to fork(): %m");
+
+    if (pid > 0) {
+        // ParentProcess
+        log_info("Child pid: %d", pid);
+        return ParentFunc(test, thread);
+    } else {
+        return ChildFunc(test, thread);
+    }
+}
+#endif
+
+#if defined(STATIC) && defined(__GLIBC__)
+extern "C" {
+[[noreturn]] void __libc_fatal (const char *message);
+}
+
+static int selftest_libc_fatal_run(struct test *, int)
+{
+    __libc_fatal("__libc_fatal called\n");
+}
+#endif
+
+#if defined(__linux__) && defined(__x86_64__) && !defined(__clang__) && defined(SANDSTONE_DEVICE_CPU)
+BEGIN_ASM_FUNCTION(payload_long_64bit)
+    asm("movabs $0x1234deadbeaf5678, %rax\n"
+        "mov    $0x12345, %ebx\n"
+        "mov    %rax, (%rbx)\n"
+        "mov    (%rbx), %rdx\n"
+        "cmp    %rax, %rdx\n"
+        "jne    0f\n"
+        "mov    $0, %eax\n"
+        "hlt\n"
+    "0:\n"
+        "mov    $1, %eax\n"
+        "hlt");
+END_ASM_FUNCTION()
+
+static const kvm_config_t kvm_config_long_64bit = {
+    .addr_mode = KVM_ADDR_MODE_PROTECTED_64BIT,
+    .ram_size = 8 * 1024 * 1024,
+    .payload = &payload_long_64bit,
+    .payload_end = &payload_long_64bit_end,
+};
+
+static const kvm_config_t *selftest_kvm_config_long_64bit()
+{
+    return &kvm_config_long_64bit;
+}
+
+BEGIN_ASM16_FUNCTION(payload_real_16bit)
+    asm("mov    $1, %ax\n"
+        "test   $1, %ax\n"
+        "jz     0f\n"
+        "mov    $0, %ax\n"
+        "hlt\n"
+    "0:"
+        "mov    $1, %ax\n"
+        "hlt");
+END_ASM_FUNCTION()
+
+static const kvm_config_t kvm_config_real_16bit = {
+    .addr_mode = KVM_ADDR_MODE_REAL_16BIT,
+    .ram_size = 2 * 1024 * 1024,
+    .payload = &payload_real_16bit,
+    .payload_end = &payload_real_16bit_end
+};
+
+static const kvm_config_t *selftest_kvm_config_real_16bit()
+{
+    return &kvm_config_real_16bit;
+}
+
+BEGIN_ASM16_FUNCTION(payload_real_setup_check)
+    asm("mov $2, %bx\n"
+        "mov (%bx), %dx\n"
+        "mov $0, %ax\n"
+        "hlt");
+END_ASM_FUNCTION()
+
+static int selftest_kvm_setup_check_setup(kvm_ctx_t *ctx, struct test *test, int thread)
+{
+    struct kvm_sregs sregs;
+    uint16_t ints[2] = { 0xffff, static_cast<uint16_t>(thread) };
+
+    if (ioctl(ctx->cpu_fd, KVM_GET_SREGS, &sregs) == -1)
+        return -errno;
+    sregs.ds.base = 0x10000;
+    sregs.ds.selector = 0x1000;
+    if (ioctl(ctx->cpu_fd, KVM_SET_SREGS, &sregs) == -1)
+        return -errno;
+
+    memcpy(ctx->ram + sregs.ds.base, ints, sizeof(ints));
+
+    return EXIT_SUCCESS;
+}
+
+static int selftest_kvm_setup_check_check(kvm_ctx_t *ctx, struct test *test, int thread)
+{
+    struct kvm_regs regs;
+
+    if (ioctl(ctx->cpu_fd, KVM_GET_REGS, &regs) == -1)
+        return -errno;
+
+    if (static_cast<uint16_t>(regs.rdx) != static_cast<uint16_t>(thread)) {
+        log_error("Expected %d got %d\n", static_cast<uint16_t>(thread),
+                      static_cast<uint16_t>(regs.rdx));
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
+
+static const kvm_config_t kvm_config_real_setup_check = {
+    .addr_mode = KVM_ADDR_MODE_REAL_16BIT,
+    .ram_size = 2 * 1024 * 1024,
+    .payload = &payload_real_setup_check,
+    .payload_end = &payload_real_setup_check_end,
+    .setup_handler = selftest_kvm_setup_check_setup,
+    .check_handler = selftest_kvm_setup_check_check,
+};
+
+static const kvm_config_t *selftest_kvm_config_real_setup_check()
+{
+    return &kvm_config_real_setup_check;
+}
+
+BEGIN_ASM_FUNCTION(payload_prot_64bit_fail)
+    asm("mov $1, %eax\n"
+        "fld1\n"
+        "pcmpeqb %xmm0, %xmm0\n"                // init SSE state
+
+        "cpuid\n"
+        "test $((1 << 27) | (1 << 28)), %ecx\n"
+        "mov $2, %eax\n"
+        "jz 9f\n"
+        "vcmpeqps %ymm1, %ymm1, %ymm1\n"        // init AVX state
+
+        "mov $7, %eax\n"
+        "xor %ecx, %ecx\n"
+        "cpuid\n"
+        "test $(1 << 16), %ebx\n"
+        "mov $3, %eax\n"
+        "jz 9f\n"
+        "vpternlogd $0xff, %zmm16, %zmm16, %zmm16\n"
+        "vpcmpeqb %zmm16, %zmm16, %k1\n"        // init AVX512 state
+
+        "mov $7, %eax\n"
+        "mov $1, %ecx\n"
+        "cpuid\n"
+        "test $(1 << 21), %edx\n"
+        "mov $4, %eax\n"
+        "jz 9f\n"
+        ".byte 0xd5, 0x18; inc %eax\n"          // init APX state
+
+        ".align 16\n"
+        "9: hlt");
+END_ASM_FUNCTION()
+
+static const kvm_config_t kvm_config_prot_64bit_fail = {
+    .addr_mode = KVM_ADDR_MODE_PROTECTED_64BIT,
+    .ram_size = 6 * 1024 * 1024,
+    .payload = &payload_prot_64bit_fail,
+    .payload_end = &payload_prot_64bit_fail_end
+};
+
+static const kvm_config_t *selftest_kvm_config_prot_64bit_fail()
+{
+    return &kvm_config_prot_64bit_fail;
+}
+
+BEGIN_ASM16_FUNCTION(payload_real_16bit_fail)
+    asm("mov $1, %ax\n"
+        "fld1\n"
+        "hlt");
+END_ASM_FUNCTION()
+
+static const kvm_config_t kvm_config_real_16bit_fail = {
+    .addr_mode = KVM_ADDR_MODE_REAL_16BIT,
+    .ram_size = 2 * 1024 * 1024,
+    .payload = &payload_real_16bit_fail,
+    .payload_end = &payload_real_16bit_fail_end
+};
+
+static const kvm_config_t *selftest_kvm_config_real_16bit_fail()
+{
+    return &kvm_config_real_16bit_fail;
+}
+#endif // __linux__ && x86-64
+
+static int selftest_inject_idle(struct test *test, int thread)
+{
+    auto loop_start = std::chrono::steady_clock::now();
+    TEST_LOOP(test, 1) {
+        for (int i = 0; i < 10000; ++i) {
+            int a_variable = thread * 2;
+            a_variable += 1;
+            // use the result so the compiler doesn't optimize this away
+            __asm__ volatile ("" : "+g" (a_variable));
+        }
+    }
+    auto loop_end = std::chrono::steady_clock::now();
+    auto elapsed_time = duration_cast<microseconds>(loop_end - loop_start);
+    auto sleep_duration = sApp->shmem->current_test_sleep_duration;
+
+    if (elapsed_time < 0.99 * sleep_duration) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+template <initfunc F> static int selftest_init_mainproc(struct test *test)
+{
+    check_is_main_process();
+    return F(test);
+}
+
+template <runfunc F> static int selftest_run_mainproc(struct test *test, int thread)
+{
+    check_is_main_process();
+    return F(test, thread);
+}
+
+static initfunc group_init_skip_init() noexcept
+{
+    check_is_main_process();
+    return [](struct test *) {
+        check_is_main_process();
+        log_skip(SelftestSkipCategory, "This is a skip from the group init");
+        return EXIT_SKIP;
+    };
+}
+
+const static test_group group_positive = {
+    .id = "positive",
+    .description = "Self-tests that succeed (positive results)"
+};
+
+const static test_group group_selftest_passes = {
+    .id = "selftest_passes",
+    .description = "Group for selftest_pass* tests"
+};
+
+const static test_group group_init_skip = {
+    .id = "group_init_skip",
+    .description = "Self-tests whose group_init function make it skip",
+    .group_init = group_init_skip_init,
+};
+
+const static test_group group_fail_test_the_test = {
+    .id = "fail_test_the_test",
+    .description = "Self-tests that fail --test-tests"
+};
+
+const static test_group group_negative = {
+    .id = "negative",
+    .description = "Self-tests that are expected to fail (negative results)"
+};
+
+const static test_group group_random = {
+    .id = "random",
+    .description = "Self-tests that use random input and may or may not fail"
+};
+
+const static test_group group_test_is_optional = {
+    .id = "test_is_optional",
+    .description = "Self-tests used to test test_is_optional flag"
+};
+
+#if (defined(__x86_64__) || defined(__aarch64__)) && !defined(__clang__) && defined(SANDSTONE_DEVICE_CPU)
+const static test_group group_test_hw_features = {
+    .id = "test_hw_features",
+    .description = "Self-tests that depend on CPU features"
+};
+#endif
+
+static struct test selftests_array[] = {
+{
+    .id = "selftest_pass",
+    .description = "Just pass",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_selftest_passes),
+    .test_init = selftest_init_installcallback,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_pass_beta",
+    .description = "Just pass",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_selftest_passes),
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_BETA,
+},
+{
+    .id = "selftest_pass_low_quality",
+    .description = "Just pass",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_selftest_passes),
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_SKIP,
+},
+{
+    .id = "selftest_timedpass",
+    .description = "Loops around usleep() for the regular test time",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_timedpass_run<10'000>,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#ifdef __unix__
+{
+    .id = "selftest_timedpass_fork",
+    .description = "Forks, then loops around usleep() for the regular test time",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_fork_run<selftest_timedpass_run<10'000>>,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
+{
+    .id = "selftest_preinit",
+    .description = "Changes some test configs in the preinit function",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_preinit = selftest_preinit_preinit,
+    .test_init = selftest_preinit_init,
+    .test_run = selftest_pass_run,
+    .desired_duration = INT_MAX,        // we change to -1 in the preinit
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logs",
+    .description = "Adds some debug, info and warning messages",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_init,
+    .test_run = selftest_logs_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logs_with_cb",
+    .description = "Adds some debug, info and warning messages (with callback active)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_init_installcallback<selftest_logs_init>,
+    .test_run = selftest_logs_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#if SANDSTONE_DEVICE_CPU
+{
+    .id = "selftest_logs_l3cachesize",
+    .description = "Reports the aggregate L3 cache size of the topology (heuristic scheduling)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_l3cachesize_init,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logs_l3cachesize_coregroup",
+    .description = "Reports the aggregate L3 cache size of the topology (core-group scheduling)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_l3cachesize_init,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_schedule_isolate_coregroup,
+},
+{
+    .id = "selftest_logs_l3cachesize_socket",
+    .description = "Reports the aggregate L3 cache size of the topology (socket scheduling)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_l3cachesize_init,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_schedule_isolate_socket,
+},
+#endif // SANDSTONE_DEVICE_CPU
+{
+    .id = "selftest_logdata",
+    .description = "Logs data for later parsing",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_logdata_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logdata_with_cb",
+    .description = "Logs data for later parsing (with callback active)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_init_installcallback,
+    .test_run = selftest_logdata_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_platform",
+    .description = "Logs platform messages (not related to the test)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_log_platform_init,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_raw_yaml",
+    .description = "Logs YAML content (raw string)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_lograwyaml_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_formatted_yaml",
+    .description = "Logs YAML content (using format_yaml)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_logformattedyaml_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logs_options",
+    .description = "Logs some command-line options",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_options_init,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logs_getcpu",
+    .description = "Logs the getcpu() result",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_logs_getcpu_run,   // may skip
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logs_reschedule",
+    .description = "Logs the getcpu() result before and after rescheduling",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_reschedule_init,
+    .test_run = selftest_logs_reschedule_run,   // may skip
+    .test_cleanup = selftest_logs_reschedule_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logs_random_init",
+    .description = "Logs some random numbers in the init function",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_random_init,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logs_random",
+    .description = "Logs some random numbers",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_logs_random_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_cxxthrowcatch",
+    .description = "Throws and catches a C++ exception",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_cxxthrowcatch_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_skip_minimum_cpu",
+    .description = "Skips by having unsatisfiable .minimum_cpu requirements",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_failinit_init,            // shouldn't get run
+    .test_run = selftest_fail_run,                  // shouldn't get run
+    .minimum_cpu = ~decltype(test::minimum_cpu)(0), // hopefully we won't get run where this passes!
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_skip",
+    .description = "Skips by returning EXIT_SKIP from the init function",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_skip_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_skip_init",
+    .description = "Skips using log_skip() in the init function",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_log_skip_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_skip_preinit",
+    .description = "SKIP in the init function set from the test's preinit",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_preinit = selftest_log_skip_preinit,
+    .test_init = selftest_failinit_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_true_skip_in_preinit",
+    .description = "SKIP in preinit",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_preinit = selftest_true_skip_in_preinit,
+    .test_init = selftest_failinit_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_skip_init_mainproc",
+    .description = "Skips using log_skip() in the init function in the main process",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_init_mainproc<selftest_log_skip_init>,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_init_in_parent,
+},
+{
+    .id = "selftest_log_skip_init_from_group",
+    .description = "Skips using log_skip() in the init function, in the main process, "
+                   "applied by the group's init",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_init_skip),
+    .test_init = selftest_failinit_init,    // will be replaced!
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_skip_init_socket0",
+    .description = "Skips using log_skip() in the init function only in socket 0",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_log_skip_socket_init<0>,
+    .test_run = selftest_log_skip_socket_run<0>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_skip_init_socket1",
+    .description = "Skips using log_skip() in the init function only in socket 1",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_log_skip_socket_init<1>,
+    .test_run = selftest_log_skip_socket_run<1>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_skip_run_all_threads",
+    .description = "Skips using log_skip() in the run function where all threads skip",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_log_skip_run_all_threads,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_skip_run_even_threads",
+    .description = "Skips using log_skip() in the run function where only even numbered threads skip",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_log_skip_run_even_threads,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_log_skip_newline",
+    .description = "Skips using log_skip() in the init function where there are newlines in the message",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_log_skip_newline_init,
+    .test_run = selftest_log_skip_newline_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_skip_cleanup",
+    .description = "SKIP in the cleanup function",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_random_init,
+    .test_run = selftest_pass_run,
+    .test_cleanup = selftest_skip_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_oserror_cleanup",
+    .description = "OS error in the cleanup function",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_random_init,
+    .test_run = selftest_pass_run,
+    .test_cleanup = selftest_errno_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_skipmsg_success_cleanup",
+    .description = "Log skip message with SUCCESS in the cleanup function",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_random_init,
+    .test_run = selftest_pass_run,
+    .test_cleanup = selftest_skipmsg_success_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_skipmsg_skip_cleanup",
+    .description = "Log skip message with SKIP in the cleanup function",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_logs_random_init,
+    .test_run = selftest_pass_run,
+    .test_cleanup = selftest_skipmsg_skip_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_maybe_skip_750ms",
+    .description = "Requests to run for 750 ms (could be skipped)",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_timedpass_run<(7500us).count()>,
+    .desired_duration = 750,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_requires_smt",
+    .description = "Test the flag test_requires_smt",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_requires_smt,
+},
+{
+    .id = "selftest_timedpass_busywait",
+    .description = "Runs for the requested time, but busy-waiting", // or practically so
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_fail_test_the_test),
+    .test_run = selftest_timedpass_run<0>,
+    .desired_duration = 200,
+    .fracture_loop_count = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_timedpass_tooshort",
+    .description = "Runs for the requested time, but each loop is too short",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_fail_test_the_test),
+    .test_run = selftest_timedpass_run<(250us).count()>,
+    .desired_duration = 200,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_timedpass_toolong",
+    .description = "Runs for the requested time, but each loop is too long",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_fail_test_the_test),
+    .test_run = selftest_timedpass_run<duration_cast<microseconds>(test_the_test_data<true>::MaximumLoopDuration).count() * 2>,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_timedpass_whileloop",
+    .description = "Runs for the requested time, but uses a while () loop instead of do {} while ()",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_fail_test_the_test),
+    .test_run = selftest_timedpass_whileloop_run<10'000>,
+    .desired_duration = 200,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_timedpass_noloop",
+    .description = "Runs for the requested time, but doesn't loop at all",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_fail_test_the_test),
+    .test_run = selftest_timedpass_noloop_run<10'000>,
+    .desired_duration = 200,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_timedpass_no_fracture",
+    .description = "Runs for the requested time, but doesn't fracture",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_fail_test_the_test),
+    .test_run = selftest_timedpass_run<10'000>,
+    .desired_duration = 200,
+    .fracture_loop_count = -1,          /* don't fracture */
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_uses_too_much_mem",
+    .description = "Allocates and uses too much memory",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_fail_test_the_test),
+    .test_run = selftest_uses_too_much_mem_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_busywait_random_generation",
+    .description = "Calls the random() function in a loop",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_busywait_random_generation_run<random, 1000*1000>,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_busywait_random32_generation",
+    .description = "Calls the random32() function in a loop",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_busywait_random_generation_run<random32, 1000*1000>,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_busywait_random128_generation",
+    .description = "Calls the random128() function in a loop",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_busywait_random_generation_run<random128, 1000*1000>,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_check_sequential",
+    .description = "Checks that threads were run sequentially",
+    .test_init = selftest_check_sequential_init,
+    .test_run = selftest_check_sequential_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_schedule_sequential,
+},
+{
+    .id = "selftest_test_mainproc",
+    .description = "Checks test with flag test_in_parent if runs entirely in main process",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_init = selftest_init_mainproc<selftest_pass_init>,
+    .test_run = selftest_run_mainproc<selftest_pass_run>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_in_parent,
+},
+{
+    .id = "selftest_fail_run_mainproc",
+    .description = "Fails in the run function in main process",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_run_mainproc<selftest_fail_run>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_in_parent,
+},
+{
+    .id = "selftest_fail_cleanup_mainproc",
+    .description = "Fails in the cleanup function in main process",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_run_mainproc<selftest_pass_run>,
+    .test_cleanup = selftest_init_mainproc<selftest_fail_cleanup>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_in_parent,
+},
+
+#if defined(__linux__) && defined(__x86_64__) && !defined(__clang__) && defined(SANDSTONE_DEVICE_CPU)
+{
+    .id = "kvm_long_64bit",
+    .description = "Runs simple 64-bit KVM workload successfully",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_kvm),
+    .test_init = kvm_generic_init,
+    .test_run = kvm_generic_run,
+    .test_cleanup = kvm_generic_cleanup,
+    .test_kvm_config = selftest_kvm_config_long_64bit,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "kvm_real_16bit",
+    .description = "Runs simple 16-bit KVM workload successfully",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_kvm),
+    .test_init = kvm_generic_init,
+    .test_run = kvm_generic_run,
+    .test_cleanup = kvm_generic_cleanup,
+    .test_kvm_config = selftest_kvm_config_real_16bit,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "kvm_real_setup_check",
+    .description = "Checks the setup and check handlers are called correctly",
+    .groups = DECLARE_TEST_GROUPS(&group_positive, &group_kvm),
+    .test_init = kvm_generic_init,
+    .test_run = kvm_generic_run,
+    .test_cleanup = kvm_generic_cleanup,
+    .test_kvm_config = selftest_kvm_config_real_setup_check,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif // __linux__
+
+    /* Randomly failing tests */
+
+{
+    .id = "selftest_randomfail_50pct",
+    .description = "Fails about 50% of the time, randomly",
+    .groups = DECLARE_TEST_GROUPS(&group_random),
+    .test_run = selftest_randomfail_run<std::ratio<1, 2>>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_randomfail_rare",
+    .description = "Fails less than 0.1% of the time, randomly",
+    .groups = DECLARE_TEST_GROUPS(&group_random),
+    .test_run = selftest_randomfail_run<std::ratio<1, 1024>>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_timed_randomfail_25pct",
+    .description = "Randomly fails about 25% of the time, every 100 ms",
+    .groups = DECLARE_TEST_GROUPS(&group_random),
+    .test_run = selftest_timed_randomfail_run<100'000, std::ratio<1, 4>>,
+    .fracture_loop_count = 4,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_timed_randomfail_rare",
+    .description = "Randomly fails less than 0.1% of the time, every 10 ms",
+    .groups = DECLARE_TEST_GROUPS(&group_random),
+    .test_run = selftest_timed_randomfail_run<10'000, std::ratio<1, 1024>>,
+    .fracture_loop_count = 4,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_datacomparefailrare_int_50pct",
+    .description = "Fakes a memcmp_or_fail that finds a difference that isn't there, 50% of the time",
+    .groups = DECLARE_TEST_GROUPS(&group_random),
+            .test_run = selftest_datacomparefailrare_run<std::ratio<1, 2>>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_datacomparefailrare_int_rare",
+    .description = "Fakes a memcmp_or_fail that finds a difference that isn't there, less than 0.1% of the time",
+    .groups = DECLARE_TEST_GROUPS(&group_random),
+            .test_run = selftest_datacomparefailrare_run<std::ratio<1, 1024>>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_datacomparefailrare_double_50pct",
+    .description = "Fakes a memcmp_or_fail that finds a difference that isn't there, 50% of the time",
+    .groups = DECLARE_TEST_GROUPS(&group_random),
+            .test_run = selftest_datacomparefailrare_run<std::ratio<1, 2>, double>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_datacomparefailrare_double_rare",
+    .description = "Fakes a memcmp_or_fail that finds a difference that isn't there, less than 0.1% of the time",
+    .groups = DECLARE_TEST_GROUPS(&group_random),
+            .test_run = selftest_datacomparefailrare_run<std::ratio<1, 1024>, double>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+
+    /* Multi-socket tests */
+{
+    .id = "selftest_failinit_socket1",
+    .description = "Fails on init for socket 1",
+    .groups = nullptr, // positive on single-socket systems, negative on multi-socket
+    .test_init = selftest_if_socket1_initcleanup<selftest_failinit_init>,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_fail_socket1",
+    .description = "Fails on any thread of socket 1",
+    .groups = nullptr, // positive on single-socket systems, negative on multi-socket
+    .test_run = selftest_if_socket1_run<selftest_fail_run>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_freeze_socket1",
+    .description = "Freezes on any thread of socket 1",
+    .groups = nullptr, // positive on single-socket systems, negative on multi-socket
+    .test_run = selftest_if_socket1_run<selftest_noreturn_run>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_init_socket1",
+    .description = "Crashes with SIGSEGV (data) on init for socket 1",
+    .groups = nullptr, // positive on single-socket systems, negative on multi-socket
+    .test_init = selftest_if_socket1_initcleanup<selftest_crash_initcleanup<cause_sigsegv_null>>,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_socket1",
+    .description = "Crashes with SIGSEGV (data) dereferencing the null page for any thread of socket 1",
+    .groups = nullptr, // positive on single-socket systems, negative on multi-socket
+    .test_run = selftest_if_socket1_run<selftest_crash_run<cause_sigsegv_null>>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+
+    /* Negative tests */
+
+{
+    .id = "selftest_failinit",
+    .description = "Fails in the init function",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_failinit_init,
+    .test_run = selftest_failinit_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_failinit_and_logskip",
+    .description = "Fails by returning EXIT_FAILURE after log_skip() in init",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_failinit_and_logskip_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logerror_init",
+    .description = "Fails on error logged in init",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_logerror_init,
+    .test_run = selftest_failinit_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logerror_init_mainproc",
+    .description = "Fails on error logged in init from the main process",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_init_mainproc<selftest_logerror_init>,
+    .test_run = selftest_failinit_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_init_in_parent,
+},
+{
+    .id = "selftest_logerror_and_logskip",
+    .description = "Fails by with log_error() and log_skip() in init",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_logerror_and_logskip_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logerror_and_logskip_exitskip",
+    .description = "Fails by with log_error(), log_skip(), return EXIT_SKIP in init",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_logerror_and_logskip_exitskip_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logskip_and_logerror",
+    .description = "Fails by with log_skip() and log_error() in init",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_logskip_and_logerror_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_fail",
+    .description = "Fails by way of returning",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_randomprint_init,
+    .test_run = selftest_fail_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_fail_with_cb",
+    .description = "Fails by way of returning (callback active)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_init_installcallback,
+    .test_run = selftest_fail_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_fail_cleanup",
+    .description = "Fails in the cleanup function",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_pass_run,
+    .test_cleanup = selftest_fail_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_fail_run_and_cleanup",
+    .description = "Fails in the run and cleanup functions",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_fail_run,
+    .test_cleanup = selftest_fail_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logerror_cleanup",
+    .description = "Fails in the cleanup function with log_error()",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_pass_run,
+    .test_cleanup = selftest_logerror_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_fail_cleanup_after_skip",
+    .description = "Fails in the cleanup function after having skipped",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_log_skip_run_all_threads,
+    .test_cleanup = selftest_fail_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logerror_cleanup_after_skip",
+    .description = "Fails in the cleanup function with log_error() after having skipped",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_log_skip_run_all_threads,
+    .test_cleanup = selftest_logerror_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logerror",
+    .description = "Fails by calling log_error()",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_logerror_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logerror_with_cb",
+    .description = "Fails by calling log_error() (callback active)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_init_installcallback,
+    .test_run = selftest_logerror_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_logerror_lots",
+    .description = "Fails by calling log_error() [a lot of times]",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_logerror_lots_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_errormsg_cleanup",
+    .description = "Fails by calling log_error() in the cleanup function",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_logs_random_init,
+    .test_run = selftest_pass_run,
+    .test_cleanup = selftest_errormsg_success_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_reportfail",
+    .description = "Fails by calling report_fail()",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_randomprint_init,
+    .test_run = selftest_reportfail_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_reportfail_with_cb",
+    .description = "Fails by calling report_fail() (callback active)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_init_installcallback,
+    .test_run = selftest_reportfail_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_reportfailmsg",
+    .description = "Fails by calling report_fail_msg()",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_randomprint_init,
+    .test_run = selftest_reportfailmsg_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_reportfailmsg_with_cb",
+    .description = "Fails by calling report_fail_msg() (callback active)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_init_installcallback,
+    .test_run = selftest_reportfailmsg_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_fail_after_reschedule",
+    .description = "Fails by calling report_fail_msg() after reschedule()",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_logs_reschedule_init,
+    .test_run = selftest_fail_after_reschedule_run,
+    .test_cleanup = selftest_logs_reschedule_cleanup,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_fail_after_reschedule_lowest_cpu",
+    .description = "Fails by calling report_fail_msg() after reschedule(), but only on the lowest numbered CPU",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_fail_after_reschedule_lowest_cpu_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#if defined(STATIC) && defined(__GLIBC__)
+{
+    .id = "selftest_libc_fatal",
+    .description = "Calls __libc_fatal",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_libc_fatal_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
+
+#define DATACOMPARE_TEST(Type, Value)                                   \
+{                                                                       \
+    .id = "selftest_datacomparefail_" SANDSTONE_STRINGIFY(Type),        \
+    .description = "Attempts to compare one " SANDSTONE_STRINGIFY(Type),       \
+    .groups = DECLARE_TEST_GROUPS(&group_negative),                     \
+    .test_run = selftest_datacomparefail_run<Type>,                     \
+    .desired_duration = -1,                                             \
+    .quality_level = TEST_QUALITY_PROD,                                 \
+},                                                                      \
+{                                                                       \
+    .id = "selftest_datacomparefail_" SANDSTONE_STRINGIFY(Type) "_with_cb", \
+    .description = "Attempts to compare one " SANDSTONE_STRINGIFY(Type) " (callback active)", \
+    .groups = DECLARE_TEST_GROUPS(&group_negative),                     \
+    .test_init = selftest_datacomparefail_with_cb_init,                 \
+    .test_run = selftest_datacomparefail_run<Type>,                     \
+    .desired_duration = -1,                                             \
+    .quality_level = TEST_QUALITY_PROD,                                 \
+},
+FOREACH_DATATYPE(DATACOMPARE_TEST)
+#undef DATACOMPARE_TEST
+{
+    .id = "selftest_datacompare_nodifference",
+    .description = "Fakes a memcmp_or_fail that finds a difference that isn't there",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_datacompare_nodifference_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_datacompare_nodifference_with_cb",
+    .description = "Fakes a memcmp_or_fail that finds a difference that isn't there (callback active)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_init_installcallback,
+    .test_run = selftest_datacompare_nodifference_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+
+{
+    .id = "selftest_cxxthrow",
+    .description = "Throws C++ exception",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_cxxthrow_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_cxxthrow_with_cb",
+    .description = "Throws C++ exception",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_init_installcallback,
+    .test_run = selftest_cxxthrow_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_abort",
+    .description = "Aborts",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<abort>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_abortinit",
+    .description = "Aborts on init",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_crash_initcleanup<abort>,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigill",
+    .description = "Crashes with SIGILL",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigill>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigfpe",
+    .description = "Crashes with SIGFPE",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigfpe>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigbus",
+    .description = "Crashes with SIGBUS",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigbus>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_init",
+    .description = "Crashes with SIGSEGV (data) on init",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_crash_initcleanup<cause_sigsegv_null>,
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv",
+    .description = "Crashes with SIGSEGV (data) dereferencing the null page",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigsegv_null>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_noncanonical",
+    .description = "Crashes with SIGSEGV (data) with a non-canonical address",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigsegv_noncanonical>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_kernel",
+    .description = "Crashes with SIGSEGV (data) on a kernel address",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigsegv_kernel>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_cleanup",
+    .description = "Crashes with SIGSEGV (data) on cleanup",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_pass_run,
+    .test_cleanup  = selftest_crash_initcleanup<cause_sigsegv_null>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_instruction",
+    .description = "Crashes with SIGSEGV (instruction)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigsegv_instruction>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigill_near_unreadable",
+    .description = "Crashes with SIGILL (UD2/UDF instruction) near a readable/unmapped page boundary",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigill_partial>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_readable_unreadable",
+    .description = "Crashes with SIGSEGV (instruction) jumping from a readable page into an unmapped page",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigsegv_readable_unreadable>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigsegv_unreadable_readable",
+    .description = "Crashes with SIGSEGV (instruction) on an unmapped page adjacent to a readable page",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigsegv_unreadable_readable>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_sigtrap_int3",
+    .description = "Crashes with SIGTRAP (int3 instruction)",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<cause_sigtrap_int3>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#ifdef _WIN32
+{
+    .id = "selftest_fastfail",
+    .description = "Executes __fastfail()",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<raise_fastfail>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#else
+{
+    .id = "selftest_sigkill",
+    .description = "Raises SIGKILL",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_crash_run<raise_sigkill>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
+{
+    .id = "selftest_malloc_fail",
+    .description = "Attempts to malloc a silly amount of memory",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_malloc_fail,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_oserror",
+    .description = "Exits the test with an operating system error",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_oserror_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_freeze",
+    .description = "Freezes",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#ifdef __unix__
+{
+    .id = "selftest_freeze_exit_on_termination",
+    .description = "Freezes and _exit()s on SIGQUIT",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_exit_on_termination_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_freeze_ignore_termination",
+    .description = "Freezes and ignore SIGQUITs",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_init = selftest_ignore_termination_init,
+    .test_run = selftest_noreturn_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_freeze_fork",
+    .description = "Freezes after forking",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_fork_run<selftest_noreturn_run_inner>,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
+{
+    .id = "selftest_50pct_freeze_fail",
+    .description = "Freezes 50% of the time",
+    .groups = DECLARE_TEST_GROUPS(&group_negative),
+    .test_run = selftest_50pct_freeze_fail_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+
+#if defined(__linux__) && defined(__x86_64__) && !defined(__clang__) && defined(SANDSTONE_DEVICE_CPU)
+{
+    .id = "kvm_prot_64bit_fail",
+    .description = "Runs simple 64-bit KVM workload that fails",
+    .groups = DECLARE_TEST_GROUPS(&group_negative, &group_kvm),
+    .test_init = kvm_generic_init,
+    .test_run = kvm_generic_run,
+    .test_cleanup = kvm_generic_cleanup,
+    .test_kvm_config = selftest_kvm_config_prot_64bit_fail,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "kvm_real_16bit_fail",
+    .description = "Runs simple 16-bit KVM workload that fails",
+    .groups = DECLARE_TEST_GROUPS(&group_negative, &group_kvm),
+    .test_init = kvm_generic_init,
+    .test_run = kvm_generic_run,
+    .test_cleanup = kvm_generic_cleanup,
+    .test_kvm_config = selftest_kvm_config_real_16bit_fail,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif // __linux__
+{
+    .id = "selftest_inject_idle",
+    .description = "Verifies idle injection has no impact on test run time",
+    .groups = DECLARE_TEST_GROUPS(&group_positive),
+    .test_run = selftest_inject_idle,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD
+},
+// group of selftests that test test_is_optional flag
+{
+    .id = "selftest_test_optional",
+    .description = "Tests prod test without test_is_optional flag",
+    .groups = DECLARE_TEST_GROUPS(&group_test_is_optional),
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_optional_beta",
+    .description = "Tests beta test without test_is_optional flag",
+    .groups = DECLARE_TEST_GROUPS(&group_test_is_optional),
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_BETA,
+},
+{
+    .id = "selftest_test_optional_include_optional",
+    .description = "Tests prod test with test_is_optional flag",
+    .groups = DECLARE_TEST_GROUPS(&group_test_is_optional),
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+    .flags = test_is_optional,
+},
+{
+    .id = "selftest_test_optional_beta_include_optional",
+    .description = "Tests beta test with test_is_optional flag",
+    .groups = DECLARE_TEST_GROUPS(&group_test_is_optional),
+    .test_run = selftest_pass_run,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_BETA,
+    .flags = test_is_optional,
+},
+#if defined(__x86_64__) && !defined(__clang__) && defined(SANDSTONE_DEVICE_CPU)
+{
+    .id = "selftest_test_hsw_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_haswell",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_haswell,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_bdw_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_broadwell",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_broadwell,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_skl_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_skylake",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_skylake,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+
+},
+{
+    .id = "selftest_test_skx_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_skylake_avx512",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_skylake_avx512,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+
+},
+{
+    .id = "selftest_test_icx_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_icelake_server",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_icelake_server,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_spr_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_sapphirerapids",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_sapphirerapids,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_srf_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_sierraforest",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_sierraforest,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_gnr_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_graniterapids",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_graniterapids,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_dmr_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_diamondrapids",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_diamondrapids,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
+#if defined(__aarch64__) && defined(SANDSTONE_DEVICE_CPU)
+// ARM64 HWCAP feature-gating robustness selftests, the counterpart of the x86
+// selftest_test_*_min_cpu series above. These do NOT compute anything or compare
+// golden values; they assert that the framework's minimum_cpu gate (driven by
+// the generated cpu_features.h / HWCAP-based device_has_feature()) admits or
+// cleanly skips tests per the advertised ARM feature. A gate misjudgement would
+// either skip a test that should run (missed coverage) or run one that should
+// not (SIGILL crash) -- both are framework robustness defects, not silicon
+// issues. On a host that has the feature the test passes; on one that lacks it
+// the framework must report a clean EXIT_SKIP (never a crash), mirroring how
+// real ARM64 tests (e.g. crypto_test, svd_cdouble_sve) gate themselves.
+{
+    .id = "selftest_test_arm_asimd_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_feature_asimd (ARMv8.0 baseline NEON)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_feature_asimd,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_arm_crc32_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_feature_crc32 (ACLE __crc32*)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_feature_crc32,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_arm_aes_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_feature_aes (AES crypto)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_feature_aes,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_arm_sve_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_feature_sve (Scalable Vector Extension)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_feature_sve,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_arm_bf16_min_cpu",
+    .description = "Tests prod test with min_cpu_level set to cpu_feature_bf16 (BFloat16)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_feature_bf16,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+{
+    .id = "selftest_test_arm_unsatisfiable_min_cpu",
+    .description = "Tests that an unsatisfiable ARM min_cpu_level cleanly skips (SVE2p1 is absent on this host)",
+    .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
+    .test_run = selftest_pass_run,
+    .minimum_cpu = cpu_feature_sve2p1,
+    .desired_duration = -1,
+    .quality_level = TEST_QUALITY_PROD,
+},
+#endif
+};
+
+extern const std::span<struct test> selftests;
+const std::span<struct test> selftests = { std::begin(selftests_array), std::end(selftests_array) };

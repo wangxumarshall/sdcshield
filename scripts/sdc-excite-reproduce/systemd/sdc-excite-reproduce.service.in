@@ -1,0 +1,20 @@
+[Unit]
+Description=SDCShield sdc-excite-reproduce driver (L0-L5, break-point resume)
+Wants=sdc-monitor.service
+After=sdc-monitor.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@REPO@
+Environment=SDC_EXCITE_REPRODUCE_DIR=@CAMPAIGN_DIR@
+ExecStart=/bin/bash @REPO@/scripts/sdc-excite-reproduce/sdc-excite-reproduce.sh full
+Restart=always
+RestartSec=10
+TimeoutStopSec=150
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

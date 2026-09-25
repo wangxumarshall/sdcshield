@@ -1,0 +1,48 @@
+# Copyright 2022 Intel Corporation.
+# SPDX-License-Identifier: Apache-2.0
+
+option('logging_format', type : 'combo', choices : ['yaml', 'tap', 'no_output'], value : 'yaml',
+    description : 'Set build-time default logging format to "no_output", "yaml" (default), or "tap".')
+option('march_base', type : 'string', value : '',
+    description : 'Build framework with this base optimization -march= value (default: "haswell").')
+option('framework_options', type : 'array', value : [],
+    description : 'Configuration options for the framework. ' +
+    'Possible options: restricted-cmdline, no-child-debug{,-crashes,-hangs}, no-child-backtrace, ' +
+    'no-test-names, no-ulog, allow-stdout-from-tests')
+option('dependency_link', type : 'combo', choices : ['dynamic', 'static'], value : 'dynamic',
+    description : 'Link preference for dependencies: dynamic (default) or static')
+option('docdir', type : 'string', value : 'doc/dcdiag',
+    description : 'Directory name of where documentation will be installed.')
+option('static_libstdcpp', type : 'boolean', value : false,
+    description : 'Link with -static-libstdc++ (default false).')
+option('executable_name', type : 'string', value : 'sdcshield',
+    description : 'Output name of the main binary (default "sdcshield").')
+option('fallback_exec', type : 'string', value : '',
+    description : 'Executable to run if processor does not support required features (e.g. AVX2)')
+option('selftests', type : 'boolean', value : true,
+    description : 'Build in selftests (default true)')
+option('version_suffix', type : 'string', value: '',
+    description : 'Suffix to be added to the version number (e.g., build variant)')
+option('builtin_test_list', type : 'string', value : '',
+    description : 'List of name-file pairs that specify the built-in test lists to be embedded into the binary, e.g. default:data/default.txt,skx:data/skx.txt')
+option('ssl_link_type', type: 'combo', choices : ['none', 'dynamic', 'loaded', 'static'], value: 'dynamic',
+    description : 'Link with openssl library if available (default dynamic; prefers vendored third-party/openssl/install).')
+option('fuzzing', type : 'boolean', value : false,
+    description : 'Build in fuzzing (default false)')
+option('afl_inc', type : 'string', value : '',
+    description : '(Optional) Directory with AFL header files (absolute path).')
+option('coverage', type : 'boolean', value : false,
+    description : 'Enable code coverage (default false)')
+option('device_type', type: 'combo', choices : ['cpu', 'gpu', 'idxd'], value: 'cpu',
+    description : 'Device type for the build (default cpu).')
+option('target_device', type : 'string', value: 'bmg',
+    description : 'Type of the device to be used for the build. Run `ocloc compile --help` for a full list of available device types. Defaults to "bmg". For SPIR-V intermediate format use "spirv".')
+# Arm Compute Library (ACL) for the arithmetic_arm tests (acl_gemm, fisttp_arm).
+# Vendored source build under third-party/acl (Arm Compute Library v23.02,
+# built by third-party/acl/build.sh → install/lib/libarm_compute-core.a).
+# auto: build if the vendored install/ is present (else skip, empty lib, no
+#   link, with a message).
+# enabled: require the vendored install/ (hard error if missing).
+# disabled: never build the 2 ACL tests.
+option('enable_acl', type : 'combo', choices : ['auto', 'enabled', 'disabled'], value : 'auto',
+    description : 'Arm Compute Library tests in arithmetic_arm: auto/enabled/disabled (default auto; requires third-party/acl/build.sh to have been run).')

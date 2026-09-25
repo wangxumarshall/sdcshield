@@ -1,0 +1,16 @@
+[Unit]
+Description=SDCShield sdc-excite-reproduce monitor (root: IPMI/OS sampling + safety interlocks)
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=SDC_EXCITE_REPRODUCE_DIR=@CAMPAIGN_DIR@
+ExecStart=/bin/bash @REPO@/scripts/sdc-excite-reproduce/sdc_monitor.sh
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

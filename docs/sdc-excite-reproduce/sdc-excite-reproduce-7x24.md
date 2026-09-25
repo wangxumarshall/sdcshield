@@ -158,6 +158,8 @@ flowchart LR
 | `sdc-monitor.service`、collector 模板 | 不变 | 本就无 campaign 字样 |
 | `scripts/run/run_sdc_campaign.sh` 等历史脚本 | 保留原名 | 历史参照，标注即可，不强制改 |
 
+**（2026-09-25 M0-T2 已落地**：脚本/服务模板/logrotate/数据根已按本表改名并迁移，root 侧单元重装待执行**）**
+
 ---
 
 ## 3. 总体架构

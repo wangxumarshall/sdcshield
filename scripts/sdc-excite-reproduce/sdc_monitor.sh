@@ -11,25 +11,25 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/sdc_common.sh"
 
-# 目录权限模型：CAMPAIGN_DIR 树归运行用户（sdc）所有（install.sh/驱动创建）。
-# 本脚本以 root 运行，只补建监控自身目录，并把属主还给 CAMPAIGN_DIR 的属主，
+# 目录权限模型：EXCITE_REPRODUCE_DIR 树归运行用户（sdc）所有（install.sh/驱动创建）。
+# 本脚本以 root 运行，只补建监控自身目录，并把属主还给 EXCITE_REPRODUCE_DIR 的属主，
 # 避免抢建驱动目录（logs/events/stressng）导致 sdc 侧不可写。
 # alerts.log 为双进程共写（root 监控 + sdc 驱动），必须 666。
-mkdir -p "$CAMPAIGN_DIR" "$MON_DIR" "$CMD_DIR"
+mkdir -p "$EXCITE_REPRODUCE_DIR" "$MON_DIR" "$CMD_DIR"
 CSV="$MON_DIR/monitor.csv"
 SNAP="$MON_DIR/snapshots"
 SEL_EV="$MON_DIR/sel_events"
 mkdir -p "$SNAP" "$SEL_EV"
-DIR_OWNER=$(stat -c %U "$CAMPAIGN_DIR" 2>/dev/null || echo root)
-DIR_GROUP=$(stat -c %G "$CAMPAIGN_DIR" 2>/dev/null || echo root)
+DIR_OWNER=$(stat -c %U "$EXCITE_REPRODUCE_DIR" 2>/dev/null || echo root)
+DIR_GROUP=$(stat -c %G "$EXCITE_REPRODUCE_DIR" 2>/dev/null || echo root)
 if [ "$DIR_OWNER" != root ]; then
-    chown -R "${DIR_OWNER}:${DIR_GROUP}" "$CAMPAIGN_DIR" 2>/dev/null
+    chown -R "${DIR_OWNER}:${DIR_GROUP}" "$EXCITE_REPRODUCE_DIR" 2>/dev/null
 fi
 touch "$MON_DIR/alerts.log" 2>/dev/null
 chmod 666 "$MON_DIR/alerts.log" 2>/dev/null
 
-# campaign.env 由 sdc_campaign.sh 首次运行生成；监控可先于驱动启动（用默认阈值）
-[ -f "$CAMPAIGN_DIR/campaign.env" ] && source "$CAMPAIGN_DIR/campaign.env"
+# campaign.env 由 sdc-excite-reproduce.sh 首次运行生成；监控可先于驱动启动（用默认阈值）
+[ -f "$EXCITE_REPRODUCE_DIR/campaign.env" ] && source "$EXCITE_REPRODUCE_DIR/campaign.env"
 PAUSE_C="${THERMAL_PAUSE_C:-95}"
 RESUME_C="${THERMAL_RESUME_C:-90}"
 DISK_WARN="${DISK_WARN_PCT:-85}"
@@ -111,7 +111,7 @@ while :; do
     ma=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
     sw=$(awk '/^SwapTotal/{t=$2}/^SwapFree/{f=$2}END{print t-f}' /proc/meminfo)
     l1=$(awk '{print $1}' /proc/loadavg)
-    dp=$(df -P "$CAMPAIGN_DIR" | awk 'NR==2{gsub(/%/,"");print $5}')
+    dp=$(df -P "$EXCITE_REPRODUCE_DIR" | awk 'NR==2{gsub(/%/,"");print $5}')
     echo "$ts,${c1:-},${c2:-},${m1:-},${m2:-},${ot:-},${in_:-},${pw:-},${v1:-},${v2:-},${nv1:-},${nv2:-},${fx1:-},${fx2:-},${h1:-},${h2:-},${qa1:-},${qc1:-},${qa2:-},${qc2:-},${f2:-},${f3:-},${p1:-},${p2:-},${tz0:-},${tz1:-},${ua:-},${us0:-},${us1:-},${fmin:-},${favg:-},${fmax:-},${ma:-},${sw:-},${l1:-},${dp:-},${SEL5M_CARRY:-},$bmc" >> "$CSV"
 
     # ---- 10 分钟工况快照 + 偏移标记（用户指令 2026-09-24）----

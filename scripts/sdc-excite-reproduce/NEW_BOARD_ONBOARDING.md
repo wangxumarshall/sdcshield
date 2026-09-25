@@ -20,11 +20,11 @@
 ```bash
 cd <sdcshield 仓库>
 # 方式 A：有 sudo 免密
-scripts/campaign/collect_inventory.sh docs/superpowers/inventory/
+scripts/sdc-excite-reproduce/collect_inventory.sh docs/superpowers/inventory/
 # 方式 B：用 root 密码（经 stdin 传给 su，不落任何文件）
-SDC_ROOT_PW='...' scripts/campaign/collect_inventory.sh docs/superpowers/inventory/
+SDC_ROOT_PW='...' scripts/sdc-excite-reproduce/collect_inventory.sh docs/superpowers/inventory/
 # 方式 C：无 root —— 自动降级，缺口写入 00_gaps.txt
-scripts/campaign/collect_inventory.sh docs/superpowers/inventory/
+scripts/sdc-excite-reproduce/collect_inventory.sh docs/superpowers/inventory/
 ```
 
 产物 `docs/superpowers/inventory/<系统SN>-<日期>/`（16 个文件）。**核对** `01_nonroot_all.txt` 的 lscpu/内存/热区 trips 与 `03_ipmitool_sdr_list.txt` 的传感器清单——这些是第 3 步自动推导的输入。人工补写 `00_MACHINE_PROFILE.md`（可参照 `2102312YVY10M6000038-2026-09-23/00_MACHINE_PROFILE.md` 的结构）。
@@ -45,13 +45,13 @@ ninja -C builddir
 
 ```bash
 # 安装（root；模板替换 REPO/用户/数据目录）
-su -c "bash scripts/campaign/install.sh"          # 或 sudo bash scripts/campaign/install.sh
+su -c "bash scripts/sdc-excite-reproduce/install.sh"          # 或 sudo bash scripts/sdc-excite-reproduce/install.sh
 # smoke 全链路（~10 分钟；驱动手动跑，不动 systemd 的 full 实例）
 su -c "systemctl start sdc-monitor"
-timeout 900 bash scripts/campaign/sdc_campaign.sh smoke
-bash scripts/campaign/status.sh                   # 观察 monitor.csv 在涨、无 PAUSE
+timeout 900 bash scripts/sdc-excite-reproduce/sdc-excite-reproduce.sh smoke
+bash scripts/sdc-excite-reproduce/status.sh                   # 观察 monitor.csv 在涨、无 PAUSE
 # 通过后正式启动 7×24
-su -c "systemctl start sdc-campaign"
+su -c "systemctl start sdc-excite-reproduce"
 ```
 
 ## 自动推导 vs 人工确认
@@ -71,12 +71,12 @@ su -c "systemctl start sdc-campaign"
 
 | 操作 | 命令 |
 |---|---|
-| 状态 | `bash scripts/campaign/status.sh`（任意用户） |
-| 暂停/恢复战役 | 联锁自动 PAUSE/RESUME；人工暂停 `echo 原因 > ~/sdc-campaign/PAUSE`，恢复 `rm ~/sdc-campaign/PAUSE` |
-| SEL Critical 粘性暂停 | 调查后 `rm ~/sdc-campaign/PAUSE`（监控只清除自己写的 thermal/fan/mem 类） |
-| 事件台账 | `cat ~/sdc-campaign/events/ledger.csv`；单事件证据在 `events/<时间戳>-*/` |
+| 状态 | `bash scripts/sdc-excite-reproduce/status.sh`（任意用户） |
+| 暂停/恢复战役 | 联锁自动 PAUSE/RESUME；人工暂停 `echo 原因 > ~/sdc-excite-reproduce/PAUSE`，恢复 `rm ~/sdc-excite-reproduce/PAUSE` |
+| SEL Critical 粘性暂停 | 调查后 `rm ~/sdc-excite-reproduce/PAUSE`（监控只清除自己写的 thermal/fan/mem 类） |
+| 事件台账 | `cat ~/sdc-excite-reproduce/events/ledger.csv`；单事件证据在 `events/<时间戳>-*/` |
 | 崩溃后 | systemd 自动拉起（Restart=always）；从 state.json 断点续跑 |
-| 停止 | `su -c "bash scripts/campaign/stop.sh"`（保留进度） |
+| 停止 | `su -c "bash scripts/sdc-excite-reproduce/stop.sh"`（保留进度） |
 | 日志轮转 | logrotate 每日压缩保留 14 天；YAML/events/monitor 证据**永不轮转** |
 
 ## 已知缺口模式（遇到即如实记录，不得留空假设）

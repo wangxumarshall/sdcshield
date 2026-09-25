@@ -1,26 +1,26 @@
 #!/bin/bash
-# sdc_common.sh — SDC 7×24 战役共享助手。被 sdc_campaign.sh 与 sdc_monitor.sh source。
-# 所有路径可由 env 覆盖（SDC_BIN / SDC_CAMPAIGN_DIR），新单板零修改。
+# sdc_common.sh — SDC 7×24 战役共享助手。被 sdc-excite-reproduce.sh 与 sdc_monitor.sh source。
+# 所有路径可由 env 覆盖（SDC_BIN / SDC_EXCITE_REPRODUCE_DIR，兼容回退旧名 SDC_CAMPAIGN_DIR），新单板零修改。
 # 依据 docs/superpowers/plans/2026-09-23-2102312YVY10M6000038-sdc-7x24-stress-plan.md
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="${SDC_BIN:-$REPO_DIR/builddir/sdcshield}"
-CAMPAIGN_DIR="${SDC_CAMPAIGN_DIR:-$HOME/sdc-campaign}"
-STATE_FILE="$CAMPAIGN_DIR/state.json"
-PAUSE_FLAG="$CAMPAIGN_DIR/PAUSE"
-CMD_DIR="$CAMPAIGN_DIR/cmd"
-LOG_ROOT="$CAMPAIGN_DIR/logs"
-MON_DIR="$CAMPAIGN_DIR/monitor"
-EVENTS_DIR="$CAMPAIGN_DIR/events"
-STRESSNG_DIR="$CAMPAIGN_DIR/stressng"
+EXCITE_REPRODUCE_DIR="${SDC_EXCITE_REPRODUCE_DIR:-${SDC_CAMPAIGN_DIR:-$HOME/sdc-excite-reproduce}}"
+STATE_FILE="$EXCITE_REPRODUCE_DIR/state.json"
+PAUSE_FLAG="$EXCITE_REPRODUCE_DIR/PAUSE"
+CMD_DIR="$EXCITE_REPRODUCE_DIR/cmd"
+LOG_ROOT="$EXCITE_REPRODUCE_DIR/logs"
+MON_DIR="$EXCITE_REPRODUCE_DIR/monitor"
+EVENTS_DIR="$EXCITE_REPRODUCE_DIR/events"
+STRESSNG_DIR="$EXCITE_REPRODUCE_DIR/stressng"
 
 ensure_dirs() {
     mkdir -p "$LOG_ROOT" "$MON_DIR" "$EVENTS_DIR" "$CMD_DIR" "$STRESSNG_DIR" \
-             "$CAMPAIGN_DIR/inventory"
+             "$EXCITE_REPRODUCE_DIR/inventory"
 }
 
 log() {
-    echo "[$(date '+%F %T')] $*" >> "$CAMPAIGN_DIR/driver.log"
+    echo "[$(date '+%F %T')] $*" >> "$EXCITE_REPRODUCE_DIR/driver.log"
     echo "[driver] $*"
 }
 

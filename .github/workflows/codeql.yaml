@@ -1,8 +1,11 @@
 name: CodeQL
 
 # C/C++ 静态分析,排除 third-party/ vendored 代码去噪。
-# meson 项目 autobuild 不可靠,显式 meson 构建供注入(arm64,与仓库唯一
-# 支持目标一致;eigen5 为 in-repo vendored,无需 submodule)。
+# meson 项目 autobuild 不可靠,显式 meson 构建供注入(eigen5 为 in-repo
+# vendored,无需 submodule)。
+# 跑 x86 机群:托管 ubuntu-24.04-arm 裸 VM 曾被平台侧随机关机(2026-09-25
+# 当天 16/19 个 run 构建中途收 SIGTERM);aarch64 专属测试(SVE 等)在 x86
+# 被 meson 守卫排除,其编译覆盖由 multi-os-verify 每日 ARM 构建承担。
 
 on:
   push:
@@ -11,13 +14,18 @@ on:
   schedule:
     - cron: '37 2 * * 1'   # 每周一 UTC 02:37 = 北京 10:37
 
+# 合并批次曾 3 分钟连发 7 个 run;同 ref 只留最新,PR 推新时取消旧 run 省配额
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   analyze:
     name: analyze (cpp)
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       security-events: write    # 上传 SARIF 到 Security and quality 页
@@ -41,8 +49,14 @@ jobs:
             libgtest-dev libhwloc-dev libssl-dev libzstd-dev zlib1g-dev
       - name: Build (meson, for CodeQL injection)
         run: |
-          # arm64 用 vendored eigen5(CLAUDE.md:系统 3.3.x 在 GCC12+ 断);
+          # eigen 一律用 vendored eigen5(aarch64: GCC12+ 下系统 3.3.x 断;
+          # x86: meson 走 pkg-config 找 eigen3)。必须用 $PWD 绝对路径:
+          # ninja -C builddir 时编译器 cwd 是 builddir,相对 -I 解析到
+          # builddir/third-party/eigen5 → "Eigen/Core: No such file"。
           # 其余 vendored 依赖缺席时 meson 优雅降级,足够静态分析覆盖面。
-          PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
+          # plain = 无优化无调试信息:静态分析只看编译器调用,不需要 -O3/-g;
+          # 编译更快、产物更小,也缩短今晚平台侧 runner 回收(长时重负载 job
+          # 连续被 shutdown signal 杀)的暴露窗口
+          PKG_CONFIG_PATH="$PWD/third-party/eigen5" meson setup builddir --buildtype=plain
           ninja -C builddir
       - uses: github/codeql-action/analyze@v3

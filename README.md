@@ -145,7 +145,7 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 - **15 个镜像 × 15 个 job 并行**（`fail-fast: false`，互不拖累，全跑完出结论）：openEuler 20.03 / 22.03 / 24.03 × LTS+SP1~SP4。
 - **每 job**：`actions/checkout`（`submodules: false`，镜像已烘焙依赖）→ `actions/cache` 缓存 vendored 库构建 → 镜像内 `meson+ninja` 构建原生二进制 → `scripts/gha/verify-params.py` 做**全量用例的全量参数**功能测试 → `scripts/gha/benchmark.sh` 采跨 OS 基准 → 上传日志/基准。
 - **全量参数扫描**（`verify-params.py`，纯 stdlib 适配容器无 PyYAML）：`--quality=-1` 覆盖 PROD+BETA+SKIP；`-n 1/4/8` 三档并发；openblas `mdim` 扫谱；selftests `@positive` + 逐条负面 selftest（断言非零退出且非 insn 崩溃）。
-- **基准对比**：固定 `--max-test-loop-count`（同工作量墙钟）对三系列交集的 11 个测试采 `benchmark.tsv`，`report` job 汇总成一张跨 OS 对比表写入 job summary。
+- **基准与结果矩阵**：固定 `--max-test-loop-count`（同工作量墙钟）对三系列交集的 11 个测试采 `benchmark.tsv`（24.03-SP3 档推 gh-pages 趋势，见下节）；`report` job 另汇总 15 份 `allquality.yaml` 成「用例 × 版本」结果矩阵写入 job summary，每格 `结果[耗时s (±Δs)]`——Δ 为相对上次成功全量运行同用例同版本的耗时变化（增加为正，仅对比耗时）。
 - **运行器**：`ubuntu-24.04-arm`（GitHub hosted aarch64，GA）；换自建 kunpeng920 runner 改一行 `runs-on` 即可。
 - **前置**：15 个镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`（manifest `remote=yes`）。
 

@@ -10,7 +10,7 @@
 | `verify-params.py` | 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），末行 `RESULT: PASS|FAIL` |
 | `benchmark.sh` | 固定 `--max-test-loop-count` 采集跨 OS 基准 → `benchmark.tsv` |
 | `benchmark.md` | 基准口径说明（为何固定 loop 数、诚实边界） |
-| `report-summary.py` | `report` job 汇总 15 份 `allquality.yaml` 成「用例 × 版本」结果矩阵 |
+| `report-summary.py` | `report` job 汇总 15 份 `allquality.yaml` 成「用例 × 版本」结果矩阵（有基线时每格附耗时 Δ） |
 | `package-built.sh` | 把 CI 构建的二进制打成自包含 built/ tarball（bin+libs+脚本+元数据），上传为 artifact |
 
 ## report-summary.py（最终 report 输出）
@@ -25,6 +25,15 @@ PROD+BETA+SKIP 用例），生成一张 **「用例 × 版本」矩阵**写入 j
   - `SKIP[0.00s]` 跳过
   - `TIMEOUT[60.0s]` 超时、`CRASH[0.0s]` 崩溃、`OSERR[..]` 系统错误、`INTERRUPTED[..]` 中断、`INVALID[..]` 无效
   - 空 = 该版本未编译出该用例（如 22.03/20.03 无 `sleef_neon`）
+- **耗时 Δ（可选 `--previous DIR`）**：`report` job 先用 `gh run download` 拉上次成功
+  全量运行的 `verify-*` artifact（候选 = 本 workflow 最近 8 个 success run，新到旧排除
+  自身；接受第一个目录树里含 `allquality.yaml` 的——smoke 运行只有 `smoke_zstd19.yaml`，
+  天然被排除；7 天 retention 之外的下载失败自动试下一个），再以 `--previous
+  prev-all-results` 调用本脚本。此时每格升级为 `<结果态>[<耗时>s (±Δs)]`，
+  Δ = 相对上次成功全量运行**同用例同版本**的耗时变化（增加为正，**仅对比耗时**，
+  结果态 PASS/FAIL/... 本身不参与对比）。当前有而基线无的用例（基线版本未编译出）
+  维持旧格式；基线缺失（7 天内无成功全量运行）时打印说明行、降级为不带 Δ 的旧格式。
+  不带 `--previous` 时输出与旧版**逐字节一致**（pr.yaml 的 quick summary 无参复用本脚本）。
 - 矩阵尾部附一张「结果态统计（单元格计数）」表。
 - 纯 stdlib，逐行流式解析（每份 ~1.4MB × 15 = ~20MB，不整文件入内存）。
 

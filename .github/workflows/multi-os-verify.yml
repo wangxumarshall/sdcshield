@@ -265,6 +265,9 @@ jobs:
     needs: verify
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read            # checkout 脚本
+      actions: read             # gh 下载其它 run 的 artifact(耗时对比基线)需要
     steps:
       - name: Checkout (for scripts/gha/report-summary.py)
         uses: actions/checkout@v7
@@ -275,12 +278,47 @@ jobs:
         with:
           path: all-results
           pattern: verify-*
+      # ---- 下载上次成功全量运行的 verify-* artifact 作为耗时对比基线。
+      # 候选 = 本 workflow 最近 8 个 success run(databaseId 单调增,sort -rn 即新到旧,
+      # 排除当前 run 自身);逐个试下,接受第一个目录树里含 allquality.yaml 的候选
+      # (全量运行才有 allquality.yaml;smoke 运行只有 smoke_zstd19.yaml,天然被排除)。
+      # run 已过 7 天 retention → gh run download 失败,清目录试下一个。
+      # 全都没有 → 基线=none,后续步骤无 --previous 照常跑;任何失败只降级不红 job
+      # (基线是增强信息,不是门槛)。----
+      - name: Download previous full-run baseline (duration delta)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          rm -rf prev-all-results
+          for id in $(gh run list --workflow multi-os-verify.yml --status success --limit 8 \
+                      --json databaseId --jq '.[].databaseId' | sort -rn); do
+            [ "$id" != "${{ github.run_id }}" ] || continue
+            echo "trying baseline candidate run $id ..."
+            if gh run download "$id" --pattern 'verify-*' --dir prev-all-results; then
+              n=$(find prev-all-results -name allquality.yaml | wc -l)
+              if [ "$n" -gt 0 ]; then
+                echo "baseline: run $id ($n allquality.yaml)"
+                exit 0
+              fi
+              echo "run $id has no allquality.yaml (smoke run?) — try older"
+            fi
+            rm -rf prev-all-results
+          done
+          echo "no baseline found — duration delta disabled for this run"
       # 不 merge:15 份 allquality.yaml 各占一名。汇总成「用例 × 版本」结果矩阵
-      # (PASS[耗时]/FAIL[耗时]/SKIP[耗时]/TIMEOUT[耗时]/CRASH[耗时]/OSERR[耗时],空=无此用例)。
+      # (PASS[耗时]/FAIL[耗时]/SKIP[耗时]/TIMEOUT[耗时]/CRASH[耗时]/OSERR[耗时],空=无此用例;
+      # 有基线时每格耗时附 (±Δs) = 相对上次成功全量运行的耗时变化,仅对比耗时)。
+      # tee:矩阵同时进 job 日志(API 可取,summary 页面外的第二条取证渠道)。
+      # set +e:汇总失败不红 job(report 是信息聚合,不是闸门)。----
       - name: Build full test-result matrix summary
         run: |
           set +e
-          python3 scripts/gha/report-summary.py >> "$GITHUB_STEP_SUMMARY"
+          if find prev-all-results -name allquality.yaml 2>/dev/null | grep -q .; then
+            python3 scripts/gha/report-summary.py --previous prev-all-results | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            python3 scripts/gha/report-summary.py | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           echo "report done"
 
   # ---- 基准趋势:只取 24.03-LTS-SP3(基准版本)的 benchmark.tsv 上 gh-pages。

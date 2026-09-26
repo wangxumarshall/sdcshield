@@ -16,7 +16,7 @@
 ## 分支保护 + required checks(把「一补丁一 PR」变硬门)
 
 1. **Settings → Branches → Add branch ruleset** → target: `main`
-2. **Require a pull request before merging**(DCO/历史检查已由 `git-sanity` 承担)
+2. **Require a pull request before merging**(DCO/历史检查已由 `git-sanity` 承担;人工提交须 Signed-off-by,Copilot Autofix 机器提交豁免——双标记:GitHub 提交者+bot trailer,命中打 notice 可审计)
 3. **Require status checks to pass**:勾选
    - `lint`
    - `git-sanity`

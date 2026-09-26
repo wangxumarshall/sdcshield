@@ -13,6 +13,13 @@ In order to get a clear contribution chain of trust we use the [signed-off-by
 language](https://01.org/community/signed-process) used by the Linux\* kernel
 project.
 
+Commits created by GitHub's Copilot Autofix for code scanning alerts (machine
+commits on `alert-autofix-*` branches) are exempt: they cannot carry a human
+sign-off at creation time and are certified by the maintainer when the pull
+request is merged. The CI check identifies them by their GitHub committer and
+the `github-advanced-security[bot]` co-authored-by trailer (see
+`.github/scripts/check-git-history.sh`).
+
 ## Commit message format
 
 Beside the signed-off-by footer, we encourage to commits to be well-formatted.

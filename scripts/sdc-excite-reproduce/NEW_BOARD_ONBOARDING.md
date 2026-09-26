@@ -127,6 +127,89 @@ alerts.log 与 SEL 对时。
 污染数据已标注不入 SDC 统计）。测试一律 `env -u SDC_ROOT_PW python3 -m pytest`，
 勿手工直跑 `cleanup_orphans` 所在路径。
 
+## 第 5 步：M2 规则闭环部署（eventd/controller/root-helper 三守护，v5 §8/§13）
+
+### 三服务职责与事件流链路
+
+```
+五源（events/ledger.csv、monitor/{discrete_events,journal_watch,collector_self,
+alerts}.log）→ sdc-eventd（尾随规范化）→ spool/events.jsonl（canonical 事件档案）
+  → sdc-controller（五态规则状态机 green/yellow/orange/red/black）
+      ├→ spool/controller_ledger.jsonl（append-only 决策账本，replay 可重放）
+      └→ cmd/ 请求文件（文件协议 v5 §13.3 最小版）
+            ├ burst-<action_id>.request ──┐
+            ├ cpu_hotplug.request ────────┼→ sdc-root-helper（root：allowlist
+            ├ restore.request ───────────┘   特权动作 + nonce + 审计）
+            └ snapshot.request → 既有 root monitor 代理（沿用，不重复实现）
+```
+
+- **sdc-eventd**（用户态）：五源尾随 → 事件档案；dedup/offset 持久化在 `spool/`；
+  行级毒丸兜底（残行入 `eventd_invalid.jsonl` 不炸守护）。
+- **sdc-controller**（用户态）：规则驱动五态机（`configs/sdc-excite-reproduce/
+  rules_m2.json`）；守护模式每轮无新事件写 `{"rule":"heartbeat",...}` 决策行
+  （活体证据）；状态+消费 offset 原子持久化（重启不丢 RED/BLACK、不重放旧决策）。
+- **sdc-root-helper**（root）：allowlist 特权动作执行器；每请求一行审计
+  `spool/root_helper_audit.jsonl`（含 rejected/expired/error——被拒也是安全事件）。
+
+### 部署顺序（首启基线——顺序不可换）
+
+```bash
+su -c "systemctl start sdc-root-helper sdc-eventd"   # ① 消费者先就位，eventd 产事件
+sleep 10                                              # ② 等 eventd 首轮回填（≥3 轮 2s 轮询）
+bash scripts/sdc-excite-reproduce/m2_controller_baseline.sh   # ③ 消费基线（见下）
+touch ~/sdc-excite-reproduce/spool/root_helper_audit.jsonl    # ④ 审计通道预建（空文件）
+su -c "systemctl start sdc-controller"                # ⑤ 消费者上线
+```
+
+**消费基线（步骤 ③）为什么必须**：eventd 首启把五源全部历史回填 events.jsonl
+（事件档案，设计内）；controller 首启 offset=0 会把整段历史喂进状态机——参考板
+实测 193 条历史事件含 2×sdc_mismatch(red)+25×interlock(black)，直接终态 BLACK，
+并对陈旧事件分派 snapshot/verify 请求（历史含 orange 断言还会真触发 perf
+burst）——**陈旧事件驱动特权动作是安全事故**。基线脚本把 controller 消费
+offset 预置到回填末尾（state=green），只消费部署时刻之后的实时事件；事件档案
+全量保留可 replay。注意 offset 单位=字节（tail_file 二进制读），脚本复用
+tail_file 本身取末偏移，勿手工按字符数算。
+
+**验收冒烟**（≥3 轮后）：`spool/events.jsonl` 有行、`controller_ledger.jsonl`
+有 heartbeat 行、`controller_state.json` state=green、三服务 active、既有五服务
+（战役/monitor/三采集器）不受影响。
+
+### spurious canary 能力探测（v5 §6.5）
+
+`sudo bash tools/telemetry/bpf_canary_probe.sh [数据根]` → 幂等写入
+`capabilities.env` 的 `SPURIOUS_CANARY=` 行。参考板实测（2026-09-26，bpftrace
+v0.19.1）：BTF 在、符号在 kallsyms 与 available_filter_functions 均在，但
+`bpftrace -l 'kprobe:do_translation_fault'` 不列出该 kprobe（其余 kprobe 可列）
+→ **不可安全挂载 → SPURIOUS_CANARY=dmesg**。这是 v5 §6.5 预期的诚实降级
+（dmesg/RAS 轮询路径 M1 起在 collector@ras 运行），非缺失；BPF 升级待内核
+侧能力变化后重探。
+
+### M2 演练（m2_drill.sh——永不碰真实根）
+
+```bash
+bash scripts/sdc-excite-reproduce/m2_drill.sh /tmp/全新隔离目录
+# 五级链：collector 降级→yellow、离散断言→orange（pmu_burst）、合成 mismatch→red
+# （ring 固化）、RAS 关键字→red 下非法 ignored、温度越限→black（verify_only）
+# 断言 A-E：决策序列/重放确定性/ring 固化/burst 全链/请求在案 + 静止复跑幂等
+```
+
+守卫：数据根必须全新（已含 spool/ 即拒绝——真实根部署后必含，天然防误跑）；
+全程 --once + helper --mock-exec（伪 perf CSV，绝不真特权写）。
+
+### 运维要点（T4/T5 移交项）
+
+- **cmd/verify.request 滞留是设计内**：interlock→BLACK 时 controller 落
+  verify.request（只读校验请求，v5 §8.3 BLACK 态只允许验证类动作）；消费者属
+  M3——文件落盘即接口契约，滞留非故障，M3 上线后自动消化。
+- **restore 基线重置**：helper 首次 hotplug 改写前快照 online 集到
+  `spool/pre_state_online.txt` 且不覆盖——restore 恒回**最初**全集。若运维
+  有意变更了 online 集并想让 restore 回**新**基线，须手删该文件（下次改写
+  重新落快照）。
+- **cmd/ 里 .done./.rejected. 尾缀文件**是既有 monitor 代理与 helper 的请求
+  终态化产物，非垃圾；helper 只扫 `*.request` 活请求。
+- install.sh 重装会覆盖 sdc-collector@.service——M1 的 PMU_CORE_COUNTERS
+  注入行需重做（见第 4 步第 2 点）。
+
 ## 自动推导 vs 人工确认
 
 **自动推导**（`campaign.env`，首次运行探测；删除该文件可重新生成）：
@@ -145,6 +228,7 @@ alerts.log 与 SEL 对时。
 | 操作 | 命令 |
 |---|---|
 | 状态 | `bash scripts/sdc-excite-reproduce/status.sh`（任意用户） |
+| M2 三守护 | `systemctl is-active sdc-eventd sdc-controller sdc-root-helper`；决策账本 `tail ~/sdc-excite-reproduce/spool/controller_ledger.jsonl`（每 2s 一行 heartbeat=活体）；状态 `cat ~/sdc-excite-reproduce/spool/controller_state.json` |
 | 暂停/恢复战役 | 联锁自动 PAUSE/RESUME；人工暂停 `echo 原因 > ~/sdc-excite-reproduce/PAUSE`，恢复 `rm ~/sdc-excite-reproduce/PAUSE` |
 | SEL Critical 粘性暂停 | 调查后 `rm ~/sdc-excite-reproduce/PAUSE`（监控只清除自己写的 thermal/fan/mem 类） |
 | 事件台账 | `cat ~/sdc-excite-reproduce/events/ledger.csv`；单事件证据在 `events/<时间戳>-*/` |

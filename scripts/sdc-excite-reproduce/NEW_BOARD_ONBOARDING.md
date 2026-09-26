@@ -127,20 +127,22 @@ alerts.log 与 SEL 对时。
 污染数据已标注不入 SDC 统计）。测试一律 `env -u SDC_ROOT_PW python3 -m pytest`，
 勿手工直跑 `cleanup_orphans` 所在路径。
 
-## 第 5 步：M2 规则闭环部署（eventd/controller/root-helper 三守护，v5 §8/§13）
+## 第 5 步：M2 规则闭环部署（eventd/controller/root-helper/ring 四守护，v5 §8/§13）
 
-### 三服务职责与事件流链路
+### 四服务职责与事件流链路
 
 ```
 五源（events/ledger.csv、monitor/{discrete_events,journal_watch,collector_self,
 alerts}.log）→ sdc-eventd（尾随规范化）→ spool/events.jsonl（canonical 事件档案）
-  → sdc-controller（五态规则状态机 green/yellow/orange/red/black）
+  ├→ sdc-controller（五态规则状态机 green/yellow/orange/red/black）
       ├→ spool/controller_ledger.jsonl（append-only 决策账本，replay 可重放）
       └→ cmd/ 请求文件（文件协议 v5 §13.3 最小版）
             ├ burst-<action_id>.request ──┐
             ├ cpu_hotplug.request ────────┼→ sdc-root-helper（root：allowlist
             ├ restore.request ───────────┘   特权动作 + nonce + 审计）
             └ snapshot.request → 既有 root monitor 代理（沿用，不重复实现）
+  └→ sdc-ring（120s 滚动热窗口；red/black 事件固化 events/<event_id>/ring_window/，
+        monitor.csv/percore.csv 同窗入证据）
 ```
 
 - **sdc-eventd**（用户态）：五源尾随 → 事件档案；dedup/offset 持久化在 `spool/`；
@@ -150,15 +152,20 @@ alerts}.log）→ sdc-eventd（尾随规范化）→ spool/events.jsonl（canoni
   （活体证据）；状态+消费 offset 原子持久化（重启不丢 RED/BLACK、不重放旧决策）。
 - **sdc-root-helper**（root）：allowlist 特权动作执行器；每请求一行审计
   `spool/root_helper_audit.jsonl`（含 rejected/expired/error——被拒也是安全事件）。
+- **sdc-ring**（用户态）：120s 滚动热窗口（尾随 monitor/percore CSV）；red/black
+  事件到达即固化 `events/<event_id>/ring_window/`（[-60s,+60s] 口径取证证据）；
+  offset/已固化 id 集原子持久化（`spool/ring_offset.json`/`ring_frozen.json`），
+  重扫护栏双保险（id 集 + 固化文件存在性）防覆盖既有证据。
 
 ### 部署顺序（首启基线——顺序不可换）
 
 ```bash
 su -c "systemctl start sdc-root-helper sdc-eventd"   # ① 消费者先就位，eventd 产事件
 sleep 10                                              # ② 等 eventd 首轮回填（≥3 轮 2s 轮询）
-bash scripts/sdc-excite-reproduce/m2_controller_baseline.sh   # ③ 消费基线（见下）
-touch ~/sdc-excite-reproduce/spool/root_helper_audit.jsonl    # ④ 审计通道预建（空文件）
-su -c "systemctl start sdc-controller"                # ⑤ 消费者上线
+bash scripts/sdc-excite-reproduce/m2_controller_baseline.sh   # ③ controller 消费基线（见下）
+bash scripts/sdc-excite-reproduce/m2_ring_baseline.sh         # ④ ring 消费基线（见下）
+touch ~/sdc-excite-reproduce/spool/root_helper_audit.jsonl    # ⑤ 审计通道预建（空文件）
+su -c "systemctl start sdc-controller sdc-ring"       # ⑥ 消费者上线
 ```
 
 **消费基线（步骤 ③）为什么必须**：eventd 首启把五源全部历史回填 events.jsonl
@@ -170,9 +177,18 @@ offset 预置到回填末尾（state=green），只消费部署时刻之后的�
 全量保留可 replay。注意 offset 单位=字节（tail_file 二进制读），脚本复用
 tail_file 本身取末偏移，勿手工按字符数算。
 
+**ring 消费基线（步骤 ④）同理且更严**：sdc-ring 无基线直接启动会以 offset=0
+重扫全部历史事件——重扫护栏只拦"已有固化证据"的覆盖，**拦不住首次固化**：
+当前 120s 热窗对历史 red/black 是时间错位数据，冒充 [-60s,+60s] 固化窗口即取证
+证据污染。基线脚本只预置 offset（字节单位，同复用 tail_file）+ `ring_frozen.json`
+空集，**不固化任何历史事件**——历史事件的窗口数据早已流逝，诚实做法是基线后
+新事件才固化；ring 首轮自动回放两 CSV 文件尾暖窗，窗口为内存态无需（也无法）
+预置。
+
 **验收冒烟**（≥3 轮后）：`spool/events.jsonl` 有行、`controller_ledger.jsonl`
-有 heartbeat 行、`controller_state.json` state=green、三服务 active、既有五服务
-（战役/monitor/三采集器）不受影响。
+有 heartbeat 行、`controller_state.json` state=green、`spool/ring_offset.json`
+存在且 `events/*/ring_window` 无历史假固化（新 red/black 到来才出现）、四服务
+active、既有五服务（战役/monitor/三采集器）不受影响。
 
 ### spurious canary 能力探测（v5 §6.5）
 
@@ -228,7 +244,7 @@ bash scripts/sdc-excite-reproduce/m2_drill.sh /tmp/全新隔离目录
 | 操作 | 命令 |
 |---|---|
 | 状态 | `bash scripts/sdc-excite-reproduce/status.sh`（任意用户） |
-| M2 三守护 | `systemctl is-active sdc-eventd sdc-controller sdc-root-helper`；决策账本 `tail ~/sdc-excite-reproduce/spool/controller_ledger.jsonl`（每 2s 一行 heartbeat=活体）；状态 `cat ~/sdc-excite-reproduce/spool/controller_state.json` |
+| M2 四守护 | `systemctl is-active sdc-eventd sdc-controller sdc-root-helper sdc-ring`；决策账本 `tail ~/sdc-excite-reproduce/spool/controller_ledger.jsonl`（每 2s 一行 heartbeat=活体）；状态 `cat ~/sdc-excite-reproduce/spool/controller_state.json`；ring 消费位 `cat ~/sdc-excite-reproduce/spool/ring_offset.json` |
 | 暂停/恢复战役 | 联锁自动 PAUSE/RESUME；人工暂停 `echo 原因 > ~/sdc-excite-reproduce/PAUSE`，恢复 `rm ~/sdc-excite-reproduce/PAUSE` |
 | SEL Critical 粘性暂停 | 调查后 `rm ~/sdc-excite-reproduce/PAUSE`（监控只清除自己写的 thermal/fan/mem 类） |
 | 事件台账 | `cat ~/sdc-excite-reproduce/events/ledger.csv`；单事件证据在 `events/<时间戳>-*/` |

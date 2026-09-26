@@ -1,0 +1,17 @@
+[Unit]
+Description=SDCShield sdc-excite-reproduce ring (user: 120s rolling hot window + red/black event freeze)
+After=sdc-eventd.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+ExecStart=/usr/bin/python3 @REPO@/tools/telemetry/sdc_ring.py --data-root @CAMPAIGN_DIR@
+Environment=SDC_EXCITE_REPRODUCE_DIR=@CAMPAIGN_DIR@
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

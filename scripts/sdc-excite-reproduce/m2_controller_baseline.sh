@@ -13,10 +13,11 @@
 # 历史完整保留在事件档案里。
 #
 # offset 单位裁定：tail_file（T1 单一实现，eventd/controller/ring 共用）以
-# 文本模式读文件，offset 是**字符**偏移而非字节偏移（事件含中文多字节文本，
-# 本机实测 162529B 文件全量消费 offset=158892）。故本脚本必须复用 tail_file
-# 本身取末偏移（同一实现同一单位），绝不自行按字节数——字节偏移会让
-# controller 盲区数个事件并从行中撕裂读起。
+# 二进制模式读文件 + 原始字节上 rfind（58153793 起），offset 是**字节**偏移
+# ——生产实证（2026-09-26）：164073B 档案全量消费 offset=164073==文件字节数。
+# 本脚本必须复用 tail_file 本身取末偏移（同一实现同一单位），绝不自行按
+# 字符数/行数算——文本模式字符偏移每轮缩水多字节开销，controller 会重读
+# 已消费行 + 断行合并（58153793 修复前的重复消费缺陷）。
 #
 # 时机：eventd 完成首轮回填之后、controller 首次启动之前（install.sh 只 enable
 # 不 start，即安装与首次 start 之间；eventd 启动后等 ≥1 轮 2s 轮询即可）。
@@ -46,7 +47,7 @@ python3 - "$EVENTS" "$STATE" "$REPO" <<'EOF'
 import json, os, sys
 events, state, repo = sys.argv[1], sys.argv[2], sys.argv[3]
 sys.path.insert(0, os.path.join(repo, "tools", "telemetry"))
-from sdc_eventd import tail_file            # T1 单一实现：同一 offset 单位（字符）
+from sdc_eventd import tail_file            # T1 单一实现：同一 offset 单位（字节）
 lines, store = tail_file(events, {})        # 空起点全量消费 → 末偏移即回填末尾
 off = store[str(events)]
 st = {"state": "green", "offsets": {os.path.abspath(events): off}}

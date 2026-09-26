@@ -215,8 +215,10 @@ bash scripts/sdc-excite-reproduce/m2_drill.sh /tmp/全新隔离目录
 ### 运维要点（T4/T5 移交项）
 
 - **cmd/verify.request 滞留是设计内**：interlock→BLACK 时 controller 落
-  verify.request（只读校验请求，v5 §8.3 BLACK 态只允许验证类动作）；消费者属
-  M3——文件落盘即接口契约，滞留非故障，M3 上线后自动消化。
+  verify.request（只读校验请求，v5 §8.3 BLACK 态只允许验证类动作）；消费者
+  已随 M3 落 repo（`sdc_common.sh consume_verify_request`，驱动主循环轮询）。
+  **运行中的驱动是旧代码——repo 接线在驱动下次重启后生效**（systemd
+  Restart=always 或 stop/start）；生效前滞留仍非故障。
 - **restore 基线重置**：helper 首次 hotplug 改写前快照 online 集到
   `spool/pre_state_online.txt` 且不覆盖——restore 恒回**最初**全集。若运维
   有意变更了 online 集并想让 restore 回**新**基线，须手删该文件（下次改写
@@ -225,6 +227,62 @@ bash scripts/sdc-excite-reproduce/m2_drill.sh /tmp/全新隔离目录
   终态化产物，非垃圾；helper 只扫 `*.request` 活请求。
 - install.sh 重装会覆盖 sdc-collector@.service——M1 的 PMU_CORE_COUNTERS
   注入行需重做（见第 4 步第 2 点）。
+
+## 第 6 步：M3 主动激发与复现（profile/四轴/复现队列，v5 §7+§10）
+
+### 工具族（tools/excite/，全 stdlib-only 零第三方依赖）
+
+| 工具 | 职责 | 入口 |
+|---|---|---|
+| `sdc_profile.py` | 压力 profile 定义（JSON）/resolve 冻结（拓扑实际展开+二进制 sha256+capabilities/topology 快照——同一 profile 名跨机器/时点不静默漂移）/受界执行器（victim 先起、aggressor 并发） | `run [--dry-run] <profile.json>`；样例 `configs/sdc-excite-reproduce/profiles/victim_candidate_v1.json` |
+| `sdc_axes.py` | 四轴策略执行器：load_shaping/hotplug 可执行；governor 实验档=能力缺口诚实暴露（需独立授权，v5 §7.4.1） | 库模块（测试驱动） |
+| `sdc_reproducer.py` | 复现 runner+真实性门禁七项（v5 §10.1）+复现胶囊打包（§10.2）+队列消费 | 子命令 `gate`/`capsule`；模式 `--from-queue [--once] [--data-root DIR]` |
+| `sdc_reducer.py` | 概率 ddmin reducer+搜索树（CORE179 硬规则） | 库模块（m3_drill/后续编排接线） |
+
+### 复现队列语义（M2 enqueue_reproduction 落点闭环）
+
+- **产出端（驱动钩子——repo 已接线，下次驱动重启后生效）**：`handle_failure`
+  台账行后调 `enqueue_repro` → `spool/repro_queue/<epoch-ns>.json`（文件名
+  数值序即消费 ts 序）。
+- **消费端（按需 CLI——裁定不部署常驻守护**，事件驱动由驱动钩子产出+手动/
+  巡检消费；cron 可选未部署）：
+  `python3 tools/excite/sdc_reproducer.py --from-queue [--once] --data-root <根>`
+  （`--data-root` 缺省 $SDC_EXCITE_REPRODUCE_DIR，生产根即 ~/sdc-excite-reproduce）。
+- 每事件全链：`from_event`（失败 test/seed 锚定 detecting 核构造最小 victim
+  profile）→ 真实性门禁七项（含健康核对照真实发射）→（过）capsule 打包到
+  `spool/repro_capsules/<event_id>/` + 概率复测 3 次（单事件总预算 ≤5min，
+  per-trial 截断）→ 结果行 `spool/repro_done/<队列文件名>` + 删队列。
+- done 状态：`processed` / `gate_rejected`（拒因入案，不重试）/ `invalid`
+  （毒丸 JSON 原文截留）/ `error`（from_event 响亮拒绝：无种子/无锚点）/
+  `already_done`（崩溃恢复幂等——复测是有界负载，不无理由重跑）。
+- **消费前人工确认**：健康核对照与概率复测是真实受界发射（复用 retest_guarded
+  内存护栏：前置门 6GB/看门狗 2.5GB）；单事件最坏 ~7min，建议低负载时段跑，
+  `spool/repro_queue/` 有堆积即待办（目录即看板）。
+
+### CORE179 语义（概率 ddmin，v5 §10.3-10.4）
+
+CORE179 教训：**单核隔离会消除 SDC**——确定性 ddmin 被硬规则禁止（单次试验
+定夺=误删复现条件）。每候选序贯 k/n + Wilson 95% 区间（min_trials ≥2）；
+aggressor 因素删空复现崩塌（REJECT）→ 回退上一接受态 + `necessary_aggressors`
+标记——输出"最小 victim + 必要 aggressor 场"，绝不强迫空 aggressor 样例；
+INCONCLUSIVE 一律保留因素（最小性存疑优于误删复现条件）。
+
+### M3 演练（m3_drill.sh——永不碰真实根/真实负载）
+
+```bash
+bash scripts/sdc-excite-reproduce/m3_drill.sh /tmp/全新隔离目录
+# 演练链：合成 mismatch 事件目录 → enqueue_repro（生产产出端）→
+#   sdc_reproducer --from-queue --once（消费端全链——SDC_BIN=隔离根内
+#   fake bin，绝不真跑 sdcshield）
+# 断言 A-D：队列消费闭环（done+复测 k=3/3+门禁过）/capsule 完整+SHA256SUMS/
+#   run.sh --check-only 同机可重放（退出标准①，预检不 mock）/CORE179
+#   概率 ddmin 语义（退出标准②：最小 victim+必要 aggressor）
+```
+
+守卫：数据根必须全新（已含 spool/ 即拒绝）；MemAvailable < 6GB 前置拒
+（复测内存门门槛）；capsule 平台快照取自实机只读探针——同机 --check-only
+真实通过（可重放的最强形态）。
+
 
 ## 自动推导 vs 人工确认
 
@@ -248,6 +306,7 @@ bash scripts/sdc-excite-reproduce/m2_drill.sh /tmp/全新隔离目录
 | 暂停/恢复战役 | 联锁自动 PAUSE/RESUME；人工暂停 `echo 原因 > ~/sdc-excite-reproduce/PAUSE`，恢复 `rm ~/sdc-excite-reproduce/PAUSE` |
 | SEL Critical 粘性暂停 | 调查后 `rm ~/sdc-excite-reproduce/PAUSE`（监控只清除自己写的 thermal/fan/mem 类） |
 | 事件台账 | `cat ~/sdc-excite-reproduce/events/ledger.csv`；单事件证据在 `events/<时间戳>-*/` |
+| M3 复现队列 | 待办 `ls ~/sdc-excite-reproduce/spool/repro_queue/`（堆积即待消费）；消费 `python3 tools/excite/sdc_reproducer.py --from-queue --once --data-root ~/sdc-excite-reproduce`（真实受界发射——低负载时段跑）；结果 `ls ~/sdc-excite-reproduce/spool/repro_done/`；capsule `~/sdc-excite-reproduce/spool/repro_capsules/<event_id>/`（`scripts/run.sh --check-only` 可重放预检） |
 | 崩溃后 | systemd 自动拉起（Restart=always）；从 state.json 断点续跑 |
 | 停止 | `su -c "bash scripts/sdc-excite-reproduce/stop.sh"`（保留进度） |
 | 日志轮转 | logrotate 每日压缩保留 14 天；YAML/events/monitor 证据**永不轮转** |

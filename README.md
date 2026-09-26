@@ -153,7 +153,7 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 
 ### PR CI 门禁、安全扫描与基准趋势
 
-PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历史/DCO → `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，quick 结果以「用例 × 结果[耗时]」矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3，源码/适配层改动才跑，docs-only PR 自动跳过）。同 PR 推新 commit 自动取消旧 run；所有 job 有超时上限。
+PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历史/DCO（人工提交必须 Signed-off-by；GitHub 生成的 Copilot Autofix 机器提交豁免——双标记识别 GitHub 提交者 + `github-advanced-security[bot]` trailer，git-sanity 输出 notice 可审计）→ `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，quick 结果以「用例 × 结果[耗时]」矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3，源码/适配层改动才跑，docs-only PR 自动跳过）。同 PR 推新 commit 自动取消旧 run；所有 job 有超时上限。
 
 安全（`security.yaml` + `codeql.yaml`，每周一全量 + PR 增量）：zizmor（workflow 自身安全，噪声策略见 `zizmor.yml`）、gitleaks（全历史凭据扫描）、osv-scanner（vendored 依赖 CVE）、CodeQL cpp（arm64 构建，排除 `third-party/`；SVE 等 aarch64 专属测试进分析库）。全部 checkout `persist-credentials: false`；Dependabot 管 action 版本（分组 + 7 天冷却）。
 

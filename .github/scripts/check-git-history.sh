@@ -29,12 +29,33 @@ if [[ -n "${merges}" ]]; then
     err=1
 fi
 
+# Copilot Autofix commits (code scanning "Security and quality" alerts, pushed
+# by GitHub on alert-autofix-* branches) are created by the GHAS bot and cannot
+# carry a human Signed-off-by at creation time; the human certifies them by
+# merging the PR. Identified by BOTH markers: committed by GitHub on behalf of
+# the bot AND carrying the bot's co-authored-by trailer. Both markers are
+# unauthenticated commit metadata: they raise the bar (a local commit with a
+# crafted trailer alone does not pass), but a determined contributor can forge
+# both. The maintainer's merge review remains the actual certification, exactly
+# as with any Signed-off-by line.
+commit_is_copilot_autofix() {
+    local sha=$1
+    local committer trailer
+    committer=$(git show -s --format='%cn <%ce>' ${sha})
+    trailer=$(git show -s --format=%B ${sha} | grep -F 'github-advanced-security[bot]@users.noreply.github.com')
+    [[ "${committer}" == "GitHub <noreply@github.com>" && -n "${trailer}" ]]
+}
+
 # look sign offs in all the non-merge commits
 for sha in $(git log --no-merges --format=%H ${base}..${right}); do
     signoff=$(git show -s --format=%B ${sha} | grep '^Signed-off-by:')
     if [[ -z "${signoff}" ]]; then
-        echo "::error:: Commit ${sha} does not contain Signed-off-by. Rebase and amend with 'git commit --amend --signoff'."
-        err=1
+        if commit_is_copilot_autofix ${sha}; then
+            echo "::notice:: Commit ${sha} has no Signed-off-by but is a Copilot Autofix commit (github-advanced-security[bot]) - exempt."
+        else
+            echo "::error:: Commit ${sha} does not contain Signed-off-by. Rebase and amend with 'git commit --amend --signoff'."
+            err=1
+        fi
     fi
 done
 exit $err

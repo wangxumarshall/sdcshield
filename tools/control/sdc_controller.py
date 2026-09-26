@@ -26,9 +26,10 @@ tail_file 单一实现）→ 规则驱动五态机（green/yellow/orange/red/bla
   - 行级兜底：events.jsonl 坏 JSON 行入 spool/controller_invalid.jsonl 隔离
     后继续，offset 照常推进（T1 毒丸教训同类关法——残行不炸守护）；
   - 动作分派（本版最小）：snapshot_root → touch cmd/snapshot.request（root
-    monitor 现有代理即吃）；pmu_burst → cmd/burst.request（固定名单槽，同轮
-    多次触发后写覆盖先写——最新事件胜出，expires_at 300s 到期由 helper 侧
-    拒绝）；其余动作（freeze_ring——sdc_ring 对 red/black 已自动做；
+    monitor 现有代理即吃）；pmu_burst → cmd/burst-<action_id>.request（多槽
+    ——T3 评审裁定：同轮多次触发各占一文件，后写不覆盖先写；单槽时代早触发
+    cpu 的 burst 会被后写静默覆盖；expires_at 300s 到期由 helper 侧拒绝）；
+    其余动作（freeze_ring——sdc_ring 对 red/black 已自动做；
     enqueue_reproduction/hold_profile——M3 消费者；alert_only/verify_only——
     T5 扩展）本版只入账本，动作行即接口契约；
   - burst 事件 cpu：event.location.logical_cpu 存在则 [cpu]，否则 []（未定位
@@ -219,10 +220,11 @@ class ControllerLoop:
                        "expires_at": (datetime.now(timezone.utc)
                                       + timedelta(seconds=BURST_EXPIRES_S)).isoformat(),
                        "reason_event_ids": [event.get("event_id")]}
-                tmp = os.path.join(self.cmd_dir, "burst.request.tmp")
+                path = os.path.join(self.cmd_dir, f"burst-{req['action_id']}.request")
+                tmp = path + ".tmp"
                 with open(tmp, "w", encoding="utf-8") as f:   # 原子写：helper 不读半截
                     json.dump(req, f, ensure_ascii=False)
-                os.replace(tmp, os.path.join(self.cmd_dir, "burst.request"))
+                os.replace(tmp, path)                   # 多槽：后写不覆盖先写
 
     def poll_once(self):
         """一轮：尾随 → 逐事件决策入账本 + 动作分派。返回本轮决策行（含 ts）。"""

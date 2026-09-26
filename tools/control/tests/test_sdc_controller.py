@@ -1,4 +1,4 @@
-import datetime, json, os, subprocess, sys
+import datetime, glob, json, os, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "telemetry"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import sdc_controller as sc
@@ -43,7 +43,7 @@ def test_controller_loop_writes_ledger_and_requests(tmp_path):
     assert dec and dec[0]["rule"] == "discrete_assert" and dec[0]["to"] == "orange"
     led = [json.loads(l) for l in open(f"{d}/spool/controller_ledger.jsonl")]
     assert led[0]["actions"] == ["pmu_burst"]
-    req = json.load(open(f"{d}/cmd/burst.request"))
+    req = json.load(open(glob.glob(f"{d}/cmd/burst-*.request")[0]))
     assert req["action"] == "perf_burst" and 17 in req["parameters"]["cpus"]
 
 # ---- T1 传入裁定（必修）：safety_interlock 的 when 带 severity=black ----
@@ -142,7 +142,7 @@ def test_ledger_minus_ts_equals_replay(tmp_path):
     stripped = [{k: v for k, v in x.items() if k != "ts"} for x in led]
     assert stripped == sc.replay(f"{d}/spool/events.jsonl", RULES)
 
-# ---- CLI --once：一轮即退、幂等、不写 heartbeat + burst.request 形状 ----
+# ---- CLI --once：一轮即退、幂等、不写 heartbeat + burst-*.request 形状 ----
 
 def test_cli_once_idempotent_no_heartbeat(tmp_path):
     d = str(tmp_path / "data")
@@ -156,7 +156,7 @@ def test_cli_once_idempotent_no_heartbeat(tmp_path):
     assert r.returncode == 0, r.stderr
     led = [json.loads(l) for l in open(f"{d}/spool/controller_ledger.jsonl")]
     assert len(led) == 1 and led[0]["rule"] == "discrete_assert"
-    req = json.load(open(f"{d}/cmd/burst.request"))
+    req = json.load(open(glob.glob(f"{d}/cmd/burst-*.request")[0]))
     assert req["action"] == "perf_burst" and req["schema_version"] == "1"
     assert req["parameters"]["cpus"] == [3] and req["parameters"]["duration_s"] == 60
     assert len(req["action_id"]) == 32                 # uuid4().hex
@@ -168,3 +168,34 @@ def test_cli_once_idempotent_no_heartbeat(tmp_path):
     assert r2.returncode == 0, r2.stderr
     led2 = [json.loads(l) for l in open(f"{d}/spool/controller_ledger.jsonl")]
     assert len(led2) == 1                              # 幂等：无重放决策、无 heartbeat
+
+# ---- burst 多槽（T3 评审移交必修）：同轮多触发各占一文件，后写不覆盖先写 ----
+# 单槽 burst.request 时代：同轮第二个 pmu_burst 覆盖第一个的请求文件——早触发
+# cpu 的 burst 丢失（两决策都在账本，动作却只执行一次）。多槽 burst-<action_id>
+# 各占一文件；root-helper（T4）glob 消费。
+
+def test_burst_multi_slot_two_requests_survive(tmp_path):
+    d = str(tmp_path / "data")
+    for p in ("spool", "cmd", "events"): os.makedirs(f"{d}/{p}")
+    rules = tmp_path / "rules.json"
+    rules.write_text(json.dumps({
+        "schema_version": "1",
+        "rules": [
+            {"id": "burst_one", "when": {"event_type": "discrete_transition"},
+             "transition": "orange", "actions": ["pmu_burst"]},
+            {"id": "burst_two", "when": {"event_type": "ras_keyword", "severity": "red"},
+             "transition": "red", "actions": ["pmu_burst"]},
+        ],
+        "transitions": {"green": {"orange": ["burst_one"], "red": ["burst_two"]},
+                        "yellow": {}, "orange": {"red": ["burst_two"]},
+                        "red": {}, "black": {}}}))
+    with open(f"{d}/spool/events.jsonl", "w") as f:
+        f.write(json.dumps(ev("discrete_transition", "orange", "m1", cpu=7)) + "\n")
+        f.write(json.dumps(ev("ras_keyword", "red", "m2", cpu=9)) + "\n")
+    dec = sc.ControllerLoop(d, f"{d}/spool", str(rules), heartbeat=False).poll_once()
+    assert [x["rule"] for x in dec] == ["burst_one", "burst_two"]   # 两次分派都合法
+    files = sorted(glob.glob(f"{d}/cmd/burst-*.request"))
+    assert len(files) == 2                             # 多槽：两个请求都存活
+    reqs = [json.load(open(p)) for p in files]
+    assert len({r["action_id"] for r in reqs}) == 2    # action_id 各异
+    assert {r["parameters"]["cpus"][0] for r in reqs} == {7, 9}  # 各自 cpu 不丢

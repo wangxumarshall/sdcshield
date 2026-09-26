@@ -67,3 +67,38 @@ p = 16
 while p * 2 <= n: p *= 2
 print(min(p, 4096))" "$1"
 }
+
+# ---------------- monitor v3: SDR 发现式解析（v5 §6.4 归一化 + 单元 4）----------------
+# 输入: stdin = 一次 ipmitool sdr list 全量输出（两种实测格式通吃: 3 字段 name|reading|status
+#       / 5 字段 name|id|status|x|reading——取 $5 空则退 $2，与 sdc_monitor.sh 既有 sdr_raw 同口径）
+# 模拟量判定 = 纯数值 ^[0-9]+(\.[0-9]+)?$（brief 修正注记：0x00 含数字但属离散量，以测试为准）；
+# 离散量判定 = 上述取补——两函数分类互补、不重不漏。
+_sdr_norm() { tr -c 'a-zA-Z0-9\n' '_' <<<"$1" | tr 'A-Z' 'a-z' | sed 's/_*$//;s/^_*//'; }
+sdr_analog_columns() {   # stdin: sdr list 全量 → stdout: 每行 规范化名|数值（仅模拟量）
+    awk -F'|' 'NF>=3 {
+        v=$5; if (v ~ /^[ ]*$/) v=$2; gsub(/^ +| +$/,"",v); gsub(/^ +| +$/,"",$1)
+        if (v ~ /^[ ]*[0-9]+(\.[0-9]+)?[ ]*$/) print $1 "|" v
+    }' | while IFS='|' read -r name val; do
+        [ -n "$name" ] && printf "%s|%s\n" "$(_sdr_norm "$name")" "$(grep -oE '[0-9]+(\.[0-9]+)?' <<<"$val" | head -1)"
+    done
+}
+sdr_discrete_map() {     # stdin: sdr list 全量 → stdout: 每行 规范化名|原始读数（仅离散量）
+    awk -F'|' 'NF>=3 {
+        v=$5; if (v ~ /^[ ]*$/) v=$2; gsub(/^ +| +$/,"",v); gsub(/^ +| +$/,"",$1)
+        if (v !~ /^[ ]*[0-9]+(\.[0-9]+)?[ ]*$/ && $1 != "") print $1 "|" v
+    }' | while IFS='|' read -r name val; do
+        printf "%s|%s\n" "$(_sdr_norm "$name")" "$val"
+    done
+}
+# discrete_diff <旧map文件> <新map文件>: 输出变化行（旧无=INIT），退出码=变化数（0=无变化）
+discrete_diff() {
+    local old="$1" new="$2" rc=0 line name val
+    [ -f "$old" ] || touch "$old"
+    while IFS='|' read -r name val; do
+        [ -z "$name" ] && continue
+        prev=$(grep -m1 "^${name}|" "$old" | cut -d'|' -f2-)
+        if [ -z "$prev" ]; then echo "${name}: INIT → ${val}"; rc=$((rc+1))
+        elif [ "$prev" != "$val" ]; then echo "${name}: ${prev} → ${val}"; rc=$((rc+1)); fi
+    done < "$new"
+    return $rc
+}

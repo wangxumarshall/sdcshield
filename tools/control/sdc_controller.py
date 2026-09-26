@@ -29,9 +29,12 @@ tail_file 单一实现）→ 规则驱动五态机（green/yellow/orange/red/bla
     monitor 现有代理即吃）；pmu_burst → cmd/burst-<action_id>.request（多槽
     ——T3 评审裁定：同轮多次触发各占一文件，后写不覆盖先写；单槽时代早触发
     cpu 的 burst 会被后写静默覆盖；expires_at 300s 到期由 helper 侧拒绝）；
-    其余动作（freeze_ring——sdc_ring 对 red/black 已自动做；
-    enqueue_reproduction/hold_profile——M3 消费者；alert_only/verify_only——
-    T5 扩展）本版只入账本，动作行即接口契约；
+    verify_only → cmd/verify.request（T5：interlock→BLACK 的只读校验请求，
+    v5 §8.3 BLACK 态只允许验证类动作；单槽——black 为终态（transitions.black
+    空），合法分派至多一次；helper 通道不含该文件，M3 消费者——接口契约
+    落盘即交付）；其余动作（freeze_ring——sdc_ring 对 red/black 已自动做；
+    enqueue_reproduction/hold_profile——M3 消费者；alert_only）本版只入账本，
+    动作行即接口契约；
   - burst 事件 cpu：event.location.logical_cpu 存在则 [cpu]，否则 []（未定位
     ——discrete 事件无 location 字段时诚实留空，helper 侧 perf -a 全核语义）。
 """
@@ -225,6 +228,19 @@ class ControllerLoop:
                 with open(tmp, "w", encoding="utf-8") as f:   # 原子写：helper 不读半截
                     json.dump(req, f, ensure_ascii=False)
                 os.replace(tmp, path)                   # 多槽：后写不覆盖先写
+            elif a == "verify_only":
+                # interlock→BLACK 只读校验请求（M3 消费；单槽——black 终态，
+                # 合法分派至多一次；原子写同 burst：消费者不读半截）
+                req = {"schema_version": "1", "action_id": uuid.uuid4().hex,
+                       "action": "verify_only", "parameters": {},
+                       "expires_at": (datetime.now(timezone.utc)
+                                      + timedelta(seconds=BURST_EXPIRES_S)).isoformat(),
+                       "reason_event_ids": [event.get("event_id")]}
+                path = os.path.join(self.cmd_dir, "verify.request")
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(req, f, ensure_ascii=False)
+                os.replace(tmp, path)
 
     def poll_once(self):
         """一轮：尾随 → 逐事件决策入账本 + 动作分派。返回本轮决策行（含 ts）。"""

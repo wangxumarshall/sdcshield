@@ -34,6 +34,11 @@ root 服务（systemd sdc-root-helper.service，T6 部署）：扫 cmd/ 三类�
 
 注入点（测试全 mock，绝不真 offline/真 perf/真写 sysfs 对真机）：
 _sdcshield_running / _run_perf_burst / _write_cpu_online / _read_cpu_attr。
+--mock-exec CLI 旗标（仅测试！生产部署绝不设）：perf_burst 写伪 CSV
+（_mock_perf_burst，绝不 spawn 真 perf），其余特权动作一律拒绝——_process
+前置门 + execute choke point 双门（测试旗标绝不执行真实特权写）；m2_drill.sh
+端到端演练（M2 T5）用——E2E 须含 helper 真执行，跨进程 monkeypatch 不可行，
+故设 CLI 旗标而非测试内注入。
 --once 跑一个完整轮次即退出（测试/演练）；守护 2s 轮询、SIGTERM 优雅退出
 （分片睡 ≤1s——M1 教训：PEP 475 会续睡剩余时长）。
 """
@@ -119,6 +124,25 @@ def _run_perf_burst(params, output_path):
         p = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT,
                            timeout=dur + 60)
     return f"exit={p.returncode}"
+
+
+# --mock-exec 测试旗标（仅测试！生产恒 False；main 解析 CLI 时置位）。
+# E2E（m2_drill.sh）须含 helper 真执行才算全链路，而 _run_perf_burst 是跨进程
+# subprocess 无法 monkeypatch——故设 CLI 旗标；绝不用于生产部署。
+_MOCK_EXEC = False
+_MOCK_REJECT_REASON = ("--mock-exec 仅测试旗标：只允许 perf_burst（伪 CSV），"
+                       "真实特权动作（sysfs 写/restore）一律拒绝")
+
+
+def _mock_perf_burst(params, output_path):
+    """--mock-exec 下的伪 perf 输出（仅测试旗标——绝不 spawn 真 perf 子进程）。
+    形状仿 perf stat -x CSV + 显式 mock 标记（文件内容与审计 perf_return 均可见）。"""
+    dur, cpus = params.get("duration_s"), params.get("cpus")
+    with open(output_path, "w") as f:
+        f.write("# mock perf_burst output -- TEST ONLY (--mock-exec), not real PMU counters\n")
+        f.write(f"# parameters: duration_s={dur} cpus={cpus}\n")
+        f.write(f"{time.strftime('%F %T')},mock-core,cycles=0,instructions=0\n")
+    return "exit=0 (mock)"
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +291,12 @@ def execute(action, params, data_root, action_id=None, caller=None,
         res["status"], res["reason"] = "rejected", f"action_id 非法（须 ^[A-Za-z0-9_-]+$）: {action_id!r}"
         _audit(data_root, res)
         return res
+    if _MOCK_EXEC and action != "perf_burst":
+        # mock 门之二（choke point）：直接调用方（M3）在测试旗标下同样不得
+        # 执行真实特权动作——mock 语义对全部入口成立
+        res["status"], res["reason"] = "rejected", _MOCK_REJECT_REASON
+        _audit(data_root, res)
+        return res
     ok, why = validate(action, params, data_root)
     if not ok:
         res["status"], res["reason"] = "rejected", why
@@ -277,7 +307,8 @@ def execute(action, params, data_root, action_id=None, caller=None,
             out_dir = params.get("output_dir") or os.path.join(data_root, "spool", "bursts")
             os.makedirs(out_dir, exist_ok=True)
             out_path = os.path.join(out_dir, f"{action_id}.csv")
-            ret = _run_perf_burst(params, out_path)
+            # --mock-exec（仅测试）：伪 CSV，绝不 spawn 真 perf
+            ret = (_mock_perf_burst if _MOCK_EXEC else _run_perf_burst)(params, out_path)
             res["status"] = "done"
             res["readback"] = {"output": out_path, "perf_return": ret}
         elif action in ("cpu_offline", "cpu_online"):
@@ -416,6 +447,11 @@ class HelperLoop:
                 res["status"], res["reason"] = "rejected", \
                     f"动作 {res['action']!r} 不在通道 {name} 允许集 {list(channel_actions)}"
                 return self._finish(path, res, "rejected")
+            # 4.5 --mock-exec 门（仅测试旗标，前置——先于 validate 的真机探测）：
+            #     非 perf_burst 一律拒绝，测试旗标绝不触达真实特权动作执行路径
+            if _MOCK_EXEC and res["action"] != "perf_burst":
+                res["status"], res["reason"] = "rejected", _MOCK_REJECT_REASON
+                return self._finish(path, res, "rejected")
             # 5. 参数校验
             ok, why = validate(res["action"], res["params"], self.data_root)
             if not ok:
@@ -461,7 +497,15 @@ def main(argv=None):
     ap.add_argument("--data-root", default=None,
                     help="数据根（默认 $SDC_EXCITE_REPRODUCE_DIR/$SDC_CAMPAIGN_DIR"
                          "/~/sdc-excite-reproduce）")
+    ap.add_argument("--mock-exec", action="store_true",
+                    help="仅测试旗标（m2_drill.sh E2E 用，生产部署绝不设）："
+                         "perf_burst 写伪 CSV、其余特权动作一律拒绝")
     a = ap.parse_args(argv)
+    global _MOCK_EXEC
+    if a.mock_exec:
+        _MOCK_EXEC = True
+        print("[root-helper] MOCK-EXEC 模式（仅测试旗标）：perf_burst 输出为伪 CSV，"
+              "其余特权动作一律拒绝", file=sys.stderr)
     root = a.data_root or os.environ.get("SDC_EXCITE_REPRODUCE_DIR") or \
         os.environ.get("SDC_CAMPAIGN_DIR") or os.path.expanduser("~/sdc-excite-reproduce")
     loop = HelperLoop(root, os.path.join(root, "cmd"))

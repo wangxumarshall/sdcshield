@@ -1,7 +1,8 @@
-CPU1 Core Rem       | 45      | ok
-CPU2 Core Rem       | 47      | ok
-CPU1 VDDAVS         | 0.88    | ok
-CPU1 Prochot        | 0x00    | ok
-FAN2 Speed          | 11475   | ok
-Power               | 300     | ok
-SEL                 | 0x00    | ok
+CPU1 Core Rem       | 65 degrees C      | ok
+CPU2 Core Rem       | 48 degrees C      | ok
+CPU1 VDDAVS         | 0.88 Volts        | ok
+CPU1 Prochot        | 0x00              | ok
+FAN2 Speed          | 11475 RPM         | ok
+Power               | 276 Watts         | ok
+SEL                 | 0x00              | ok
+Inlet Temp          | no reading        | ns

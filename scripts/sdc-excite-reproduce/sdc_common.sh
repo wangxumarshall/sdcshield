@@ -71,24 +71,31 @@ print(min(p, 4096))" "$1"
 # ---------------- monitor v3: SDR 发现式解析（v5 §6.4 归一化 + 单元 4）----------------
 # 输入: stdin = 一次 ipmitool sdr list 全量输出（两种实测格式通吃: 3 字段 name|reading|status
 #       / 5 字段 name|id|status|x|reading——取 $5 空则退 $2，与 sdc_monitor.sh 既有 sdr_raw 同口径）
-# 模拟量判定 = 纯数值 ^[0-9]+(\.[0-9]+)?$（brief 修正注记：0x00 含数字但属离散量，以测试为准）；
-# 离散量判定 = 上述取补——两函数分类互补、不重不漏。
+# 分类三态（2026-09-26 评审根修：真机读数带单位——实证 inventory 03_ipmitool_sdr_list.txt
+#   "35 degrees C"/"276 Watts"/"0.88 Volts"，旧"纯数值=模拟量"判定使真机模拟量恒 0 列、
+#   离散图混入带单位读数与 no reading）：
+#   读数 0x 开头 → discrete（十六进制状态码）
+#   非 0x 且含数字 → analog（提取首个数值："276 Watts"→276、"20.52 Amps"→20.52）
+#   no reading/Not Readable/空/纯文字无数值 → skip（两边都不入，缺失不伪造）
+#   两函数消费同一 _sdr_classify 三态输出，分类互补不重不漏。
 _sdr_norm() { tr -c 'a-zA-Z0-9\n' '_' <<<"$1" | tr 'A-Z' 'a-z' | sed 's/_*$//;s/^_*//'; }
-sdr_analog_columns() {   # stdin: sdr list 全量 → stdout: 每行 规范化名|数值（仅模拟量）
+_sdr_classify() {    # stdin: sdr list 全量 → stdout: 每行 规范化名|原始读数|analog|discrete|skip
     awk -F'|' 'NF>=3 {
         v=$5; if (v ~ /^[ ]*$/) v=$2; gsub(/^ +| +$/,"",v); gsub(/^ +| +$/,"",$1)
-        if (v ~ /^[ ]*[0-9]+(\.[0-9]+)?[ ]*$/) print $1 "|" v
-    }' | while IFS='|' read -r name val; do
-        [ -n "$name" ] && printf "%s|%s\n" "$(_sdr_norm "$name")" "$(grep -oE '[0-9]+(\.[0-9]+)?' <<<"$val" | head -1)"
+        cl = "skip"
+        if (v ~ /^0x/) cl = "discrete"
+        else if (v ~ /[0-9]/) cl = "analog"
+        if ($1 == "") cl = "skip"
+        print $1 "|" v "|" cl
+    }' | while IFS='|' read -r name val cl; do
+        printf "%s|%s|%s\n" "$(_sdr_norm "$name")" "$val" "$cl"
     done
 }
+sdr_analog_columns() {   # stdin: sdr list 全量 → stdout: 每行 规范化名|提取数值（仅模拟量）
+    _sdr_classify | awk -F'|' '$3=="analog" && match($2, /[0-9]+(\.[0-9]+)?/) { print $1 "|" substr($2, RSTART, RLENGTH) }'
+}
 sdr_discrete_map() {     # stdin: sdr list 全量 → stdout: 每行 规范化名|原始读数（仅离散量）
-    awk -F'|' 'NF>=3 {
-        v=$5; if (v ~ /^[ ]*$/) v=$2; gsub(/^ +| +$/,"",v); gsub(/^ +| +$/,"",$1)
-        if (v !~ /^[ ]*[0-9]+(\.[0-9]+)?[ ]*$/ && $1 != "") print $1 "|" v
-    }' | while IFS='|' read -r name val; do
-        printf "%s|%s\n" "$(_sdr_norm "$name")" "$val"
-    done
+    _sdr_classify | awk -F'|' '$3=="discrete" { print $1 "|" $2 }'
 }
 # discrete_diff <旧map文件> <新map文件>: 输出变化行（旧无=INIT），退出码=变化数（0=无变化）
 discrete_diff() {

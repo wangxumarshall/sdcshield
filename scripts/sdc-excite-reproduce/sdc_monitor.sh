@@ -120,8 +120,8 @@ declare -A collector_last_alert=()
 # 读取：$EXCITE_REPRODUCE_DIR/known_faults.csv（数据根，每周期重读=热更新），缺失回退
 # repo configs/sdc-excite-reproduce/known_faults.csv。行格式 source,type,description,whitelist_action；
 # source 与离散传感器名同口径规范化后匹配（PSU Redundancy ↔ psu_redundancy）。
-# action=ignore → 只记录不告警；log_only → 记录且 TRANSITION 行尾加 [known_fault:log_only]
-# 标注（告警仍发——仅 ignore 豁免，M1b plan Task 3 告警规则）。
+# action=ignore|log_only → 都只记录不告警（控制器 2026-09-26 裁定：log_only 与 ignore 的
+# 差异仅在 TRANSITION 行尾加 [known_fault:log_only] 标注——修正 plan 字面的误读）。
 declare -A KNOWN_FAULTS=()
 load_known_faults() {
     KNOWN_FAULTS=()
@@ -250,9 +250,19 @@ while :; do
                 kact="${KNOWN_FAULTS[$tname]:-}"
                 tsuf=""; [ "$kact" = log_only ] && tsuf=" [known_fault:log_only]"
                 echo "[$ts] TRANSITION ${tline}${tsuf}" >> "$DISCRETE_LOG"
-                case "$tnew" in             # 断言判定：新值为正常态（0x00/ok/OK）→ 跳过告警
-                    0x00|ok|OK) ;;
-                    *) [ "$kact" != ignore ] && alert "离散态断言 ${tline}" ;;
+                # 断言告警判定（2026-09-26 评审裁定，三重豁免）：
+                #   1) INIT（首启全量快照）不是断言——坏值 INIT 也只记录（消除首启假告警）
+                #   2) 新值为正常态（0x00/ok/OK）非断言
+                #   3) 白名单 ignore|log_only 都只记录（log_only 差异=行尾标注）
+                case "$tline" in
+                    *": INIT → "*) ;;
+                    *) case "$tnew" in
+                           0x00|ok|OK) ;;
+                           *) case "$kact" in
+                                  ignore|log_only) ;;
+                                  *) alert "离散态断言 ${tline}" ;;
+                              esac ;;
+                       esac ;;
                 esac
             done <<< "$dtrans"
         fi

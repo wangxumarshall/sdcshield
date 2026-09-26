@@ -2,14 +2,14 @@ import csv, os, subprocess, tempfile
 
 # 约定（T2 评审传入）：MON_SELFTEST=1 只在周期末提前退出，联锁段照跑——因此所有 SDR
 # fixture 温度必须良性（<88°C：不触发 20s 快采样；更不可触发 95°C set_pause 与
-# 100°C/连续 2 采样 KILL 路径的 pkill）。本文件 fixture 最高 47°C，安全。
+# 100°C/连续 2 采样 KILL 路径的 pkill）。本文件 fixture 最高 65°C，安全。
 
 MON = os.path.join(os.path.dirname(__file__), "..", "..", "..",
                    "scripts", "sdc-excite-reproduce", "sdc_monitor.sh")
 
 SDR = open(os.path.join(os.path.dirname(__file__), "fixture_sdr.txt")).read() if os.path.exists(
     os.path.join(os.path.dirname(__file__), "fixture_sdr.txt")) else (
-    "CPU1 Core Rem       | 45      | ok\nCPU1 Prochot        | 0x00    | ok\nPower | 300 | ok\n")
+    "CPU1 Core Rem       | 65 degrees C      | ok\nCPU1 Prochot        | 0x00              | ok\nPower               | 276 Watts         | ok\n")
 
 def run_monitor_once(tmp, sdr_text):
     f = os.path.join(tmp, "sdr.txt"); open(f, "w").write(sdr_text)
@@ -29,7 +29,7 @@ def test_v3_discovery_columns_and_ras_tail(tmp_path):
     assert hdr[-1] == "bmc_ok" and "mc_ue_total" in hdr   # 固定尾列
     assert "oom_kill" in hdr and "numa0_memavail_kb" in hdr
     assert len(rows) == 2                                  # header + 1 周期
-    assert rows[1][hdr.index("cpu1_core_rem")] == "45"
+    assert rows[1][hdr.index("cpu1_core_rem")] == "65"     # "65 degrees C" → 65（带单位提取）
 
 def test_v3_restart_column_stability(tmp_path):
     run_monitor_once(str(tmp_path), SDR)
@@ -39,7 +39,7 @@ def test_v3_restart_column_stability(tmp_path):
     assert len({l.split(",")[1] for l in lines[1:]}) == 1   # 列集稳定（cpu1_core_rem 同位）
     idx = lines[0].strip().split(",").index("cpu1_core_rem")   # 占位落实：idx 取自表头
     assert len(lines) == 3                                  # header + 两次运行各 1 周期
-    assert lines[1].split(",")[idx] == lines[2].split(",")[idx] == "45"
+    assert lines[1].split(",")[idx] == lines[2].split(",")[idx] == "65"
 
 def test_v3_numa_memavail_chain(tmp_path):
     # T2 裁定传入：本机 node meminfo 无 MemAvailable 行 → 取值链 MemAvailable → MemFree
@@ -79,3 +79,19 @@ def test_known_fault_whitelist(tmp_path):
     d = os.path.join(str(tmp_path), "data", "monitor")
     assert "psu_redundancy: 0x00 → 0x01" in open(os.path.join(d, "discrete_events.log")).read()
     assert "psu_redundancy" not in open(os.path.join(d, "alerts.log")).read()
+
+def test_init_rows_and_log_only_no_alert(tmp_path):
+    # 评审裁定（2026-09-26）：INIT（首启全量快照）不是断言——坏值 INIT 也不告警；
+    # log_only 白名单与 ignore 同样只记录，差异仅在 TRANSITION 行尾 [known_fault:log_only]
+    # 标注。告警只对非白名单传感器的旧→新坏值转移发（对照上一测试）。
+    kf = os.path.join(str(tmp_path), "data", "known_faults.csv")
+    os.makedirs(os.path.dirname(kf), exist_ok=True)
+    open(kf, "w").write("source,type,description,whitelist_action\npsu_redundancy,discrete,known,log_only\n")
+    run_monitor_once(str(tmp_path), "CPU1 Prochot        | 0x01    | ok\nPSU Redundancy      | 0x01    | ok\n")
+    run_monitor_once(str(tmp_path), "CPU1 Prochot        | 0x01    | ok\nPSU Redundancy      | 0x02    | ok\n")
+    d = os.path.join(str(tmp_path), "data", "monitor")
+    dev = open(os.path.join(d, "discrete_events.log")).read()
+    assert "cpu1_prochot: INIT → 0x01" in dev            # INIT 坏值：记录
+    assert "psu_redundancy: 0x01 → 0x02" in dev          # log_only 转移：记录
+    assert "[known_fault:log_only]" in dev               # 且行尾带标注
+    assert "离散态断言" not in open(os.path.join(d, "alerts.log")).read()   # 但都不告警

@@ -25,6 +25,16 @@
       .from_event() -> resolved   事件 test/seed → 最小 victim 单测 profile
                                   （复现条件建模 R 的最小起点，v5 §10.4）
       .run_cycle(profile, n)      n 次受界运行数失败 → {k, n, ci}（Wilson）
+  consume_queue(data_root, once)  M3 T5 队列消费：扫 spool/repro_queue/（驱动
+                                  enqueue_repro 产，M2 enqueue_reproduction
+                                  落点）→ 逐事件 from_event→门禁→（过）capsule
+                                  + 概率复测 QUEUE_TRIALS 次（单事件总预算
+                                  QUEUE_EVENT_BUDGET_S ≤5min，per-trial 截断）
+                                  → 结果行 spool/repro_done/<队列文件名> +
+                                  删队列；CLI: --from-queue [--once]
+                                  [--data-root DIR]（error/invalid 条目 rc=1
+                                  诚实汇报；gate 拒/already_done 同样入 done
+                                  不重试）
 
 门禁七项对照（v5 §10.1 ↔ M3 简化裁定）：
   1 原始证据保存（stdout_summary/yaml_extract/context 三件齐）；
@@ -1043,13 +1053,142 @@ class Reproducer:
 
 
 # ---------------------------------------------------------------------------
+# 复现队列消费（M3 T5：M2 enqueue_reproduction → repro_queue → 闭环）
+
+QUEUE_EVENT_BUDGET_S = 300          # 单事件概率复测总预算（≤5 min，受界纪律）
+QUEUE_TRIALS = 3                    # 复测次数（初判；v5 §10.1.7 概率口径）
+QUEUE_SUBDIR = "repro_queue"        # 生产端：驱动 enqueue_repro（sdc_common.sh）
+DONE_SUBDIR = "repro_done"
+CAPSULE_SUBDIR = "repro_capsules"
+
+
+def _queue_sort_key(name):
+    """ts 序以文件名为准：epoch-ns 数值序优先；非数值名（异常形态）字典序殿后。"""
+    stem = name[:-len(".json")]
+    return (0, int(stem), "") if stem.isdigit() else (1, 0, stem)
+
+
+def _finish_queue_entry(rec, done_path, qpath):
+    """done 先落（tmp+os.replace 原子写）再删队列文件——两步间崩溃 → 下轮
+    already_done 幂等收敛（复测是有界负载，不得无理由重跑）。"""
+    tmp = done_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(rec, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, done_path)
+    os.unlink(qpath)
+
+
+def _consume_queue_entry(data_root, qpath, name, done_path,
+                         capabilities, topology_snapshot):
+    """单个队列条目 → 结果行（写 done + 删队列；already_done 只删队列）。
+
+    状态：processed / gate_rejected / invalid（毒丸 JSON，原文截留入案）/
+    error（from_event 响亮拒绝等）/ already_done（崩溃恢复，不重跑）。
+    gate 拒亦移 done（拒因入案）——不重试（消费端一次定案，重试属人工裁量）。
+    """
+    stem = name[:-len(".json")]
+    rec = {"id": stem, "status": None, "event_id": None, "ts": _now()}
+    with open(qpath, encoding="utf-8", errors="replace") as f:
+        raw = f.read()
+    try:
+        entry = json.loads(raw)
+        if not isinstance(entry, dict) or not entry.get("event_dir"):
+            raise ValueError(f"记录非 JSON 对象或缺 event_dir: {raw!r}")
+    except ValueError as e:              # 毒丸 JSON（bash printf 转义残留形态等）
+        rec.update(status="invalid",
+                   error=f"队列记录非法 JSON: {e}——原文截留: {raw}")
+        rec["raw"] = raw
+        _finish_queue_entry(rec, done_path, qpath)
+        return rec
+
+    event_dir = entry["event_dir"]
+    rec["event_dir"] = event_dir
+    rec["event_id"] = os.path.basename(os.path.normpath(event_dir))
+    if os.path.exists(done_path):        # 崩溃恢复：done 已在，只清队列不重跑
+        rec["status"] = "already_done"
+        os.unlink(qpath)
+        return rec
+    try:
+        rep = Reproducer(data_root, event_dir)
+        resolved = rep.from_event(capabilities, topology_snapshot)
+        ctx = {"binary": resolved["binary_path"]}
+        det = set(rep.event["detecting_cpus"])
+        healthy = [c for c in resolved["topology_snapshot"]["online"]
+                   if c not in det]
+        if healthy:                      # 健康核对照（门禁4 真实发射，受界 120s）
+            ctx["control_cpus"] = healthy[:1]
+        ok, reasons = authenticity_gate(event_dir, ctx)
+        rec["gate"] = {"ok": ok, "reasons": reasons}
+        if not ok:
+            rec["status"] = "gate_rejected"
+        else:
+            per_trial = QUEUE_EVENT_BUDGET_S // QUEUE_TRIALS
+            if resolved["limits"]["duration_s"] > per_trial:
+                resolved["limits"]["duration_s"] = per_trial   # ≤5min 预算截断
+            capsule_dir = os.path.join(data_root, "spool", CAPSULE_SUBDIR,
+                                       rec["event_id"])
+            build_capsule(event_dir, resolved, capsule_dir,
+                          gate_results=rec["gate"])   # 门禁结果注入 manifest
+            cycle = rep.run_cycle(resolved, QUEUE_TRIALS)
+            rec["status"] = "processed"
+            rec["capsule_dir"] = capsule_dir
+            rec["repro"] = {**cycle, "ci": list(cycle["ci"])}
+    except ValueError as e:              # from_event 响亮拒绝（无种子/无锚点等）
+        rec["status"] = "error"
+        rec["error"] = str(e)
+    except Exception as e:               # 意外异常同样入案隔离——不炸队列扫描
+        rec["status"] = "error"
+        rec["error"] = f"{type(e).__name__}: {e}"
+    _finish_queue_entry(rec, done_path, qpath)
+    return rec
+
+
+def consume_queue(data_root, once=False, capabilities=None,
+                  topology_snapshot=None):
+    """扫 spool/repro_queue/（epoch-ns 文件名数值序）→ 逐事件
+    from_event→真实性门禁→（过）build_capsule + 概率复测 QUEUE_TRIALS 次
+    （单事件总预算 QUEUE_EVENT_BUDGET_S，超出按 per-trial 截断）→ 结果行写
+    spool/repro_done/<队列文件名> → 删队列文件。返回结果行列表（CLI 汇报用）。
+
+    capabilities/topology 缺省由 from_event 从 data_root/capabilities.env +
+    实时 sysfs 快照取（resolve 冻结单一权威）。注入点同 Reproducer._run_once /
+    _control_run（测试全 mock——战役运行中绝不真发射负载）。
+    """
+    qdir = os.path.join(data_root, "spool", QUEUE_SUBDIR)
+    ddir = os.path.join(data_root, "spool", DONE_SUBDIR)
+    os.makedirs(ddir, exist_ok=True)
+    names = []
+    if os.path.isdir(qdir):
+        names = sorted((n for n in os.listdir(qdir) if n.endswith(".json")),
+                       key=_queue_sort_key)
+    results = []
+    for name in names:
+        results.append(_consume_queue_entry(
+            data_root, os.path.join(qdir, name), name,
+            os.path.join(ddir, name), capabilities, topology_snapshot))
+        if once:                         # --once：处理一个即退（轮询单步）
+            break
+    return results
+
+
+# ---------------------------------------------------------------------------
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="sdc_reproducer.py",
         description="sdc_reproducer——复现 runner + 真实性门禁 + 复现胶囊"
                     "（v5 §10.1-10.2，M3）")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # --from-queue 为模式旗标而非子命令（子命令名不得带 -- 前缀）；与
+    # gate/capsule 子命令互斥，裸调用响亮报错
+    ap.add_argument("--from-queue", action="store_true",
+                    help="消费 spool/repro_queue（M2 enqueue_reproduction 落点，"
+                         "M3 T5）；与子命令 gate/capsule 互斥")
+    ap.add_argument("--once", action="store_true",
+                    help="（--from-queue）处理一个事件即退（轮询模式单步）")
+    ap.add_argument("--data-root", default=None,
+                    help="（--from-queue）数据根（默认 $SDC_EXCITE_REPRODUCE_DIR"
+                         "/$SDC_CAMPAIGN_DIR/~/sdc-excite-reproduce）")
+    sub = ap.add_subparsers(dest="cmd")
     gp = sub.add_parser("gate", help="对事件目录跑七项真实性门禁")
     gp.add_argument("event_dir")
     gp.add_argument("--control-cpus", default=None,
@@ -1065,6 +1204,39 @@ def main(argv=None):
                     help="resolved-profile JSON（sdc_profile.py run --dry-run 产）")
     a = ap.parse_args(argv)
 
+    if a.from_queue and a.cmd:
+        ap.error("--from-queue 与子命令 gate/capsule 互斥")
+
+    if a.from_queue:
+        root = a.data_root or os.environ.get("SDC_EXCITE_REPRODUCE_DIR") \
+            or os.environ.get("SDC_CAMPAIGN_DIR") \
+            or os.path.expanduser("~/sdc-excite-reproduce")
+        results = consume_queue(root, once=a.once)
+        if not results:
+            print(f"队列为空（{os.path.join(root, 'spool', QUEUE_SUBDIR)} "
+                  "无待处理事件）")
+            return 0
+        bad = 0
+        for r in results:
+            if r["status"] == "processed":
+                cyc = r["repro"]
+                print(f"[{r['id']}] processed: event={r['event_id']} "
+                      f"复测 k={cyc['k']}/{cyc['n']} "
+                      f"ci=({cyc['ci'][0]:.4f},{cyc['ci'][1]:.4f}) "
+                      f"capsule={r['capsule_dir']}")
+            elif r["status"] == "gate_rejected":
+                print(f"[{r['id']}] gate_rejected: event={r['event_id']}（不重试）")
+                for reason in r["gate"]["reasons"]:
+                    print("  " + reason)
+            elif r["status"] == "already_done":
+                print(f"[{r['id']}] already_done: event={r['event_id']}"
+                      "（done 已存在，只清队列不重跑）")
+            else:                        # invalid / error——rc=1 诚实汇报
+                bad += 1
+                where = f" event={r['event_id']}" if r.get("event_id") else ""
+                print(f"[{r['id']}] {r['status']}{where}: {r['error']}")
+        return 1 if bad else 0
+
     if a.cmd == "gate":
         ctx = {}
         if a.control_cpus:
@@ -1079,6 +1251,9 @@ def main(argv=None):
         print(f"authenticity_gate: {'通过（含警告）' if ok else '未通过'} "
               f"（{len(reasons)} 条问题行）")
         return 0 if ok else 1
+
+    if a.cmd != "capsule":
+        ap.error("需指定 --from-queue 或子命令 gate/capsule")
 
     with open(a.resolved, encoding="utf-8") as f:
         resolved = json.load(f)

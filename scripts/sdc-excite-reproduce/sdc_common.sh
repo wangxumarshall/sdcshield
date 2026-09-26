@@ -80,6 +80,31 @@ extract_fail_seed() {    # $1=stdout_summary 路径 → 首个 fail 块内的 AE
     grep -m1 '^  fail: {' "$1" 2>/dev/null | grep -oE "AES:[0-9a-f]+"
 }
 
+# ---------------- 复现队列产出 + verify.request 消费（M3 T5 驱动集成）----------------
+# M2 controller 的 enqueue_reproduction 动作（账本行）在驱动侧的落点：handle_failure
+# 台账行后入队 spool/repro_queue/，由 tools/excite/sdc_reproducer.py --from-queue
+# 消费（from_event→真实性门禁→capsule+概率复测×3→spool/repro_done，闭环 M3）。
+enqueue_repro() {  # enqueue_repro <event_dir> [test] [seed] → spool/repro_queue/<epoch-ns>.json
+    local evdir="$1" t="${2:-?}" s="${3:-none}" q
+    mkdir -p "$EXCITE_REPRODUCE_DIR/spool/repro_queue"
+    q="$EXCITE_REPRODUCE_DIR/spool/repro_queue/$(date +%s%N).json"
+    printf '{"event_dir": "%s", "test": "%s", "seed": "%s", "label": "%s", "queued_at": "%s"}\n' \
+        "$evdir" "$t" "$s" "$(basename "$evdir")" "$(date -Is)" > "$q.tmp" \
+        && mv "$q.tmp" "$q"   # tmp+mv 原子落位（controller 同纪律）：消费者不读半截
+}
+
+# cmd/verify.request 消费（M2 T5 移交③闭环）：monitor v3 联锁 PAUSE 时 controller
+# 写的只读校验请求（interlock→BLACK）。最小消费者：记台账一行 + touch
+# snapshot.request（root monitor 现有 60s 代理吃）+ 按 monitor 命令代理惯例终态化
+# verify.done.<epoch>（mv 保留原件内容供审计）。幂等：无请求即 no-op。
+consume_verify_request() {
+    if [ -f "$CMD_DIR/verify.request" ]; then
+        alert "interlock verify 触发（M2 controller）: $(cat "$CMD_DIR/verify.request" 2>/dev/null)"
+        touch "$CMD_DIR/snapshot.request"   # root 监控 60s 内补 dmesg/SEL/SDR 快照
+        mv "$CMD_DIR/verify.request" "$CMD_DIR/verify.done.$(date +%s)"
+    fi
+}
+
 # ---------------- 复测内存护栏 + control 孤儿清理（Task 5，RCA 附3 建议 1/2/3）----------------
 # v5 §8.6 分工：主负载的内存防线是 monitor 联锁——护栏只针对 handle_failure 的复测，
 # 主阶段路径零内存检查（test_no_mem_checks_in_main_phase_paths 守护此边界）。

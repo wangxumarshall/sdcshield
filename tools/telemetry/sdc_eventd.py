@@ -25,6 +25,9 @@
   - dedup 键 = sha1(源名+行内容)[:16]，持久化 spool/dedup.json（上限 4096 条 FIFO 淘汰，
     防 offset 丢失/轮转重写导致的重复入流）；
   - schema 校验失败的事件不入 events.jsonl，隔离写 spool/eventd_invalid.jsonl（诚实保留）；
+  - 行级异常兜底：单行转换抛出的任何异常被 poll_once 捕获，该行连同错误入
+    eventd_invalid.jsonl 后继续下一行——残行毒丸不炸守护、offsets 正常推进
+    （offsets 只在轮末落盘，若中途抛异常，重启重读同一坏行 = 永久堵塞该源）；
   - 源 ts 解析失败 → realtime_ns 取当前时刻、mapping_error_ns=-1（哨兵：误差无界，
     不伪造 0）；源行原文保留在事件的 source/source_line 字段（溯源）；
   - tail 只消费完整行（最后一个 \\n 之前），尾部残行留待下轮；
@@ -147,11 +150,16 @@ def journal_line_to_event(line, sid):
     return _event("journal", line, sid, "ras_keyword", sev, "monitor", ts_raw)
 
 def _selfmon_parse(line):
-    """→ (collector 名, samples_dropped 累计值) | None（表头/残行）。"""
+    """→ (collector 名, samples_dropped 累计值) | None。
+
+    仅服务 poll_once 的 prev 状态提取：只认完整 8 列行（列数不足/表头/非数字
+    均不更新状态）。转换器 selfmon_line_to_event 自行解析——残行在其内部抛
+    异常，由 poll_once 行级兜底入 eventd_invalid.jsonl（诚实保留，不静默吞）。
+    """
     if line.startswith("ts,"):
         return None
     f = line.split(",")
-    if len(f) < 4 or not f[3].strip().isdigit():
+    if len(f) < 8 or not f[3].strip().isdigit():
         return None
     return f[1], int(f[3])
 
@@ -160,8 +168,10 @@ def selfmon_line_to_event(line, sid, prev_dropped=None):
 
     行级信号：last_success_ts 空 = 本周期采集失败（写入器在 samples_dropped 自增的
     同一行留空该字段）；跨行信号：prev_dropped 提供时 samples_dropped 增量>0。
+    表头行 → None；列数不足的残行 → IndexError（调用方 poll_once 兜底隔离；
+    坏数据要被看见，不静默丢弃）。
     """
-    if _selfmon_parse(line) is None:
+    if line.startswith("ts,"):
         return None
     f = line.split(",")
     ts_raw, name, dropped = f[0], f[1], int(f[3])
@@ -236,14 +246,20 @@ class EventdLoop:
             lines, self.offsets = tail_file(path, self.offsets)
             conv = globals()[conv_name]
             for line in lines:
-                if src == "selfmon":
-                    p = _selfmon_parse(line)
-                    ev = conv(line, self.sdc_id,
-                              prev_dropped=self._selfmon_prev.get(p[0]) if p else None)
-                    if p:
-                        self._selfmon_prev[p[0]] = p[1]
-                else:
-                    ev = conv(line, self.sdc_id)
+                try:                             # 行级兜底：坏行隔离不炸守护（关整类问题）
+                    if src == "selfmon":
+                        p = _selfmon_parse(line)
+                        ev = conv(line, self.sdc_id,
+                                  prev_dropped=self._selfmon_prev.get(p[0]) if p else None)
+                        if p:
+                            self._selfmon_prev[p[0]] = p[1]
+                    else:
+                        ev = conv(line, self.sdc_id)
+                except Exception as e:
+                    self._append_jsonl(self._sp(INVALID_FILE), {
+                        "ts": time.strftime("%F %T"), "source": src,
+                        "line": line, "error": repr(e)})   # repr 含异常类型名（str 不含）
+                    continue
                 if ev is None:
                     continue
                 key = hashlib.sha1((src + line).encode("utf-8", "replace")).hexdigest()[:16]

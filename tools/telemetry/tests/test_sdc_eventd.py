@@ -167,3 +167,18 @@ def test_cli_once_single_round(tmp_path):
                          "--once", "--data-root", d],
                         capture_output=True, text=True, timeout=60)
     assert r2.returncode == 0 and r2.stdout.strip().endswith("0 new events")
+
+# ---- 残行毒丸回归（评审 Important #1）：坏行入 invalid 隔离，poll_once 存活 ----
+
+def test_poison_row_isolated_not_fatal(tmp_path):
+    # 残行毒丸回归：坏行入 invalid 隔离，poll_once 存活且 offsets 正常推进
+    d = make_root(str(tmp_path))
+    os.makedirs(f"{d}/monitor", exist_ok=True)     # make_root 已建，exist_ok 防重
+    with open(f"{d}/monitor/collector_self.csv", "w") as f:
+        f.write("ts,collector,samples_total,samples_dropped,period_s\n")   # 5 列头
+        f.write("2026-09-26 10:00:00,pmu,100,0\n")                        # 4 列残行
+    loop = sdc_eventd.EventdLoop(d, f"{d}/spool")
+    evs = loop.poll_once()          # 不得抛异常
+    assert loop.poll_once() == []   # offsets 已推进，残行不再重读
+    inv = [json.loads(l) for l in open(f"{d}/spool/eventd_invalid.jsonl")]
+    assert inv and "IndexError" in inv[0]["error"]

@@ -62,7 +62,7 @@ _edac_sum() {   # $1=ce_count|ue_count → EDAC 全 mc 求和；无 EDAC（无 m
 SENSORS_JSON="$MON_DIR/sensors_v3.json"
 DISCRETE_MAP="$MON_DIR/discrete_state.map"
 DISCRETE_LOG="$MON_DIR/discrete_events.log"
-touch "$DISCRETE_LOG" 2>/dev/null    # Task 3 填充 diff 内容；本任务建文件空转
+touch "$DISCRETE_LOG" 2>/dev/null    # 离散态转移事件流（Task 3：diff 结果逐行追加 TRANSITION）
 V3_TAIL="mc_ce_total,mc_ue_total,oom_kill,pgmajfault,numa0_memavail_kb,numa1_memavail_kb,numa2_memavail_kb,numa3_memavail_kb,disk_pct,sel5m,bmc_ok"
 # 启动列集装配（v5 §6.4 discovery）：首次全量发现并持久化；重启重新发现与持久序比对——
 # 一致→沿用；漂移（固件升级/换板致 SDR 列集变化）→ 归档旧 CSV（_v3drift_）+ alert +
@@ -115,6 +115,27 @@ clr_pause_if() { if paused_for "$1"; then rm -f "$PAUSE_FLAG"; alert "RESUME: $1
 ue_alerted=0                        # UE>0 每周期至多一条告警；UE 清零后重置
 declare -A collector_fail=()
 declare -A collector_last_alert=()
+
+# ---- known_faults 白名单（v5 §6.4，Task 3：断言告警的用户定案豁免表）----
+# 读取：$EXCITE_REPRODUCE_DIR/known_faults.csv（数据根，每周期重读=热更新），缺失回退
+# repo configs/sdc-excite-reproduce/known_faults.csv。行格式 source,type,description,whitelist_action；
+# source 与离散传感器名同口径规范化后匹配（PSU Redundancy ↔ psu_redundancy）。
+# action=ignore → 只记录不告警；log_only → 记录且 TRANSITION 行尾加 [known_fault:log_only]
+# 标注（告警仍发——仅 ignore 豁免，M1b plan Task 3 告警规则）。
+declare -A KNOWN_FAULTS=()
+load_known_faults() {
+    KNOWN_FAULTS=()
+    local kf="$EXCITE_REPRODUCE_DIR/known_faults.csv" line s act
+    [ -f "$kf" ] || kf="$REPO_DIR/configs/sdc-excite-reproduce/known_faults.csv"
+    [ -f "$kf" ] || return 0
+    while IFS= read -r line; do
+        case "$line" in '#'*|'') continue ;; esac
+        s=$(_sdr_norm "$(cut -d',' -f1 <<<"$line")")
+        act=$(awk -F',' '{gsub(/\r/,""); gsub(/^ +| +$/,"",$NF); print $NF}' <<<"$line")
+        case "$act" in ignore|log_only) KNOWN_FAULTS[$s]=$act ;; esac
+    done < "$kf"
+    return 0
+}
 
 # ---- MON_SELFTEST 测试钩子（生产不设；联锁段 :184-293 逐字保留，跳过动作全部在本段完成）----
 # SEL 段在 sel_tick%5==1 的周期调真 ipmitool sel list——测试下置初值 -1 使唯一周期落在
@@ -178,14 +199,15 @@ while :; do
         BEGIN { n = split(cols, C, ","); for (i = 1; i <= n; i++) idx[C[i]] = i }
         ($1 in idx) { V[idx[$1]] = $2 }
         END { s = ""; for (i = 1; i <= n; i++) s = s V[i] ","; printf "%s", s }')
-    # ---- v3 固定尾列：RAS（EDAC CE/UE）+ OS（vmstat oom_kill/pgmajfault）+ NUMA MemAvailable（缺失=空）----
+    # ---- v3 固定尾列：RAS（EDAC CE/UE）+ OS（vmstat oom_kill/pgmajfault）+ NUMA MemAvailable（缺则 MemFree 近似，节点缺失=空）----
     mc_ce=$(_edac_sum ce_count); mc_ue=$(_edac_sum ue_count)
     oomk=$(awk '/^oom_kill /{print $2}' /proc/vmstat 2>/dev/null)
     pgmj=$(awk '/^pgmajfault /{print $2}' /proc/vmstat 2>/dev/null)
-    n0=$(awk '/MemAvailable:/{print $4}' /sys/devices/system/node/node0/meminfo 2>/dev/null)
-    n1=$(awk '/MemAvailable:/{print $4}' /sys/devices/system/node/node1/meminfo 2>/dev/null)
-    n2=$(awk '/MemAvailable:/{print $4}' /sys/devices/system/node/node2/meminfo 2>/dev/null)
-    n3=$(awk '/MemAvailable:/{print $4}' /sys/devices/system/node/node3/meminfo 2>/dev/null)
+    # numa 口径（T2 裁定）：MemAvailable，缺则 MemFree 近似——本机 node meminfo 无 MemAvailable 行
+    n0=$(awk '/MemAvailable:/{v=$4} /MemFree:/{f=$4} END{print (v!="")?v:f}' /sys/devices/system/node/node0/meminfo 2>/dev/null)
+    n1=$(awk '/MemAvailable:/{v=$4} /MemFree:/{f=$4} END{print (v!="")?v:f}' /sys/devices/system/node/node1/meminfo 2>/dev/null)
+    n2=$(awk '/MemAvailable:/{v=$4} /MemFree:/{f=$4} END{print (v!="")?v:f}' /sys/devices/system/node/node2/meminfo 2>/dev/null)
+    n3=$(awk '/MemAvailable:/{v=$4} /MemFree:/{f=$4} END{print (v!="")?v:f}' /sys/devices/system/node/node3/meminfo 2>/dev/null)
     echo "$ts,${arow}${mc_ce:-},${mc_ue:-},${oomk:-},${pgmj:-},${n0:-},${n1:-},${n2:-},${n3:-},${dp:-},${SEL5M_CARRY:-},$bmc" >> "$CSV"
 
     # ---- UE 即时告警（v5 §8.6：即时告警不自动 PAUSE——用户决策点；每周期至多一条，UE 清零后重置）----
@@ -214,12 +236,26 @@ while :; do
         fi
     done
 
-    # ---- 离散态全量（v5 §6.4；本任务建状态文件空转，Task 3 在调用位填 diff→events/告警/白名单）----
+    # ---- 离散态全量 diff（v5 §6.4：转移即事件；断言（新值非 0x00/ok）即时告警；known_faults 白名单）----
     if [ -n "$SDR" ]; then
+        load_known_faults     # 每周期重读（热更新：数据根 known_faults.csv 追加行无需重启监控）
         sdr_discrete_map <<<"$SDR" > "$DISCRETE_MAP.new"
-        # [Task 3 调用位] out=$(discrete_diff "$DISCRETE_MAP" "$DISCRETE_MAP.new") || drc=$?
-        #   （discrete_diff 退出码=变化数，调用处必须守卫）→ 非空输出逐行追加
-        #   "[ts] TRANSITION ..." 至 $DISCRETE_LOG；断言（新值非 0x00/ok）告警；known_faults 白名单
+        dtrans=""; drc=0
+        dtrans=$(discrete_diff "$DISCRETE_MAP" "$DISCRETE_MAP.new") || drc=$?   # 退出码=变化数，调用处守卫
+        if [ -n "$dtrans" ]; then
+            while IFS= read -r tline; do
+                [ -z "$tline" ] && continue
+                tname=${tline%%:*}          # "name: 旧 → 新" → name（规范化名，与 kf source 同口径）
+                tnew=${tline##* → }         # 行尾新值（取最后一个 → 之后，INIT 行同构）
+                kact="${KNOWN_FAULTS[$tname]:-}"
+                tsuf=""; [ "$kact" = log_only ] && tsuf=" [known_fault:log_only]"
+                echo "[$ts] TRANSITION ${tline}${tsuf}" >> "$DISCRETE_LOG"
+                case "$tnew" in             # 断言判定：新值为正常态（0x00/ok/OK）→ 跳过告警
+                    0x00|ok|OK) ;;
+                    *) [ "$kact" != ignore ] && alert "离散态断言 ${tline}" ;;
+                esac
+            done <<< "$dtrans"
+        fi
         mv -f "$DISCRETE_MAP.new" "$DISCRETE_MAP"
     fi
 

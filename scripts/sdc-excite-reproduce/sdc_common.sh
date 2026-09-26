@@ -91,6 +91,13 @@ mem_below() {  # 纯判定（测试直测）：$1=当前 MemAvailable kB，$2=�
 }
 
 cleanup_orphans() { # 清本用户 control 孤儿切片；-u 限定当前用户防误杀他人进程
+    # 测试沙盒：SDC_ORPHAN_PIDS（逗号分隔 pid 表）设置时只杀这些 pid（pytest 用），
+    # 不设走生产 pkill——战役运行期跑测试必须经测试助手设此变量（test 文件头红线：
+    # 2026-09-26 无沙盒时期实测污染战役，pkill 与运行中切片 comm=control 不可区分）
+    if [ -n "${SDC_ORPHAN_PIDS:-}" ]; then
+        local p; for p in ${SDC_ORPHAN_PIDS//,/ }; do kill -KILL "$p" 2>/dev/null; done
+        return 0
+    fi
     pkill -KILL -x control -u "$(id -un)" 2>/dev/null
     return 0        # pkill 无匹配 rc=1，此处无孤儿是常态，归零
 }

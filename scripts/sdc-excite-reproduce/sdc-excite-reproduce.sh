@@ -199,6 +199,7 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
         done
     fi
     echo "$(date '+%F %T'),$label,rc=$rc,test=${failed_test:-?},seed=${fail_seed:-none},$(tr '\n' ';' < "$evdir/retests.txt"),$evdir" >> "$EVENTS_DIR/ledger.csv"
+    enqueue_repro "$evdir" "${failed_test:-?}" "${fail_seed:-none}"   # M2 enqueue_reproduction 落点（M3 T5）→ repro_queue 待 --from-queue 消费
     alert "SDC/崩溃事件: $label rc=$rc test=${failed_test:-?} → $evdir（战役继续）"
     [ -n "$failed_test" ] && DWELL_OVERRIDE="$failed_test"   # 本周期 L4 优先深驻留该测试
 }
@@ -440,11 +441,20 @@ while :; do
     CYCLE=$((CYCLE + 1))
     state_set cycle "$CYCLE"
     state_set cycle_start "$(date -Is)"
+    # interlock verify 轮询（M2 T5 移交③）：阶段以小时计，逐阶段边界轮询把
+    # verify.request 消费延迟压到"当前阶段余量"（联锁 PAUSE 期间驱动停在
+    # check_pause，恢复后走最近的轮询点）
+    consume_verify_request
     phase_cold
+    consume_verify_request
     phase_l2
+    consume_verify_request
     phase_l3
+    consume_verify_request
     phase_l5
+    consume_verify_request
     phase_l4
+    consume_verify_request
     daily_summary
     if [ "$MODE" = smoke ]; then
         log "smoke 完成（全链路走通）"

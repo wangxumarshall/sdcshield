@@ -124,6 +124,7 @@ run_sdc() { # run_sdc <label> <phase_timeout_s|0> <sdcshield args...>（自动�
         handle_failure "$label" "$yaml" "$rc" "$*"       # 进程级失败（无 YAML 失败行，如 init 崩溃）
     elif [ $killed -eq 1 ]; then
         log "$label 被阶段边界终止（rc=$rc，无 fail/crash 行）——非事件"
+        cleanup_orphans   # 阶段兜底 kill 后收残：comm=control 的切片可能漏网（RCA 附3）
     fi
     return 0
 }
@@ -171,21 +172,29 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     } > "$evdir/context.txt"
     touch "$CMD_DIR/snapshot.request"   # root 监控 60s 内补 dmesg/SEL/SDR 快照
     # ---- 复测：定向（失败测试+失败种子，120s×3）；提取失败则回退整命令（900s 封顶）----
+    # 复测前清 control 孤儿切片（RCA 附3 建议 2：孤儿抢内存/抢核正是复测拖垮机器的主因）；
+    # 复测全程带内存护栏（retest_guarded：前置门 6GB + 看门狗 2.5GB）——护栏只覆盖复测，
+    # 主负载的内存防线是 monitor 联锁（v5 §8.6 分工），主阶段路径零内存检查
+    cleanup_orphans
     local i rcf
     : > "$evdir/retests.txt"
     if [ -n "$failed_test" ] && [ -n "$seed_ok" ]; then
         for i in 1 2 3; do
             sleep 5; check_pause
-            timeout --signal=TERM --kill-after=60s 150s \
+            retest_guarded "retest$i" "$evdir/retests.txt" 150s \
                 "$BIN" -e "$failed_test" -s "$fail_seed" -n 0 -t 120s --max-test-loop-count=0 \
-                "${FLAGS[@]}" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
+                "${FLAGS[@]}" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
+            rcf=$?
+            [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记
             echo "retest$i(targeted) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
         done
     else
         for i in 1 2 3; do
             sleep 5; check_pause
-            timeout --signal=TERM --kill-after=60s 900s \
-                "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
+            retest_guarded "retest$i" "$evdir/retests.txt" 900s \
+                "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
+            rcf=$?
+            [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记
             echo "retest$i(wholecmd) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
         done
     fi
@@ -415,6 +424,7 @@ daily_summary() {
 cleanup() {
     [ -n "${STRESS_PID:-}" ] && kill "$STRESS_PID" 2>/dev/null
     [ -d /sys/devices/system/cpu/cpu0/cpufreq ] && echo performance > "$CMD_DIR/governor.request" 2>/dev/null
+    cleanup_orphans   # 退出兜底：清可能残留的 control 孤儿切片（RCA 附3 建议 3）
 }
 trap cleanup EXIT INT TERM
 

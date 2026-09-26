@@ -80,6 +80,60 @@ extract_fail_seed() {    # $1=stdout_summary 路径 → 首个 fail 块内的 AE
     grep -m1 '^  fail: {' "$1" 2>/dev/null | grep -oE "AES:[0-9a-f]+"
 }
 
+# ---------------- 复测内存护栏 + control 孤儿清理（Task 5，RCA 附3 建议 1/2/3）----------------
+# v5 §8.6 分工：主负载的内存防线是 monitor 联锁——护栏只针对 handle_failure 的复测，
+# 主阶段路径零内存检查（test_no_mem_checks_in_main_phase_paths 守护此边界）。
+# RCA：cold_c4 的 wholecmd 重放（900s×3）在内存紧张期推进 OOM，且泄漏命令留下
+# comm=control 的孤儿切片（sandstone_run.cpp child_run 以 prctl 改名，pkill -x sdcshield 够不着）。
+mem_below() {  # 纯判定（测试直测）：$1=当前 MemAvailable kB，$2=阈值 kB；低于→0；空/非数值→1（不拦）
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    [ "$1" -lt "$2" ] 2>/dev/null
+}
+
+cleanup_orphans() { # 清本用户 control 孤儿切片；-u 限定当前用户防误杀他人进程
+    pkill -KILL -x control -u "$(id -un)" 2>/dev/null
+    return 0        # pkill 无匹配 rc=1，此处无孤儿是常态，归零
+}
+
+_cur_memavail_kb() { mem_avail_kb; }   # 取数钩子：测试 monkeypatch 覆写以注入内存值
+
+retest_guarded() { # <label> <retests.txt> <timeout时长> <命令...> → 命令 rc；250=内存门拦截
+    # 前置门：MemAvailable < 6GB → 等 MEMGUARD_WAIT_S(默认60s) 重取，仍低 → 记 skipped 返回 250
+    # 看门狗：运行期每 MEMWATCH_POLL_S(默认5s) 查 < 2.5GB → KILL 复测进程组并记 killed
+    # kill 语义（2026-09-26 实证）：本机 coreutils timeout 自成进程组长（整树 pgid=timeout
+    # pid），kill -KILL $rpid + kill -KILL -- -$rpid 一击整树（sdcshield 对 TERM 无响应的
+    # 前科 → 直接 KILL 不做 TERM 阶梯）；-$cpid 兜底兼容"子进程自成组"的 coreutils 形态；
+    # wait $rpid 收尸（timeout 被 KILL → rc 137）
+    local label="$1" rtxt="$2" tmo="$3"; shift 3
+    local ma cpid rpid
+    ma=$(_cur_memavail_kb)
+    if mem_below "$ma" 6291456; then            # < 6GB：等一手再判（可能只是事件余波）
+        sleep "${MEMGUARD_WAIT_S:-60}"
+        ma=$(_cur_memavail_kb)
+        if mem_below "$ma" 6291456; then
+            echo "$label skipped(memguard ma=${ma}kB)" >> "$rtxt"
+            return 250
+        fi
+    fi
+    timeout --signal=TERM --kill-after=60s "$tmo" "$@" &
+    rpid=$!
+    while kill -0 "$rpid" 2>/dev/null; do
+        sleep "${MEMWATCH_POLL_S:-5}"
+        kill -0 "$rpid" 2>/dev/null || break
+        ma=$(_cur_memavail_kb)
+        if mem_below "$ma" 2621440; then        # < 2.5GB：灭组，防复测把机器推进 OOM
+            cpid=$(ps --ppid "$rpid" -o pid= 2>/dev/null | head -1 | tr -d ' ')
+            kill -KILL "$rpid" 2>/dev/null
+            kill -KILL -- "-$rpid" 2>/dev/null
+            [ -n "$cpid" ] && kill -KILL -- "-$cpid" 2>/dev/null
+            echo "$label killed(memwatch ma=${ma}kB)" >> "$rtxt"
+            break
+        fi
+    done
+    wait "$rpid"
+    return $?
+}
+
 # ---------------- monitor v3: SDR 发现式解析（v5 §6.4 归一化 + 单元 4）----------------
 # 输入: stdin = 一次 ipmitool sdr list 全量输出（两种实测格式通吃: 3 字段 name|reading|status
 #       / 5 字段 name|id|status|x|reading——取 $5 空则退 $2，与 sdc_monitor.sh 既有 sdr_raw 同口径）

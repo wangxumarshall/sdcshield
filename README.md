@@ -32,7 +32,7 @@ cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 
 > **SP 必须与目标机一致**：SP3 的 `glibc-devel` 携带 `Requires: glibc = <sp3-N>`，装到 SP4 会触发受保护 `glibc` 降级死结。`install-deps.sh` 通过 `.os-version` 标记在安装前拦截错配。
 
-**从 CI 下载预构建二进制（无需 clone 子模块）**：每次 [Multi-OS Verify](.github/workflows/multi-os-verify.yml) CI 运行（每日 cron + 手动触发）都为 15 个 SP 各产出一个自包含 tarball（`built-<series>-<sp>` artifact，保留 90 天）——仓库 → Actions → 任意运行 → Artifacts 下载，或 `gh run download <run-id> --name built-24.03-SP3`。解包后 `./run-sdcshield.sh` 用法同上。要**永久保存**某次构建：手动触发时勾选 `publish_release`，15 个 tarball 会作为 GitHub Release 资产上传（详见 [docs/multi-version-build-deploy.md §6.2.1](docs/multi-version-build-deploy.md)）。
+**从 CI 下载预构建二进制（无需 clone 子模块）**：每次 [Multi-OS Verify](.github/workflows/multi-os-verify.yml) CI 运行（每日 cron + 手动触发）都为 15 个 SP 各产出一个自包含 tarball（`built-<series>-<sp>` artifact，保留 90 天）——仓库 → Actions → 任意运行 → Artifacts 下载，或 `gh run download <run-id> --name built-24.03-SP3`。解包后 `./run-sdcshield.sh` 用法同上。要**永久保存**某次构建：手动触发时勾选 `publish_release`，15 个 tarball 会作为 GitHub Release 资产上传（详见 [docs/build-deploy/multi-version-build-deploy.md §6.2.1](docs/build-deploy/multi-version-build-deploy.md)）。
 
 ### 从源码构建
 
@@ -136,7 +136,7 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 
 > 2026-09-02/03 全链路实测：15 × `RESULT: PASS`（fail=0, crashes=0, eigen_fails=[]），stage 5 自动完成 3 个 submodule + 主仓的提交与推送。
 
-完整设计与操作指南见 [docs/multi-version-build-deploy.md](docs/multi-version-build-deploy.md)（设计方案）与 [docs/multi-version-build-deploy-retrospective.md](docs/multi-version-build-deploy-retrospective.md)（一键复现指南 + 15 SP 全 full 验证基线 + 复现 gotcha）。快速开始速查见 [scripts/offline-build/README.md](scripts/offline-build/README.md)。
+完整设计与操作指南见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md)（设计方案）与 [docs/build-deploy/multi-version-build-deploy-usermanual.md](docs/build-deploy/multi-version-build-deploy-usermanual.md)（用户手册：原回顾报告，一键复现指南 + 15 SP 全 full 验证基线 + 复现 gotcha）。快速开始速查见 [scripts/offline-build/README.md](scripts/offline-build/README.md)。
 
 ### GitHub Actions 每日多 OS 自动验证（`.github/workflows/multi-os-verify.yml`）
 
@@ -149,7 +149,7 @@ cd sdcshield && git checkout feat/multi-version-build-deploy
 - **运行器**：`ubuntu-24.04-arm`（GitHub hosted aarch64，GA）；换自建 kunpeng920 runner 改一行 `runs-on` 即可。
 - **前置**：15 个镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`（manifest `remote=yes`）。
 
-详见 [docs/multi-version-build-deploy.md](docs/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
+详见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
 
 ### PR CI 门禁、安全扫描与基准趋势
 

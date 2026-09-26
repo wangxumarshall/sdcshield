@@ -9,7 +9,10 @@ import json, sys
 SCHEMA_VERSION = "1.0"
 SCHEMA_REF = "configs/sdc-excite-reproduce/schemas/event.schema.json"
 EVENT_TYPES = {"sdc_mismatch", "crash", "ras_event", "spurious_fault",
-               "sel_event", "interlock_action", "phase_boundary", "note"}
+               "sel_event", "interlock_action", "phase_boundary", "note",
+               # M2 扩展（规则闭环输入，v5 §8）：monitor v3 离散断言 / RAS 关键字行 /
+               # collector 自监控降级——sdc-eventd 五源产出
+               "discrete_transition", "ras_keyword", "collector_degraded"}
 SEVERITIES = {"green", "yellow", "orange", "red", "black"}
 CONFIDENCES = {"observed", "inferred", "hypothetical"}
 VERDICTS = {"PASS", "FAIL", "SKIP", "CRASH", "TIMED_OUT", "INTERRUPTED", "OSE"}

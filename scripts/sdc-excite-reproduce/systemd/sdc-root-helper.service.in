@@ -1,0 +1,16 @@
+[Unit]
+Description=SDCShield sdc-excite-reproduce root-helper (root: allowlist privileged actions - burst/hotplug/restore)
+After=sdc-monitor.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 @REPO@/tools/control/sdc_root_helper.py --data-root @CAMPAIGN_DIR@
+Environment=SDC_EXCITE_REPRODUCE_DIR=@CAMPAIGN_DIR@
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

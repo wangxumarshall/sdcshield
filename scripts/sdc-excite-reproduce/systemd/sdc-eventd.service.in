@@ -1,0 +1,17 @@
+[Unit]
+Description=SDCShield sdc-excite-reproduce eventd (user: five-source tail normalized event stream)
+After=sdc-monitor.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+ExecStart=/usr/bin/python3 @REPO@/tools/telemetry/sdc_eventd.py --data-root @CAMPAIGN_DIR@
+Environment=SDC_EXCITE_REPRODUCE_DIR=@CAMPAIGN_DIR@
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

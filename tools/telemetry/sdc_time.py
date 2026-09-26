@@ -30,16 +30,19 @@ def anchor():
     return a
 
 def interpolate(anchors, realtime_ns):
-    """最近两锚点线性插值 → (cntvct 估计, 误差界 ns)。anchors 按 realtime 升序。"""
+    """最近两锚点线性插值 → (cntvct 估计, 误差界 ns)。anchors 按 realtime 升序、≥2 个。"""
     if len(anchors) < 2:
         raise ValueError("需要 ≥2 个锚点")
     a, b = anchors[-2], anchors[-1]
-    if realtime_ns < a["realtime_ns"] or realtime_ns > b["realtime_ns"]:
-        a, b = anchors[0], anchors[1]  # 越界样本：用首对并放大误差
     span = b["realtime_ns"] - a["realtime_ns"]
-    frac = (realtime_ns - a["realtime_ns"]) / span
-    est = a["cntvct"] + frac * (b["cntvct"] - a["cntvct"])
+    if span <= 0:
+        raise ValueError("锚点 realtime 无跨度（span<=0）")
+    est = a["cntvct"] + (realtime_ns - a["realtime_ns"]) / span * (b["cntvct"] - a["cntvct"])
     err = max(a.get("mapping_error_ns", 0), b.get("mapping_error_ns", 0)) + span
+    if realtime_ns < a["realtime_ns"] or realtime_ns > b["realtime_ns"]:
+        # 越界外推：误差加上外推距离（对称计），且不假装包络精度
+        err += abs(realtime_ns - (a["realtime_ns"] if realtime_ns < a["realtime_ns"]
+                                  else b["realtime_ns"]))
     return int(est), err
 
 if __name__ == "__main__":

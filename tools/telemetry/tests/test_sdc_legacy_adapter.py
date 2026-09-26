@@ -30,3 +30,9 @@ def test_parse_yaml_fail_block():
     assert blocks[0]["test"] == "memcpy_rewr" and blocks[0]["result"] == "crash"
     assert "seed" in blocks[0]["fail"]           # fail 行含 seed（连字符键 cpu-mask/time-to-fail 也要能解析）
     assert "cpu-mask" in blocks[0]["fail"]
+
+def test_event_id_content_derived_stable():
+    evs = ada.convert_ledger(os.path.join(FIX, "ledger.csv"), "c0")
+    evs2 = ada.convert_ledger(os.path.join(FIX, "ledger.csv"), "c0")
+    assert [e["event_id"] for e in evs] == [e["event_id"] for e in evs2]
+    assert all(e["event_id"].startswith("legacy-") and len(e["event_id"]) == 19 for e in evs)

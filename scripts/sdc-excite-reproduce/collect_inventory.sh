@@ -132,8 +132,8 @@ cpu0f=/sys/devices/system/cpu/cpu0/cpufreq
   echo "# capabilities.env — collect_inventory v2 生成（消费方: M1 采集器/控制器）"
   echo "NPROC=$(nproc)"
   echo "HAS_CPUFREQ=$([ -d "$cpu0f" ] && echo yes || echo no)"
-  echo "CPUFREQ_DRIVER=$(readlink -f "$cpu0f" 2>/dev/null | xargs -r basename)"
   echo "GOVERNOR=$(cat "$cpu0f/scaling_governor" 2>/dev/null || echo none)"
+  echo "CPUFREQ_DRIVER=$(cat "$cpu0f/scaling_driver" 2>/dev/null || echo none)"
   echo "HAS_TIME_IN_STATE=$([ -f "$cpu0f/stats/time_in_state" ] && echo yes || echo no)"
   echo "GOVERNOR_RESPONSE_VERIFIED=unknown  # R1 写入实验需用户批准后单做（v5 §7.4.1）"
   echo "HAS_OEM_VOLTAGE=no  # 2026-09-24 全量探测定案: 0x30 0x91-0x98 被 0xD6 封印（v5 附录 B）"
@@ -153,6 +153,30 @@ cpu0f=/sys/devices/system/cpu/cpu0/cpufreq
   # [ -f meminfo ]：本机 memoryless node0/2 同样有 meminfo 文件（MemTotal: 0 kB）。
   echo "MEM_NODES=\"$(for n in /sys/devices/system/node/node*; do mt=$(awk '/MemTotal/{print $4}' "$n/meminfo" 2>/dev/null); [ "${mt:-0}" -gt 0 ] && basename "$n" | tr -d a-z; done | tr '\n' ' ' | sed 's/ $//')\""
 } > "$CAP"
+
+# per-PMU 计数器预算探测：递增事件数直至出现 multiplex（time 百分比 <100）
+# 列位（2026-09-25 本机实测，perf 6.6）：本探测命令形（-x, -a，无 -I 时间戳）percent 在 $5；
+# 带 ts 前缀的 -I 间隔格式普通行在 $6、--per-core 行在 $8（plan Global Constraints 所引）——勿混用
+# 范围 2..16：本机 dmesg 报 armv8_pmuv3_0 "13 counters available"，实测 12 份全 100%、
+# 13 份首次 multiplex（percent≈91%≈12/13）→ 预算 12；上限 16 兼容 PMCR.N≤31 的实现
+probe_pmu_budget() { # $1=perf 前缀（固定 "-a"），$2=事件名（重复挂 N 份占计数器）
+    local n evs pct
+    for n in $(seq 2 16); do
+        evs=$(seq 1 $n | sed "s/.*/$2/" | paste -sd,)
+        pct=$(eval perf stat -x, $1 -e "$evs" -- true 2>&1 \
+              | awk -F, '{gsub(/ /,"",$5); if ($5 ~ /^[0-9.]+$/ && $5+0 < 100) {print $5; exit}}')
+        if [ -n "$pct" ]; then echo $((n-1)); return; fi
+    done
+    echo 16  # 16 份仍未复用 → 预算 ≥16，16 为下界（本机 dmesg 报 13，不会触达）
+}
+CORE_BUDGET=$(probe_pmu_budget "-a" "cycles")
+if [ "$ROOT_MODE" != none ]; then
+    echo "PMU_CORE_COUNTERS=$CORE_BUDGET  # 无复用容量实测（递增事件至首次 multiplex）" >> "$CAP"
+else
+    echo "PMU_CORE_COUNTERS=unknown  # 需 root（perf -a）" >> "$CAP"
+fi
+echo "AB_BASELINE_FILE=$HOME/sdc-excite-reproduce/monitor/ab_baseline.json" >> "$CAP"
+
 cp "$CAP" "${SDC_EXCITE_REPRODUCE_DIR:-$HOME/sdc-excite-reproduce}/capabilities.env" 2>/dev/null \
   || echo "note: 数据根不存在，capabilities.env 仅存于画像目录" >&2
 echo "16_capabilities.env 完成: $(wc -l < "$CAP") 行"

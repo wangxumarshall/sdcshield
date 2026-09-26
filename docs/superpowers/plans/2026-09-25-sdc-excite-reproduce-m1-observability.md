@@ -298,18 +298,19 @@ if __name__ == "__main__":
 并在该节末尾（`cp "$CAP" ...` 之前）追加 per-PMU 计数器预算探测（root 通道，M0 终审判定的 spec §14.2 单元 3 缺口）：
 
 ```bash
-# per-PMU 计数器预算探测：递增 raw 事件数直至出现 multiplex（time 百分比 <100）
-probe_pmu_budget() { # $1=perf 前缀（如 "-a --per-core"），$2=事件模板（含 %s 占位）
+# per-PMU 计数器预算探测：递增事件数直至出现 multiplex（time 百分比 <100）
+# 列位依据（Global Constraints 实测格式）：普通 -a 行 percent 在 $6；--per-core 行在 $8——勿混用
+probe_pmu_budget() { # $1=perf 前缀（固定 "-a"），$2=事件名（重复挂 N 份占计数器）
     local n evs pct
     for n in 2 3 4 5 6 7 8; do
         evs=$(seq 1 $n | sed "s/.*/$2/" | paste -sd,)
         pct=$(eval perf stat -x, $1 -e "$evs" -- true 2>&1 \
-              | awk -F, '{gsub(/ /,"",$7); if ($7 ~ /^[0-9.]+$/ && $7+0 < 100) {print $7; exit}}')
+              | awk -F, '{gsub(/ /,"",$6); if ($6 ~ /^[0-9.]+$/ && $6+0 < 100) {print $6; exit}}')
         if [ -n "$pct" ]; then echo $((n-1)); return; fi
     done
     echo 8
 }
-CORE_BUDGET=$(probe_pmu_budget "-a --per-core" "cycles")
+CORE_BUDGET=$(probe_pmu_budget "-a" "cycles")
 if [ "$ROOT_MODE" != none ]; then
     echo "PMU_CORE_COUNTERS=$CORE_BUDGET  # 无复用容量实测（递增事件至首次 multiplex）" >> "$CAP"
 else

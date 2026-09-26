@@ -1,0 +1,15 @@
+[Unit]
+Description=SDCShield sdc-excite-reproduce collector (%i)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 @REPO@/tools/telemetry/sdc_collector.py %i
+Environment=SDC_EXCITE_REPRODUCE_DIR=@CAMPAIGN_DIR@
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

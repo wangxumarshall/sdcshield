@@ -54,6 +54,48 @@ bash scripts/sdc-excite-reproduce/status.sh                   # 观察 monitor.c
 su -c "systemctl start sdc-excite-reproduce"
 ```
 
+## 第 4 步：M1 采集器部署与验收（v5 §6 采集器族 + §14.1 M1 退出标准）
+
+前置：第 3 步 `install.sh` 已装 `sdc-collector@.service` 模板（未启动）。采集器与战役
+（`sdc-excite-reproduce.service`）解耦——验收门只看采集器，不要求战役运行。
+
+```bash
+# 1) 刷新数据根 capabilities.env（root；让 per-PMU 计数器预算等实测能力落数据根）。
+#    输出根指 /tmp：画像产物不落仓库；SDC_EXCITE_REPRODUCE_DIR 必须显式给（root 的 HOME 是 /root）
+su -c "SDC_EXCITE_REPRODUCE_DIR=/home/<user>/sdc-excite-reproduce \
+  bash scripts/sdc-excite-reproduce/collect_inventory.sh /tmp/inv_refresh"
+grep PMU_CORE_COUNTERS ~/sdc-excite-reproduce/capabilities.env   # 期望实测数字（本系列板 12）；unknown=探测失败
+
+# 2) PMU 预算注入 @pmu 单元：采集器进程不 source capabilities.env，单元环境缺
+#    PMU_CORE_COUNTERS 时 sdc_collector_pmu.py 回落默认 6（每组建事件被砍尾、丢覆盖面）。
+#    最小方案：给已安装单元追加一行 Environment（值读 capabilities.env）+ daemon-reload。
+#    注意：install.sh 重装会用模板覆盖单元文件，此行需重做。
+B=$(grep -oP 'PMU_CORE_COUNTERS=\K[0-9]+' ~/sdc-excite-reproduce/capabilities.env)
+su -c "sed -i \"/^Environment=SDC_EXCITE_REPRODUCE_DIR=/a Environment=PMU_CORE_COUNTERS=$B\" \
+  /etc/systemd/system/sdc-collector@.service && systemctl daemon-reload"
+
+# 3) 启动三采集器（enable --now；保持常驻——它们就是 M1 24h 门与后续战役的监控载体）
+su -c "systemctl enable --now sdc-collector@percore sdc-collector@pmu sdc-collector@ras"
+
+# 4) 30 分钟冒烟 → 0.5h 门（六项：active×3 / 丢样<0.1% / percore 新鲜度 / percent_covered
+#    可见 / 时长 / A/B 开销；A/B 段 15×30s 约 9 分钟）
+sleep 1800 && bash scripts/sdc-excite-reproduce/acceptance_m1.sh 0.5
+
+# 5) 24h 正式门（M1 退出标准最终判据；采集器持续运行满 24h 后执行）
+bash scripts/sdc-excite-reproduce/acceptance_m1.sh 24
+```
+
+产物（`~/sdc-excite-reproduce/monitor/`）：`percore.csv`（逐核占用/实测频率）、
+`pmu_core.csv`/`pmu_uncore.csv`（perf 计数模式宽表 + `percent_covered` 质量列，组轮换
+10min）、`ras_edac.csv`（mc 级 + per-DIMM 宽稀疏列 `dimm_mc<N>_<idx>_ce/ue`）、
+`journal_watch.log`（RAS 流告警）、`collector_self.csv`（自监控 drop counter——丢样验收依据）。
+重启列头防御：采集器重启后列头不重复写；若已有 CSV 列头与当前 schema 不符会拒绝启动
+（stderr 说明）——那是 schema 漂移，人工核查后再处置，不要盲目删数据。
+
+A/B 判读纪律：锚点为采集器全停时基线（Task 2，5×10s，MAD 可达 ±14%）；复测为
+15×30s（MAD ~±3%）。下降 ≤3% PASS；3%-8% WARN——受锚点噪声限制，需静默窗口复测
+（`pgrep sdcshield` 为 0 时复跑第 5 步的 A/B 段）；>8% FAIL 查采集器 CPU 占用。
+
 ## 自动推导 vs 人工确认
 
 **自动推导**（`campaign.env`，首次运行探测；删除该文件可重新生成）：

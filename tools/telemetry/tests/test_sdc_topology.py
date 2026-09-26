@@ -22,13 +22,16 @@ def test_has_memory_matches_memtotal():
     import glob, os
     t = sdc_topology.snapshot()
     for n in glob.glob("/sys/devices/system/node/node*"):
-        total = 0
-        try:
-            # 行格式: "Node <id> MemTotal:  <kB> kB" → 值在 split()[3]
-            for line in open(f"{n}/meminfo"):
-                if "MemTotal:" in line:
-                    total = int(line.split()[3]); break
-        except OSError:
-            pass
+        total = sdc_topology._memtotal_kb(n)
         nid = os.path.basename(n)[4:]
         assert t["nodes"][nid]["has_memory"] == (total > 0), nid
+
+def test_has_memory_uses_regex_independent_of_impl(tmp_path):
+    # 前缀变体免疫：写真实 meminfo 文件直接验证正则口径（_memtotal_kb 契约是目录路径）
+    import sdc_topology as st
+    (tmp_path / "meminfo").write_text("Node 0 MemTotal:       264123904 kB\n")
+    assert st._memtotal_kb(str(tmp_path)) == 264123904
+    (tmp_path / "meminfo").write_text("MemTotal:       0 kB\n")
+    assert st._memtotal_kb(str(tmp_path)) == 0
+    (tmp_path / "meminfo").write_text("Node 3 MemTotal:  1024 kB\n")
+    assert st._memtotal_kb(str(tmp_path)) == 1024

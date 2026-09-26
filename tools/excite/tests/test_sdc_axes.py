@@ -406,6 +406,37 @@ def test_wait_request_stale_exclusion_and_polling(tmp_path):
         t.join()
 
 
+def test_write_request_stat_race_closed(tmp_path, monkeypatch):
+    """T2 评审移交①回归：_write_request 的 inode 记录必须取自 replace **之前**
+    的 tmp（rename 保 inode，tmp 的 inode 即提交后 path 的 inode）。竞态场景：
+    本方 replace 落地后、stat(path) 执行前，并发写者以全新文件覆盖同路径——
+    旧实现（replace 后 stat path）会把**并发写者的 inode** 记为本方请求
+    （_wait_request 误领他人请求的终态）；修复后本方 inode 与 path 现值必然
+    不同（本方文件已被换出），等待方对他人终态恒不认领。"""
+    root = str(tmp_path)
+    ex = sa.AxesExecutor(root, CAPS_FULL)
+    real_replace = os.replace
+    ours = {}
+
+    def racing_replace(src, dst):
+        if os.path.basename(dst) == "race.request":
+            st = os.stat(src)
+            ours["ident"] = (st.st_dev, st.st_ino)      # 本方 tmp 的 inode
+        real_replace(src, dst)
+        if os.path.basename(dst) == "race.request":     # 并发写者竞态窗口：
+            other = dst + ".other"                      # 全新 tmp+replace 覆盖同路径
+            with open(other, "w") as f:
+                f.write("concurrent-writer")
+            real_replace(other, dst)
+
+    monkeypatch.setattr(sa.os, "replace", racing_replace)
+    ex._write_request("race.request", "mine")
+    cur = os.stat(os.path.join(root, "cmd", "race.request"))
+    assert ours["ident"] != (cur.st_dev, cur.st_ino)    # path 现值=并发写者的文件
+    assert ex._submit_ident == ours["ident"]            # 记录的必须仍是本方 inode
+    assert ex._submit_ident != (cur.st_dev, cur.st_ino) # 不得误领并发写者 inode
+
+
 # ---------------------------------------------------------------------------
 # spec 校验（配置错误必须响亮失败，不静默降级）
 

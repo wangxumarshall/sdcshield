@@ -237,13 +237,16 @@ class AxesExecutor:
 
     def _write_request(self, name, text):
         """原子写请求（tmp + os.replace——消费者不读半截）+ 记录请求 inode
-        （_wait_request 终态归属判据：rename 终态化保 inode，见模块头）。"""
+        （_wait_request 终态归属判据：rename 终态化保 inode，见模块头）。
+        inode 取自 replace **之前**的 tmp：rename 保 inode，tmp 的 inode 即
+        提交后 path 的 inode——关闭 replace→stat(path) 之间并发写者换掉
+        path 的竞态窗口（旧实现会误领并发写者的 inode 为本方请求）。"""
         path = os.path.join(self.cmd_dir, name)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(text)
+        st = os.stat(tmp)
         os.replace(tmp, path)
-        st = os.stat(path)
         self._submit_ident = (st.st_dev, st.st_ino)
 
     def _expires_at(self, wait_s):

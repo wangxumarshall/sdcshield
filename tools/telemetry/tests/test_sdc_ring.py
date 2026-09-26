@@ -149,6 +149,38 @@ def test_ring_cli_once(tmp_path):
     r2 = subprocess.run(cmd, capture_output=True, text=True, timeout=60)  # 跨进程幂等
     assert r2.returncode == 0 and "frozen 0" in r2.stdout
 
+# ---- Important-1 回归：offset 撕裂重扫不覆盖既有取证证据 ----
+
+def test_rescan_does_not_overwrite_frozen_evidence(tmp_path):
+    # 崩溃撕裂 ring_offset.json（半截 JSON）→ offset 归零重扫；时间流逝等价 =
+    # CSV 轮转后当前文件只剩新行 B（旧行 A 已出窗）。无护栏时 freeze 用当前窗
+    # （header+B）覆盖既有证据（header+A）——取证数据静默销毁且格式合法难察觉。
+    d = make_root(str(tmp_path))
+    with open(f"{d}/monitor/monitor.csv", "w") as f:
+        f.write("ts,c1\n" + f"{ts(5)},A\n")
+    write_event(d, {"event_id": "e1", "severity": "red"})
+    loop1 = sdc_ring.RingLoop(d, f"{d}/spool")
+    assert loop1.poll_once()["frozen"] == ["e1"]
+    ev_file = f"{d}/events/e1/ring_window/monitor.csv"
+    evidence = open(ev_file).read()
+    assert ",A" in evidence                        # 旧行 A 已入取证
+    with open(f"{d}/spool/ring_offset.json", "w") as f:
+        f.write('{"events_offset": 4')             # 撕裂 offset
+    with open(f"{d}/monitor/monitor.csv", "w") as f:
+        f.write("ts,c1\n" + f"{ts(1)},B\n")        # 时间流逝：当前窗只剩 B
+    loop2 = sdc_ring.RingLoop(d, f"{d}/spool")
+    r = loop2.poll_once()                          # offset 归零 → 重扫 e1
+    assert r["frozen"] == [] and r.get("skipped_existing") == ["e1"]
+    assert open(ev_file).read() == evidence        # 证据原封不动（A 行仍在）
+    # 护栏之二：ring_frozen.json 也丢失 → 文件存在性护栏仍拦截
+    os.remove(f"{d}/spool/ring_frozen.json")
+    with open(f"{d}/spool/ring_offset.json", "w") as f:
+        f.write('{"events_offset": 4')             # 再次撕裂（上轮已原子写修复）
+    loop3 = sdc_ring.RingLoop(d, f"{d}/spool")
+    r3 = loop3.poll_once()
+    assert r3["frozen"] == [] and r3.get("skipped_existing") == ["e1"]
+    assert open(ev_file).read() == evidence
+
 # ---- 补充：重启暖窗——大文件只回放尾 1MB（历史行过期即弃，读内存有界）----
 
 def test_ring_warmup_big_file_tail_only(tmp_path):

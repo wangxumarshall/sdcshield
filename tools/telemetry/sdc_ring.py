@@ -19,9 +19,12 @@
   - 行首 ts 解析失败的行保窗不淘汰（诚实保留：表头/残行在固化文件里要可见，与
     T1 eventd 同哲学；代价是持续产出不可解析行的源会让窗无限长——源头问题可见，
     不静默丢）；
-  - events.jsonl 消费 offset 持久化 spool/ring_offset.json（已处理行不重复固化）；
-    截断/轮转/首启/offset 损坏都会从 0 重扫——历史 red/black 重新固化一遍（覆盖写
-    幂等，frozen 列表会重现，诚实记录）；
+  - events.jsonl 消费 offset 持久化 spool/ring_offset.json（原子写 tmp+os.replace，
+    崩溃不撕裂）；已固化 id 集持久化 spool/ring_frozen.json（同原子写；不设容量
+    上限——T1 dedup 丢键只致重复入流，此集丢键致取证证据被覆盖，代价不对称）；
+  - 重扫护栏（offset 撕裂/截断/首启从 0 重扫时）：id 已在固化集，或目标
+    ring_window/ 下已有 *.csv → 跳过覆盖、返回值附 skipped_existing、stderr 一行
+    ——重扫时当前窗对旧事件已是时间错位数据，覆盖即静默销毁既有取证证据；
   - CSV 尾随 offset 不持久化：进程首轮回放两文件尾 ≤WARMUP_TAIL_BYTES 暖窗——重启
     后窗口仍持最近 ≤120s 数据，且回放读内存有界（percore.csv as-built 已 1.4MB/天
     级增长、无常规轮转，全量重读内存随战役时长线性涨）；start>0 时从块内首个换行
@@ -40,7 +43,8 @@ from sdc_eventd import tail_file
 POLL_INTERVAL_S = 2.0
 MAX_SECONDS = 120
 WARMUP_TAIL_BYTES = 1 << 20          # 暖窗回放上限：1MB ≫ 120s 数据量（percore ~6KB/120s）
-OFFSET_FILE, EVENTS_FILE, INVALID_FILE = "ring_offset.json", "events.jsonl", "ring_invalid.jsonl"
+OFFSET_FILE, FROZEN_FILE = "ring_offset.json", "ring_frozen.json"
+EVENTS_FILE, INVALID_FILE = "events.jsonl", "ring_invalid.jsonl"
 FROZEN_SEVERITIES = ("red", "black")
 
 # ---------------------------------------------------------------------------
@@ -129,9 +133,18 @@ class RingLoop:
         self._csv_offsets = {}            # 进程内尾随 offset（不持久化——重启暖窗重放）
         self._warmed = False
         self.event_offset = self._load_state()
+        self._frozen_ids = self._load_frozen_ids()   # 重扫护栏之一（之二=文件存在性）
 
     def _sp(self, name):
         return os.path.join(self.spool_dir, name)
+
+    @staticmethod
+    def _atomic_json(path, obj):
+        """原子写：tmp + os.replace——崩溃不留半截 JSON（Important-1 修复）。"""
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
 
     def _load_state(self):
         try:
@@ -139,11 +152,34 @@ class RingLoop:
                 state = json.load(f)
             return state.get("events_offset", 0) if isinstance(state, dict) else 0
         except (OSError, json.JSONDecodeError):
-            return 0                      # 无/损坏 → 从头重扫（重新固化幂等，见模块注）
+            return 0                      # 无/撕裂 → 从头重扫（重扫护栏拦截覆盖，见模块注）
 
     def _save_state(self):
-        with open(self._sp(OFFSET_FILE), "w") as f:
-            json.dump({"events_offset": self.event_offset}, f, ensure_ascii=False, indent=1)
+        self._atomic_json(self._sp(OFFSET_FILE), {"events_offset": self.event_offset})
+
+    def _load_frozen_ids(self):
+        """已固化 id 集（T1 dedup 同思路；不设容量上限——dedup 丢键只致重复入流，
+        此集丢键致取证证据被覆盖，代价不对称）。撕裂/丢失 → 空集，由文件存在性
+        护栏兜底。"""
+        try:
+            with open(self._sp(FROZEN_FILE)) as f:
+                data = json.load(f)
+            return set(data) if isinstance(data, list) else set()
+        except (OSError, json.JSONDecodeError):
+            return set()
+
+    def _save_frozen_ids(self):
+        self._atomic_json(self._sp(FROZEN_FILE), sorted(self._frozen_ids))
+
+    @staticmethod
+    def _has_frozen_files(out_dir):
+        """out_dir/ring_window/ 下已有 *.csv → 已有固化证据（护栏之二：固化集
+        丢失/撕裂时仍拦得住，防覆盖既有取证文件）。"""
+        try:
+            return any(f.endswith(".csv") for f in
+                       os.listdir(os.path.join(out_dir, "ring_window")))
+        except OSError:
+            return False
 
     def _warmup_tail(self, csv_name, path):
         """进程首轮回放文件尾（≤WARMUP_TAIL_BYTES）暖窗；返回尾随起始 offset。
@@ -189,7 +225,9 @@ class RingLoop:
                                 "error": error}, ensure_ascii=False) + "\n")
 
     def poll_once(self):
-        """一轮尾随 + 固化；返回 {"frozen": [本轮固化的 event_id / 回退标识]}。"""
+        """一轮尾随 + 固化；返回 {"frozen": [...]}，有跳过时附
+        "skipped_existing": [...]（键仅在非空时出现——重扫护栏跳过的 id，
+        T6 断言以此区分 frozen/skipped）。"""
         # 1) 两 CSV 尾随入窗（首轮先回放文件尾暖窗——重启不丢最近 ≤120s）
         for name, rel in self.SOURCES:
             path = os.path.join(self.data_root, *rel)
@@ -203,7 +241,7 @@ class RingLoop:
                 self.window.push(name, l)
         self._warmed = True
         # 2) events.jsonl 新行：red/black → freeze（行级兜底：坏行隔离不炸守护）
-        frozen = []
+        frozen, skipped, added = [], [], False
         ev_path = self._sp(EVENTS_FILE)
         ev_lines, store = tail_file(ev_path, {str(ev_path): self.event_offset})
         self.event_offset = store.get(str(ev_path), self.event_offset)
@@ -214,12 +252,26 @@ class RingLoop:
                     raise ValueError(f"event line is {type(ev).__name__}, not an object")
                 if ev.get("severity") in FROZEN_SEVERITIES:
                     out_dir, ident = self._freeze_target(ev)
+                    if ident in self._frozen_ids or self._has_frozen_files(out_dir):
+                        # 重扫护栏：当前窗对旧事件已是时间错位数据，
+                        # 覆盖即静默销毁既有取证证据（Important-1）
+                        skipped.append(ident)
+                        print(f"[ring] skip re-freeze {ident}: frozen evidence already "
+                              f"exists (offset 重扫不覆盖取证证据)", file=sys.stderr)
+                        continue
                     freeze(self.window, out_dir, ident)
+                    self._frozen_ids.add(ident)
+                    added = True
                     frozen.append(ident)
             except Exception as e:
                 self._quarantine(line, repr(e))
+        if added:
+            self._save_frozen_ids()
         self._save_state()
-        return {"frozen": frozen}
+        out = {"frozen": frozen}
+        if skipped:
+            out["skipped_existing"] = skipped
+        return out
 
 # ---------------------------------------------------------------------------
 

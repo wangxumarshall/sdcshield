@@ -96,6 +96,37 @@ A/B 判读纪律：锚点为采集器全停时基线（Task 2，5×10s，MAD 可
 15×30s（MAD ~±3%）。下降 ≤3% PASS；3%-8% WARN——受锚点噪声限制，需静默窗口复测
 （`pgrep sdcshield` 为 0 时复跑第 5 步的 A/B 段）；>8% FAIL 查采集器 CPU 占用。
 
+## monitor v3 与驱动加固（M1b）部署说明
+
+**monitor v3 列集（发现式）**：首启全量发现 BMC SDR 模拟量传感器（本系列板 ~40 列）
++ 11 个固定尾列（EDAC ce/ue 总和、oom_kill、pgmajfault、NUMA0-3 memavail、disk_pct、
+sel5m、bmc_ok）+ ts，共 ~52 列；列集持久化在 `monitor/sensors_v3.json`。重启重新发现
+并与持久序比对。两级归档语义，**都属预期行为、非缺陷**：
+
+- v2→v3 首次升级：旧 CSV 表头（38 列）≠ v3 表头 → 旧数据归档为
+  `monitor_v1_<ts>.csv.gz`（沿用历史命名，不告警）；
+- 运行期列集漂移（固件升级/换板致 SDR 列集变化）：归档 `monitor_v3drift_<ts>.csv`
+  **并告警**——人工核查后再处置，不要盲目删数据；BMC 暂不可达的空发现沿用持久序
+  （空发现不构成漂移证据）。
+
+**离散态 diff**：`monitor/discrete_events.log` 首启为全部离散传感器记
+`INIT → 当前值` 基线行（本系列板实测 103 行），此后**只在状态转移时**追加
+`TRANSITION` 行（含时间戳与新旧值）——看 0x00 → 非 0x00 即异常起点，配合
+alerts.log 与 SEL 对时。
+
+**复测内存护栏（retest_guarded）**：fail/crash 事件的定向复测全程带护栏——
+前置门 MemAvailable < 6GB（等 60s 重取，仍低则记 `skipped(memguard)` 不复测，
+返回码 250）+ 运行期看门狗 < 2.5GB（KILL 复测进程组并记 `killed(memwatch)`，
+防复测把机器推进 OOM——2026-09-25 cold_c4 rc=137 的教训）。护栏只覆盖复测窗口，
+主阶段路径零内存检查（有测试守护此边界）。
+
+**测试沙盒红线（SDC_ORPHAN_PIDS）**：战役运行期跑 pytest（`tools/telemetry/tests/`）
+必须经测试助手设置 `SDC_ORPHAN_PIDS`（逗号分隔 pid 表）——看门狗击杀后的孤儿清理
+`cleanup_orphans` 在该变量设置时只杀表内 pid；不设则走生产 `pkill -KILL -x control`，
+与运行中切片 comm 不可区分，**会污染战役**（2026-09-26 无沙盒时期实测发生过，
+污染数据已标注不入 SDC 统计）。测试一律 `env -u SDC_ROOT_PW python3 -m pytest`，
+勿手工直跑 `cleanup_orphans` 所在路径。
+
 ## 自动推导 vs 人工确认
 
 **自动推导**（`campaign.env`，首次运行探测；删除该文件可重新生成）：

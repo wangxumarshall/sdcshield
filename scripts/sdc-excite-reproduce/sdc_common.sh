@@ -91,6 +91,13 @@ mem_below() {  # 纯判定（测试直测）：$1=当前 MemAvailable kB，$2=�
 }
 
 cleanup_orphans() { # 清本用户 control 孤儿切片；-u 限定当前用户防误杀他人进程
+    # 测试沙盒：SDC_ORPHAN_PIDS（逗号分隔 pid 表）设置时只杀这些 pid（pytest 用），
+    # 不设走生产 pkill——战役运行期跑测试必须经测试助手设此变量（test 文件头红线：
+    # 2026-09-26 无沙盒时期实测污染战役，pkill 与运行中切片 comm=control 不可区分）
+    if [ -n "${SDC_ORPHAN_PIDS:-}" ]; then
+        local p; for p in ${SDC_ORPHAN_PIDS//,/ }; do kill -KILL "$p" 2>/dev/null; done
+        return 0
+    fi
     pkill -KILL -x control -u "$(id -un)" 2>/dev/null
     return 0        # pkill 无匹配 rc=1，此处无孤儿是常态，归零
 }
@@ -100,12 +107,16 @@ _cur_memavail_kb() { mem_avail_kb; }   # 取数钩子：测试 monkeypatch 覆�
 retest_guarded() { # <label> <retests.txt> <timeout时长> <命令...> → 命令 rc；250=内存门拦截
     # 前置门：MemAvailable < 6GB → 等 MEMGUARD_WAIT_S(默认60s) 重取，仍低 → 记 skipped 返回 250
     # 看门狗：运行期每 MEMWATCH_POLL_S(默认5s) 查 < 2.5GB → KILL 复测进程组并记 killed
-    # kill 语义（2026-09-26 实证）：本机 coreutils timeout 自成进程组长（整树 pgid=timeout
-    # pid），kill -KILL $rpid + kill -KILL -- -$rpid 一击整树（sdcshield 对 TERM 无响应的
-    # 前科 → 直接 KILL 不做 TERM 阶梯）；-$cpid 兜底兼容"子进程自成组"的 coreutils 形态；
-    # wait $rpid 收尸（timeout 被 KILL → rc 137）
+    # kill 语义（2026-09-26 两轮实证）：本机 coreutils timeout 自成进程组长（pgid=
+    # timeout pid，sdcshield main 亦在其组）→ kill -KILL $rpid + kill -KILL -- -$rpid
+    # 收 timeout+main；但框架切片 signals_init_child() setsid() 自成会话/组（真机
+    # 实测 control 切片 pgid=sess=自pid）——组杀够不着，须 cleanup_orphans 按
+    # comm=control 收（sdcshield 对 TERM 无响应前科 → 直接 KILL 不做 TERM 阶梯）；
+    # -$cpid 兜底兼容"子进程自成组"形态；wait $rpid 收尸（timeout 被 KILL → 137）
+    # killed(memwatch) 记录取击杀即复核（kill -0）：pid 已被 bash 收尸 = ma 读取
+    # 期间自然退出（假阳性窗口），不记；zombie 仍在表则记（实证 5/5 不漏）
     local label="$1" rtxt="$2" tmo="$3"; shift 3
-    local ma cpid rpid
+    local ma cpid rpid hit
     ma=$(_cur_memavail_kb)
     if mem_below "$ma" 6291456; then            # < 6GB：等一手再判（可能只是事件余波）
         sleep "${MEMGUARD_WAIT_S:-60}"
@@ -124,9 +135,11 @@ retest_guarded() { # <label> <retests.txt> <timeout时长> <命令...> → 命�
         if mem_below "$ma" 2621440; then        # < 2.5GB：灭组，防复测把机器推进 OOM
             cpid=$(ps --ppid "$rpid" -o pid= 2>/dev/null | head -1 | tr -d ' ')
             kill -KILL "$rpid" 2>/dev/null
+            hit=0; kill -0 "$rpid" 2>/dev/null && hit=1
             kill -KILL -- "-$rpid" 2>/dev/null
             [ -n "$cpid" ] && kill -KILL -- "-$cpid" 2>/dev/null
-            echo "$label killed(memwatch ma=${ma}kB)" >> "$rtxt"
+            cleanup_orphans   # 收 setsid 自成组的 control 切片（组杀够不着）
+            [ "$hit" -eq 1 ] && echo "$label killed(memwatch ma=${ma}kB)" >> "$rtxt"
             break
         fi
     done

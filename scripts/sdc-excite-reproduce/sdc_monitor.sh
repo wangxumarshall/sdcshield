@@ -35,10 +35,56 @@ RESUME_C="${THERMAL_RESUME_C:-90}"
 DISK_WARN="${DISK_WARN_PCT:-85}"
 DISK_STOP="${DISK_STOP_PCT:-95}"
 
-# CSV v2 表头（用户指令 2026-09-24：补 CPU 占用率/频率/全电压轨/SEL 异常计数）
-CSV_HDR="ts,cpu1_c,cpu2_c,mem1_c,mem2_c,outlet_c,inlet_c,watts,vddavs1,vddavs2,nvddavs1,nvddavs2,vddfix1,vddfix2,hvcc1,hvcc2,vddq_ab1,vddq_cd1,vddq_ab2,vddq_cd2,fan2_rpm,fan3_rpm,prochot1,prochot2,tz0_c,tz1_c,cpu_util_all,cpu_util_s0,cpu_util_s1,freq_min_khz,freq_avg_khz,freq_max_khz,memavail_kb,swap_used_kb,load1,disk_pct,sel5m,bmc_ok"
+# ---- monitor.csv v3 表头（v5 §6.4/§6.6/§6.7 单元 4：SDR 发现式列集 + RAS/OS 固定尾列）----
+# 列 = ts + 发现式模拟量列（sdr_analog_columns 归一化名，列序持久化于 sensors_v3.json，
+#       重启列集一致）+ 固定尾列 mc_ce_total..bmc_ok（EDAC CE/UE、vmstat oom/pgmajfault、
+#       NUMA MemAvailable、磁盘水位、SEL 5min 窗口、BMC 通道）。
+# 测试钩子（生产不设即走 ipmitool）：MON_SDR_FILE=非空文件 → SDR 从该文件读，不调 ipmitool；
+#                                   MON_SELFTEST=1 → 一个完整采样周期后退出（周期末 break）。
+fetch_sdr() {   # 每周期单轮询（联锁段仍用同一 $SDR 取值）
+    if [ -n "${MON_SDR_FILE:-}" ] && [ -s "$MON_SDR_FILE" ]; then
+        cat "$MON_SDR_FILE"
+    else
+        timeout 20 ipmitool sdr list 2>/dev/null
+    fi
+}
+_edac_sum() {   # $1=ce_count|ue_count → EDAC 全 mc 求和；无 EDAC（无 mc*/）→ 空（缺失=空，不伪造 0）
+    local f v t=0 n=0
+    for f in /sys/devices/system/edac/mc/mc*/"$1"; do
+        [ -r "$f" ] || continue
+        v=$(cat "$f" 2>/dev/null)
+        case "$v" in ''|*[!0-9]*) continue ;; esac
+        t=$((t + v)); n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] && echo "$t"
+    return 0
+}
+SENSORS_JSON="$MON_DIR/sensors_v3.json"
+DISCRETE_MAP="$MON_DIR/discrete_state.map"
+DISCRETE_LOG="$MON_DIR/discrete_events.log"
+touch "$DISCRETE_LOG" 2>/dev/null    # Task 3 填充 diff 内容；本任务建文件空转
+V3_TAIL="mc_ce_total,mc_ue_total,oom_kill,pgmajfault,numa0_memavail_kb,numa1_memavail_kb,numa2_memavail_kb,numa3_memavail_kb,disk_pct,sel5m,bmc_ok"
+# 启动列集装配（v5 §6.4 discovery）：首次全量发现并持久化；重启重新发现与持久序比对——
+# 一致→沿用；漂移（固件升级/换板致 SDR 列集变化）→ 归档旧 CSV（_v3drift_）+ alert +
+# 以新列集开新文件；发现为空（BMC 暂不可达）→ 沿用持久序（空发现不构成漂移证据）。
+BOOT_SDR=$(fetch_sdr)
+NEW_COLS=$(sdr_analog_columns <<<"$BOOT_SDR" | awk -F'|' -v fixed="ts,$V3_TAIL" '
+    BEGIN { split(fixed, F, ","); for (i in F) skip[F[i]] = 1 }
+    !($1 in skip) { print $1 }' | paste -sd, -)   # 与 ts/尾列重名的发现列剔除（防表头列名冲突）
+OLD_COLS=""
+[ -f "$SENSORS_JSON" ] && OLD_COLS=$(python3 -c "import json,sys; print(','.join(json.load(open(sys.argv[1])).get('columns', [])))" "$SENSORS_JSON" 2>/dev/null)
+V3_COLS="$OLD_COLS"
+if [ -n "$NEW_COLS" ] && [ "$NEW_COLS" != "$OLD_COLS" ]; then
+    if [ -n "$OLD_COLS" ]; then
+        alert "monitor v3 列集漂移（SDR 模拟量列集变化——固件升级/换板？）: 旧[${OLD_COLS}] → 新[${NEW_COLS}]，旧 CSV 归档 _v3drift_"
+        [ -f "$CSV" ] && mv "$CSV" "$MON_DIR/monitor_v3drift_$(date +%Y%m%d_%H%M%S).csv"
+    fi
+    V3_COLS="$NEW_COLS"
+    python3 -c "import json,sys,time; json.dump({'columns': [c for c in sys.argv[1].split(',') if c], 'updated': time.strftime('%F %T')}, open(sys.argv[2], 'w'), indent=1)" "$V3_COLS" "$SENSORS_JSON"
+fi
+CSV_HDR="ts${V3_COLS:+,$V3_COLS},$V3_TAIL"
 if [ -f "$CSV" ] && [ "$(head -1 "$CSV")" != "$CSV_HDR" ]; then
-    mv "$CSV" "$MON_DIR/monitor_v1_$(date +%Y%m%d_%H%M%S).csv"   # 旧数据归档保留
+    mv "$CSV" "$MON_DIR/monitor_v1_$(date +%Y%m%d_%H%M%S).csv"   # 旧表头数据归档保留（v1/v2 → v3 升级）
     gzip -q "$MON_DIR"/monitor_v1_*.csv 2>/dev/null &
 fi
 [ -f "$CSV" ] || echo "$CSV_HDR" > "$CSV"
@@ -65,9 +111,24 @@ paused_for() { [ -f "$PAUSE_FLAG" ] && grep -q "$1" "$PAUSE_FLAG" 2>/dev/null; }
 set_pause() { echo "$1: $2 ($(date '+%F %T'))" > "$PAUSE_FLAG"; alert "PAUSE: $2"; }
 clr_pause_if() { if paused_for "$1"; then rm -f "$PAUSE_FLAG"; alert "RESUME: $1 已恢复"; fi; }
 
+# ---- monitor v3 周期状态（UE 告警去重 / collector 看门狗计数）----
+ue_alerted=0                        # UE>0 每周期至多一条告警；UE 清零后重置
+declare -A collector_fail=()
+declare -A collector_last_alert=()
+
+# ---- MON_SELFTEST 测试钩子（生产不设；联锁段 :184-293 逐字保留，跳过动作全部在本段完成）----
+# SEL 段在 sel_tick%5==1 的周期调真 ipmitool sel list——测试下置初值 -1 使唯一周期落在
+# %5==0，SEL 采集整体安全跳过（不打真 BMC）；cmd 代理段监听的 cmd/ 重定向到监控目录下
+# 空目录——governor/snapshot 代理自然空转（不写真 sysfs / ipmitool）。
+if [ "${MON_SELFTEST:-0}" = 1 ]; then
+    sel_tick=-1
+    CMD_DIR="$MON_DIR/cmd_selftest"
+    mkdir -p "$CMD_DIR"
+fi
+
 while :; do
     ts=$(date '+%F %T')
-    SDR=$(timeout 20 ipmitool sdr list 2>/dev/null)
+    SDR=$(fetch_sdr)     # 单轮询（MON_SDR_FILE 测试注入 / ipmitool；联锁段仍用同一 $SDR）
     bmc=1; [ -z "$SDR" ] && bmc=0
     if [ "$bmc" = 0 ]; then
         bmc_fail=$((bmc_fail+1))
@@ -112,7 +173,55 @@ while :; do
     sw=$(awk '/^SwapTotal/{t=$2}/^SwapFree/{f=$2}END{print t-f}' /proc/meminfo)
     l1=$(awk '{print $1}' /proc/loadavg)
     dp=$(df -P "$EXCITE_REPRODUCE_DIR" | awk 'NR==2{gsub(/%/,"");print $5}')
-    echo "$ts,${c1:-},${c2:-},${m1:-},${m2:-},${ot:-},${in_:-},${pw:-},${v1:-},${v2:-},${nv1:-},${nv2:-},${fx1:-},${fx2:-},${h1:-},${h2:-},${qa1:-},${qc1:-},${qa2:-},${qc2:-},${f2:-},${f3:-},${p1:-},${p2:-},${tz0:-},${tz1:-},${ua:-},${us0:-},${us1:-},${fmin:-},${favg:-},${fmax:-},${ma:-},${sw:-},${l1:-},${dp:-},${SEL5M_CARRY:-},$bmc" >> "$CSV"
+    # ---- v3 行装配：模拟量按 sensors_v3.json 持久列序取值（缺失列留空——"传感器在但无读数"）----
+    arow=$(sdr_analog_columns <<<"$SDR" | awk -F'|' -v cols="$V3_COLS" '
+        BEGIN { n = split(cols, C, ","); for (i = 1; i <= n; i++) idx[C[i]] = i }
+        ($1 in idx) { V[idx[$1]] = $2 }
+        END { s = ""; for (i = 1; i <= n; i++) s = s V[i] ","; printf "%s", s }')
+    # ---- v3 固定尾列：RAS（EDAC CE/UE）+ OS（vmstat oom_kill/pgmajfault）+ NUMA MemAvailable（缺失=空）----
+    mc_ce=$(_edac_sum ce_count); mc_ue=$(_edac_sum ue_count)
+    oomk=$(awk '/^oom_kill /{print $2}' /proc/vmstat 2>/dev/null)
+    pgmj=$(awk '/^pgmajfault /{print $2}' /proc/vmstat 2>/dev/null)
+    n0=$(awk '/MemAvailable:/{print $4}' /sys/devices/system/node/node0/meminfo 2>/dev/null)
+    n1=$(awk '/MemAvailable:/{print $4}' /sys/devices/system/node/node1/meminfo 2>/dev/null)
+    n2=$(awk '/MemAvailable:/{print $4}' /sys/devices/system/node/node2/meminfo 2>/dev/null)
+    n3=$(awk '/MemAvailable:/{print $4}' /sys/devices/system/node/node3/meminfo 2>/dev/null)
+    echo "$ts,${arow}${mc_ce:-},${mc_ue:-},${oomk:-},${pgmj:-},${n0:-},${n1:-},${n2:-},${n3:-},${dp:-},${SEL5M_CARRY:-},$bmc" >> "$CSV"
+
+    # ---- UE 即时告警（v5 §8.6：即时告警不自动 PAUSE——用户决策点；每周期至多一条，UE 清零后重置）----
+    if [ -n "$mc_ue" ] && [ "$mc_ue" -gt 0 ] 2>/dev/null; then
+        if [ "$ue_alerted" = 0 ]; then
+            alert "EDAC UE>0 total=${mc_ue}（v5 §8.6：即时告警不自动 PAUSE——用户决策点）"
+            ue_alerted=1
+        fi
+    else
+        ue_alerted=0
+    fi
+
+    # ---- collector 看门狗（v5 §16.4 采集断链可见化：连续 3 周期 fail → alert，30min 内不重复）----
+    for c in percore pmu ras; do
+        if systemctl is-active "sdc-collector@$c" >/dev/null 2>&1; then
+            collector_fail[$c]=0
+        else
+            collector_fail[$c]=$(( ${collector_fail[$c]:-0} + 1 ))
+            if [ "${collector_fail[$c]}" -ge 3 ]; then
+                _wd_now=$(date +%s)
+                if [ $(( _wd_now - ${collector_last_alert[$c]:-0} )) -ge 1800 ]; then
+                    collector_last_alert[$c]=$_wd_now
+                    alert "collector 看门狗：sdc-collector@$c 连续 ${collector_fail[$c]} 周期 inactive（采集断链，v5 §16.4）"
+                fi
+            fi
+        fi
+    done
+
+    # ---- 离散态全量（v5 §6.4；本任务建状态文件空转，Task 3 在调用位填 diff→events/告警/白名单）----
+    if [ -n "$SDR" ]; then
+        sdr_discrete_map <<<"$SDR" > "$DISCRETE_MAP.new"
+        # [Task 3 调用位] out=$(discrete_diff "$DISCRETE_MAP" "$DISCRETE_MAP.new") || drc=$?
+        #   （discrete_diff 退出码=变化数，调用处必须守卫）→ 非空输出逐行追加
+        #   "[ts] TRANSITION ..." 至 $DISCRETE_LOG；断言（新值非 0x00/ok）告警；known_faults 白名单
+        mv -f "$DISCRETE_MAP.new" "$DISCRETE_MAP"
+    fi
 
     # ---- 10 分钟工况快照 + 偏移标记（用户指令 2026-09-24）----
     # 全量工况人读快照入 condition_10m.log；与上次快照比较，电压/频率/温度/SEL 等
@@ -289,5 +398,7 @@ PYEOF
         mv "$CMD_DIR/snapshot.request" "$CMD_DIR/snapshot.done.$(date +%s)"
     fi
 
+    # MON_SELFTEST 测试钩子：周期末退出——保证一个完整采样周期落盘（生产不设 → 永续循环）
+    [ "${MON_SELFTEST:-0}" = 1 ] && break
     sleep "$SLEEP_NEXT"
 done

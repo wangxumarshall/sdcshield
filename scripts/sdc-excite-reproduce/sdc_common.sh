@@ -96,6 +96,7 @@ discrete_diff() {
     [ -f "$old" ] || touch "$old"
     while IFS='|' read -r name val; do
         [ -z "$name" ] && continue
+        [ -z "$val" ] && continue   # 空读数传感器不参与 diff（防"每周期 INIT"误报，T1 评审 2b）
         prev=$(grep -m1 "^${name}|" "$old" | cut -d'|' -f2-)
         if [ -z "$prev" ]; then echo "${name}: INIT → ${val}"; rc=$((rc+1))
         elif [ "$prev" != "$val" ]; then echo "${name}: ${prev} → ${val}"; rc=$((rc+1)); fi

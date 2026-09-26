@@ -49,3 +49,15 @@ def test_discrete_diff_init(tmp_path):
     new.write_text("cpu1_prochot|0x00\n")
     p = _bash(f"discrete_diff {tmp_path / 'absent.map'} {new}")
     assert p.returncode == 1 and "cpu1_prochot: INIT → 0x00" in p.stdout
+
+def test_discrete_diff_empty_reading_no_false_init(tmp_path):
+    # 空读数传感器（'CPU1 Absent |  | ok' → map 行 'cpu1_absent|'）不参与 diff——
+    # 防"每周期 INIT"误报（T1 评审传入项 2b，随 monitor v3 Task 2 修）
+    sdr = "CPU1 Absent        |  | ok\nCPU1 Prochot        | 0x01    | ok\n"
+    new = tmp_path / "new.map"
+    p = _bash(f"sdr_discrete_map > {new}", sdr)
+    assert p.returncode == 0
+    p = _bash(f"discrete_diff {tmp_path / 'old_absent.map'} {new}")
+    assert "cpu1_absent" not in p.stdout                    # 空读数：不产出 INIT 行
+    assert "cpu1_prochot: INIT → 0x01" in p.stdout          # 有读数的照常 INIT
+    assert p.returncode == 1

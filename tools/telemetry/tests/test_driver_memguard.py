@@ -1,4 +1,4 @@
-import os, shlex, subprocess
+import os, shlex, shutil, subprocess, time
 
 COMMON = os.path.join(os.path.dirname(__file__), "..", "..", "..",
                       "scripts", "sdc-excite-reproduce", "sdc_common.sh")
@@ -111,24 +111,59 @@ def test_retest_guarded_waits_and_recovers(tmp_path):
 
 
 def test_retest_guarded_watchdog_kills_whole_tree(tmp_path):
-    # 看门狗：运行期跌破 2.5GB → KILL 复测进程组（含 timeout 的子树，不留 control 孤儿）
-    # 2026-09-26 实证：本机 coreutils timeout 自成 pgid（整树 pgid=timeout pid），
-    # kill -KILL $rpid + kill -KILL -- -$rpid 一击整树；只杀 timeout 会孤儿化命令树。
+    # 看门狗：运行期跌破 2.5GB → KILL 复测进程组 + cleanup_orphans 收 setsid 切片。
+    # 真实形态（2026-09-26 真机实测 pid/pgid 链）：timeout(pgid=自pid) → sdcshield
+    # main(pgid=timeout pid，组杀可及) → control 切片(pgid=sess=自pid——
+    # framework/sysdeps/unix/signals.cpp:63 signals_init_child setsid 自成会话，
+    # 组杀够不着)。故击杀序列后必须 cleanup_orphans（pkill -x control）收切片，
+    # 否则切片幸存重挂 init 继续烧内存（wholecmd 重放 -t 可达小时级且无人兜底）。
     rtxt = tmp_path / "retests.txt"; rtxt.write_text("")
     sleeper = tmp_path / "sleeper.pid"
-    binp = _fake_bin(tmp_path, f"sleep 30 &\necho $! > {sleeper}\nwait")
+    gc = tmp_path / "gc.pid"
+    ctrl = tmp_path / "control"      # comm=control：模拟框架切片的 prctl 改名
+    shutil.copy("/bin/sleep", ctrl); ctrl.chmod(0o755)
+    binp = _fake_bin(tmp_path, f"sleep 30 &\necho $! > {sleeper}\n"
+                               f"setsid bash -c 'echo $$ > {gc}; exec {ctrl} 300' &\nwait")
     p = bash(_seq_memavail_mock(tmp_path, [HEALTHY, LOW_WATCH]) + "\n"
              f'MEMGUARD_WAIT_S=0.2 MEMWATCH_POLL_S=0.3 '
              f'retest_guarded retest1 "{rtxt}" 60s "{binp}"; echo rc=$?',
              timeout=30)
     assert "rc=137" in p.stdout, p.stdout + p.stderr
     assert f"retest1 killed(memwatch ma={LOW_WATCH}kB)" in rtxt.read_text()
+    time.sleep(0.3)   # KILL 投递到生效的微小时滞
     spid = int(sleeper.read_text().strip())
+    gpid = int(gc.read_text().strip())
     try:
         r = subprocess.run(["kill", "-0", str(spid)], capture_output=True)
         assert r.returncode != 0, f"看门狗后 sleeper(pid={spid}) 仍存活——孤儿未清"
+        # setsid 孙进程（切片形态）：组杀够不着，必须被 cleanup_orphans 收掉
+        r = subprocess.run(["kill", "-0", str(gpid)], capture_output=True)
+        assert r.returncode != 0, f"setsid 切片(pid={gpid}) 幸存——cleanup_orphans 未生效"
     finally:
-        subprocess.run(["kill", "-KILL", str(spid)], capture_output=True)  # 测试自清
+        subprocess.run(["kill", "-KILL", str(spid), str(gpid)], capture_output=True)  # 测试自清
+
+
+def test_retest_guarded_no_false_positive_when_exits_during_judge(tmp_path):
+    # 竞态消除（评审 Minor 1）：ma 读取期间复测进程自然退出 → 击杀扑空，
+    # 不得记 killed(memwatch)（假阳性——它并非死于看门狗）。
+    # 构造：mock 第 2 次调用（看门狗判定取数时）先 KILL fakebin、留 0.6s 让
+    # timeout 退出并被 bash 收尸（实证：前台命令等待期间 bash 收尸后台作业），
+    # 再返回低内存值——此时击杀扑空（pid 已收尸），修复前会误记 killed。
+    rtxt = tmp_path / "retests.txt"; rtxt.write_text("")
+    fbp = tmp_path / "fb.pid"
+    binp = _fake_bin(tmp_path, f"echo $$ > {fbp}\nsleep 60")
+    cnt = tmp_path / "calls"
+    mock = ('_cur_memavail_kb() { n=$(cat "' + str(cnt) + '" 2>/dev/null || echo 0); '
+            'n=$((n+1)); echo "$n" > "' + str(cnt) + '"; '
+            'if [ "$n" -ge 2 ]; then kill -KILL "$(cat ' + str(fbp) + ')" 2>/dev/null; '
+            'sleep 0.6; echo ' + str(LOW_WATCH) + '; '
+            'else echo ' + str(HEALTHY) + '; fi; }')
+    p = bash(mock + "\n"
+             f'MEMGUARD_WAIT_S=0.2 MEMWATCH_POLL_S=0.3 '
+             f'retest_guarded retest1 "{rtxt}" 60s "{binp}"; echo rc=$?',
+             timeout=30)
+    assert "rc=137" in p.stdout, p.stdout + p.stderr   # fakebin 被测试所杀 → timeout 汇报 137
+    assert "killed" not in rtxt.read_text(), "自然退出被误记 killed(memwatch)——假阳性"
 
 
 # ---------------- 驱动接线与边界守护 ----------------

@@ -124,6 +124,7 @@ run_sdc() { # run_sdc <label> <phase_timeout_s|0> <sdcshield args...>（自动�
         handle_failure "$label" "$yaml" "$rc" "$*"       # 进程级失败（无 YAML 失败行，如 init 崩溃）
     elif [ $killed -eq 1 ]; then
         log "$label 被阶段边界终止（rc=$rc，无 fail/crash 行）——非事件"
+        cleanup_orphans   # 阶段兜底 kill 后收残：comm=control 的切片可能漏网（RCA 附3）
     fi
     return 0
 }
@@ -136,12 +137,14 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     # ---- 失败测试与失败种子：优先从 .out 头部摘要提取（事件 #1 实测：框架退出时
     #      打印精简失败报告，含 cpu-mask/ttf/失败迭代种子；YAML 全文 grep 取首 state
     #      seed 会错位到轮转第一个用例）----
+    #      提取函数见 sdc_common.sh（fail|crash 通吃；RCA 附3：旧内联正则只认 fail，
+    #      cold_c4 的 crash 事件因此提取为空 → 落入 wholecmd 重放而非定向复测）----
     local outsum="${yaml%.yaml}.out" failed_test="" fail_seed=""
     if [ -f "$outsum" ]; then
-        failed_test=$(awk '/^- test:/{t=$3} /^  result: *fail/{print t; exit}' "$outsum")
-        fail_seed=$(grep -m1 '^  fail: {' "$outsum" | grep -oE "AES:[0-9a-f]+")
+        failed_test=$(extract_failed_test "$outsum")
+        fail_seed=$(extract_fail_seed "$outsum")
     fi
-    [ -z "$failed_test" ] && failed_test=$(LC_ALL=C grep -m1 -B3 'result: *fail' "$yaml" 2>/dev/null | grep '^- test:' | awk '{print $3}')
+    [ -z "$failed_test" ] && failed_test=$(LC_ALL=C grep -m1 -B3 -E 'result: *(fail|crash)' "$yaml" 2>/dev/null | grep '^- test:' | awk '{print $3}')
     [ -z "$fail_seed" ]   && fail_seed=$(LC_ALL=C grep -m1 "seed: 'AES:" "$yaml" 2>/dev/null | grep -oE "AES:[0-9a-f]+")
     local seed_ok=""
     if [ -n "$fail_seed" ]; then
@@ -151,6 +154,7 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     # ---- 提取式取证（事件 #1 实测：L3 单 YAML 2.76GB——不整文件复制）----
     {
         echo "# 提取自 $(basename "$yaml")（原件 $(du -h "$yaml" 2>/dev/null | cut -f1) 保留于 logs/，每日 gzip 归档）"
+        echo "# 注：threads[].runtime 字段单位为毫秒（RCA 2026-09-25 实验证实），分析勿按秒读"
         head -60 "$yaml" 2>/dev/null
         echo "# ---- 失败相关切片（含前后上下文，最多 50 处）----"
         LC_ALL=C grep -m 50 -B14 -A6 -E 'result: *(fail|crash)' "$yaml" 2>/dev/null
@@ -168,21 +172,29 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     } > "$evdir/context.txt"
     touch "$CMD_DIR/snapshot.request"   # root 监控 60s 内补 dmesg/SEL/SDR 快照
     # ---- 复测：定向（失败测试+失败种子，120s×3）；提取失败则回退整命令（900s 封顶）----
+    # 复测前清 control 孤儿切片（RCA 附3 建议 2：孤儿抢内存/抢核正是复测拖垮机器的主因）；
+    # 复测全程带内存护栏（retest_guarded：前置门 6GB + 看门狗 2.5GB）——护栏只覆盖复测，
+    # 主负载的内存防线是 monitor 联锁（v5 §8.6 分工），主阶段路径零内存检查
+    cleanup_orphans
     local i rcf
     : > "$evdir/retests.txt"
     if [ -n "$failed_test" ] && [ -n "$seed_ok" ]; then
         for i in 1 2 3; do
             sleep 5; check_pause
-            timeout --signal=TERM --kill-after=60s 150s \
+            retest_guarded "retest$i" "$evdir/retests.txt" 150s \
                 "$BIN" -e "$failed_test" -s "$fail_seed" -n 0 -t 120s --max-test-loop-count=0 \
-                "${FLAGS[@]}" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
+                "${FLAGS[@]}" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
+            rcf=$?
+            [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记
             echo "retest$i(targeted) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
         done
     else
         for i in 1 2 3; do
             sleep 5; check_pause
-            timeout --signal=TERM --kill-after=60s 900s \
-                "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1; rcf=$?
+            retest_guarded "retest$i" "$evdir/retests.txt" 900s \
+                "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
+            rcf=$?
+            [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记
             echo "retest$i(wholecmd) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
         done
     fi
@@ -248,7 +260,7 @@ phase_l2() {
     local f
     for f in "$LOG_ROOT/spectrum_c${CYCLE}_files"/*.yaml; do
         [ -f "$f" ] || continue
-        if grep -q 'result: *fail' "$f" 2>/dev/null; then
+        if grep -Eq 'result: *(fail|crash)' "$f" 2>/dev/null; then
             handle_failure "l2_$(basename "$f" .yaml)" "$f" 0 "spectrum sweep"
         fi
     done
@@ -412,6 +424,7 @@ daily_summary() {
 cleanup() {
     [ -n "${STRESS_PID:-}" ] && kill "$STRESS_PID" 2>/dev/null
     [ -d /sys/devices/system/cpu/cpu0/cpufreq ] && echo performance > "$CMD_DIR/governor.request" 2>/dev/null
+    cleanup_orphans   # 退出兜底：清可能残留的 control 孤儿切片（RCA 附3 建议 3）
 }
 trap cleanup EXIT INT TERM
 

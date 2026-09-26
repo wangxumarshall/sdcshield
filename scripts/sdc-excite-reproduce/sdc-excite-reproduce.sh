@@ -136,12 +136,14 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     # ---- 失败测试与失败种子：优先从 .out 头部摘要提取（事件 #1 实测：框架退出时
     #      打印精简失败报告，含 cpu-mask/ttf/失败迭代种子；YAML 全文 grep 取首 state
     #      seed 会错位到轮转第一个用例）----
+    #      提取函数见 sdc_common.sh（fail|crash 通吃；RCA 附3：旧内联正则只认 fail，
+    #      cold_c4 的 crash 事件因此提取为空 → 落入 wholecmd 重放而非定向复测）----
     local outsum="${yaml%.yaml}.out" failed_test="" fail_seed=""
     if [ -f "$outsum" ]; then
-        failed_test=$(awk '/^- test:/{t=$3} /^  result: *fail/{print t; exit}' "$outsum")
-        fail_seed=$(grep -m1 '^  fail: {' "$outsum" | grep -oE "AES:[0-9a-f]+")
+        failed_test=$(extract_failed_test "$outsum")
+        fail_seed=$(extract_fail_seed "$outsum")
     fi
-    [ -z "$failed_test" ] && failed_test=$(LC_ALL=C grep -m1 -B3 'result: *fail' "$yaml" 2>/dev/null | grep '^- test:' | awk '{print $3}')
+    [ -z "$failed_test" ] && failed_test=$(LC_ALL=C grep -m1 -B3 'result: *(fail|crash)' "$yaml" 2>/dev/null | grep '^- test:' | awk '{print $3}')
     [ -z "$fail_seed" ]   && fail_seed=$(LC_ALL=C grep -m1 "seed: 'AES:" "$yaml" 2>/dev/null | grep -oE "AES:[0-9a-f]+")
     local seed_ok=""
     if [ -n "$fail_seed" ]; then
@@ -151,6 +153,7 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     # ---- 提取式取证（事件 #1 实测：L3 单 YAML 2.76GB——不整文件复制）----
     {
         echo "# 提取自 $(basename "$yaml")（原件 $(du -h "$yaml" 2>/dev/null | cut -f1) 保留于 logs/，每日 gzip 归档）"
+        echo "# 注：threads[].runtime 字段单位为毫秒（RCA 2026-09-25 实验证实），分析勿按秒读"
         head -60 "$yaml" 2>/dev/null
         echo "# ---- 失败相关切片（含前后上下文，最多 50 处）----"
         LC_ALL=C grep -m 50 -B14 -A6 -E 'result: *(fail|crash)' "$yaml" 2>/dev/null

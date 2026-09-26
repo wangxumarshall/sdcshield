@@ -68,6 +68,18 @@ while p * 2 <= n: p *= 2
 print(min(p, 4096))" "$1"
 }
 
+# ---------------- 事件提取（handle_failure 定向复测依据）----------------
+# 输入: sdcshield stdout_summary（框架退出时打印的精简失败报告，含 - test: / result: / fail: 块）
+# 注意 result 必须同时认 fail 与 crash——RCA 附3 根因：旧实现只匹配 'result: *fail'，
+# 2026-09-25 cold_c4 事件（result: crash）提取为空 → 落入 wholecmd 重放（900s×3 重放泄漏命令）
+# 而非 120s 定向复测；crash 事件的 fail: 块同样带 AES 种子，故两函数口径一致。
+extract_failed_test() {  # $1=stdout_summary 路径 → 首个 fail/crash 事件的测试名（无则空）
+    awk '/^- test:/{t=$3} /^  result: *(fail|crash)/{print t; exit}' "$1" 2>/dev/null
+}
+extract_fail_seed() {    # $1=stdout_summary 路径 → 首个 fail 块内的 AES 种子（无则空）
+    grep -m1 '^  fail: {' "$1" 2>/dev/null | grep -oE "AES:[0-9a-f]+"
+}
+
 # ---------------- monitor v3: SDR 发现式解析（v5 §6.4 归一化 + 单元 4）----------------
 # 输入: stdin = 一次 ipmitool sdr list 全量输出（两种实测格式通吃: 3 字段 name|reading|status
 #       / 5 字段 name|id|status|x|reading——取 $5 空则退 $2，与 sdc_monitor.sh 既有 sdr_raw 同口径）

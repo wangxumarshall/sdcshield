@@ -56,7 +56,8 @@ template <typename SVD, int Dim> struct EigenSVDTest
     template <typename FP> static inline std::enable_if_t<!boost::is_complex<FP>::value>
     compare_or_fail(const FP *actual, const FP *expected, int dim, const char *name)
     {
-        memcmp_or_fail(actual, expected, dim * dim, name);
+        memcmp_or_fail(actual, expected,
+                       static_cast<size_t>(dim) * static_cast<size_t>(dim), name);
     }
 
     static int init(struct test *test)

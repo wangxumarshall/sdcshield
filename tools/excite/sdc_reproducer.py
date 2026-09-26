@@ -800,6 +800,23 @@ def build_capsule(event_dir, resolved_profile, out_dir, gate_results=None):
         {"note": "authenticity_gate 由调用方（T5 队列消费）在打包前执行并注入"},
     }
 
+    # original/：原始证据三件套复制——**先于 manifest 落盘**（M3 移交一行修：
+    # original_evidence 键须在 _w(manifest.json) 前赋值，否则盘上 manifest
+    # 缺该键——返回值有而文件无=证据链断言对不上）
+    copied = []
+    if _cp("stdout_summary.out", "original/stdout.log"):
+        copied.append("original/stdout.log")
+    if _cp("yaml_extract.txt", "original/result.yaml"):
+        copied.append("original/result.yaml")
+    if _cp("context.txt", "original/context.txt"):
+        copied.append("original/context.txt")
+    if _cp("retests.txt", "original/retests.txt"):
+        copied.append("original/retests.txt")
+    _w("original/stderr.log",
+       "# 驱动以 2>&1 合并采集——stderr 无独立原件，全量见 stdout.log"
+       "（as-built 口径，scripts/sdc-excite-reproduce/sdc-excite-reproduce.sh）\n")
+    manifest["original_evidence"] = copied
+
     # ---- 逐项落盘（v5 §10.2 目录结构） ----
     _w("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
     _w("resolved-profile.json",
@@ -821,20 +838,6 @@ def build_capsule(event_dir, resolved_profile, out_dir, gate_results=None):
        "golden 文件。本目录为 v5 §10.2 结构占位；§10.5 最小检测用例（毒药数据"
        "组合锁定）产出后落位于此。\n")
     _w("event.json", json.dumps(ev, ensure_ascii=False, indent=1))
-
-    copied = []
-    if _cp("stdout_summary.out", "original/stdout.log"):
-        copied.append("original/stdout.log")
-    if _cp("yaml_extract.txt", "original/result.yaml"):
-        copied.append("original/result.yaml")
-    if _cp("context.txt", "original/context.txt"):
-        copied.append("original/context.txt")
-    if _cp("retests.txt", "original/retests.txt"):
-        copied.append("original/retests.txt")
-    _w("original/stderr.log",
-       "# 驱动以 2>&1 合并采集——stderr 无独立原件，全量见 stdout.log"
-       "（as-built 口径，scripts/sdc-excite-reproduce/sdc-excite-reproduce.sh）\n")
-    manifest["original_evidence"] = copied
 
     # windows/：context.txt 内嵌 monitor 尾样提取 + 不可得项如实注记
     mon_lines, in_mon = [], False

@@ -336,6 +336,12 @@ def test_build_capsule_structure(tmp_path, fake_bin):
     assert "引用不复制" in manifest["binary"]["note"]
     assert manifest["topology_hash"] == sr.topology_fingerprint(TOPO)
     assert manifest["platform"]["thermal_band"] == ["ambient", "+10C"]
+    # M3 移交一行修守卫：original_evidence 必须在**落盘的** manifest.json 内
+    # （原实现赋值在 _w(manifest.json) 之后——返回值有键而盘上缺键）
+    disk_manifest = json.loads((out / "manifest.json").read_text())
+    assert disk_manifest["original_evidence"] == [
+        "original/stdout.log", "original/result.yaml",
+        "original/context.txt", "original/retests.txt"]
     # binaries/ 只放引用——绝不复制二进制本体
     assert not (out / "binaries" / "sdcshield").exists()
     ref = (out / "binaries" / "sdcshield.sha256").read_text()

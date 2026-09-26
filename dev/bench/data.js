@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790398789949,
+  "lastUpdate": 1790413500953,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -307,6 +307,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 9.275,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "c9086128bea43567393ef4cd668a5eedc8d8aa8b",
+          "message": "Merge pull request #188 from wangxumarshall/feat/sdc-excite-reproduce-m1b\n\nfix: M1b 收尾（看门狗 setsid 修复 + 测试沙盒 + 污染标注 + 部署文档）",
+          "timestamp": "2026-09-26T06:30:04Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/c9086128bea43567393ef4cd668a5eedc8d8aa8b"
+        },
+        "date": 1790413499866,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 8.049,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 5.359,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 6.371,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 38.049,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.632,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.034,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.045,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.725,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 12.632,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.617,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 7.625,
             "unit": "s"
           }
         ]

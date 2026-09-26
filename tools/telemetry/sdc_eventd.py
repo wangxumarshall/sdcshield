@@ -53,6 +53,13 @@ def tail_file(path, offset_store):
 
     offset 持久化于调用方（EventdLoop 落 spool/tail_offsets.json）；
     文件缺失 → 无新行；截断/轮转（offset > size）→ 从 0 重读。
+
+    offset 单位=字节（二进制读 + 显式 decode）：文本模式 seek 把 offset 当
+    字节位置解释而 rfind 得字符索引，混用让 offset 每轮缩水新数据的多字节
+    开销——中文密集源一轮缩水数百字节，下轮重读整行（重复消费+断行合并，
+    T6 部署前实测：controller 对同一 interlock 事件二次决策 green→black 假
+    转换）。offset 恒落在 '\n' 后（ASCII 单字节，decode 起点对齐安全）；
+    sdc_ring._warmup_tail 的字节暖窗种子与本函数同一单位。
     """
     key = str(path)
     store = dict(offset_store)
@@ -63,14 +70,15 @@ def tail_file(path, offset_store):
     off = store.get(key, 0)
     if off > size:                                # 截断/轮转 → 重置
         off = 0
-    with open(path, "r", errors="replace") as f:
+    with open(path, "rb") as f:
         f.seek(off)
-        data = f.read()
-    last_nl = data.rfind("\n")
+        raw = f.read()
+    last_nl = raw.rfind(b"\n")
     if last_nl == -1:
         return [], store                          # 无新的完整行（尾部残行留待下轮）
-    store[key] = off + last_nl + 1
-    return [l for l in data[:last_nl].split("\n") if l], store
+    store[key] = off + last_nl + 1                # 字节 rfind——offset 单位精确一致
+    data = raw[:last_nl].decode("utf-8", errors="replace")
+    return [l for l in data.split("\n") if l], store
 
 # ---------------------------------------------------------------------------
 # 行级转换（源 → canonical event）

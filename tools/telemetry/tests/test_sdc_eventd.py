@@ -18,6 +18,28 @@ def test_tail_file_incremental_and_rotation(tmp_path):
     lines, off = sdc_eventd.tail_file(str(f), off)
     assert lines == ["x"]
 
+def test_tail_file_multibyte_offset_roundtrip(tmp_path):
+    """多字节源 offset 往返（T6 部署前实测发现的 T1 缺陷）：文本模式 seek 把
+    offset 当字节位置解释，而 rfind 算的是字符索引——混用让 offset 每轮缩水
+    （缩水量=新数据多字节开销），下一轮重读已消费行（重复消费 + 断行合并）。
+    真实数据中文密集（ledger 【定性】注记/热升级告警），一轮可缩水数百字节，
+    重读整行 → controller 对同一 interlock 事件二次决策（green→black 假转换）。
+    修复口径：全程字节 offset（二进制读 + decode），offset 恒落在 '\n' 后
+    （ASCII 单字节，decode 对齐安全）。"""
+    f = tmp_path / "alerts.log"
+    l1 = "[2026-09-26 10:00:00] ALERT PAUSE: CPU 105C >= 95C（热升级联锁，演练合成行）"
+    l2 = "[2026-09-26 10:01:00] ALERT RESUME: thermal 已恢复"
+    l3 = "[2026-09-26 10:02:00] ALERT 磁盘水位 88%（告警线 85%）"
+    f.write_text(l1 + "\n", encoding="utf-8")
+    off = {}
+    lines, off = sdc_eventd.tail_file(str(f), off)
+    assert lines == [l1]
+    assert off[str(f)] == len((l1 + "\n").encode("utf-8"))   # 字节 offset，非字符数
+    with open(f, "a", encoding="utf-8") as fh:
+        fh.write(l2 + "\n" + l3 + "\n")
+    lines, off = sdc_eventd.tail_file(str(f), off)
+    assert lines == [l2, l3], lines          # 修复前：重读 l1 残尾/整行 + 断行合并
+
 def test_ledger_line_to_event():
     ev = sdc_eventd.ledger_line_to_event(
         "2026-09-26 10:00:00,cold_c5,rc=137,test=memcpy_rewr,seed=AES:ab,retests...", "s0")

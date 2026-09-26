@@ -144,7 +144,7 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
         failed_test=$(extract_failed_test "$outsum")
         fail_seed=$(extract_fail_seed "$outsum")
     fi
-    [ -z "$failed_test" ] && failed_test=$(LC_ALL=C grep -m1 -B3 'result: *(fail|crash)' "$yaml" 2>/dev/null | grep '^- test:' | awk '{print $3}')
+    [ -z "$failed_test" ] && failed_test=$(LC_ALL=C grep -m1 -B3 -E 'result: *(fail|crash)' "$yaml" 2>/dev/null | grep '^- test:' | awk '{print $3}')
     [ -z "$fail_seed" ]   && fail_seed=$(LC_ALL=C grep -m1 "seed: 'AES:" "$yaml" 2>/dev/null | grep -oE "AES:[0-9a-f]+")
     local seed_ok=""
     if [ -n "$fail_seed" ]; then
@@ -260,7 +260,7 @@ phase_l2() {
     local f
     for f in "$LOG_ROOT/spectrum_c${CYCLE}_files"/*.yaml; do
         [ -f "$f" ] || continue
-        if grep -q 'result: *fail' "$f" 2>/dev/null; then
+        if grep -Eq 'result: *(fail|crash)' "$f" 2>/dev/null; then
             handle_failure "l2_$(basename "$f" .yaml)" "$f" 0 "spectrum sweep"
         fi
     done

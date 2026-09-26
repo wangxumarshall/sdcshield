@@ -1,4 +1,4 @@
-import os, subprocess
+import os, shlex, subprocess
 
 COMMON = os.path.join(os.path.dirname(__file__), "..", "..", "..",
                       "scripts", "sdc-excite-reproduce", "sdc_common.sh")
@@ -66,3 +66,38 @@ def test_crash_test_extracted(tmp_path):
     assert 'extract_fail_seed "$outsum"' in src
     assert "/^  result: *fail/{print t; exit}" not in src          # 旧内联 awk 提取器已删
     assert "grep -m1 -B3 'result: *fail'" not in src               # 旧 grep 回退已删
+
+
+def _run_src_cmd(cmd, fixture, var):
+    # 从驱动源码逐字提取的命令/管道对 fixture 实跑——防"正则改了但漏 -E"这类
+    # 源码级失效（BRE 下 '(fail|crash)' 是字面量，fail/crash 全匹配不到）
+    r = subprocess.run(["bash", "-c", f"{var}={shlex.quote(str(fixture))}; {cmd} && echo HIT"],
+                       capture_output=True, text=True, timeout=15)
+    return r.stdout
+
+
+def test_spectrum_sweep_detection_accepts_crash(tmp_path):
+    # :254 同类修复（Task 4 同模式）：phase_l2 谱系扫档的失败检测只认 fail →
+    # spectrum 产物的 crash 事件漏进取证流水线
+    src = open(DRIVER).read()
+    line = next(l.strip() for l in src.splitlines()
+                if "grep" in l and "result:" in l and '"$f"' in l)
+    cmd = line[len("if "):line.index("; then")]
+    crash = tmp_path / "spec_crash.yaml"; crash.write_text("tests:\n- test: x\n  result: crash\n")
+    ok = tmp_path / "spec_ok.yaml"; ok.write_text("tests:\n- test: x\n  result: pass\n")
+    assert "HIT" in _run_src_cmd(cmd, crash, "f"), f"crash 行未触发谱系检测: {line}"
+    assert "HIT" not in _run_src_cmd(cmd, ok, "f")
+
+
+def test_yaml_fallback_extraction_accepts_crash(tmp_path):
+    # :146 修复（Task 4 遗留，2026-09-26 实证发现）：回退提取的正则加了 (fail|crash)
+    # 却漏 -E——BRE 下为字面量，fail/crash 都提取不到（.out 摘要缺失时回退路径静默失效）
+    src = open(DRIVER).read()
+    line = next(l.strip() for l in src.splitlines() if "grep -m1 -B3" in l)
+    pipe = line[line.index("LC_ALL=C grep"):line.rindex(")")]
+    y = tmp_path / "ev.yaml"
+    y.write_text("- test: memcpy_rewr\n  result: crash\n  result-details: {code: 9}\n")
+    r = subprocess.run(["bash", "-c",
+                        f'yaml={shlex.quote(str(y))}; out=$({pipe}); echo "[$out]"'],
+                       capture_output=True, text=True, timeout=15)
+    assert "[memcpy_rewr]" in r.stdout, f"crash 事件回退提取失败: {line}"

@@ -35,7 +35,10 @@
         "sel_event",
         "interlock_action",
         "phase_boundary",
-        "note"
+        "note",
+        "discrete_transition",
+        "ras_keyword",
+        "collector_degraded"
       ]
     },
     "severity": {

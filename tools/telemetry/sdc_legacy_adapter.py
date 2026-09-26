@@ -20,23 +20,29 @@ def _kv(field):  # "rc=137" / "test=mesh..." / "seed=AES:.."
     m = re.match(r"^(rc|test|seed)=(.*)$", field.strip())
     return (m.group(1), m.group(2)) if m else (None, field.strip())
 
-def parse_ledger(path):
+def parse_ledger_lines(lines):
+    """行级解析（csv.reader 接受任意行迭代器，含单行列表）——sdc_eventd 逐行尾随
+    复用本实现（M2 计划：勿重写）。注意：ledger 行内无引号包裹的嵌入换行（as-built
+    驱动 echo 单行追加），逐行喂入安全。"""
     rows = []
-    with open(path, newline="") as f:
-        for raw in csv.reader(f):
-            if not raw or not raw[0].strip(): continue
-            row = {"ts": raw[0].strip(), "label": raw[1].strip() if len(raw) > 1 else "",
-                   "retests": "", "dir": "", "note": ""}
-            kv, free = {}, []
-            for i, cell in enumerate(raw[2:], start=2):
-                k, v = _kv(cell)
-                if k: kv[k] = v
-                elif re.match(r"^retest\d", cell.strip()): row["retests"] = cell.strip()
-                elif cell.startswith("/"): row["dir"] = cell.strip()
-                else: free.append(cell.strip())
-            row.update(kv); row["note"] = "；".join(x for x in free if x)
-            rows.append(row)
+    for raw in csv.reader(lines):
+        if not raw or not raw[0].strip(): continue
+        row = {"ts": raw[0].strip(), "label": raw[1].strip() if len(raw) > 1 else "",
+               "retests": "", "dir": "", "note": ""}
+        kv, free = {}, []
+        for i, cell in enumerate(raw[2:], start=2):
+            k, v = _kv(cell)
+            if k: kv[k] = v
+            elif re.match(r"^retest\d", cell.strip()): row["retests"] = cell.strip()
+            elif cell.startswith("/"): row["dir"] = cell.strip()
+            else: free.append(cell.strip())
+        row.update(kv); row["note"] = "；".join(x for x in free if x)
+        rows.append(row)
     return rows
+
+def parse_ledger(path):
+    with open(path, newline="") as f:
+        return parse_ledger_lines(f)
 
 def parse_yaml_fail_blocks(text):
     """提取 '- test: <id>' … 'result: fail|crash' 块的关键字段（含连字符键 cpu-mask/time-to-fail）。"""

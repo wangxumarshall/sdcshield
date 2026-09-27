@@ -1,0 +1,48 @@
+{
+  "case": "CORE179 脱敏回归画像（真实案例锚定）",
+  "purpose": "M4 Task 6 回归样本：十域假设矩阵对该画像的排序稳定性守卫——top 域须稳定落于 LSU-L1D / L2-LLC-一致性 / 寄存器-旁路 三域（真实案例两条竞争根因谱系 + 一致性域），矩阵/权重/规则漂移导致翻转即测试失败。消费方：tools/analysis/tests/test_sdc_hypothesis.py（fixtures 段）与 sdc_hypothesis.py CLI（本文件即其 evidence/actions_taken 输入形状，可直接喂入）。",
+  "desensitization": "只取 docs/cases 已公开的形态学特征与计数；不含原始 seed、寄存器/内存原始十六进制值、vmcore 主机 IP、机器序列号、确切崩溃时间戳。计数（12 开机/135 WARNING/191 对照核等）与子族形态均出自仓库内公开文档。",
+  "source": [
+    "docs/cases/sdc1-01-02-core179/CPU179_TWELVE_BOOT_CENSUS.md（十二开机全谱综合）",
+    "docs/cases/sdc1-01-02-core179/SYNTHESIS-12case-cross-analysis.md（十二案交叉综合）"
+  ],
+  "machine_class": "Kunpeng-920（TaiShan-v110 级）192 核 aarch64，8 NUMA 节点",
+  "observation_window": {
+    "boots": 12,
+    "span_days": 22,
+    "panics": 12,
+    "spurious_warnings": 135,
+    "attributable_events": 147,
+    "crash_path_morphology": "11/12 同调度器负载均衡热路径的索引型装载指令、1/12 块层回写同型索引装载（同病不同路径）；崩溃进程多为受害核上的单线程内核上下文（idle 均衡/kworker）"
+  },
+  "evidence": {
+    "cpu_clustering": true,
+    "n1_immune": false,
+    "multicore_only": true,
+    "bit_hints": "load_path",
+    "healthy_core_clean": true
+  },
+  "evidence_basis": {
+    "cpu_clustering": "12/12 panic 与 135 次 WARNING（spurious translation fault）100% 落单一逻辑核（十二开机全谱单核收敛）；同窗 191 个对照核零事件",
+    "n1_immune": "腐化交付发生在受害核的单股执行上下文（idle 均衡 per-CPU 遍历/kworker 单线程路径，多案崩溃进程即此形态）——单线程执行本身不消除故障，缺陷绑定执行核的装载数据返回通路；极性键 False 同时是 L2-LLC-一致性域的反证（v5 §11.2「victim 单核私有 L1 驻留仍稳定复现」）",
+    "multicore_only": "store/aggressor 并存是必要条件：纯加载探针约 1e12 次装载零撕裂；v5 §2 引本案例为据——单核隔离（剥离对侧核负载）会消除 SDC",
+    "bit_hints": "load_path——双子族均为装载返回通路形态：零塌缩族（整字全零交付）+ 撕裂移位族（内存字节流 +1/+2/+5 字节相位非对齐窗口/等价旋转，撕裂值本身未损坏、是错位的真实数据）；Hamming 距离谱均匀散布无列聚类",
+    "healthy_core_clean": "同机同内核同负载 191 对照核零事件（含同节点共享 L3/DRAM 的 23 个同胞核）；活体三臂对照实验各 >8e10 次装载零差异"
+  },
+  "actions_taken": [
+    {"type": "raw_fact", "desc": "12 次 vmcore 寄存器-内存对照转储（整段 per-CPU 偏移数组 192 项等差无一损坏，装载目标寄存器实收腐化值）"},
+    {"type": "spatial_correlation", "desc": "十二开机全谱单核 100% 聚集（147 起可归因事件全落一颗逻辑核；同节点同胞核零事件）"},
+    {"type": "intervention", "desc": "store 共存反事实：纯加载探针约 1e12 次零撕裂（完整失败表达需 store 并存）；真值地址反事实 vtop 验证（真值下平静读出不崩溃）"},
+    {"type": "cross_validation", "desc": "crash 工具独立 oracle 直读：撕裂值与内存真实字节流的非对齐窗口逐位相等（连续三案，含跨槽窗口≡单槽旋转的数值同一性）"},
+    {"type": "platform_confirm", "desc": "gem5 结构注入 byte_lane_skew 复现同族形态（注入 30 次检出 28 次）；−30mV 欠压可控复现同签名（gem5-fi 活体报告）。诚实边界：此为模型级结构注入（v5 §11.8 阶梯「结构注入」归类 E4），实物芯片 MBIST/LBIST/shmoo 属厂商后续项"}
+  ],
+  "competing_lineages": [
+    "LSU 装载数据返回通路（fill-buffer 合并 / load 返回 mux 一族）——综合后主谱系（撕裂窗口直读证据链）",
+    "OoO 寄存器 liveness（寄存器旁路/定序依赖族）——早期竞争谱系，被撕裂移位族的装载通路形态学反证削弱"
+  ],
+  "ras_silence": "缺陷不产生任何架构化 RAS 记录（DABT ≠ SError；EDAC/BERT/GHES/SEL 全程零记录），仅在坏值恰为不可解引用地址时以 panic 暴露——pmu_anomaly 证据键不设（无计数器族异常可用，静默本身是形态学信息）",
+  "expected_ranking_anchor": {
+    "top_trio": ["LSU-L1D", "L2-LLC-一致性", "寄存器-旁路"],
+    "stable_output": "LSU-L1D 居首（score +2 = cpu_clustering + bit_hints:load_path 双支持）；L2-LLC-一致性混合证据（multicore_only +1 被 n1_immune=False -2 压过 → -1，对应真实案例排除矩阵对 L3/互连的排除）；寄存器-旁路被 load_path 形态反证（-1，对应寄存器谱系被削弱）；测试-oracle 双反证 -4（真实案例非测试工件）"
+  }
+}

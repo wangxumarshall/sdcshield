@@ -17,19 +17,25 @@ stdlib only。消费 M1 采集器 CSV（monitor.csv/percore.csv/pmu_core.csv，t
         stall_ratio / stall_frontend_ratio / stall_backend_ratio = */cycles
         l1d/l2d/llc_mpki、dtlb_wpk、remote_kpi、br_mpki = */inst_retired×1000
       判读辅助量：事件前（dt<0）相位对半拆早/晚期——嫌疑核 stall 上升
-      （晚期/早期 ≥ RISE_RATIO）且对照平稳 → suspect_pre_rise；对照核同升
-      → control_sync。percent_covered < 80 的行计 mux_degraded_rows
-      （v5 §11.5 PMU 证据降级，计但不禁）。
-      返回 {"metrics", "diffs", "rel_diffs", "suspect_means", "control_means",
-      "counts"(各指标 n 嫌/照), "missing", "flags"(|相对差|≥FLAG_REL),
-      "phases", "suspect_pre_rise", "control_sync", "n_suspect_rows",
-      "n_control_rows", "mux_degraded_rows", "ts_degraded_rows", "suspect_cpus",
-      "control_cpus", "window", "has_mismatch", "notes"}。
+      （晚期/早期 ≥ RISE_RATIO）且对照未同步 → suspect_pre_rise；对照核同升
+      → control_sync；晚期仅 1 拍超阈 → "单拍毛刺可能"注记（判读降信度）。
+      percent_covered < 80 的行计 mux_degraded_rows（v5 §11.5 PMU 证据降级，
+      计但不禁）。返回 {"metrics", "diffs", "rel_diffs", "suspect_means",
+      "control_means", "counts"(各指标 n 嫌/照), "missing", "flags"
+      (|相对差|≥FLAG_REL), "phases", "suspect_pre_rise", "control_sync",
+      "n_suspect_rows", "n_control_rows", "mux_degraded_rows",
+      "ts_degraded_rows", "suspect_cpus", "control_cpus", "window",
+      "has_mismatch", "notes"}。
 
   timeline_verdict(diff) -> {"rule", "reading", "caveat"}
       v5 §11.5 判读四规则（优先级：④对照同步 > ①嫌疑前升 > ③canary/异常 >
-      ②不否定；"嫌疑前升"本身要求对照平稳，④是①的改判）：
-        ① 嫌疑核事件前 stall 上升+对照平稳 → 时序/资源压力候选（亦可能调度/中断）
+      ②不否定；"嫌疑前升"本身要求对照未同步，④是①的改判）：
+        ① 嫌疑核事件前 stall 上升、对照核未同步 → 时序/资源压力候选（亦可能
+           调度/中断）。对照核读数按实际分档（评审 Important #2：不再硬编码
+           "平稳"）：晚期/早期 <FLAT_MAX_RATIO="平稳"；[FLAT_MAX_RATIO,
+           RISE_RATIO)="轻度上升（未达同步阈值）"——caveat 追加共享环境未排
+           除、读数弱化；≥RISE_RATIO 走规则④。比值不可判（早期均值为零等）
+           如实写"比值不可判"。
         ② mismatch 无 PMU 异常 → 不否定 SDC（故障可能短于采样窗或不影响计数事件）
         ③ PMU 异常无 mismatch → canary，不计为 SDC
         ④ 对照核同步异常 → 共享环境候选（仅嫌疑核异常才更支持 core-local）
@@ -38,11 +44,17 @@ stdlib only。消费 M1 采集器 CSV（monitor.csv/percore.csv/pmu_core.csv，t
       裁，只报异常/无异常。每输出 caveat 必含"同窗相关≠因果"。
 
   format_timeline(windows, diff, verdict) -> str
-      Markdown 段（§12.3 口径：分子/分母同示、缺列单独显示不零填充）。
+      Markdown 段（§12.3 口径：分子/分母同示、缺列单独显示不零填充）。相位
+      比值为 None（早期半窗均值恰 0，比值未定义）渲染 "——绝不渲染成 0
+      （评审 Important #1）。
 
 core 列匹配（诚实边界）：M1 as-built pmu_core.csv 的 core 列为 perf 拓扑标签
 （"S36-D0-C0"）——须传标签原串；纯数字核号只匹配数字 core 列（fixture/派生
 表），数字 0 不误配 "-C0"（尾部是 die 内 core 号，非逻辑 CPU 号）。
+
+流式读取（评审 Important #3）：CSV 行级 parse→判窗→留行，绝不全量物化——
+94MB 真实 pmu_core.csv 全量 dict 物化峰值 RSS ~1.1GB（本机有 OOM 前科），
+流式窗内行仅数 MB。CLI 对 pmu_core.csv 单次读取共享给窗口段与差分。
 
 用法：python3 sdc_timeline.py --pmu pmu_core.csv --event "2026-09-26 12:00:00" \
          --suspect 96 --control 0 32 [--before 60 --after 60] \
@@ -80,7 +92,7 @@ _TS_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
 
 
 # ---------------------------------------------------------------------------
-# 基础件：时间解析 / CSV 读取 / 值三态转换 / 核匹配
+# 基础件：时间解析 / 流式 CSV / 值三态转换 / 核匹配
 
 def _naive(dt):
     """tz-aware → 本地 naive（M1 数据全 naive；有 tz 时以本地口径折算）。"""
@@ -114,6 +126,13 @@ def _fmt_ts(dt):
     return dt.strftime(_TS_FORMATS[0])
 
 
+def _fmt_g(v, spec=".3g"):
+    """数值格式化；None（比值未定义/不可判）→ "—"——绝不把 None 渲染成 0
+    （评审 Important #1：早期半窗均值恰 0 时比值为 None，直接 format 会
+    TypeError，且渲染 0 是失实）。"""
+    return "—" if v is None else format(v, spec)
+
+
 def _val(v):
     """CSV 单元格三态：空→None；数字串→float；其余→原串。"""
     if v is None:
@@ -128,27 +147,71 @@ def _val(v):
     return v
 
 
-def _read_csv(path):
-    """读 CSV → (strip 后列头, 行 dict 列表)。路径不可读/空文件 → ValueError。"""
+def _stream_csv(path, lo_ts=None, hi_ts=None):
+    """流式读 CSV → 生成器：首 yield 列头（strip 后 list），其后每数据行
+    yield (ts, row_dict)。行级判窗：lo_ts/hi_ts（含端点）给定时，窗外可解
+    析行在流内即弃（不物化——内存关键路径）；ts 不可解析行无法判窗，仍
+    yield (None, row) 由调用方计 degraded 跳过。无窗参数全行 yield（兼容
+    全量口径）。路径不可读/空文件 → ValueError（首次 next 即抛）。"""
     if not isinstance(path, (str, os.PathLike)):
         raise ValueError(f"CSV 路径必须为 str/Path: {path!r}")
     try:
         f = open(path, newline="")
     except OSError as e:
         raise ValueError(f"CSV 不可读: {path}: {e}") from None
-    with f:
-        reader = csv.reader(f)
-        try:
-            header = [h.strip() for h in next(reader)]
-        except StopIteration:
-            raise ValueError(f"空 CSV（无列头）: {path}") from None
-        rows = []
-        for fields in reader:
-            if not fields:
-                continue                          # 空行
-            rows.append({h: (fields[i] if i < len(fields) else None)
-                         for i, h in enumerate(header)})
-    return header, rows
+
+    def _gen():
+        with f:
+            reader = csv.reader(f)
+            try:
+                header = [h.strip() for h in next(reader)]
+            except StopIteration:
+                raise ValueError(f"空 CSV（无列头）: {path}") from None
+            yield header
+            ts_idx = header.index("ts") if "ts" in header else None
+            for fields in reader:
+                if not fields:
+                    continue                      # 空行
+                t = _parse_ts(fields[ts_idx]) \
+                    if ts_idx is not None and ts_idx < len(fields) else None
+                if t is not None:
+                    if lo_ts is not None and t < lo_ts:
+                        continue
+                    if hi_ts is not None and t > hi_ts:
+                        continue
+                yield (t, {h: (fields[i] if i < len(fields) else None)
+                           for i, h in enumerate(header)})
+    return _gen()
+
+
+def _slice_window(path, event_ts, before_s, after_s,
+                  required_cols=("ts",), first_col_ts=False):
+    """单次流式扫描 + 事件窗切片（内部共用件——align_window/
+    suspect_vs_control_diff/CLI 单读共享）→
+    (header, [(dt_s, row)], degraded, ev, before_s, after_s)。
+    窗外行不物化；ts 不可解析行不进列表、计 degraded。"""
+    ev = _parse_ts(event_ts)
+    if ev is None:
+        raise ValueError(f"event_ts 不可解析: {event_ts!r}")
+    b, a = _validate_span(before_s, after_s)
+    it = _stream_csv(path, lo_ts=ev - datetime.timedelta(seconds=b),
+                     hi_ts=ev + datetime.timedelta(seconds=a))
+    header = next(it)
+    if first_col_ts and (not header or header[0] != "ts"):
+        raise ValueError(f"CSV 首列必须为 ts（M1 采集器口径）: {path!r} "
+                         f"首列={header[0] if header else None!r}")
+    for c in required_cols:
+        if c not in header:
+            raise ValueError(f"CSV 缺必需列 {c!r}: {path!r} 列头={header}")
+    rows, degraded = [], 0
+    for t, r in it:
+        if t is None:
+            degraded += 1
+            continue
+        dt = (t - ev).total_seconds()
+        if _in_window(dt, ev, b, a):
+            rows.append((dt, r))
+    return header, rows, degraded, ev, b, a
 
 
 def _cpu_key(c):
@@ -205,15 +268,6 @@ def _extract_window(window):
     return {"event_ts": ev, "before_s": b, "after_s": a, "event_ts_raw": raw}
 
 
-def _half_means(series):
-    """事件前序列（(dt, v)）按 dt 升序对半拆 → (早期均值, 晚期均值)。"""
-    ss = sorted(series, key=lambda x: x[0])
-    k = len(ss) // 2
-    early = sum(v for _, v in ss[:k]) / k if k else None
-    late = sum(v for _, v in ss[k:]) / (len(ss) - k) if len(ss) > k else None
-    return early, late
-
-
 def _series(rows, num_col, den_col, scale):
     """行 → [(dt, num/den×scale)]；分子/分母非数值或分母 ≤0 的行不贡献。"""
     out = []
@@ -229,31 +283,37 @@ def _series(rows, num_col, den_col, scale):
 
 def align_window(metrics_csv, event_ts, before_s=60, after_s=60):
     """事件对齐窗口切片（任何 ts 首列 CSV）→ 见模块 docstring。"""
-    ev = _parse_ts(event_ts)
-    if ev is None:
-        raise ValueError(f"event_ts 不可解析: {event_ts!r}")
-    b, a = _validate_span(before_s, after_s)
-    header, rows = _read_csv(metrics_csv)
-    if not header or header[0] != "ts":
-        raise ValueError(f"CSV 首列必须为 ts（M1 采集器口径）: {metrics_csv!r} "
-                         f"首列={header[0] if header else None!r}")
+    header, rows, degraded, _, _, _ = _slice_window(
+        metrics_csv, event_ts, before_s, after_s,
+        required_cols=("ts",), first_col_ts=True)
+    return _align_from_slice(header, rows, degraded, event_ts, before_s, after_s)
+
+
+def _align_from_slice(header, rows, degraded, event_ts, before_s, after_s):
+    """已切片行 → align_window 输出（CLI 单读共享件）。"""
     cols = header[1:]
-    out, degraded = [], 0
-    for r in rows:
-        t = _parse_ts(r.get("ts"))
-        if t is None:
-            degraded += 1                        # 坏 ts 行：跳过 + 计数，不抛
-            continue
-        dt = (t - ev).total_seconds()
-        if _in_window(dt, ev, b, a):
-            row = {"dt_s": dt}
-            for c in cols:
-                row[c] = _val(r.get(c))
-            out.append(row)
-    out.sort(key=lambda x: x["dt_s"])
-    raw = event_ts if isinstance(event_ts, str) else _fmt_ts(ev)
+    out = [{**{c: _val(r.get(c)) for c in cols}, "dt_s": dt}
+           for dt, r in sorted(rows, key=lambda x: x[0])]
+    raw = event_ts if isinstance(event_ts, str) else \
+        _fmt_ts(_parse_ts(event_ts))
     return {"columns": cols, "rows": out, "n": len(out), "degraded": degraded,
             "window": {"event_ts": raw, "before_s": before_s, "after_s": after_s}}
+
+
+def _core_select(rows, s_set, c_set, has_pct):
+    """窗内行按核归桶 → (嫌疑行, 对照行, mux_degraded 行数)。"""
+    s_rows, c_rows, mux = [], [], 0
+    for dt, r in rows:
+        if has_pct:
+            pct = _val(r.get("percent_covered"))
+            if isinstance(pct, float) and pct < MUX_THRESHOLD:
+                mux += 1                     # multiplex_degraded：计数+降级注记
+        key = _core_key(r.get("core"))
+        if key in s_set:
+            s_rows.append((dt, r))
+        elif key in c_set:
+            c_rows.append((dt, r))
+    return s_rows, c_rows, mux
 
 
 def suspect_vs_control_diff(pmu_csv, suspect_cpus, control_cpus, window,
@@ -266,42 +326,30 @@ def suspect_vs_control_diff(pmu_csv, suspect_cpus, control_cpus, window,
     if overlap:
         raise ValueError(f"嫌疑/对照核重叠（对照必须独立）: {sorted(overlap)!r}")
     s_set, c_set = set(s_keys), set(c_keys)
-    header, rows = _read_csv(pmu_csv)
-    for req in ("ts", "core"):
-        if req not in header:
-            raise ValueError(f"pmu CSV 缺必需列 {req!r}: {pmu_csv!r} 列头={header}")
-    s_rows, c_rows, ts_degraded, mux = [], [], 0, 0
-    has_pct = "percent_covered" in header
-    for r in rows:
-        t = _parse_ts(r.get("ts"))
-        if t is None:
-            ts_degraded += 1
-            continue
-        dt = (t - win["event_ts"]).total_seconds()
-        if not _in_window(dt, win["event_ts"], win["before_s"], win["after_s"]):
-            continue
-        if has_pct:
-            pct = _val(r.get("percent_covered"))
-            if isinstance(pct, float) and pct < MUX_THRESHOLD:
-                mux += 1                         # multiplex_degraded：计数+降级注记
-        key = _core_key(r.get("core"))
-        if key in s_set:
-            s_rows.append((dt, r))
-        elif key in c_set:
-            c_rows.append((dt, r))
+    header, rows, degraded, _, _, _ = _slice_window(
+        pmu_csv, win["event_ts"], win["before_s"], win["after_s"],
+        required_cols=("ts", "core"))
+    s_rows, c_rows, mux = _core_select(rows, s_set, c_set,
+                                       "percent_covered" in header)
     if not s_rows:
         raise ValueError(f"嫌疑核 {list(suspect_cpus)!r} 在窗口内无样本行"
                          f"（core 列值为 perf 拓扑标签时须传标签串）")
     if not c_rows:
         raise ValueError(f"对照核 {list(control_cpus)!r} 在窗口内无样本行")
+    return _diff_from_slice(header, s_rows, c_rows, degraded, mux,
+                            suspect_cpus, control_cpus, win, has_mismatch)
 
+
+def _diff_from_slice(header, s_rows, c_rows, ts_degraded, mux,
+                     suspect_cpus, control_cpus, win, has_mismatch):
+    """已选核行 → 差分 dict（CLI 单读共享件）。win 为 _extract_window 输出。"""
     metrics, missing, means_s, means_c = [], [], {}, {}
     diffs, rels, flags, counts = {}, {}, [], {}
     for name, num_col, den_col, scale in METRICS:
         sv, cv = _series(s_rows, num_col, den_col, scale), \
                  _series(c_rows, num_col, den_col, scale)
         if not sv or not cv:
-            missing.append(name)                 # 列缺席或窗口内全空——注记不零填充
+            missing.append(name)             # 列缺席或窗口内全空——注记不零填充
             continue
         ms = sum(v for _, v in sv) / len(sv)
         mc = sum(v for _, v in cv) / len(cv)
@@ -311,7 +359,7 @@ def suspect_vs_control_diff(pmu_csv, suspect_cpus, control_cpus, window,
         if abs(mc) > _EPS:
             rels[name] = (ms - mc) / abs(mc)
         else:
-            rels[name] = None                    # 对照近零：相对差无定义
+            rels[name] = None                # 对照近零：相对差无定义
         flagged = (rels[name] is not None and abs(rels[name]) >= FLAG_REL) or \
                   (rels[name] is None and abs(diffs[name]) > _EPS)
         if flagged:
@@ -346,10 +394,15 @@ def suspect_vs_control_diff(pmu_csv, suspect_cpus, control_cpus, window,
             notes.append(f"事件前样本不足（嫌疑 {len(s_pre)} 拍/对照 {len(c_pre)} 拍，"
                          "需 ≥2）——pre 相位不可判")
         else:
-            se, sl = _half_means(s_pre)
-            ce, cl = _half_means(c_pre)
-            s_ratio = sl / se if se and se > 0 else None
-            c_ratio = cl / ce if ce and ce > 0 else None
+            ss = sorted(s_pre, key=lambda x: x[0])
+            cs = sorted(c_pre, key=lambda x: x[0])
+            k, ck = len(ss) // 2, len(cs) // 2
+            se = sum(v for _, v in ss[:k]) / k
+            sl = sum(v for _, v in ss[k:]) / (len(ss) - k)
+            ce = sum(v for _, v in cs[:ck]) / ck
+            cl = sum(v for _, v in cs[ck:]) / (len(cs) - ck)
+            s_ratio = sl / se if se > 0 else None
+            c_ratio = cl / ce if ce > 0 else None
             pre_rise = s_ratio is not None and s_ratio >= RISE_RATIO
             sync = c_ratio is not None and c_ratio >= RISE_RATIO
             phases = {"metric": rise_metric,
@@ -357,9 +410,15 @@ def suspect_vs_control_diff(pmu_csv, suspect_cpus, control_cpus, window,
                       "control_pre_early": ce, "control_pre_late": cl,
                       "suspect_ratio": s_ratio, "control_ratio": c_ratio,
                       "n_pre_suspect": len(s_pre), "n_pre_control": len(c_pre)}
+            if pre_rise:
+                n_hot = sum(1 for _, v in ss[k:] if v >= RISE_RATIO * se)
+                if n_hot < 2:
+                    notes.append(f"单拍毛刺可能：嫌疑核晚期仅 {n_hot} 拍 ≥ "
+                                 f"{RISE_RATIO:g}×早期——上升或由孤立尖峰驱动，"
+                                 "判读降信度")
             if not sync and c_ratio is not None and c_ratio >= FLAT_MAX_RATIO:
                 notes.append(f"对照核事件前轻度上升（×{c_ratio:.2g}，未达同步阈值 "
-                             f"{RISE_RATIO}）——注记不藏")
+                             f"{RISE_RATIO:g}）——注记不藏")
 
     return {"metrics": metrics, "diffs": diffs, "rel_diffs": rels,
             "suspect_means": means_s, "control_means": means_c, "counts": counts,
@@ -371,6 +430,22 @@ def suspect_vs_control_diff(pmu_csv, suspect_cpus, control_cpus, window,
             "window": {"event_ts": win["event_ts_raw"],
                        "before_s": win["before_s"], "after_s": win["after_s"]},
             "has_mismatch": has_mismatch, "notes": notes}
+
+
+def _control_band(ph):
+    """对照核事件前形态分档（评审 Important #2：读数按实际分档，不硬编码
+    "平稳"）→ {"band", "desc"}：zero/none/flat/mid。"""
+    cr = ph.get("control_ratio")
+    if cr is None:
+        ce = ph.get("control_pre_early")
+        if ce is not None and ce <= 0:
+            return {"band": "zero",
+                    "desc": "对照核早期均值为零（比值未定义）"}
+        return {"band": "none", "desc": "对照核比值不可判"}
+    if cr < FLAT_MAX_RATIO:
+        return {"band": "flat", "desc": f"对照核平稳（×{cr:.2g}）"}
+    return {"band": "mid",
+            "desc": f"对照核轻度上升（×{cr:.2g}，未达同步阈值 {RISE_RATIO:g}）"}
 
 
 def timeline_verdict(diff):
@@ -393,22 +468,27 @@ def timeline_verdict(diff):
         rule = 4
         if pre_rise:
             reading = (f"共享环境候选：对照核与嫌疑核同步异常（事件前 {metric} 同升"
-                       f" ×{ph.get('suspect_ratio', 0):.2g}/×{ph.get('control_ratio', 0):.2g}）"
+                       f" ×{_fmt_g(ph.get('suspect_ratio'), '.2g')}/"
+                       f"×{_fmt_g(ph.get('control_ratio'), '.2g')}）"
                        "——共享环境（供电/温度/内存带宽等）候选；"
                        "仅嫌疑核异常才更支持 core-local 候选")
         else:
             reading = (f"共享环境候选：对照核事件前 {metric} 上升"
-                       f"（×{ph.get('control_ratio', 0):.2g}）而嫌疑核未同升"
+                       f"（×{_fmt_g(ph.get('control_ratio'), '.2g')}）而嫌疑核未同升"
                        "——共享环境候选优先于 core-local")
         caveat.append("共享环境与 core-local 须成组移除/隔离等对照实验区分")
     elif pre_rise:
         rule = 1
+        ctrl = _control_band(ph)
         reading = (f"时序/资源压力候选：事件前嫌疑核 {metric} 上升"
-                   f"（{ph.get('suspect_pre_early', 0):.3g}→"
-                   f"{ph.get('suspect_pre_late', 0):.3g}，"
-                   f"×{ph.get('suspect_ratio', 0):.2g}）、对照核平稳"
+                   f"（{_fmt_g(ph.get('suspect_pre_early'))}→"
+                   f"{_fmt_g(ph.get('suspect_pre_late'))}，"
+                   f"×{_fmt_g(ph.get('suspect_ratio'), '.2g')}）、{ctrl['desc']}"
                    "——支持时序/资源压力，亦可能是调度或中断")
         caveat.append("延迟尾部需 latency 通道佐证；调度/中断干扰须排除")
+        if ctrl["band"] == "mid":
+            caveat.append("对照核亦升（未达同步阈值）——共享环境可能性未排除，"
+                          "时序压力读数弱化")
     elif flags:
         if mm is False:
             rule = 3
@@ -503,12 +583,12 @@ def format_timeline(windows, diff, verdict):
         ph = diff.get("phases") or {}
         if ph:
             L.append(f"事件前 {ph.get('metric', '?')} 相位（早期→晚期）：嫌疑核 "
-                     f"{ph.get('suspect_pre_early', 0):.3g}→"
-                     f"{ph.get('suspect_pre_late', 0):.3g}"
-                     f"（×{ph.get('suspect_ratio', 0):.2g}）、对照核 "
-                     f"{ph.get('control_pre_early', 0):.3g}→"
-                     f"{ph.get('control_pre_late', 0):.3g}"
-                     f"（×{ph.get('control_ratio', 0):.2g}）")
+                     f"{_fmt_g(ph.get('suspect_pre_early'))}→"
+                     f"{_fmt_g(ph.get('suspect_pre_late'))}"
+                     f"（×{_fmt_g(ph.get('suspect_ratio'), '.2g')}）、对照核 "
+                     f"{_fmt_g(ph.get('control_pre_early'))}→"
+                     f"{_fmt_g(ph.get('control_pre_late'))}"
+                     f"（×{_fmt_g(ph.get('control_ratio'), '.2g')}）")
         for n in diff.get("notes") or []:
             L.append(f"- {n}")
     if verdict is not None:
@@ -541,15 +621,34 @@ def _main(argv=None):
     def _cpu(s):
         return int(s) if s.lstrip("-").isdigit() else s
 
+    suspect = [_cpu(s) for s in args.suspect]
+    control = [_cpu(s) for s in args.control]
     win = {"event_ts": args.event, "before_s": args.before, "after_s": args.after}
-    windows = {"pmu_core": align_window(args.pmu, args.event, args.before, args.after)}
+    winx = _extract_window(win)
+    s_keys = _validate_cpus(suspect, "嫌疑核")
+    c_keys = _validate_cpus(control, "对照核")
+    if {k for k in s_keys} & {k for k in c_keys}:
+        raise ValueError("嫌疑/对照核重叠（对照必须独立）")
+    # pmu_core.csv 单次读取共享给窗口段与差分（评审 Important #3：不双读）
+    header, rows, degraded, _, _, _ = _slice_window(
+        args.pmu, args.event, args.before, args.after,
+        required_cols=("ts", "core"))
+    windows = {"pmu_core": _align_from_slice(header, rows, degraded,
+                                             args.event, args.before, args.after)}
     for m in args.metrics:
         windows[os.path.basename(m)] = align_window(m, args.event,
                                                     args.before, args.after)
+    s_rows, c_rows, mux = _core_select(rows, {k for k in s_keys},
+                                       {k for k in c_keys},
+                                       "percent_covered" in header)
+    if not s_rows:
+        raise ValueError(f"嫌疑核 {suspect!r} 在窗口内无样本行"
+                         f"（core 列值为 perf 拓扑标签时须传标签串）")
+    if not c_rows:
+        raise ValueError(f"对照核 {control!r} 在窗口内无样本行")
     mm = {"yes": True, "no": False, "unknown": None}[args.has_mismatch]
-    d = suspect_vs_control_diff(args.pmu, [_cpu(s) for s in args.suspect],
-                                [_cpu(s) for s in args.control], win,
-                                has_mismatch=mm)
+    d = _diff_from_slice(header, s_rows, c_rows, degraded, mux,
+                         suspect, control, winx, mm)
     print(format_timeline(windows, d, timeline_verdict(d)))
     return 0
 

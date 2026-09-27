@@ -15,6 +15,13 @@ fixture 口径（brief Step 1 裁定，event_ts=2026-09-26 12:00:00，窗口 ±6
   PMU_MISSING_COL    列头仅 cycles/inst_retired（无 stall/事件列）→ 缺列降级。
   PMU_LABEL_CORE     core 列为 perf 拓扑标签（S36-D0-C0 形，M1 as-built）
                      → 标签串匹配；数字 0 不得误配 "-C0"。
+  PMU_ZERO_EARLY     嫌疑核事件前早期半窗 stall=0（事件前空闲）+ 对照核全零
+                     → 相位比值 None → format_timeline 渲染 "—" 不抛（评审
+                     Important #1 回归）。
+  PMU_MID_RISE       对照核事件前轻度上升（×1.37，1.25-1.5 中间带）→ 规则①
+                     读数分档"轻度上升"而非硬编码"平稳"（评审 Important #2）。
+  PMU_SINGLE_SPIKE   嫌疑核晚期仅 1 拍尖峰（×2.5 由单拍驱动）→ "单拍毛刺可能"
+                     降信度注记（评审 Minor #4）。
   MONITOR_CSV        align_window 专用：边界（±60 含、±61 弃）、坏 ts 行
                      （不可解析/空）跳过 + degraded 计数、数值/字符串/空值
                      三态列转换。
@@ -115,6 +122,28 @@ MONITOR_CSV = _write_csv("monitor.csv", "ts,load_pct,mode,note", [
     "not-a-date,1,2,3",                    # 坏 ts → 跳过 + degraded
     ",1,2,3",                              # 空 ts → 跳过 + degraded
 ])
+
+ZERO_EARLY_STALL = {-120: 0.0, -60: 0.0, -48: 0.0, -36: 0.40, -24: 0.50,
+                    -12: 0.55, 0: 0.55, 12: 0.55, 24: 0.55, 36: 0.55,
+                    48: 0.55, 60: 0.55, 72: 0.55}
+ALL_ZERO = {dt: 0.0 for dt in DTS}
+PMU_ZERO_EARLY = _write_csv("pmu_zero_early.csv", PMU_HEADER,
+    [_pmu_row(96, dt, ZERO_EARLY_STALL[dt]) for dt in DTS]
+    + [_pmu_row(0, dt, ALL_ZERO[dt]) for dt in DTS])
+
+MID_STALL = {-120: 0.10, -60: 0.10, -48: 0.10, -36: 0.13, -24: 0.14,
+             -12: 0.14, 0: 0.14, 12: 0.14, 24: 0.14, 36: 0.14, 48: 0.14,
+             60: 0.14, 72: 0.14}
+PMU_MID_RISE = _write_csv("pmu_mid.csv", PMU_HEADER,
+    [_pmu_row(96, dt, SUSPECT_STALL[dt]) for dt in DTS]
+    + [_pmu_row(0, dt, MID_STALL[dt]) for dt in DTS])
+
+SPIKE_STALL = {-120: 0.10, -60: 0.10, -48: 0.10, -36: 0.10, -24: 0.55,
+               -12: 0.10, 0: 0.10, 12: 0.10, 24: 0.10, 36: 0.10, 48: 0.10,
+               60: 0.10, 72: 0.10}
+PMU_SINGLE_SPIKE = _write_csv("pmu_spike.csv", PMU_HEADER,
+    [_pmu_row(96, dt, SPIKE_STALL[dt]) for dt in DTS]
+    + [_pmu_row(0, dt, FLAT_STALL[dt]) for dt in DTS])
 
 
 # ---------------------------------------------------------------------------
@@ -264,3 +293,62 @@ def test_format_timeline_markdown():
     assert "l1d_mpki" in out                                  # 缺列名单在场
     # 事件前相位摘要（判读依据可追溯）
     assert "0.11" in out and "0.35" in out
+
+
+# ---------------------------------------------------------------------------
+# 评审修复回归（Important #1/#2/#3 + Minor #4）
+
+def test_none_phase_ratio_renders_dash_not_crash():
+    """#1：早期半窗均值恰 0 → 相位比值 None → format/verdict 不抛、渲染 "—"。"""
+    d = tl.suspect_vs_control_diff(PMU_ZERO_EARLY, [96], [0], WIN)
+    assert d["phases"]["suspect_ratio"] is None               # 早期 0 → 比值未定义
+    assert d["phases"]["control_ratio"] is None
+    v = tl.timeline_verdict(d)                                # 无事件前上升——异常分支
+    out = tl.format_timeline({"pmu_core": tl.align_window(PMU_ZERO_EARLY, EVENT_TS)},
+                             d, v)                            # 修复前此处 TypeError
+    phase_line = [l for l in out.splitlines() if "相位" in l][0]
+    assert "×—" in phase_line                                 # None → "—"
+    assert "×None" not in out and "×0）" not in phase_line    # 绝不渲染成 0/None
+
+
+def test_control_mid_rise_banded_reading():
+    """#2：对照核 1.25-1.5 中间带 → 规则① 读数分档"轻度上升"，不硬编码"平稳"。"""
+    d = tl.suspect_vs_control_diff(PMU_MID_RISE, [96], [0], WIN)
+    assert d["suspect_pre_rise"] is True and d["control_sync"] is False
+    assert tl.FLAT_MAX_RATIO <= d["phases"]["control_ratio"] < tl.RISE_RATIO
+    v = tl.timeline_verdict(d)
+    assert v["rule"] == 1
+    assert "轻度上升" in v["reading"] and "未达同步阈值" in v["reading"]
+    assert "平稳" not in v["reading"]                         # 与注记不再自相矛盾
+    assert "共享环境可能性未排除" in v["caveat"]              # 读数弱化提示
+    assert any("轻度上升" in n for n in d["notes"])
+    # 分档另一端：对照真平稳（主 fixture ×1.0）→ 读数"对照核平稳"
+    v_flat = tl.timeline_verdict(
+        tl.suspect_vs_control_diff(PMU_FIXTURE, [96], [0, 32], WIN))
+    assert "对照核平稳" in v_flat["reading"]
+
+
+def test_single_beat_spike_annotated():
+    """Minor #4：晚期仅 1 拍超阈 → 比值判据仍触发但注"单拍毛刺可能"。"""
+    d = tl.suspect_vs_control_diff(PMU_SINGLE_SPIKE, [96], [0], WIN)
+    assert d["suspect_pre_rise"] is True                      # ×2.5 由单拍驱动
+    assert any("单拍毛刺" in n for n in d["notes"])
+    v = tl.timeline_verdict(d)
+    assert v["rule"] == 1
+    assert "单拍毛刺" in tl.format_timeline(None, d, v)       # 报告可见
+
+
+def test_cli_single_pass_matches_composed(capsys):
+    """#3：CLI 对 pmu_core.csv 单次读取共享窗口段+差分——输出与独立组合逐字节一致。"""
+    rc = tl._main(["--pmu", PMU_FIXTURE, "--event", EVENT_TS,
+                   "--suspect", "96", "--control", "0", "32",
+                   "--metrics", MONITOR_CSV])
+    assert rc == 0
+    out = capsys.readouterr().out
+    windows = {"pmu_core": tl.align_window(PMU_FIXTURE, EVENT_TS, 60.0, 60.0),
+               "monitor.csv": tl.align_window(MONITOR_CSV, EVENT_TS, 60.0, 60.0)}
+    d = tl.suspect_vs_control_diff(PMU_FIXTURE, [96], [0, 32],
+                                   {"event_ts": EVENT_TS, "before_s": 60.0,
+                                    "after_s": 60.0})
+    # print 在 format 尾换行外再补一个 \n
+    assert out == tl.format_timeline(windows, d, tl.timeline_verdict(d)) + "\n"

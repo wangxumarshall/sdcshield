@@ -62,9 +62,40 @@ assert_not_contains "$EVID/events/$EID/ring_window/monitor.csv" "must_not_freeze
 assert_contains "$EVID/events/$EID/ring_window/percore.csv" "d01_percore_marker" \
     "固化窗口含 percore 种子行"
 
-# 断言 4：复现队列入口在案（生产产出端真实路径）
+# 断言 4：复现队列入口在案（生产产出端真实路径；事件目录带四件证据——
+# 消费端 from_event/gate 的合法输入形状，m3_drill 全链覆盖消费侧）
 EVDIR="$EVID/events/$(date +%Y%m%d-%H%M%S)-d01syn"
 mkdir -p "$EVDIR"
+cat > "$EVDIR/stdout_summary.out" <<EOF
+- test: zstd19
+  result: fail
+  fail: { cpu-mask: 'X', time-to-fail: 2.511, seed: '$SEED'}
+EOF
+cat > "$EVDIR/context.txt" <<EOF
+cmd: /bin/true --cpuset=3 -e zstd19 -t 100s -o /tmp/d01.yaml
+rc: 1  date: $(date -Is)  fail_seed: $SEED(usable=1)  failed_test: zstd19
+EOF
+cat > "$EVDIR/yaml_extract.txt" <<EOF
+command-line: 'sdcshield --cpuset=3 -e zstd19 -t 100s'
+- test: zstd19
+  state: { seed: '$SEED', iteration: 5, retry: false }
+  result: fail
+  fail: { cpu-mask: 'X', time-to-fail: 2.511, seed: '$SEED'}
+  threads:
+  - thread: 3
+    id: { logical:  3, package: 0, numa_node: 0, module: 0, core:  3, thread: 0 }
+    state: failed
+    messages:
+      data-miscompare:
+        type:        uint32_t
+        offset:      [ 44, 0 ]
+        actual:      '0x000000ff'
+        expected:    '0x000000f7'
+        mask:        '0x00000008'
+EOF
+cat > "$EVDIR/retests.txt" <<EOF
+retest1(targeted) rc=1 fail/crash=1
+EOF
 enqueue_repro_drill "$EVDIR" zstd19 "$SEED"
 QF=$(echo "$EVID"/spool/repro_queue/*.json)
 [ -f "$QF" ] || fail "repro_queue 无队列文件"

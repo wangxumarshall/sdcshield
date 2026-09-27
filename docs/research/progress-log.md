@@ -324,3 +324,22 @@
 - [ ] 平台回收稳定后把 `analyze (cpp)` 加入分支保护必过检查
 - [ ] #183 在 debian:sid arm64 容器复现 + core 取证
 - [ ] CodeQL integer-multiplication-cast 2 告警排查（eigen_svd common 头）
+
+## 2026-09-26（会话：Copilot Autofix PR DCO 补签 + 豁免根治）
+
+### 完成内容
+
+- PR #193/#194（Copilot Autofix 修 eigen_svd CodeQL 告警 22/23）缺签致
+  git-sanity 必过检查失败，已手动补签强推（amend --signoff，树零变化），
+  两者 git-sanity 绿。
+- 根治：`ci/dco-exempt-copilot-autofix` 分支——check-git-history.sh 双标记
+  豁免 autofix 机器提交（GitHub 提交者 + `github-advanced-security[bot]`
+  trailer，缺一不可——仅提高伪造门槛、非防伪造保证，均无认证元数据，
+  merge 审查为真实认证），命中打 ::notice 可审计；人工提交行为零变化。
+  弃 CI 自动补签路线：GITHUB_TOKEN 推送不触发 CI 重跑（PR 会卡 waiting）、
+  仓库无 PAT secret。计划：docs/superpowers/plans/2026-09-26-dco-exempt-copilot-autofix.md
+  （六用例 harness：未签/豁免/已签/伪造 trailer/混合 PR/merge 规则）。
+
+### 下一步
+
+- [ ] 合并豁免 PR 后，观察下一个 autofix PR 的 git-sanity 即时豁免生效

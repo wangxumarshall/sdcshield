@@ -141,11 +141,118 @@ load_known_faults() {
 # SEL 段在 sel_tick%5==1 的周期调真 ipmitool sel list——测试下置初值 -1 使唯一周期落在
 # %5==0，SEL 采集整体安全跳过（不打真 BMC）；cmd 代理段监听的 cmd/ 重定向到监控目录下
 # 空目录——governor/snapshot 代理自然空转（不写真 sysfs / ipmitool）。
+# exposure 段钩子：MON_ONLINE_FILE=非空文件 → online 核集从该文件读（生产不设 →
+# /sys/devices/system/cpu/online）——与 MON_SDR_FILE 同模式。
 if [ "${MON_SELFTEST:-0}" = 1 ]; then
     sel_tick=-1
     CMD_DIR="$MON_DIR/cmd_selftest"
     mkdir -p "$CMD_DIR"
 fi
+
+# ---- exposure.json 暴露量快照（M5 T1，v5 §9.4 有效分母——M4 移交项）----
+# 10min 周期与 condition_10m 对齐：聚合 driver.log 今日日汇总行（loop-count 累计 +
+# cycle）+ online 核数积分 → spool/exposure.json **追加** JSONL 快照行（与
+# events.jsonl 同风格——追加不覆盖）。字段不可得 → null + source 注记 unavailable
+# （不伪造 0）。核时积分状态存 monitor/exposure_state.json：跨重启沿 last_epoch
+# 锚点续积分（dt=实际间隔；首启无锚点按名义 600s）、跨日归零、dt 有界 24h。
+# as-built 驱动的 driver.log 日汇总行只有「日汇总完成（历史 YAML 已压缩）」——
+# daily_summary() 不产 loop-count 累计，该行补记 token 前 valid_iterations_today
+# 如实为 null（M4 rate_table 的"不可得"降级路径为此保留）。
+write_exposure() {
+    local dlog="$EXCITE_REPRODUCE_DIR/driver.log" today summary=""
+    today=$(date '+%F')
+    [ -r "$dlog" ] && summary=$(grep "$today" "$dlog" 2>/dev/null | grep '日汇总' | tail -1)
+    EXPOSURE_TODAY="$today" EXPOSURE_SUMMARY="$summary" \
+    python3 - "$EXCITE_REPRODUCE_DIR" <<'PYEOF' 2>/dev/null || :
+import json, os, re, sys, time
+
+root = sys.argv[1]
+today = os.environ["EXPOSURE_TODAY"]
+summary = os.environ.get("EXPOSURE_SUMMARY", "")
+
+def _online_count():
+    src = os.environ.get("MON_ONLINE_FILE") or "/sys/devices/system/cpu/online"
+    try:
+        text = open(src).read().strip()
+    except OSError:
+        return None
+    n = 0
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            if "-" in part:
+                a, b = part.split("-")
+                n += int(b) - int(a) + 1
+            else:
+                n += 1
+        except ValueError:
+            return None
+    return n or None
+
+# driver 今日日汇总行 → loop-count 累计 + cycle（token 提取；行在而无 token → None）
+iters = cyc = None
+m = re.search(r"loop[-_]count\s*[:=]?\s*(\d+)", summary)
+if m:
+    iters = int(m.group(1))
+m = re.search(r"cycle\s*[:=]?\s*(\d+)", summary)
+if m:
+    cyc = int(m.group(1))
+
+# online 核数积分（core_hours_today）= Σ dt × online 核数 / 3600
+now = time.time()
+state_p = os.path.join(root, "monitor", "exposure_state.json")
+state = {}
+try:
+    state = json.load(open(state_p))
+except Exception:
+    pass
+n_online = _online_count()
+core_hours = None
+if n_online is not None:
+    base = float(state.get("core_hours") or 0.0) if state.get("date") == today else 0.0
+    try:
+        dt = now - float(state.get("last_epoch")) if state.get("last_epoch") is not None else 600.0
+    except (TypeError, ValueError):
+        dt = 600.0                     # 首启/坏锚点：按名义 10min 周期计
+    dt = min(max(dt, 0.0), 86400.0)    # 时钟回拨归零、长停机以 24h 封顶
+    core_hours = base + dt * n_online / 3600.0
+
+# source_files：今日 logs/YYYYMMDD/ 的 yaml / yaml.gz 计数（目录列举，恒便宜）
+sf = {"yaml_today": 0, "yaml_gz_today": 0}
+day_dir = os.path.join(root, "logs", today.replace("-", ""))
+if os.path.isdir(day_dir):
+    for name in os.listdir(day_dir):
+        if name.endswith(".yaml"):
+            sf["yaml_today"] += 1
+        elif name.endswith(".yaml.gz"):
+            sf["yaml_gz_today"] += 1
+
+if iters is None and core_hours is None:
+    src = "unavailable"
+elif iters is None or core_hours is None:
+    miss = []
+    if iters is None:
+        miss.append("valid_iterations_today:driver.log今日日汇总行无loop-count累计")
+    if core_hours is None:
+        miss.append("core_hours_today:online核数不可读")
+    src = "unavailable(" + ";".join(miss) + ")"
+else:
+    src = "driver.log日汇总loop-count + online核数积分"
+
+snap = {"ts": time.strftime("%F %T"), "date": today,
+        "valid_iterations_today": iters, "core_hours_today": core_hours,
+        "online_cpus": n_online, "cycle": cyc, "source_files": sf, "source": src}
+spool = os.path.join(root, "spool")
+os.makedirs(spool, exist_ok=True)
+with open(os.path.join(spool, "exposure.json"), "a", encoding="utf-8") as f:
+    f.write(json.dumps(snap, ensure_ascii=False) + "\n")
+if core_hours is not None:   # online 不可读时不推锚点——恢复后把未观测间隔计入积分
+    json.dump({"date": today, "core_hours": core_hours, "last_epoch": now},
+              open(state_p, "w"))
+PYEOF
+}
 
 while :; do
     ts=$(date '+%F %T')
@@ -334,6 +441,7 @@ print("\n".join(dev) if dev else "（无偏移）")
 state = {k: g(k) for k in list(TH.keys()) + ["p1", "p2", "sel_total", "ua", "us0", "us1", "l1"]}
 json.dump(state, open(f"{mon}/snap_state.json", "w"))
 PYEOF
+        write_exposure   # 暴露量快照（M5 T1）：driver 日汇总聚合 + online 核时积分 → spool/exposure.json
     fi
 
     # ---- 温度联锁（2026-09-24 08:21 实战事件后收紧：

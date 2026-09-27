@@ -8,9 +8,13 @@ stdlib only。消费 M0-M4 全链产物，产出五段 Markdown 诊断报告 + �
   spool/events.jsonl       canonical 事件流（M0 schema）：sdc_mismatch 事件取其
                             mismatch 块（dict 或块列表）入位形态段；mismatch 事件
                             存在性 → T4 has_mismatch 注入；缺失 → has_mismatch=None
-  spool/exposure.json      暴露量摘要（v5 §9.6 等效试验日汇总的机器可读形：
-                            {"valid_iterations", "valid_core_hours", "source"}）；
-                            真实根当前无此文件 → 暴露量不可得，仅事件计数（如实）
+  spool/exposure.json      暴露量 JSONL（M5 T1：monitor write_exposure 每 10min 追加
+                            快照行 {"ts","valid_iterations_today","core_hours_today",
+                            "online_cpus","cycle","source_files","source"}）——取最后
+                            一个有效快照作 rate_table 分母（不同日分母不混，不回退
+                            更早行）；缺文件/坏行/字段 null → 暴露量不可得，仅事件
+                            计数（如实；as-built 驱动日汇总行无 loop-count，迭代
+                            口径降级不可得直至驱动侧补记）
   monitor/pmu_core.csv     M1 PMU 采集（时序段事件对齐窗口 + 嫌疑/对照差分；
                             流式读取——T4 评审 Important #3 口径）
   events/<event_id>/ring_window/  capsule（120s 环窗冻结，M2 Task 2）；存在则引
@@ -57,8 +61,21 @@ T4 私有件复用（同 tools/analysis 家族内约定，评审 Important #3 �
 _slice_window/_core_select/_diff_from_slice/_extract_window/_cpu_key/_core_key。
 
 诚实边界：假设排序证据键只从数据可派生项生成（cpu_clustering=位视图 logical
-占比≥0.5、bit_hints=T2 提示令牌）；n1_immune/multicore_only 等无数据源不设。
-台账 retests 为同命令复测，不计为干预记录（不虚报 E2）。
+占比≥0.5、bit_hints=T2 候选域提示令牌——M5 T2 起由 classification_hint 的
+signals 机读布尔键派生（lane_fixed_address_varying→execute_path、
+address_fixed/offset_low_fixed_lane_varying→load_path），hint 文本仅显示用
+（T5 改措辞不破坏证据链）；signals 缺键（T2/T5 版本错位、手工构造）回退既有
+文本子串匹配，ev["bit_hints_source"] 注记来源（"signals"/"text_fallback"，
+非评分键）；mantissa 令牌仍由视图 field_clustering 位段主导派生）；
+n1_immune/multicore_only 等无数据源不设。台账 retests 为同命令复测，不计为
+干预记录（不虚报 E2）。
+
+嫌疑核标签接续（M4 终审移交）：时序差分的 mismatch cpu 经
+sdc_timeline.cpu_to_topology_label 接续为 perf --per-core 拓扑标签
+（S<pkg>-D<die>-C<core>），数字核号与标签双键 join pmu_core.csv core 列
+（fixture 数字列与 M1 标签列皆可匹配）；标签不可得 → 注记「标签不可接续」
+降级（仅数字核号匹配）。topology_root 参数注入 fixture 拓扑根（缺省真实
+/sys/devices/system/cpu，测试用）。
 
 用法：python3 sdc_report.py [--data-root DIR] [--event-id ID] [-o out.md]
 """
@@ -136,25 +153,53 @@ def _load_events_jsonl(path):
 
 
 def _load_exposure(root):
-    """spool/exposure.json → dict|None（缺失/坏 JSON/非 dict → None，不抛）。"""
+    """spool/exposure.json → 最后一个有效快照 dict|None（缺失/全坏 → None，不抛）。
+    M5 T1 起为 JSONL（monitor write_exposure 每 10min 追加一行快照）——逐行解析取
+    最后一个可解析 dict（坏行容忍；as-built 快照的 valid_iterations_today 可为
+    null=当日不可得，不回退更早行——不同日的分母不可混）；兼容旧单 dict 形
+    （M4 fixture：无行可解析时整体 json.load）。"""
     p = os.path.join(root, "spool", "exposure.json")
     if not os.path.isfile(p):
         return None
     try:
         with open(p, encoding="utf-8") as f:
-            d = json.load(f)
-    except (OSError, json.JSONDecodeError):
+            lines = f.readlines()
+    except OSError:
         return None
-    return d if isinstance(d, dict) else None
+    snap = None
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            d = json.loads(s)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(d, dict):
+            snap = d
+    if snap is None:
+        try:
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            snap = d if isinstance(d, dict) else None
+        except (OSError, json.JSONDecodeError):
+            snap = None
+    return snap
 
 
 def _exposure_values(exposure):
-    """exposure dict → (valid_iterations|None, valid_core_hours|None)——
-    非正数/类型不对按缺失处理（不伪造 0）。"""
+    """exposure 快照 dict → (valid_iterations|None, valid_core_hours|None)——
+    新键 valid_iterations_today / core_hours_today（M5 T1 生产端）优先，回退旧键
+    valid_iterations / valid_core_hours（M4 fixture 形）；非正数/类型不对按缺失
+    处理（不伪造 0——null 是"当日不可得"的如实值，非零填充）。"""
     if not exposure:
         return (None, None)
-    n = exposure.get("valid_iterations")
-    h = exposure.get("valid_core_hours")
+    n = exposure.get("valid_iterations_today")
+    if not (isinstance(n, int) and not isinstance(n, bool) and n > 0):
+        n = exposure.get("valid_iterations")
+    h = exposure.get("core_hours_today")
+    if not (isinstance(h, (int, float)) and not isinstance(h, bool) and h > 0):
+        h = exposure.get("valid_core_hours")
     n = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
     h = h if isinstance(h, (int, float)) and not isinstance(h, bool) \
         and h > 0 else None
@@ -494,27 +539,62 @@ def _counts_line(classified):
             f"非失败行 {c['non_fail']}（分母 = 台账 n={n} 行）"), c
 
 
+# T2 classification_hint 的 signals 机读契约键（M5 T2：bit_hints 令牌来源，
+# 文本仅显示用——T5 改 hint 措辞不破坏本链路）
+_HINT_SIGNAL_KEYS = ("lane_fixed_address_varying",        # → execute_path
+                     "address_fixed_lane_varying",        # → load_path（两支之一）
+                     "offset_low_fixed_lane_varying")     # → load_path（两支之一）
+
+
+def _hint_tokens(hints):
+    """hints → (bit_hints 路径令牌列表, 来源)。signals 契约键在场 → 机读直连
+    （lane_fixed_address_varying→execute_path；address_fixed/offset_low_fixed_
+    lane_varying→load_path）；signals 缺键（T2/T5 版本错位、手工构造 hints）→
+    回退既有 hint 文本子串匹配（"执行/寄存器通路候选"/"存储层级候选"）。"""
+    h = hints if isinstance(hints, dict) else {}
+    signals = h.get("signals")
+    if isinstance(signals, dict) and any(k in signals for k in _HINT_SIGNAL_KEYS):
+        toks = []
+        if signals.get("lane_fixed_address_varying"):
+            toks.append("execute_path")
+        if signals.get("address_fixed_lane_varying") or \
+                signals.get("offset_low_fixed_lane_varying"):
+            toks.append("load_path")
+        return toks, "signals"
+    text = h.get("hint") if isinstance(h.get("hint"), str) else ""
+    toks = []
+    if "执行/寄存器通路候选" in text:
+        toks.append("execute_path")
+    if "存储层级候选" in text:
+        toks.append("load_path")
+    return toks, "text_fallback"
+
+
 def _hypothesis_evidence(views, hints):
-    """位形态视图 → T3 evidence dict（只派生数据可得键，其余不设——不虚报）。"""
+    """位形态视图 → T3 evidence dict（只派生数据可得键，其余不设——不虚报）。
+    bit_hints 路径令牌由 T2 signals 机读键派生（M5 T2 契约，见 _hint_tokens）；
+    来源经 ev["bit_hints_source"] 注记（"signals"/"text_fallback"——非评分键，
+    T3 score_hypotheses 只认其已知键，未知键忽略）；mantissa 令牌仍由视图
+    field_clustering 位段主导派生。"""
     ev = {}
     logical = (views.get("cpu_clustering") or {}).get("logical") or {}
     if logical.get("n") and logical.get("max_share", 0.0) >= 0.5:
         ev["cpu_clustering"] = True
-    toks = []
-    hint_text = (hints or {}).get("hint", "")
-    if "执行/寄存器通路候选" in hint_text:
-        toks.append("execute_path")
-    if "存储层级候选" in hint_text:
-        toks.append("load_path")
+    toks, source = _hint_tokens(hints)
+    had_path_toks = bool(toks)            # 来源注记只描述路径令牌的派生路线
     if (views.get("field_clustering") or {}).get("dominant") == "mantissa":
         toks.append("mantissa")
     if toks:
         ev["bit_hints"] = toks
+        if had_path_toks:
+            ev["bit_hints_source"] = source
     return ev
 
 
-def _section_timeline(root, focus, events):
+def _section_timeline(root, focus, events, topology_root=None):
     """时序段（T4）。focus = [(row, cls)]；无 mismatch 类事件 → 整段省略（""）。
+    topology_root → tl.cpu_to_topology_label 拓扑根（缺省真实 /sys；M4 终审
+    移交：mismatch cpu 接续 perf --per-core 标签 join 标签形 core 列）。
     返回 (md, same_window, ctrl_diff)：后两者为推断段陈述（同窗相关/对照差分，
     v5 §11.1-5 归段口径）。"""
     if not focus:
@@ -572,7 +652,26 @@ def _section_timeline(root, focus, events):
                      "嫌疑/对照差分不可算（v5 §11.5 需拓扑匹配对照核）")
             L.append("")
             continue
-        s_keys = {tl._cpu_key(c) for c in suspect}
+        # 嫌疑核标签接续（M4 终审移交）：cpu → perf --per-core 拓扑标签，数字
+        # 核号与标签双键 join（fixture 数字列与 M1 标签形 core 列皆可匹配）；
+        # 标签不可得 → 注记「标签不可接续」降级（仅数字核号，不抛）。
+        s_keys, joined, unjoined = set(), [], []
+        for c in suspect:
+            s_keys.add(tl._cpu_key(c))
+            lab = tl.cpu_to_topology_label(c, topology_root)
+            if lab is None:
+                unjoined.append(str(c))
+            else:
+                joined.append((c, lab))
+                s_keys.add(tl._cpu_key(lab))
+        if joined:
+            L.append("- 嫌疑核标签接续（cpu→perf --per-core 拓扑标签，标签形 "
+                     "core 列匹配用）："
+                     + "、".join(f"{c}→{lab}" for c, lab in joined))
+        if unjoined:
+            L.append(f"- 嫌疑核标签不可接续（cpu{'、'.join(unjoined)} sysfs 拓扑"
+                     "不可得）——仅数字核号匹配（core 列为标签形时差分不可算，"
+                     "如实降级）")
         core_disp = {}
         for _, r in rows_w:
             k = tl._core_key(r.get("core"))
@@ -612,8 +711,10 @@ def _section_timeline(root, focus, events):
 # ---------------------------------------------------------------------------
 # generate_report
 
-def generate_report(data_root, event_id=None, out_path=None):
-    """数据根 → 五段 Markdown 诊断报告（+ 红线自检段）。见模块 docstring。"""
+def generate_report(data_root, event_id=None, out_path=None, topology_root=None):
+    """数据根 → 五段 Markdown 诊断报告（+ 红线自检段）。见模块 docstring。
+    topology_root → 时序段嫌疑核标签接续的拓扑根（缺省真实
+    /sys/devices/system/cpu；测试注入 fixture 根）。"""
     root = str(data_root)
     _require(os.path.isdir(root), f"数据根不存在或不是目录: {root!r}")
 
@@ -716,14 +817,15 @@ def generate_report(data_root, event_id=None, out_path=None):
         L1.append(f"- 暴露量来源：{exposure.get('source', '—')}"
                   f"（valid_iterations={n_iter if n_iter is not None else '不可得'}, "
                   f"valid_core_hours="
-                  f"{n_hours if n_hours is not None else '不可得'}）")
+                  f"{format(n_hours, 'g') if n_hours is not None else '不可得'}）")
     else:
         L1.append("- 暴露量不可得：无 spool/exposure.json（loop-count 日汇总缺失）——"
                   "仅事件计数，不得据此作零率或无 SDC 声明（v5 §9.6 报告纪律）")
     L1.append("")
 
     # ---- 时序段（T4；先算——推断段陈述来源）----
-    timeline_md, same_window, ctrl_diff = _section_timeline(root, focus_rows, events)
+    timeline_md, same_window, ctrl_diff = _section_timeline(
+        root, focus_rows, events, topology_root=topology_root)
 
     # ---- 概述：证据分级三段（v5 §11.1-5）----
     mm_counts = views.get("counts") or {}
@@ -781,7 +883,12 @@ def generate_report(data_root, event_id=None, out_path=None):
                        f"{next(iter((logical.get('counts') or {}).values()), 0)}"
                        f"/{logical.get('n', 0)}，≥0.5 判据）")
     if "bit_hints" in ev3:
-        derived.append(f"bit_hints={ev3['bit_hints']}（T2 候选域提示 + 位段主导）")
+        note = {"signals": "——signals 机读键派生",
+                "text_fallback": "——signals 缺键回退 hint 文本匹配"
+                                 "（T2/T5 版本错位防护）"
+                }.get(ev3.get("bit_hints_source"), "")
+        derived.append(f"bit_hints={ev3['bit_hints']}（T2 候选域提示{note}"
+                       " + 位段主导）")
     L4.append("- 证据键派生（数据驱动，无数据源不设）：" + ("；".join(derived) or
               "无可派生证据键（无 mismatch 块或信号不足）——全域 score=0，"
               "排序仅为矩阵默认序，非候选裁定"))

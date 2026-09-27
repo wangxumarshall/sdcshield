@@ -343,3 +343,22 @@
 ### 下一步
 
 - [ ] 合并豁免 PR 后，观察下一个 autofix PR 的 git-sanity 即时豁免生效
+
+## 2026-09-27（补记：sdc-excite-reproduce M0-M4 里程碑结论——M4 终审 Minor #4 欠账清偿）
+
+> 欠账来源：M4 终审 Minor #4——progress-log 只记到 2026-09-26 的 M1b/CI 会话，
+> M0-M4 五个里程碑的交付与结论从未在此日志立档（各里程碑细节在
+> `docs/superpowers/plans/` 与 `.superpowers/sdd/`）。本条为一行式索引，逐里程碑
+> 展开见对应 plan/sdd 与 v5 §14.1-14.2 as-built 标注列。
+
+| 里程碑 | 分支（PR） | 一行结论 |
+|---|---|---|
+| M0 契约与基线 | `feat/sdc-excite-reproduce-m0`（PR #161/#163/#164，共 14 commits，09-25 合入） | canonical 事件 schema + 五元时间 + 拓扑库 + legacy 适配器 + A/B 基线 + **命名统一迁移落地**（campaign→sdc-excite-reproduce，含 systemd 路径 bug 修复）；磁盘前置清理 86%→78%（output 附2） |
+| M1 可观测性 | `feat/sdc-excite-reproduce-m1`（PR #172/#174，09-25/26） | 采集器三件套 collector@{percore,pmu,ras}（60s/20s as-built 档——BMC 限速教训，非 1s 目标态）+ acceptance_m1 0.5h/24h 门 + coverage 质量列 + A/B 开销基线；远端观测面〔研究〕未部署 |
+| M1b monitor v3 + 驱动加固 | `feat/sdc-excite-reproduce-m1b`（PR #187/#188，09-26） | 发现式列集 monitor.csv v3 + 离散态 diff + known_faults 白名单 + 复测内存护栏（cold_c4 OOM 教训）+ 孤儿清理 + 测试沙盒（SDC_ORPHAN_PIDS——pkill 污染战役实测后立红线） |
+| M2 规则闭环 | `feat/sdc-excite-reproduce-m2`（PR #189/#190，09-26） | 四守护（eventd/controller/root-helper/ring）+ 五态机重放确定性 + cmd/ 文件协议（burst/hotplug/restore+读回审计）+ **消费基线**（防陈旧事件驱动特权动作）+ 9 服务部署 + BPF canary 探测（SPURIOUS_CANARY=dmesg 降级） |
+| M3 主动激发与复现 | `feat/sdc-excite-reproduce-m3`（PR #192/#196，09-26） | sdc_profile（resolve 冻结）/四轴执行器（governor=能力缺口诚实暴露）/sdc_reproducer（门禁七项+capsule+run.sh --check-only）/概率 ddmin（CORE179 硬规则：禁确定性删减）/repro_queue 闭环；m3_drill 验收 |
+| M4 诊断与统计 | `feat/sdc-excite-reproduce-m4`（PR #197，09-27） | 五件分析工具全 stdlib-only：sdc_stats（精确二项）/bitview（七视图）/hypothesis（十域+E0-E4）/timeline（±60s 窗差分）/report（五段+guard 红线自检）+ CORE179 脱敏 fixture 回归；全套 298 passed 基线由此确立 |
+
+M4 终审其余移交已随 M5 T1/T2 交付（exposure 生产端 + 机读 hint 契约/嫌疑核标签接续）；
+M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §14.2 状态列如实标注为 ◐。

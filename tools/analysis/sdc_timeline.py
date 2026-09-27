@@ -9,6 +9,14 @@ stdlib only。消费 M1 采集器 CSV（monitor.csv/percore.csv/pmu_core.csv，t
       返回 {"columns"(去 ts), "rows"({"dt_s", ...列值}), "n", "degraded",
       "window"(echo 原参数)}。列值三态：数字串→float、空→None、其余原串。
 
+  cpu_to_topology_label(cpu, topology_root=None) -> str|None
+      logical cpu 号 → perf --per-core 拓扑标签 "S<pkg>-D<die>-C<core>"（M4 终审
+      移交项：report 差分把 mismatch cpu 接续到 M1 pmu_core.csv 标签形 core 列）。
+      S=physical_package_id 原值、C=core_id、D=die_id 值（文件缺则 0——perf 6.6
+      实测口径，见函数 docstring 实证）；cpu 目录/必需文件缺失或输入非核号 →
+      None（不抛，调用方注记「标签不可接续」降级）。topology_root 缺省
+      /sys/devices/system/cpu（测试注入 fixture 根）。
+
   suspect_vs_control_diff(pmu_csv, suspect_cpus, control_cpus, window,
                           has_mismatch=None) -> dict
       v5 §11.5——以事件为 0 切窗后，嫌疑核均值 vs 对照核均值差分表。派生指标
@@ -51,6 +59,10 @@ stdlib only。消费 M1 采集器 CSV（monitor.csv/percore.csv/pmu_core.csv，t
 core 列匹配（诚实边界）：M1 as-built pmu_core.csv 的 core 列为 perf 拓扑标签
 （"S36-D0-C0"）——须传标签原串；纯数字核号只匹配数字 core 列（fixture/派生
 表），数字 0 不误配 "-C0"（尾部是 die 内 core 号，非逻辑 CPU 号）。
+cpu_to_topology_label(cpu, topology_root=None) -> str|None 把 logical cpu 号
+接续成该标签（M4 终审移交：report 差分把 mismatch cpu join 到标签形 core 列；
+拓扑不可得 → None，调用方注记降级不抛）——格式实证见该函数 docstring
+（2026-09-27 本机 strace + 真实 pmu_core.csv：D=die_id 值、缺则 0，非 cluster_id）。
 
 流式读取（评审 Important #3）：CSV 行级 parse→判窗→留行，绝不全量物化——
 94MB 真实 pmu_core.csv 全量 dict 物化峰值 RSS ~1.1GB（本机有 OOM 前科），
@@ -280,6 +292,56 @@ def _series(rows, num_col, den_col, scale):
 
 # ---------------------------------------------------------------------------
 # 公开 API
+
+_TOPOLOGY_ROOT = "/sys/devices/system/cpu"
+
+
+def _read_topology_int(topology_root, cpu, name):
+    """<root>/cpuN/topology/<name> → int；文件缺失/不可读/非整数 → None（不抛）。"""
+    try:
+        with open(os.path.join(str(topology_root), f"cpu{cpu}", "topology", name),
+                  encoding="utf-8") as f:
+            s = f.read().strip()
+    except OSError:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
+def cpu_to_topology_label(cpu, topology_root=None):
+    """logical CPU 号 → perf --per-core 拓扑标签 "S<pkg>-D<die>-C<core>"；
+    拓扑不可得（cpu 目录/必需文件缺失或不可解析、输入非核号）→ None——不抛，
+    调用方（sdc_report 差分接续）注记「标签不可接续」降级。topology_root 缺省
+    /sys/devices/system/cpu（测试注入 fixture 根：根下 cpuN/topology/ 布局）。
+
+    格式实证（2026-09-27 本机，perf 6.6.0-159.4.3.154.oe2403sp4）：strace
+    perf stat -x, -a --per-core 逐 cpu 只 open topology/{core_id, die_id,
+    physical_package_id} 三文件（不读 cluster_id）；本机无 die_id 文件
+    （ENOENT）而真实 monitor/pmu_core.csv 全 128 标签皆 D0——cpu0 → S36-D0-C0
+    （其 cluster_id=138）、cpu96 → S8442-D0-C96（cluster_id=12720）——「D=
+    cluster_id」与「die 无则两段形 S-C」两设想均被实证否定，按 perf 实测口径：
+    D 取 die_id 值、文件缺则 0，恒 S-D-C 三段形。S=physical_package_id 原值
+    （本机 36/8442 等固件大数照读，CLAUDE.md 拓扑怪癖「read as-is」）、
+    C=core_id（SMT 机同 core 兄弟线程映同标签，与 perf --per-core 聚合一致）。
+    容忍数字串核号（mismatch 块 cpu 字段可为 str）。"""
+    if isinstance(cpu, bool):
+        return None
+    if isinstance(cpu, int):
+        n = cpu
+    elif isinstance(cpu, str) and cpu.strip().isdigit():
+        n = int(cpu.strip())
+    else:
+        return None
+    root = _TOPOLOGY_ROOT if topology_root is None else str(topology_root)
+    pkg = _read_topology_int(root, n, "physical_package_id")
+    core = _read_topology_int(root, n, "core_id")
+    if pkg is None or core is None:
+        return None
+    die = _read_topology_int(root, n, "die_id")
+    return f"S{pkg}-D{0 if die is None else die}-C{core}"
+
 
 def align_window(metrics_csv, event_ts, before_s=60, after_s=60):
     """事件对齐窗口切片（任何 ts 首列 CSV）→ 见模块 docstring。"""

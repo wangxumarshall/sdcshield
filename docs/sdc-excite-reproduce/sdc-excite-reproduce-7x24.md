@@ -1437,39 +1437,44 @@ risk_class: normal
 
 ### 14.1 分阶段交付〔v2〕
 
-| 阶段 | 周期 | 人月 | 主要交付物 | 退出标准 |
-|---|---:|---:|---|---|
-| M0 契约与基线 | 2-3 周 | 2 | schema、profile、身份/时间/拓扑库、现有日志适配器、A/B 开销基线、**命名统一迁移（§2.3）** | 历史 CORE179 和当前 sdc-excite-reproduce 数据可被统一解析；时间映射与拓扑单测通过 |
-| M1 可观测性 | 4-6 周 | 4 | 1 秒 OS/频率、PMU 组轮换、RAS/kernel watcher、120 秒 ring、（远端观测面〔研究〕） | 24 小时采集无关键丢样；PMU 质量字段和 collector 自监控可见；常态开销达标 |
-| M2 规则闭环 | 4-5 周 | 3 | GREEN-BLACK 状态机、action API、root helper（含 cpu hotplug 动作）、事件 burst、恢复机制 | 合成 mismatch、RAS、BMC 失联、温度越限均触发正确动作且可回放 |
-| M3 主动激发与复现 | 6-8 周 | 5 | profile 矩阵、victim/aggressor runner、repro capsule、概率 reducer、**四轴策略执行器（governor 实验/负载整形/上下线）** | 人工/架构态注入事件能自动到 R3；单核不复现条件不会被错误删除 |
-| M4 诊断与统计 | 5-7 周 | 4 | 假设矩阵、探针库、置信区间/聚类分析、离线报告 | 报告能区分事实/推断/假设，所有比率包含分母、暴露和区间 |
-| M5 加固与推广 | 4-6 周 | 4 | systemd/部署、权限隔离、故障演练、跨机器配置、运维手册 | 72 小时运行、panic/kdump、断网/磁盘/BMC 故障演练和恢复验收通过 |
+**M0-M5 as-built 状态（2026-09-27 标注；✅=本仓已实现并合入 main，分支/PR 号在列；
+标注列为主交付物的实装口径，〔研究〕项不作虚称）**：
+
+| 阶段 | 周期 | 人月 | 主要交付物 | 退出标准 | as-built 状态（分支/PR） |
+|---|---:|---:|---|---|---|
+| M0 契约与基线 | 2-3 周 | 2 | schema、profile、身份/时间/拓扑库、现有日志适配器、A/B 开销基线、**命名统一迁移（§2.3）** | 历史 CORE179 和当前 sdc-excite-reproduce 数据可被统一解析；时间映射与拓扑单测通过 | ✅ `feat/sdc-excite-reproduce-m0`（PR #161/#163/#164，共 14 commits，2026-09-25）：canonical schema（sdc_event）/五元时间（sdc_time）/拓扑（sdc_topology）/legacy 适配器/ab_baseline/**命名迁移落地**（§2.3 粗体注记） |
+| M1 可观测性 | 4-6 周 | 4 | 1 秒 OS/频率、PMU 组轮换、RAS/kernel watcher、120 秒 ring、（远端观测面〔研究〕） | 24 小时采集无关键丢样；PMU 质量字段和 collector 自监控可见；常态开销达标 | ✅ `feat/sdc-excite-reproduce-m1`（PR #172/#174）：采集器三件套 collector@{percore,pmu,ras} + acceptance_m1 0.5h/24h 门 + A/B 基线。**采样档为 as-built 实测档（60s/20s，§6.3 表）而非 1s**——BMC 限速教训；1s 带内与事件 burst 常态化属目标态未做（burst 通道 M2 已建，事件触发经 root-helper）；远端观测面〔研究〕未部署（本地 spool 为事实来源） |
+| M2 规则闭环 | 4-5 周 | 3 | GREEN-BLACK 状态机、action API、root helper（含 cpu hotplug 动作）、事件 burst、恢复机制 | 合成 mismatch、RAS、BMC 失联、温度越限均触发正确动作且可回放 | ✅ `feat/sdc-excite-reproduce-m2`（PR #189/#190）：四守护 eventd/controller/root-helper/ring + 五态机重放确定性 + cmd/ 文件协议（burst/hotplug/restore+readback 审计）+ 消费基线（陈旧事件驱动特权动作的防线）+ 9 服务部署 + BPF canary 探测（SPURIOUS_CANARY=dmesg 诚实降级） |
+| M3 主动激发与复现 | 6-8 周 | 5 | profile 矩阵、victim/aggressor runner、repro capsule、概率 reducer、**四轴策略执行器（governor 实验/负载整形/上下线）** | 人工/架构态注入事件能自动到 R3；单核不复现条件不会被错误删除 | ✅ `feat/sdc-excite-reproduce-m3`（PR #192/#196）：sdc_profile（resolve 冻结）/sdc_axes（load_shaping+hotplug 可执行；governor 实验档=能力缺口诚实暴露）/sdc_reproducer（门禁七项+capsule+run.sh --check-only）/sdc_reducer（CORE179 硬规则：禁确定性删减）/repro_queue 闭环；m3_drill 验收退出标准 |
+| M4 诊断与统计 | 5-7 周 | 4 | 假设矩阵、探针库、置信区间/聚类分析、离线报告 | 报告能区分事实/推断/假设，所有比率包含分母、暴露和区间 | ✅ `feat/sdc-excite-reproduce-m4`（PR #197）：sdc_stats（Clopper-Pearson/Wilson 精确）/sdc_bitview（七视图+候选域提示）/sdc_hypothesis（十域+E0-E4 守卫）/sdc_timeline（±60s 窗+嫌疑/对照差分）/sdc_report（五段+guard 红线自检）+ CORE179 脱敏 fixture 回归；"区分事实/推断/假设"由三段切分 API+报告段落落实 |
+| M5 加固与推广 | 4-6 周 | 4 | systemd/部署、权限隔离、故障演练、跨机器配置、运维手册 | 72 小时运行、panic/kdump、断网/磁盘/BMC 故障演练和恢复验收通过 | ✅ `feat/sdc-excite-reproduce-m5`（T1-T6 全交付，PR #201）：exposure 生产端+机读 hint 契约（M4 终审移交）/drill 14 类 drill_all（v5 §17.2 清单全覆盖，2026-09-27 实测 14/14 PASS）/81 机部署包+入役清单（单元 13）/运维手册 operations-runbook.md；systemd/权限隔离 M2 已达成（9 服务+allowlist）；72h 达成口径诚实分列——战役系统 2026-09-23 23:19 起 89.5h≥72h（含两次重启断点续跑，可用性 99.3%）；9 服务齐装口径仅 23.5h（2026-09-26 17:22 起），不以齐装口径虚称 72h，齐装满 72h 复核时点 2026-09-29 17:22（T6 回溯） |
 
 M0-M5 约 22 人月（源草案口径，命名迁移与四轴执行器并入各阶段不另计）；可由 4 人核心团队在约 6-8 个月完成首个可用版本，另需平台/BMC、内核/RAS 和统计支持按需投入。若同时建设厂商级 Vmin/overclock margining、gem5/RTL 结构注入、FPGA/JTAG、机群调度和长期模型训练，总投入更接近 3-6 人年〔研究〕。
 
-**本仓当前落地范围**（as-built 延续，约 6-8 人月）：M0-M2 为主 + M3 的四轴策略执行器 + M4 的统计工具链；深度的 M3 概率 reducer 与 M4 假设矩阵探针库按事件率驱动逐步投入。
+**本仓当前落地范围**（as-built 延续，约 6-8 人月）：M0-M2 为主 + M3 的四轴策略执行器 + M4 的统计工具链；深度的 M3 概率 reducer 与 M4 假设矩阵探针库按事件率驱动逐步投入。——**as-built 修订（2026-09-27）**：M0-M5 六里程碑实际全部在本仓落地（上表 ✅ 行），概率 reducer/假设矩阵探针库已随 M3/M4 交付首版，按事件率继续深化。
 
 ### 14.2 补丁单元序列（一补丁一单元，映射进 M0-M5）
 
-| # | 补丁单元 | 阶段 |
-|---|---|---|
-| 1 | 本机磁盘清理至 <85%（前置，非代码补丁，操作记录进 output） | M0 |
-| 2 | **命名统一迁移**：sdc_campaign.sh→sdc-excite-reproduce.sh、服务名、数据根、systemd 路径 bug 修复（§2.3） | M0 |
-| 3 | collect_inventory v2：capabilities.env + known_faults + PMU 拓扑/计数器预算探测 + 提权探测 + **四轴能力探测（§7.4：cpufreq 响应实验、OEM 探测结论固化、hotplug 可写性）**（吸收 81 机 sdc_machine_scan.sh） | M0 |
-| 4 | monitor v3：BMC 单轮询重构 + 发现式列集 + monitor.csv v3 + 离散态 diff → discrete_events.log + EDAC/vmstat/NUMA 内存列 + UE 告警 | M1 |
-| 5 | collector@percore：percore.csv（util+cpuinfo_cur_freq）+ 驻留直方图 + freq_residency.log | M1 |
-| 6 | collector@pmu：pmu_core/pmu_uncore（perf -a 持久进程 @20s + pivot 宽表 + 预算轮换）+ sdc-collector@.service 模板 + monitor 看门狗 | M1 |
-| 7 | collector@ras：ras_edac.csv + journal 流收编 + spurious canary + rasdaemon 监护 + BERT dump + 81 机 rasdaemon 启用 | M1 |
-| 8 | 驱动失败分类协议：复测（冷/热两态）→n1→逐核二分 + classification.txt + 台账分类列 | M2 |
-| 9 | 偏移引擎扩展：驻留/PMU/逐核极值/EDAC/离散态比较项 + 耗时分布尾部基线（§9.7） | M2 |
-| 10 | 事件取证扩展：全通道 ±5min 切片 + 失败核 120s 定向 PMU 深采（snapshot.request 扩展） | M2 |
-| 11 | root-helper v1：allowlist（governor/snapshot/perf/kdump）+ **cpu_online/cpu_offline 动作 + NUMA 本地性检查 + online 集恢复**（§7.4.4） | M2 |
-| 12 | 假通过清单 ARM64 重推导（审计补丁，产出有效覆盖核算表；统计工具链 §9.6 随此交付） | M4 |
-| 13 | 81 机部署包：统一分支拉取 + inventory v2 扫描 + systemd 安装 + legacy watchers 收编停编 + 冷机 L0 入役 | M5 |
-| 14 | 文档同步：README/NEW_BOARD_ONBOARDING.md（以 §16 为规格）/status.sh 呈现扩展 | M5 |
-| 15 | L5 逐簇健康台账〔通用〕：L5 阶段扩展逐簇 cpuset 轮换 + 健康台账落盘——是否入列由用户决定（128 核簇粒度约需数天轮换一轮） | M3 |
-| 16 | 〔研究，可选〕毒药数据 micro-benchmark 扫描器（§10.5）+ 执行单元隔离用例族（§8.5 Core→Unit 级）+ L5-⑥ 核上下线专项 | M3/M4 |
+**状态列（2026-09-27 as-built 标注）**：✅=已交付；◐=部分交付（缺口如实注明）；⬜=未做。
+
+| # | 补丁单元 | 阶段 | 状态（as-built） |
+|---|---|---|---|
+| 1 | 本机磁盘清理至 <85%（前置，非代码补丁，操作记录进 output） | M0 | ✅ output 附2（2026-09-25，86%→78% 实录；现况 67%） |
+| 2 | **命名统一迁移**：sdc_campaign.sh→sdc-excite-reproduce.sh、服务名、数据根、systemd 路径 bug 修复（§2.3） | M0 | ✅ M0（PR #161/#163/#164；§2.3 粗体注记为落地实录） |
+| 3 | collect_inventory v2：capabilities.env + known_faults + PMU 拓扑/计数器预算探测 + 提权探测 + **四轴能力探测（§7.4：cpufreq 响应实验、OEM 探测结论固化、hotplug 可写性）**（吸收 81 机 sdc_machine_scan.sh） | M0 | ✅ M0（capabilities.env/known_faults/PMU_CORE_COUNTERS 实测 12/四轴探测结论固化） |
+| 4 | monitor v3：BMC 单轮询重构 + 发现式列集 + monitor.csv v3 + 离散态 diff → discrete_events.log + EDAC/vmstat/NUMA 内存列 + UE 告警 | M1 | ✅ M1b（PR #187/#188；sensors_v3.json 持久序 + 列集漂移防御 + known_faults 白名单） |
+| 5 | collector@percore：percore.csv（util+cpuinfo_cur_freq）+ 驻留直方图 + freq_residency.log | M1 | ✅ M1（PR #172/#174） |
+| 6 | collector@pmu：pmu_core/pmu_uncore（perf -a 持久进程 @20s + pivot 宽表 + 预算轮换）+ sdc-collector@.service 模板 + monitor 看门狗 | M1 | ✅ M1（percent_covered 质量列 + 组轮换 10min + collector_self 自监控） |
+| 7 | collector@ras：ras_edac.csv + journal 流收编 + spurious canary + rasdaemon 监护 + BERT dump + 81 机 rasdaemon 启用 | M1 | ◐ 本机全量 ✅（M1，SPURIOUS_CANARY=dmesg 诚实降级）；**81 机 rasdaemon 启用未执行**——入役清单 §1.1 前置（远端用户操作） |
+| 8 | 驱动失败分类协议：复测（冷/热两态）→n1→逐核二分 + classification.txt + 台账分类列 | M2 | ✅ 既有 v4 as-built 驱动遗产（M0 收编）；M1b 加固（retest_guarded 内存护栏/孤儿清理/crash 事件复测） |
+| 9 | 偏移引擎扩展：驻留/PMU/逐核极值/EDAC/离散态比较项 + 耗时分布尾部基线（§9.7） | M2 | ◐ 比较项 ✅（M1b condition_10m 全量工况快照）；**耗时分布尾部基线（§9.7）未做** |
+| 10 | 事件取证扩展：全通道 ±5min 切片 + 失败核 120s 定向 PMU 深采（snapshot.request 扩展） | M2 | ◐ 全通道切片 ✅（驱动 handle_failure as-built：monitor/EDAC/context/yaml_extract 提取式取证）；120s 定向 PMU 深采通道 ✅（cmd/burst-*.request → root-helper perf burst），**事件触发的自动编排未常态化**（按需分派） |
+| 11 | root-helper v1：allowlist（governor/snapshot/perf/kdump）+ **cpu_online/cpu_offline 动作 + NUMA 本地性检查 + online 集恢复**（§7.4.4） | M2 | ✅ M2（PR #189/#190；burst/hotplug/restore + nonce + 审计 + 读回验证，d13 演练守卫；governor 经既有 monitor 代理） |
+| 12 | 假通过清单 ARM64 重推导（审计补丁，产出有效覆盖核算表；统计工具链 §9.6 随此交付） | M4 | ◐ 统计工具链 ✅（M4 sdc_stats：Clopper-Pearson/Wilson/rule of three/暴露量下限/经验贝叶斯收缩）；**假通过清单 22 例 ARM64 重推导未做**（§15.7-7 仍为诚实缺口） |
+| 13 | 81 机部署包：统一分支拉取 + inventory v2 扫描 + systemd 安装 + legacy watchers 收编停编 + 冷机 L0 入役 | M5 | ✅ M5 T4（f51dc0a4：tarball+入役清单+known_faults 预填；**实际入役=远端用户操作，不虚报已部署**；风扇联锁用户决策点在案） |
+| 14 | 文档同步：README/NEW_BOARD_ONBOARDING.md（以 §16 为规格）/status.sh 呈现扩展 | M5 | ◐ onboarding ✅（M2/M3/M4/M5 段+81 机第 8 步）；运维手册 ✅（M5 T5 operations-runbook.md）；**status.sh 呈现扩展与 README 引用未做**（runbook §9.3 待办） |
+| 15 | L5 逐簇健康台账〔通用〕：L5 阶段扩展逐簇 cpuset 轮换 + 健康台账落盘——是否入列由用户决定（128 核簇粒度约需数天轮换一轮） | M3 | ⬜ 未做（用户决策点，未决策） |
+| 16 | 〔研究，可选〕毒药数据 micro-benchmark 扫描器（§10.5）+ 执行单元隔离用例族（§8.5 Core→Unit 级）+ L5-⑥ 核上下线专项 | M3/M4 | ⬜〔研究〕保持（不作虚称） |
 
 每补丁自验证标准（真实命令输出引用）：本机 `ninja` 零新告警（涉及代码时）、collector 手跑 3 个周期输出实查、perf coverage 100% 实查、联锁行为实测、回归 `zstd19` pass、x86 零改动。
 

@@ -8,8 +8,8 @@
      "core_id", "cluster_id", "socket_id"}
 降级契约：缺字段的件不进依赖视图（该视图空/受限）+ views["notes"] 注记，
 绝不抛。xor_mask_hex 缺而 actual/expected 可解析时由 actual^expected 重算
-（注记）；xor_mask_hex 与 actual^expected 不一致、popcount 与重算不一致，
-均以重算为准并注记。
+（注记）；xor_mask_hex 与 actual^expected 不一致以 xor_mask_hex 为准、
+popcount 字段与重算不一致以重算为准——冲突口径两别，均注记。
 
 七视图（views 顶层键，§11.3 逐条对应）：
   1. offset_lane_bit  byte_offset→lane→bit 频率表：三维度件数/bit 次数 +
@@ -138,7 +138,9 @@ def _type_class(tname):
     """type 名 → (类 float/int/None, 位宽, 指数位宽)。
     float 判定 = 名含 float/double（double 即 IEEE754 二进制浮点）；位宽取
     名内数字（float64→64），float/double 裸名显式 32/64；缺数字时由调用方
-    从 hex 长度推、再缺默认 64（canonical double 布局）。"""
+    从 hex 长度推、再缺默认 64。回退只补 width 不补 exp——float 走回退
+    路径 exp 仍 None，位段视图按「位宽不支持」跳过（不按 canonical 布局
+    切）；仅 int 回退宽能进位段（高/低半位段）。"""
     if not isinstance(tname, str) or not tname.strip():
         return (None, None, None)
     t = tname.strip().lower()
@@ -162,7 +164,8 @@ def _type_class(tname):
 
 
 def _width_from_hex(v):
-    """actual_hex 串长 ×4 → 已知浮点位宽（整字节数且 ∈ {16,32,64,128}）。"""
+    """actual_hex 串长 ×4 → 已知位宽（整字节数且 ∈ {16,32,64,128}——
+    IEEE754 已知宽度集，int 一并复用）。"""
     if not isinstance(v, str):
         return None
     s = v.strip()
@@ -360,8 +363,9 @@ def _view_field_clustering(recs, notes):
         notes.append(f"{unsupported} 件 float 位宽不支持位段切分（如 FP8 8 位，"
                      "指数位宽无法从 type 名裁定）——跳过位段聚集")
     if defaulted:
-        notes.append(f"{defaulted} 件 float/int 宽度未知——按 64 位 canonical "
-                     "布局切（sign[63]/exp[62-52]/mantissa[51-0]）")
+        notes.append(f"{defaulted} 件 int 宽度未知——按 64 位默认宽切高/低半"
+                     "位段（float 宽度未知时 exp 无法裁定，走「位宽不支持」"
+                     "跳过路径，不落此注记）")
     if out["opaque_n"]:
         notes.append(f"{out['opaque_n']} 件 type 缺失或非 float/int——"
                      "不做位段聚集（byte 数据无 IEEE754/整数结构）")

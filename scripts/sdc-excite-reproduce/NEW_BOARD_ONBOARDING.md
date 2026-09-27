@@ -336,6 +336,82 @@ E3（独立 oracle/工具/实现交叉验证）→ E4（厂商遥测/margining/�
 只决定「下一项实验先做哪个」，不构成根因裁定。
 
 
+## 第 8 步：81 机（RCSIT TG225 B1）专属入役差异
+
+> 交付形态：打包机不可直达 81 机——`scripts/sdc-excite-reproduce/deploy_81machine.sh`
+> 产出 `dist/sdc-excite-reproduce-<git12>.tar.gz`（repo 快照 + `deploy/` 附加件）与
+> `dist/<git12>-deploy-checklist.md`（入役清单）；本节是该清单的逐项命令化。实际
+> 入役是用户远端操作，完成度以清单勾选与输出摘要为准（**不虚报已部署**）。
+> 画像依据 v5 附录 B：96 核/2 NUMA/内存全 node0（node1 跨 HCCS 访存）/平台固定
+> 2.6GHz（无 cpufreq）/BMC Hi1711 fw 3.11（132 传感器）/rasdaemon inactive。
+
+### 8.1 rasdaemon 启用前置（81 机画像 inactive——先于采集器）
+
+```bash
+rpm -q rasdaemon || echo "缺 rasdaemon——离线补：scripts/offline-build/ 体系（有网机 download-deps.sh 预下载 → install-deps.sh；或 third-party/rpms/）"
+systemctl enable --now rasdaemon
+systemctl is-active rasdaemon      # 期望 active
+ras-mc-ctl --status                # 期望 rasdaemon 记录在案
+```
+
+未启用后果（如实）：collector@ras 的 EDAC 列空采（journal 流仍在）——M1 验收门
+ras_edac.csv 形态不通过；不得虚报 RAS 通道就绪。
+
+### 8.2 known_faults 预填（FAN3 0rpm + SEL #0x84 两行 log_only）
+
+```bash
+# 解包后：tarball 内 deploy/ 副本 → 数据根（monitor 每周期重读 = 热更新，无需重启）
+install -m 644 deploy/known_faults.tg225b1.csv ~/sdc-excite-reproduce/known_faults.csv
+grep -v '^#' ~/sdc-excite-reproduce/known_faults.csv   # 恰两行（FAN3 Speed / Slot/Connector），行尾 log_only
+# 生效验证（监控跑起后）：monitor/discrete_events.log TRANSITION 行尾 [known_fault:log_only]
+```
+
+SEL #0x84 为 Fault Asserted（非 Critical）——不触发 SEL Critical 粘性 PAUSE；
+~8.5min 周期计入 sel5m 列（约 0.6 条/5min，远低于风暴告警线 20 条/5min）。
+
+**as-built 诚实注记（用户决策点，不得静默绕过）**：风扇联锁是模拟量安全联锁
+（FAN2/3 读数为 0 或缺失 → 3 个采样内 fan PAUSE），**不查 known_faults 白名单**——
+FAN3 恒 0rpm 会使该板战役持续 PAUSE（采集不断、压测暂停）。三选项：
+A) 维持联锁如实触发（该板只采集不压测）；B) 用户授权后加风扇传感器豁免代码路径
+（独立补丁单元，本包不含）；C) 先修 FAN3 传感器/风扇再入役。v5 §15.1 安全纪律：
+自动系统不得为提高事件数关闭安全联锁——选项 B 须用户明确决策后另行开发。
+
+### 8.3 无 cpufreq 列降级（预期行为，非缺陷）
+
+平台固定 2.6GHz、无 cpufreq、cpuinfo 无 MHz → 逐核频率不可观测：percore.csv
+频率列空、freq_residency.log 无数据、monitor.csv 的 fmin/favg/fmax 空、
+`--vary-frequency`/`--vary-uncore-frequency` skip（graceful）、governor 请求路径
+no-op（无 scaling_governor 可写）。验收口径：列空/skip 不算部署失败；di/dt 激发
+由负载阶跃承担（v5 §7.4.1）。
+
+### 8.4 温度基线差异（vs 参考机 TaiShan 2280）
+
+- 传感器面不同：81 机独有 CPU Power / MEM Power / 1711 Core Temp / SSD2 Temp /
+  NIC OM Temp；无 N_VDDAVS / HVCC / VDDQ Temp / VRD Temp——列集不同属预期
+  （monitor v3 发现式列集自动适应，sensors_v3.json 持久化）。
+- 实测基线（2026-09-23 24h 战役）：温度 56 → 91°C、功耗 234 → 402W。
+- 前置：空载基线距 Tjmax ≥ 30°C 余量；热联锁阈值由 ACPI trips 自动推导
+  （campaign.env），首日人工确认 monitor.csv 温度列形态。
+
+### 8.5 巡检模板新路径
+
+巡检模板以 `docs/sdc-excite-reproduce/operations-runbook.md`（M5 运维手册）为准
+——替换过时的 scripts/campaign 模板（v4 遗留路径，不再使用）；包内缺失（打包
+时点早于手册合入）时以仓库 main 最新为准。
+
+### 8.6 打包与解包（打包机侧 / 目标机侧）
+
+```bash
+# 打包机（本仓）：
+bash scripts/sdc-excite-reproduce/deploy_81machine.sh
+#   → dist/sdc-excite-reproduce-<git12>.tar.gz + dist/<git12>-deploy-checklist.md
+#   （--dist DIR 可改产物目录；--from-tree DIR 是测试模式，不打 ~204MB 真包）
+# 目标机（远端）：
+mkdir sdc-excite-reproduce-<git12>
+tar xzf sdc-excite-reproduce-<git12>.tar.gz -C sdc-excite-reproduce-<git12>
+cd sdc-excite-reproduce-<git12> && cat deploy/DEPLOY-CHECKLIST.md   # 逐项执行
+```
+
 ## 自动推导 vs 人工确认
 
 **自动推导**（`campaign.env`，首次运行探测；删除该文件可重新生成）：
@@ -360,6 +436,7 @@ E3（独立 oracle/工具/实现交叉验证）→ E4（厂商遥测/margining/�
 | 事件台账 | `cat ~/sdc-excite-reproduce/events/ledger.csv`；单事件证据在 `events/<时间戳>-*/` |
 | M3 复现队列 | 待办 `ls ~/sdc-excite-reproduce/spool/repro_queue/`（堆积即待消费）；消费 `python3 tools/excite/sdc_reproducer.py --from-queue --once --data-root ~/sdc-excite-reproduce`（真实受界发射——低负载时段跑）；结果 `ls ~/sdc-excite-reproduce/spool/repro_done/`；capsule `~/sdc-excite-reproduce/spool/repro_capsules/<event_id>/`（`scripts/run.sh --check-only` 可重放预检） |
 | M4 离线诊断报告 | `python3 tools/analysis/sdc_report.py --data-root ~/sdc-excite-reproduce -o /tmp/report.md`（只读数据根、与运行中服务共存）；报告尾部红线自检段须 **0 违例**；单事件深挖加 `--event-id <id>` |
+| 81 机部署包 | `bash scripts/sdc-excite-reproduce/deploy_81machine.sh`（→ `dist/sdc-excite-reproduce-<git12>.tar.gz` + 入役清单；81 机差异与入役步骤见第 8 步） |
 | 崩溃后 | systemd 自动拉起（Restart=always）；从 state.json 断点续跑 |
 | 停止 | `su -c "bash scripts/sdc-excite-reproduce/stop.sh"`（保留进度） |
 | 日志轮转 | logrotate 每日压缩保留 14 天；YAML/events/monitor 证据**永不轮转** |

@@ -50,7 +50,7 @@ template <typename SVD, int Dim> struct EigenSVDTest
     {
         memcmp_or_fail(reinterpret_cast<const typename FP::value_type *>(actual),
                        reinterpret_cast<const typename FP::value_type *>(expected),
-                       2 * dim * dim, name);
+                       size_t(2) * static_cast<size_t>(dim) * static_cast<size_t>(dim), name);
     }
 
     template <typename FP> static inline std::enable_if_t<!boost::is_complex<FP>::value>

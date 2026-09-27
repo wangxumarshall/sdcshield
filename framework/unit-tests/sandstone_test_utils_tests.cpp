@@ -76,6 +76,11 @@ protected:
         for (int i = 0; i < num_items; i++)
             counts[picker->pick()]++;
     }
+
+    /* 各用例裸 new picker;不 delete 会被 ASan/LSan 记为泄漏 */
+    void TearDown() override {
+        delete picker;
+    }
 };
 
 TEST_F(WeightedPickerTestFixture, Entry1_100_percent) {

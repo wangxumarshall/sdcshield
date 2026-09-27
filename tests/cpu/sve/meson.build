@@ -212,6 +212,7 @@ if host_machine.cpu_family() == 'aarch64'
                 default_cpp_flags,
                 march_generic_flags,
                 '-march=armv8.2-a+sve',
+                sve_sanitize_exempt,
             ],
         )
         sandstone_tests += [tests_sve_crt]
@@ -275,6 +276,7 @@ if host_machine.cpu_family() == 'aarch64'
                 default_cpp_flags,
                 march_generic_flags,
                 '-march=armv8.2-a+sve',
+                sve_sanitize_exempt,
             ],
         )
         sandstone_tests += [tests_sve_avx53_ipsec]
@@ -296,6 +298,7 @@ if host_machine.cpu_family() == 'aarch64'
             default_cpp_flags,
             march_generic_flags,
             '-march=armv8.2-a+sve',
+            sve_sanitize_exempt,
         ],
     )
 

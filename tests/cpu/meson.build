@@ -34,6 +34,17 @@ if target_machine.cpu_family() != 'x86_64'
     # warning was left behind
     tests_common_cpp_args += '-Wno-deprecated-copy'
 endif
+
+# GCC 12.3 对 SVE intrinsics + sanitizer 插桩存在 codegen ICE(RTL expand
+# 段错误,2026-09-27 本地 -Db_sanitize=address,undefined 全量构建实证:
+# 14 个 SVE TU 全崩、非 SVE 449 个 TU 全过)。SVE 专属库(arm64/sve 子目录
+# 各 static_library)在启用 b_sanitize 时整体豁免插桩:库内代码不受
+# ASan/UBSan 逐条插桩(全局 malloc 拦截器仍生效),非 SVE 代码全量插桩。
+# 见 .github/workflows/sanitizer.yaml 夜巡。
+sve_sanitize_exempt = []
+if get_option('b_sanitize') != 'none'
+    sve_sanitize_exempt = ['-fno-sanitize=all']
+endif
 if target_machine.system() == 'windows' and get_option('buildtype') == 'debug'
     # Force a little bit of optimization, otherwise we get:
     # Fatal error: tests/libtests_base.a.p/eigen_svd_svd_cdouble_noavx512.cpp.obj: file too big

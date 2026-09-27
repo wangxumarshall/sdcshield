@@ -8,9 +8,13 @@ stdlib only。消费 M0-M4 全链产物，产出五段 Markdown 诊断报告 + �
   spool/events.jsonl       canonical 事件流（M0 schema）：sdc_mismatch 事件取其
                             mismatch 块（dict 或块列表）入位形态段；mismatch 事件
                             存在性 → T4 has_mismatch 注入；缺失 → has_mismatch=None
-  spool/exposure.json      暴露量摘要（v5 §9.6 等效试验日汇总的机器可读形：
-                            {"valid_iterations", "valid_core_hours", "source"}）；
-                            真实根当前无此文件 → 暴露量不可得，仅事件计数（如实）
+  spool/exposure.json      暴露量 JSONL（M5 T1：monitor write_exposure 每 10min 追加
+                            快照行 {"ts","valid_iterations_today","core_hours_today",
+                            "online_cpus","cycle","source_files","source"}）——取最后
+                            一个有效快照作 rate_table 分母（不同日分母不混，不回退
+                            更早行）；缺文件/坏行/字段 null → 暴露量不可得，仅事件
+                            计数（如实；as-built 驱动日汇总行无 loop-count，迭代
+                            口径降级不可得直至驱动侧补记）
   monitor/pmu_core.csv     M1 PMU 采集（时序段事件对齐窗口 + 嫌疑/对照差分；
                             流式读取——T4 评审 Important #3 口径）
   events/<event_id>/ring_window/  capsule（120s 环窗冻结，M2 Task 2）；存在则引
@@ -136,25 +140,53 @@ def _load_events_jsonl(path):
 
 
 def _load_exposure(root):
-    """spool/exposure.json → dict|None（缺失/坏 JSON/非 dict → None，不抛）。"""
+    """spool/exposure.json → 最后一个有效快照 dict|None（缺失/全坏 → None，不抛）。
+    M5 T1 起为 JSONL（monitor write_exposure 每 10min 追加一行快照）——逐行解析取
+    最后一个可解析 dict（坏行容忍；as-built 快照的 valid_iterations_today 可为
+    null=当日不可得，不回退更早行——不同日的分母不可混）；兼容旧单 dict 形
+    （M4 fixture：无行可解析时整体 json.load）。"""
     p = os.path.join(root, "spool", "exposure.json")
     if not os.path.isfile(p):
         return None
     try:
         with open(p, encoding="utf-8") as f:
-            d = json.load(f)
-    except (OSError, json.JSONDecodeError):
+            lines = f.readlines()
+    except OSError:
         return None
-    return d if isinstance(d, dict) else None
+    snap = None
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            d = json.loads(s)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(d, dict):
+            snap = d
+    if snap is None:
+        try:
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            snap = d if isinstance(d, dict) else None
+        except (OSError, json.JSONDecodeError):
+            snap = None
+    return snap
 
 
 def _exposure_values(exposure):
-    """exposure dict → (valid_iterations|None, valid_core_hours|None)——
-    非正数/类型不对按缺失处理（不伪造 0）。"""
+    """exposure 快照 dict → (valid_iterations|None, valid_core_hours|None)——
+    新键 valid_iterations_today / core_hours_today（M5 T1 生产端）优先，回退旧键
+    valid_iterations / valid_core_hours（M4 fixture 形）；非正数/类型不对按缺失
+    处理（不伪造 0——null 是"当日不可得"的如实值，非零填充）。"""
     if not exposure:
         return (None, None)
-    n = exposure.get("valid_iterations")
-    h = exposure.get("valid_core_hours")
+    n = exposure.get("valid_iterations_today")
+    if not (isinstance(n, int) and not isinstance(n, bool) and n > 0):
+        n = exposure.get("valid_iterations")
+    h = exposure.get("core_hours_today")
+    if not (isinstance(h, (int, float)) and not isinstance(h, bool) and h > 0):
+        h = exposure.get("valid_core_hours")
     n = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
     h = h if isinstance(h, (int, float)) and not isinstance(h, bool) \
         and h > 0 else None
@@ -716,7 +748,7 @@ def generate_report(data_root, event_id=None, out_path=None):
         L1.append(f"- 暴露量来源：{exposure.get('source', '—')}"
                   f"（valid_iterations={n_iter if n_iter is not None else '不可得'}, "
                   f"valid_core_hours="
-                  f"{n_hours if n_hours is not None else '不可得'}）")
+                  f"{format(n_hours, 'g') if n_hours is not None else '不可得'}）")
     else:
         L1.append("- 暴露量不可得：无 spool/exposure.json（loop-count 日汇总缺失）——"
                   "仅事件计数，不得据此作零率或无 SDC 声明（v5 §9.6 报告纪律）")

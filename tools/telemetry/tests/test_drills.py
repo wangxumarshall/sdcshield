@@ -1,4 +1,5 @@
-"""M5 故障演练脚本族（v5 §17.2 十三类验收基准）——pytest 可执行规格。
+"""M5 故障演练脚本族（v5 §17.2 验收基准全覆盖——清单 13 项，CE/UE 拆分
+为 d04/d05 共 14 类）——pytest 可执行规格。
 
 驱动 scripts/sdc-excite-reproduce/drills/ 演练本体（bash 子进程，与人工/CI
 驱动同入口）：每类断言 ① 演练退出码 0 + PASS 行；② 证据目录形态
@@ -6,9 +7,9 @@
 
 安全边界（全程）：DRILL_OUT 指 pytest tmp_path——演练绝不写仓库内默认位、
 绝不指向真实战役根（真实根形态守卫在 drill_lib.drill_init，此处直测）。
-13 类全跑耗时较长（d07/d09 含真实进程生命周期等待）——pytest 默认只跑
-快速子集（d01-d03），全量跑由 drill_all.sh 本体承担（SDC_DRILLS_FULL=1
-环境变量开启全量 pytest 路径）。
+14 类全跑耗时较长（d07/d09 进程生命周期 + d14 热联锁跨周期 ~50s）——
+pytest 默认只跑快速子集（d01-d03）+ 各类独立用例，全量跑由 drill_all.sh
+本体承担（SDC_DRILLS_FULL=1 环境变量开启全量 pytest 路径）。
 """
 import os, re, subprocess
 
@@ -18,10 +19,11 @@ DRILL_ALL = os.path.join(DRILLS, "drill_all.sh")
 
 # 快速子集：事件链纯 --once 工具调用（无进程等待）——CI/回归默认跑
 FAST_SUBSET = ("d01_synthetic_mismatch", "d02_test_bug", "d03_spurious_fault")
+# v5 §17.2 全 13 项（CE/UE 拆分 → 14 类；映射表见 drill_all.sh 头注释）
 FULL_LIST = FAST_SUBSET + (
     "d04_ce", "d05_ue", "d06_panic", "d07_runner_hang", "d08_bmc_timeout",
     "d09_collector_crash", "d10_network_split", "d11_disk_full",
-    "d12_clock_jump", "d13_restore_fail",
+    "d12_clock_jump", "d14_thermal_overlimit", "d13_restore_fail",
 )
 
 
@@ -82,6 +84,23 @@ def test_d03_spurious_fault(tmp_path):
     assert "SPURIOUS" in ev["source_line"]
 
 
+def test_d14_thermal_overlimit(tmp_path):
+    """温度越限（v5 §17.2 清单项——热联锁 §8.6 唯一 kill 真实负载路径）。
+
+    独立复核（详细断言在 drill 内）：PAUSE 96 行/热升级行/RESUME 行三段
+    在案 + 牺牲进程已死 + PAUSE 标志随 RESUME 移除。
+    """
+    r = run_drill("d14_thermal_overlimit", tmp_path, timeout=300)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "== d14_thermal_overlimit: PASS ==" in r.stdout
+    root = assert_drill_evidence(tmp_path, "d14_thermal_overlimit")
+    alerts = (root / "monitor" / "alerts.log").read_text()
+    assert "ALERT PAUSE: CPU 96C >= 95C" in alerts           # 单热采样 PAUSE
+    assert "ALERT 热升级：97C（连续2个热采样）→ KILL 全部负载" in alerts  # 升级 KILL
+    assert "ALERT RESUME: thermal 已恢复" in alerts          # 95/90 滞回
+    assert not (root / "PAUSE").exists()                     # RESUME 后标志移除
+
+
 # ---------------------------------------------------------------------------
 # 守卫：DRILL_OUT 形似真实战役根 → 拒绝（绝不缺省/误指到真实根）
 
@@ -108,10 +127,10 @@ def run_drill_all(only=None, out_dir=None, timeout=1200):
 
 
 def test_drill_all_fast_subset_passes_with_summary(tmp_path):
-    """d01-d03 子集全过 + 汇总表格式（13 类全跑耗时较长——留给 drill_all 本体）。"""
+    """d01-d03 子集全过 + 汇总表格式（14 类全跑耗时较长——留给 drill_all 本体）。"""
     r = run_drill_all(only=FAST_SUBSET, out_dir=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "== M5 故障演练汇总（v5 §17.2，3/3 PASS）==" in r.stdout
+    assert "== M5 故障演练汇总（v5 §17.2 全 13 项（含温度越限）+ restore，3/3 PASS）==" in r.stdout
     summary = (tmp_path / "summary.txt").read_text()
     lines = summary.strip().splitlines()
     assert lines[0].startswith("== M5 故障演练汇总")
@@ -133,22 +152,25 @@ def test_drill_all_only_filter_selects_subset(tmp_path):
     assert not (tmp_path / "d02_test_bug").exists()  # 未选类不跑不建目录
 
 
-def test_drill_all_full_run_13_classes():
-    """13 类全链验收（v5 §17.2 退出标准核心验收器）。
+def test_drill_all_full_run_14_classes():
+    """14 类全链验收（v5 §17.2 全 13 项含温度越限 + restore——退出标准核心验收器）。
 
     全跑含真实进程生命周期等待（d07 超时兜底/d09 collector 重启/d12 锚点
-    2s 间隔），总时长分钟级——pytest 默认不跑，留给 drill_all.sh 本体与
-    M5 收官（Task 6）人工/CI 驱动；SDC_DRILLS_FULL=1 开启本路径。
+    2s 间隔/d14 热联锁跨周期 ~50s），总时长分钟级——pytest 默认不跑，留给
+    drill_all.sh 本体与 M5 收官（Task 6）人工/CI 驱动；SDC_DRILLS_FULL=1
+    开启本路径。
     """
     if os.environ.get("SDC_DRILLS_FULL") != "1":
         import pytest
-        pytest.skip("全量 13 类跑留给 drill_all.sh 本体（SDC_DRILLS_FULL=1 开启）")
+        pytest.skip("全量 14 类跑留给 drill_all.sh 本体（SDC_DRILLS_FULL=1 开启）")
     import tempfile
     with tempfile.TemporaryDirectory(prefix="drill-all-") as out:
         r = run_drill_all(out_dir=out, timeout=1800)
         assert r.returncode == 0, r.stdout + r.stderr
         summary = open(os.path.join(out, "summary.txt"), encoding="utf-8").read()
         lines = summary.strip().splitlines()
-        assert lines[0] == "== M5 故障演练汇总（v5 §17.2，13/13 PASS）=="
-        assert len(lines) == 14
+        assert lines[0] == \
+            "== M5 故障演练汇总（v5 §17.2 全 13 项（含温度越限）+ restore，14/14 PASS）=="
+        assert len(lines) == 15
         assert all(re.fullmatch(r"d\d{2}\S*\s+PASS", l) for l in lines[1:])
+        assert re.search(r"d14_thermal_overlimit\s+PASS", summary)  # 温度越限在场

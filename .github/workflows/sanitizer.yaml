@@ -1,0 +1,74 @@
+name: Sanitizer
+
+# 夜巡 ASan+UBSan:给 SDC 检测器自身加内存错误/未定义行为兜底(检测器自身
+# 崩溃会污染所有被测结论)。arm64-only(项目原则)。
+# - quick 档 + 云 runner 禁用集:与 PR quick 门禁 / nightly(verify-params.py)
+#   策略一致(eigen 数值类 ULP flakiness、mesh_upi*/memcpy_rewr 多 NUMA 依赖、
+#   random_access_sweep debian:sid abort #183)。
+# - ASan abort_on_error / UBSan halt_on_error:让 sanitizer 发现变成可观测的
+#   非零退出(框架记 crash),而不是仅打印后继续。
+# - vendored 依赖不构建:apt 系统库足够覆盖 framework + 绝大多数用例
+#   (openblas/isa-l/sleef 类缺席时 meson 优雅剔除,同 codeql.yaml 思路)。
+
+on:
+  schedule:
+    - cron: '43 18 * * *'   # 每日 UTC 18:43 = 北京 02:43(错峰)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanitizer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sanitizer:
+    name: asan+ubsan quick
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install build deps
+        run: |
+          sudo apt-get -y update -qq
+          sudo apt-get -y install -qq meson ninja-build libboost-dev libeigen3-dev \
+            libgtest-dev libhwloc-dev libssl-dev libzstd-dev zlib1g-dev libgmp-dev
+      - name: Build (ASan+UBSan)
+        run: |
+          # -fno-sanitize=alignment:本工具的测试内容本就包含刻意非对齐访问
+          # (volatile 未对齐读写、mem_disambiguation 等),且 cpu_info_t 上游
+          # packed 设计的 core_id 等字段为已知故意 UB —— 对齐检查全仓必炸。
+          # 2026-09-27 本地全量实证:关对齐后 quick 套件 0 ASan 错误、
+          # 0 非对齐类 UB、exit: pass。
+          PKG_CONFIG_PATH="$PWD/third-party/eigen5" meson setup builddir \
+            --buildtype=debugoptimized -Db_sanitize=address,undefined \
+            -Dcpp_args=-fno-sanitize=alignment
+          ninja -C builddir sdcshield unittests
+      - name: unittests (ASan+UBSan)
+        run: |
+          ./builddir/unittests \
+            --gtest_filter=-LinuxThermalFixture.CurrentMachine_TestUsingSingletomTemperaturesOnCurrentMachine
+      # quick 套件:与 PR quick 门禁完全相同的禁用集;ASan 下限放宽 CPU 时间
+      - name: quick suite (ASan+UBSan)
+        run: |
+          ulimit -St 600
+          nproc=$(( $(nproc) > 4 ? 4 : $(nproc) ))
+          ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+          builddir/sdcshield --quick -n$nproc --retest-on-failure=0 \
+            --disable eigen_svd_double --disable eigen_sparse \
+            --disable eigen_svd_cdouble --disable eigen_svd_cdouble_sve \
+            --disable 'mesh_upi*' --disable memcpy_rewr \
+            --disable random_access_sweep \
+            -o quick-sanitizer.yaml
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sanitizer-quick
+          retention-days: 14
+          if-no-files-found: ignore
+          path: quick-sanitizer.yaml

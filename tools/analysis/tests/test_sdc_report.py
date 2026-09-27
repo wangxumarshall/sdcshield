@@ -326,18 +326,74 @@ def test_event_id_mode_and_unknown_id(tmp_path):
         pass
 
 
+def _read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
 def test_cli_writes_report(tmp_path, capsys):
     root = fixture_root(str(tmp_path))
     out = os.path.join(str(tmp_path), "report.md")
     assert rep._main(["--data-root", root, "-o", out]) == 0
-    md = open(out).read()
+    md = _read(out)
     for sec in ("概述", "位形态", "时序", "假设排序", "建议"):
         assert sec in md
     assert rep.report_guard(md) == []
     # out_path 参数：写文件且返回全文一致
     p2 = os.path.join(str(tmp_path), "r2.md")
     md2 = rep.generate_report(root, out_path=p2)
-    assert os.path.exists(p2) and open(p2).read() == md2
+    assert os.path.exists(p2) and _read(p2) == md2
     # stdout 模式
     assert rep._main(["--data-root", root]) == 0
     assert "概述" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# 评审修复回归（Important #1/#2/#3，2026-09-27）
+
+def test_guard_rate_without_ci_flags_denominator_without_interval():
+    """#1：brief ②「无区间发生率」——有分母无 CI 的率陈述此前静默通过（假阴）。"""
+    v = rep.report_guard("SDC 率 3.2%（n=2000）无区间\n")
+    assert len(v) == 1 and "无区间" in v[0] and "行 1" in v[0]
+    v = rep.report_guard("发生率 1/2000\n")
+    assert len(v) == 1 and "无区间" in v[0]
+
+
+def test_guard_rate_without_ci_passes_with_interval_or_morphology():
+    """#1 负例：带区间/上界的率与形态学比例（行内无「率」字）不误报。"""
+    assert rep.report_guard("SDC 率 3.2%（n=2000，95% CI [0.0013, 0.0087]）\n") == []
+    assert rep.report_guard("SDC 率上界 0.15%（n=2500）\n") == []
+    assert rep.report_guard("单 bit 3/10（30.0%）\n") == []   # 形态比例非发生率
+
+
+def test_guard_zero_rate_decimal_boundary_not_flagged():
+    """#2：小数零率（0.15%/0.2%）合规行不再被子串匹配误报为整零。"""
+    assert rep.report_guard("发生率为 0.15%（n=2500，95% CI [0.1, 0.8]）\n") == []
+    assert rep.report_guard("失效率 0.2%（n=5000，95% CI [0.01, 0.7]）\n") == []
+
+
+def test_guard_zero_rate_exact_zero_still_flagged():
+    """#2 正例：整零表述（句读/行尾边界）仍触发，且不与新违例类型叠加。"""
+    for bad in ("发生率为 0。", "发生率 0", "发生率为 0（未检出）"):
+        v = rep.report_guard(bad + "\n")
+        assert len(v) == 1 and "零率" in v[0], bad
+
+
+def test_poisson_ci_log_space_large_k():
+    """#3：k≳690 旧实现 e^{-λ} 前缀下溢使区间塌缩；log 域 lgamma 累加对拍
+    评审 oracle（exposure=1：k=700 hi≈753.8、k=1000 → [938, 1064]）。"""
+    _, hi = rep._poisson_ci(700, 1.0)
+    assert abs(hi - 753.8) < 1.0
+    lo, hi = rep._poisson_ci(1000, 1.0)
+    assert abs(lo - 938.0) < 1.0 and abs(hi - 1064.0) < 1.0
+
+
+def test_rate_table_large_k_interval_not_collapsed():
+    """#3 端到端：大 k 率表 Poisson 区间非塌缩点（宽/窄比 ∈ (1.05, 2)）且
+    guard 干净。"""
+    t = rep.rate_table(700, None, 500.0)
+    row = [l for l in t.splitlines() if l.startswith("| 核心小时")][0]
+    lo_s, hi_s = row.split("|")[4].strip().strip("[]").split(",")
+    ratio = float(hi_s) / float(lo_s)
+    assert 1.05 < ratio < 2.0                     # 旧实现此处塌缩/发散
+    assert rep.report_guard(t) == []

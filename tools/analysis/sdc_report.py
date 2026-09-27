@@ -32,7 +32,8 @@ stdlib only。消费 M0-M4 全链产物，产出五段 Markdown 诊断报告 + �
       ValueError）；out_path 给定 → 同时写文件。
   rate_table(events, valid_iterations=None, valid_core_hours=None) -> str
       迭代（二项，Clopper-Pearson 精确区间）+ 核心小时（Poisson，χ² 等尾精确
-      区间——整数 k 级数 + 单调二分，与 sdc_stats 同机械口径，不用近似）双口径
+      区间——log 域 lgamma 逐项累加 + 单调二分：朴素 e^{-λ} 前缀递推在 λ≳745
+      下溢，k≳690 区间会塌缩为点，log 域全域无下溢，评审 Important #3）双口径
       表；k=0 行显式「上界 X；rule of three ≈ 3/n」（不写零率）；暴露缺省 →
       「暴露量不可得，仅事件计数」。
   fact_inference_hypothesis_sections(evidence) -> (facts, inferences, hypotheses)
@@ -41,10 +42,16 @@ stdlib only。消费 M0-M4 全链产物，产出五段 Markdown 诊断报告 + �
       建议。中英文语义键皆收（见 _FACT/_INFER/_HYPO_KINDS）；未知键忽略、
       非 str 陈述跳过（降级不抛）、非 dict 输入 ValueError。
   report_guard(md_text) -> list[str]
-      四红线行级扫描（宽松正则 + 人工复核注释）：①含百分比且行内无 n=/分母
-      ②「发生率 0」「发生率为 0」零率表述 ③「PMU 异常」与「SDC」同现且无
-      「证据非判据」字样 ④「根因已定位」且无 E2/E3/E4 前缀。返回「行 N: 类型」
-      清单；生成器内部对成稿自跑一遍并附自检段。
+      红线行级扫描（宽松正则 + 人工复核注释，brief 四违例之②拆两类检测）：
+      ①无分母比率——百分数而行内无 n= 或 / 分母；
+      ②无区间发生率——「率」陈述有分母而行内无 [ 区间/上界/CI（brief ②，
+        评审 Important #1 补齐：有分母无 CI 此前静默通过）；形态学比例
+        （单 bit 3/10 等，行内无「率」字）不在此列；
+      ③零率表述——正则 发生率(?:为)?\s*0(?![.\d])（负向前瞻边界：0.15% 小数
+        率不误报，评审 Important #2）；
+      ④「PMU 异常」与「SDC」同现且无「证据非判据」字样；
+      ⑤「根因已定位」且无 E2/E3/E4 前缀。
+      返回「行 N: 类型」清单；生成器内部对成稿自跑一遍并附自检段。
 
 T4 私有件复用（同 tools/analysis 家族内约定，评审 Important #3 流式口径）：
 _slice_window/_core_select/_diff_from_slice/_extract_window/_cpu_key/_core_key。
@@ -95,6 +102,12 @@ _HYPO_KINDS = ("unverified_explanations", "hypotheses", "probes",
                "未验证解释", "假设排序", "探针建议")
 
 _PCT_RE = re.compile(r"\d+(?:\.\d+)?%")
+# 率值陈述：「率」后（可带 为/是/=:： 连接词）紧跟数字——区分率陈述与矩阵
+# 叙述文（如「失败率对环境无响应」不带数值，不在此列）
+_RATE_VALUE_RE = re.compile(r"率(?:为|是|=|:|：)?\s*\d")
+# 零率表述：整零（含句读/行尾边界）才触发——负向前瞻排除 0.15% 等小数率
+# （评审 Important #2：子串匹配把合规小数率误报为零率）
+_ZERO_RATE_RE = re.compile(r"发生率(?:为)?\s*0(?![.\d])")
 
 
 def _require(cond, msg):
@@ -255,13 +268,21 @@ def has_mismatch_in_window(events, event_ts, before_s=WINDOW_S, after_s=WINDOW_S
 # Poisson 精确区间（核心小时口径；整数 k 级数 + 单调二分，sdc_stats 同机械口径）
 
 def _poisson_cdf(k, lam):
-    """P(X ≤ k)，X~Poisson(lam)；契约 k ≥ 0。t0=e^{-lam} 项递推累加（lam 大时
-    t0 下溢为 0 → cdf=0，二分方向仍正确——解恒在有限 lam 处）。"""
-    t = math.exp(-lam)
-    acc = t
-    for j in range(k):
-        t *= lam / (j + 1)
+    """P(X ≤ k)，X~Poisson(lam)；契约 k ≥ 0、lam ≥ 0。
+    log 域逐项累加：term(j) = exp(-lam + j·ln lam - lgamma(j+1))——各项独立
+    取 exp。朴素实现以 t0=e^{-lam} 前缀递推，λ≳745 时 t0 下溢为 0 且峰邻项
+    全被污染（k≳690 区间塌缩为点：评审 Important #3 实测 k=700 hi 偏低
+    1.2%、k≥750 全塌——旧 docstring「二分方向仍正确」断言在该区间为假）。
+    峰后（j > lam）项单调衰减，相对累加值 < 1e-18 早停（余项可忽略）。"""
+    if lam <= 0.0:
+        return 1.0                     # λ=0：P(X≤k)=1（k ≥ 0）
+    log_lam = math.log(lam)
+    acc = 0.0
+    for j in range(k + 1):
+        t = math.exp(-lam + j * log_lam - math.lgamma(j + 1))
         acc += t
+        if j > lam and t < acc * 1e-18:
+            break
     return acc
 
 
@@ -282,7 +303,9 @@ def _bisect(f, target, hi_bound, increasing):
 
 def _poisson_ci(k, exposure, alpha=ALPHA):
     """k 事件 / exposure 核心小时 → 每核时率精确区间 (lo, hi)（等尾：lo 解
-    P(X≥k;λ)=α/2、hi 解 P(X≤k;λ)=α/2；k=0 → (0, -ln(α/2)/exposure) 闭式）。"""
+    P(X≥k;λ)=α/2、hi 解 P(X≤k;λ)=α/2；k=0 → (0, -ln(α/2)/exposure) 闭式）。
+    累加机械见 _poisson_cdf（log 域 lgamma——大 λ/k 无下溢塌缩，评审
+    Important #3；k=700/1.0 → hi≈753.8、k=1000/1.0 → [938, 1064] 回归锚点）。"""
     _require(isinstance(k, int) and not isinstance(k, bool) and k >= 0,
              f"k 必须为 ≥0 的 int: {k!r}")
     _require(isinstance(exposure, (int, float)) and not isinstance(exposure, bool)
@@ -386,16 +409,25 @@ def fact_inference_hypothesis_sections(evidence):
 # 报告红线（自检器）
 
 def report_guard(md_text):
-    """四红线行级扫描 → 「行 N: 类型」清单（空 = 通过；宽松正则+人工复核口径）。"""
+    """红线行级扫描 → 「行 N: 类型」清单（空 = 通过；宽松正则+人工复核口径）。
+    五类检测（brief 四违例之②拆「无区间发生率」+「零率表述」两类）：①无分母
+    比率 ②无区间发生率（rate_without_ci——率陈述有分母而无区间/上界/CI）
+    ③零率表述（整零边界正则）④PMU 异常×SDC 无「证据非判据」⑤无 E2+ 前缀
+    根因定位。违例消息自身不含禁字样（自检段不自触发）。"""
     if not isinstance(md_text, str):
         raise ValueError(f"md_text 必须为 str: {type(md_text).__name__}")
     out = []
     for i, line in enumerate(md_text.splitlines(), 1):
         pct = _PCT_RE.search(line)
-        if pct and "n=" not in line and "/" not in line:
+        has_denom = "n=" in line or "/" in line
+        has_interval = ("[" in line or "上界" in line or "CI" in line)
+        if pct and not has_denom:
             out.append(f"行 {i}: 无分母比率（宽松正则命中百分数，"
                        "请人工复核——报告红线要求凡比率必带分母，v5 §9.6）")
-        if "发生率 0" in line or "发生率为 0" in line:
+        if _RATE_VALUE_RE.search(line) and has_denom and not has_interval:
+            out.append(f"行 {i}: 无区间发生率（率陈述有分母而无置信区间或上界，"
+                       "v5 §9.6 每比率须带区间——宽松匹配请人工复核）")
+        if _ZERO_RATE_RE.search(line):
             out.append(f"行 {i}: 零率表述（k=0 须写上界，不得作零率声明，v5 §9.6）")
         if "PMU 异常" in line and "SDC" in line and "证据非判据" not in line:
             out.append(f"行 {i}: PMU 异常与 SDC 同现且无「证据非判据」字样"
@@ -813,8 +845,8 @@ def generate_report(data_root, event_id=None, out_path=None):
     # ---- 红线自检 ----
     viol = report_guard(md)
     md += ("## 报告自检（report_guard 红线扫描）\n\n"
-           f"- 自检结果：{len(viol)} 违例（红线：①无分母比率 ②零率表述 "
-           "③PMU 异常×SDC 无「证据非判据」④无 E2+ 前缀根因定位）\n")
+           f"- 自检结果：{len(viol)} 违例（红线：①无分母比率 ②无区间发生率 "
+           "③零率表述 ④PMU 异常×SDC 无「证据非判据」⑤无 E2+ 前缀根因定位）\n")
     for v in viol:
         md += f"- {v}\n"
     if out_path is not None:

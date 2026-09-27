@@ -2,11 +2,14 @@ name: Sanitizer
 
 # 夜巡 ASan+UBSan:给 SDC 检测器自身加内存错误/未定义行为兜底(检测器自身
 # 崩溃会污染所有被测结论)。arm64-only(项目原则)。
-# - quick 档 + 云 runner 禁用集:与 PR quick 门禁 / nightly(verify-params.py)
-#   策略一致(eigen 数值类 ULP flakiness、mesh_upi*/memcpy_rewr 多 NUMA 依赖、
-#   random_access_sweep debian:sid abort #183)。
+# - quick 档;禁用集 = 云 runner 集(mesh_upi*/memcpy_rewr 多 NUMA 依赖、
+#   random_access_sweep debian:sid abort #183)+ eigen_* 一族(vendored
+#   第三方代码,且 ASan 下慢 5-10x 会顶 per-test CPU 上限,数值正确性由
+#   每日 multi-os 全量覆盖)。
 # - ASan abort_on_error / UBSan halt_on_error:让 sanitizer 发现变成可观测的
 #   非零退出(框架记 crash),而不是仅打印后继续。
+# - LSan 抑制文件 scripts/gha/lsan-suppressions.txt:只压制第三方库内部
+#   一次性分配(如系统 libcrypto 的 OPENSSL_config),本仓代码泄漏照报。
 # - vendored 依赖不构建:apt 系统库足够覆盖 framework + 绝大多数用例
 #   (openblas/isa-l/sleef 类缺席时 meson 优雅剔除,同 codeql.yaml 思路)。
 
@@ -51,16 +54,20 @@ jobs:
         run: |
           ./builddir/unittests \
             --gtest_filter=-LinuxThermalFixture.CurrentMachine_TestUsingSingletomTemperaturesOnCurrentMachine
-      # quick 套件:与 PR quick 门禁完全相同的禁用集;ASan 下限放宽 CPU 时间
+      # quick 套件:禁用集 = PR 门禁的云 runner 集 + eigen_* 一族
+      # (vendored Eigen 为第三方代码,sanitizer 夜巡不覆盖其内部;且 ASan
+      # 插桩使 Eigen 慢 5-10x,4 核 runner 上 eigen 数值类会顶到 per-test
+      # CPU 上限(首跑实测 eigen_svd_fvectors utime 599s/上限 600s 被杀),
+      # 其数值正确性由每日 multi-os 全量验证覆盖)。
       - name: quick suite (ASan+UBSan)
         run: |
           ulimit -St 600
           nproc=$(( $(nproc) > 4 ? 4 : $(nproc) ))
           ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+          LSAN_OPTIONS=suppressions=scripts/gha/lsan-suppressions.txt \
           UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
           builddir/sdcshield --quick -n$nproc --retest-on-failure=0 \
-            --disable eigen_svd_double --disable eigen_sparse \
-            --disable eigen_svd_cdouble --disable eigen_svd_cdouble_sve \
+            --disable 'eigen_*' \
             --disable 'mesh_upi*' --disable memcpy_rewr \
             --disable random_access_sweep \
             -o quick-sanitizer.yaml

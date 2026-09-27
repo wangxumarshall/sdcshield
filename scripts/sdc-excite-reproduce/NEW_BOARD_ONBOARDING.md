@@ -283,6 +283,58 @@ bash scripts/sdc-excite-reproduce/m3_drill.sh /tmp/全新隔离目录
 （复测内存门门槛）；capsule 平台快照取自实机只读探针——同机 --check-only
 真实通过（可重放的最强形态）。
 
+## 第 7 步：M4 诊断与统计（离线分析工具族，v5 §9+§11）
+
+五件工具全在 `tools/analysis/`（stdlib only、零第三方依赖、**零部署**）：
+只读消费数据根产物（ledger/events.jsonl/pmu CSV/mismatch 块），输出
+Markdown/JSON，不写回数据根——与运行中的 +9 服务完全共存，任意机器拷走
+数据根即可分析。战役运行期在机上跑其测试同样遵守 `env -u SDC_ROOT_PW
+python3 -m pytest tools/ -q` 纪律（见第 4 步沙盒红线）。
+
+### 工具族一览
+
+| 工具 | 职责 | 用法 |
+|---|---|---|
+| `sdc_stats.py` | 精确二项统计库：Clopper-Pearson 精确区间（math.comb 锚点+递推，n≤1e6 精确）/ Wilson（与 sdc_reproducer 逐位一致，交叉验证守卫）/ rule of three / 暴露量下限 required_trials / 跨 run 块经验贝叶斯收缩 | 库模块（report/reproducer 消费，无 CLI） |
+| `sdc_bitview.py` | mismatch 位形态七视图（offset→lane→bit 频率/单多 bit 比例/Hamming 分布/符号-指数-尾数聚集/lane 固定性/CPU 聚集/seed 稳定性）+ 候选域提示（lane 固定+地址变→执行通路；地址固定+lane 变→存储层级——提示恒为 hint 非定性） | `python3 tools/analysis/sdc_bitview.py mismatches.json`（缺省 stdin） |
+| `sdc_hypothesis.py` | 十域假设矩阵评分（支持 +1/反证 -2，同分保持矩阵序）+ 每域反事实探针建议 + E0-E4 证据等级与措辞守卫 | `python3 tools/analysis/sdc_hypothesis.py evidence.json`（`{"evidence": {...}, "actions_taken": [...]}`；缺省 stdin） |
+| `sdc_timeline.py` | 事件对齐 ±60s 窗口切片 + 嫌疑/对照核 PMU 差分（IPC/stall/MPKI/DTLB/remote，流式读 94MB CSV）+ 判读四规则（对照同步→共享环境 > 嫌疑前升→时序候选 > 无 PMU 异常→不否定 > canary 不计 SDC） | `python3 tools/analysis/sdc_timeline.py --pmu monitor/pmu_core.csv --event "YYYY-MM-DD HH:MM:SS" --suspect 96 --control 0 32` |
+| `sdc_report.py` | 一键离线诊断报告（五段：概述/位形态/时序/假设排序/建议）+ 内置红线自检 report_guard——M4 退出标准载体 | `python3 tools/analysis/sdc_report.py --data-root ~/sdc-excite-reproduce -o /tmp/report.md`（加 `--event-id <id>` 单事件深挖） |
+
+真实案例锚定：`tools/analysis/tests/fixtures/core179_case.json`（docs/cases
+公开形态学的脱敏画像）是假设排序的回归样本——该画像 top 域稳定落于
+LSU/一致性/寄存器三域（CORE179 两条竞争根因谱系 + 一致性域），矩阵/权重
+漂移导致翻转即测试失败。
+
+### 报告红线（report_guard，v5 §9.6 报告纪律）
+
+`sdc_report.report_guard(md_text)` 对报告行级扫描，**每次成稿自跑一遍并
+把自检段附在报告尾部**——自检段出现任何违例都是 bug，修报告而不是删自检：
+
+1. **无分母比率**：百分数出现而行内无 `n=` 或 `/` 分母；
+2. **无区间发生率**：「率」陈述有分母而行内无 `[` 区间/上界/CI；
+3. **零率表述**：k=0 写「发生率为 0」——必须写「上界 X（95% 精确）；
+   rule of three ≈ 3/n」；
+4. **「PMU 异常」×「SDC」同现**而无「证据非判据」限定词；
+5. **「根因已定位」无 E2/E3/E4 前缀**（证据阶梯见下）。
+
+暴露量纪律：无 `spool/exposure.json` → 报「暴露量不可得，仅事件计数」，
+不得据此作零率或无 SDC 声明；测试污染/TEST_BUG/定性非 SDC 不入 SDC 率
+分母但**单独列出**（不静默丢弃）。
+
+### 报告三段分级与证据阶梯（v5 §11.1-5/§11.8）
+
+报告与人工分析一律区分三段，不得混写：
+
+- **事实** = 原始观测、重算结果、干预记录（已发生的事）；
+- **推断** = 同窗相关、对照差分（**相关≠因果**）；
+- **假设** = 未验证解释、假设排序、探针建议。
+
+证据阶梯 E0（观察）→ E1（时间/空间关联）→ E2（单变量反事实干预）→
+E3（独立 oracle/工具/实现交叉验证）→ E4（厂商遥测/margining/结构注入）。
+**无 E2 以上只可用「相关/候选」措辞，不得写「根因已定位」**——假设排序
+只决定「下一项实验先做哪个」，不构成根因裁定。
+
 
 ## 自动推导 vs 人工确认
 
@@ -307,6 +359,7 @@ bash scripts/sdc-excite-reproduce/m3_drill.sh /tmp/全新隔离目录
 | SEL Critical 粘性暂停 | 调查后 `rm ~/sdc-excite-reproduce/PAUSE`（监控只清除自己写的 thermal/fan/mem 类） |
 | 事件台账 | `cat ~/sdc-excite-reproduce/events/ledger.csv`；单事件证据在 `events/<时间戳>-*/` |
 | M3 复现队列 | 待办 `ls ~/sdc-excite-reproduce/spool/repro_queue/`（堆积即待消费）；消费 `python3 tools/excite/sdc_reproducer.py --from-queue --once --data-root ~/sdc-excite-reproduce`（真实受界发射——低负载时段跑）；结果 `ls ~/sdc-excite-reproduce/spool/repro_done/`；capsule `~/sdc-excite-reproduce/spool/repro_capsules/<event_id>/`（`scripts/run.sh --check-only` 可重放预检） |
+| M4 离线诊断报告 | `python3 tools/analysis/sdc_report.py --data-root ~/sdc-excite-reproduce -o /tmp/report.md`（只读数据根、与运行中服务共存）；报告尾部红线自检段须 **0 违例**；单事件深挖加 `--event-id <id>` |
 | 崩溃后 | systemd 自动拉起（Restart=always）；从 state.json 断点续跑 |
 | 停止 | `su -c "bash scripts/sdc-excite-reproduce/stop.sh"`（保留进度） |
 | 日志轮转 | logrotate 每日压缩保留 14 天；YAML/events/monitor 证据**永不轮转** |

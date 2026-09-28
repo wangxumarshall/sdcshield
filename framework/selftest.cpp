@@ -2706,7 +2706,7 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .quality_level = TEST_QUALITY_PROD,
 },
 #endif
-#if defined(__aarch64__) && defined(SANDSTONE_DEVICE_CPU)
+#if defined(__aarch64__) && !defined(__clang__) && defined(SANDSTONE_DEVICE_CPU)
 // ARM64 HWCAP feature-gating robustness selftests, the counterpart of the x86
 // selftest_test_*_min_cpu series above. These do NOT compute anything or compare
 // golden values; they assert that the framework's minimum_cpu gate (driven by

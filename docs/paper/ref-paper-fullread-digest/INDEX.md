@@ -48,13 +48,13 @@
 | 41 | R6 | Parallaft Runtime-Based CPU Fault Tolerance via Heterogeneous Parallelism.pdf | parallaft | done |
 | 42 | R6 | ParaVerser Harnessing Heterogeneous Parallelism for Affordable Fault Detection in Data Centers, dsn25.pdf | paraverser | done |
 | 43 | R6 | Deploying Lightweight Input-Aware Selective Instruction Duplication in HPC Applications.pdf | hpc-duplication | done |
-| 44 | R7 | Understanding_Recommendation_System_Robustness_Against_Silent_Data_Corruption_An_Empirical_Study.pdf | recommendation | pending |
-| 45 | R7 | On the Vulnerability of FHE Computation to Silent Data Corruption.pdf | fhe | pending |
-| 46 | R7 | Be Aware of Metadata Corruption in Parallel File System It can be Silent and Catastrophic.pdf | fs-metadata | pending |
-| 47 | R7 | The_Dark_Side_of_Computing_Silent_Data_Corruptions.pdf | dark-side | pending |
-| 48 | R7 | Special Issue on Silent Data Corruptions—From Silicon to Cloud Data Centers and AI Systems of Huge Scale.pdf | special-issue | pending |
-| 49 | R7 | Silent_Data_Corruptions_The_Stealthy_Saboteurs_of_Digital_Integrity.pdf | stealthy-saboteurs | pending |
-| 50 | R7 | Silent Data Corruptions in Computing Understand and Quantify iolts2024_macieira.pdf | iolts24-quantify | pending |
+| 44 | R7 | Understanding_Recommendation_System_Robustness_Against_Silent_Data_Corruption_An_Empirical_Study.pdf | recommendation | done |
+| 45 | R7 | On the Vulnerability of FHE Computation to Silent Data Corruption.pdf | fhe | done |
+| 46 | R7 | Be Aware of Metadata Corruption in Parallel File System It can be Silent and Catastrophic.pdf | fs-metadata | done |
+| 47 | R7 | The_Dark_Side_of_Computing_Silent_Data_Corruptions.pdf | dark-side | done |
+| 48 | R7 | Special Issue on Silent Data Corruptions—From Silicon to Cloud Data Centers and AI Systems of Huge Scale.pdf | special-issue | done |
+| 49 | R7 | Silent_Data_Corruptions_The_Stealthy_Saboteurs_of_Digital_Integrity.pdf | stealthy-saboteurs | done |
+| 50 | R7 | Silent Data Corruptions in Computing Understand and Quantify iolts2024_macieira.pdf | iolts24-quantify | done |
 | 51 | R8 | NAVIgator Exploring the Voltage Limits of AMD NAVI GPUs for Energy Efficient Computing iolts2025_trakosa.pdf | navigator-gpu | pending |
 | 52 | R8 | Reliability assessment of AMD MicroBlaze-V TMR architecture using fault injection and proton irradiation.pdf | microblaze-tmr | pending |
 | 53 | R8 | proteanTecs White Paper_Outsmarting Silent Data Corruption in AI Processors With Two-Stage Detection.pdf | proteantecs-wp | pending |

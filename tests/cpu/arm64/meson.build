@@ -204,6 +204,13 @@ if host_machine.cpu_family() == 'aarch64'
             # 1.5*iterations*(j+1) (RADIUS=6), the stale RADIUS=4 formula
             # iterations*(j+1) was a software false positive.
             'sve512_stencil_axis_arm.cpp',
+            # XLSDFT composite-context SDC stress (escalation T1):
+            # interleaves the stencil axis kernel (phase A), the SVD-format
+            # gather/scatter over an L2-overflow working set (phase B) and
+            # a workspace pointer-table canary (phase C) in one per-core
+            # loop — the known fault-window ingredients without the MPI/
+            # libomp scaffolding.
+            'sve512_xlswave_ctx_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

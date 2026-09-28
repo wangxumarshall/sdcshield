@@ -1,0 +1,14 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M3JV4AXGEQBEM4ZWZ89N7R99",
+  "strategy": "manual-commit",
+  "branch": "feat/sve-port-avx53",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "prompt": ""
+    }
+  ]
+}

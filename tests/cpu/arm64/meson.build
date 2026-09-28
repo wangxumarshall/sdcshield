@@ -211,6 +211,13 @@ if host_machine.cpu_family() == 'aarch64'
             # loop — the known fault-window ingredients without the MPI/
             # libomp scaffolding.
             'sve512_xlswave_ctx_arm.cpp',
+            # libomp fork/join context emulation (escalation T2):
+            # SVE FMLA bursts alternating with time-synchronized
+            # collective park windows + function-pointer-table/counter
+            # metadata canaries — the runtime-interaction ingredient of
+            # the fault window, access-pattern only (layout honestly not
+            # replicated). Deadlock-free by construction.
+            'libomp_ctx_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [

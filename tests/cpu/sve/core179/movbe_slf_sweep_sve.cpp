@@ -19,7 +19,9 @@
  * buffers are sized for the SVE architectural maximum VL of 2048 bits
  * (256 bytes) and the walk uses svcntb() batches with svwhilelt tails,
  * so the test is correct at ANY vector length (the original probe's
- * [64] stack arrays overflow at VL>=1024); (C) no dead allocations —
+ * 16-element stack arrays exactly fill at VL=512, svcntw()=16, and
+ * overflow from the first legal VL above that, 640 bits, on);
+ * (C) no dead allocations —
  * test->data holds only the golden buffer, cleanup frees everything it
  * tracks. The init self-check permutes 50k random values per width
  * through the same svtbl mechanism and compares bit-exact against
@@ -43,8 +45,12 @@
 #endif
 #endif
 
-/* 64KB 扫描缓冲 (16384 u32, 按 u32 填充; 运行时按字节扫描 — 与元素宽度解耦) */
+/* 64KB 扫描缓冲 (16384 u32, 按 u32 填充; 运行时按字节扫描 — 与元素宽度解耦)。
+ * 必须是 16 的倍数: 否则 svwhilelt 尾批会截断在元素中间, 双 svtbl 对合读到
+ * 未定义车道 → 假失败 (今日所有合法 VL 下尾批不可达, 此处纵深防御) */
 #define SLF_SWEEP_BUFFER_BYTES (64 * 1024)
+static_assert(SLF_SWEEP_BUFFER_BYTES % 16 == 0,
+              "tail batches must stay element-aligned for W in {2,4,8}");
 /* SVE 架构最大 VL = 2048bit = 256 字节: 所有栈缓冲按此定容 (VL 可移植) */
 #define SVE_MAX_VECTOR_BYTES 256
 /* init 自检: 每种宽度的随机向量数 (家族 50k 验证先例) */
@@ -198,7 +204,9 @@ static int movbe_slf_sweep_sve_run(struct test *test, int cpu)
     const uint64_t total = SLF_SWEEP_BUFFER_BYTES;
     const uint64_t vbytes = (uint64_t)svcntb();
     /* SVE 架构保证 VL 是 128bit 的倍数 → vbytes 是 16 的倍数 → 对 W∈{2,4,8}
-     * 每批 (含 svwhilelt 尾批) 恒元素对齐; 索引表 256 字节定容封死 VL≥1024 溢出 */
+     * 每批 (含 svwhilelt 尾批) 恒元素对齐。256 字节定容封死原探针的栈溢出:
+     * 其 16 元素栈容量在 VL=512 (svcntw()=16) 恰好填满, svcntw()>16 即溢出,
+     * 首个越界合法 VL 为 640bit (svcntw()=20 → 80 字节写入 64 字节栈缓冲) */
 
     /* 每线程私有副本 (SLF 探针, 消除多写者竞争; 同 probe-c。fork 模型下
      * 随子进程退出回收, cleanup 只释放 test->data 所辖分配 — 同家族约定) */

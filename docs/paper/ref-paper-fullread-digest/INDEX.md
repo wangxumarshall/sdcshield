@@ -29,14 +29,14 @@
 | 22 | R3 | Gem5-MARVEL_Microarchitecture-Level_Resilience_Analysis_of_Heterogeneous_SoC_Architectures.pdf | gem5-marvel | done |
 | 23 | R3 | Estimating_the_Failures_and_Silent_Errors_Rates_of_CPUs_Across_ISAs_and_Microarchitectures.pdf | cross-isa | done |
 | 24 | R3 | Soft_Error_Effects_on_Arm_Microprocessors_Early_Estimations_versus_Chip_Measurements.pdf | arm-soft-error | done |
-| 25 | R4 | silifuzz.pdf | silifuzz | pending |
-| 26 | R4 | Harpocrates_Automated_Functional_Program_Generation_Against_CPU_Faults_and_Silent_Data_Corruptions.pdf | harpocrates-isca24 | pending |
-| 27 | R4 | Harpocrates_Breaking_the_Silence_of_CPU_Faults_through_Hardware-in-the-Loop_Program_Generation.pdf | harpocrates-micro26 | pending |
-| 28 | R4 | ASPOLOS2024 Proactive Runtime Detection of Aging-Related Silent Data Corruptions A Bottom-Up Approach.pdf | aging-asplos24 | pending |
-| 29 | R4 | ets2024_gizopoulos.pdf | ets24 | pending |
-| 30 | R4 | Improved Silent Data Error Detection through Test Optimization using Reinforcement Learning, IRPS Improved SDE Detection 2025.pdf | irps25-rl | pending |
-| 31 | R4 | Robust_Pattern_Generation_for_Small_Delay_Faults_under_the_Impact_of_Variations.pdf | sdf-pattern | pending |
-| 32 | R4 | Strategies For Detecting Sources Of Silent Data Corruption.pdf | strategies-detect | pending |
+| 25 | R4 | silifuzz.pdf | silifuzz | done |
+| 26 | R4 | Harpocrates_Automated_Functional_Program_Generation_Against_CPU_Faults_and_Silent_Data_Corruptions.pdf | harpocrates-isca24 | done |
+| 27 | R4 | Harpocrates_Breaking_the_Silence_of_CPU_Faults_through_Hardware-in-the-Loop_Program_Generation.pdf | harpocrates-micro26 | done |
+| 28 | R4 | ASPOLOS2024 Proactive Runtime Detection of Aging-Related Silent Data Corruptions A Bottom-Up Approach.pdf | aging-asplos24 | done |
+| 29 | R4 | ets2024_gizopoulos.pdf | ets24 | done |
+| 30 | R4 | Improved Silent Data Error Detection through Test Optimization using Reinforcement Learning, IRPS Improved SDE Detection 2025.pdf | irps25-rl | done |
+| 31 | R4 | Robust_Pattern_Generation_for_Small_Delay_Faults_under_the_Impact_of_Variations.pdf | sdf-pattern | done |
+| 32 | R4 | Strategies For Detecting Sources Of Silent Data Corruption.pdf | strategies-detect | done |
 | 33 | R5 | SOSP2025 Orthrus Efficient and Timely Detection of Silent User Data Corruption in the Cloud with Resource-Adaptive Computation Validation.pdf | orthrus | pending |
 | 34 | R5 | Detecting Silent Data Corruption in Sparse Matrices using Hardware Performance Counter.pdf | sparse-pmc | pending |
 | 35 | R5 | Detecting Silent Data Corruption from Hardware Counters.pdf | hw-counters | pending |

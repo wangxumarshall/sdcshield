@@ -130,21 +130,21 @@
 **Interfaces:**
 - Produces: `ref-paper-fullread-digest/` 目录 + INDEX.md(后续所有批次任务按其编号/slug 写笔记、更新其状态列)
 
-- [ ] **Step 1: 确认分支与 PDF 全集**
+- [x] **Step 1: 确认分支与 PDF 全集**
 
 Run: `cd /c/Users/ubuntu/Documents/sdc/sdcshield && git branch --show-current && ls docs/paper/ref/*.pdf | wc -l`
 Expected: `research/survey-fullread-20260928` 和 `53`。若 PDF 数 ≠53:停下,与用户确认范围后再继续(勿自行增删)。
 
-- [ ] **Step 2: 写 INDEX.md**
+- [x] **Step 2: 写 INDEX.md**
 
 `Write` `docs/paper/ref-paper-fullread-digest/INDEX.md`,内容:标题行 `# 53 篇 SDC 论文全文精读索引`、日期、分支名,然后上方"53 篇权威分配表"整表原样复制,再加一列 `状态`(初始全部 `pending`),表后加一行说明:`状态:pending/in-progress/done/unreadable;模板与 SOP 见计划 2026-09-28-sdc-survey-phaseA-fullread.md`。
 
-- [ ] **Step 3: 占位符与完整性检查**
+- [x] **Step 3: 占位符与完整性检查**
 
 Run: `grep -cE "^\|" "docs/paper/ref-paper-fullread-digest/INDEX.md"`
 Expected: ≥54(表头+分隔+53 行)。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/INDEX.md
@@ -163,27 +163,27 @@ git commit -s -m "docs(digest): 精读索引 INDEX——53 篇批次分配与状
 - Consumes: 分配表 R1 行的 PDF 文件名与 slug;SOP 模板
 - Produces: 9 篇笔记(后续批次的"横向对比注记"会引用 R1 结论;模板校准结论记入 INDEX)
 
-- [ ] **Step 1: 逐篇精读 01–09**
+- [x] **Step 1: 逐篇精读 01–09**
 
 对分配表 01–09 每篇,按 SOP Step A–C 执行:Read PDF(pages "1-20",超 20 页续读)→ 提取五类信息 → Write 笔记 `NN-<slug>.md`(模板全文,字段不留空)。每读 3 篇至少落盘 3 篇(防上下文丢失)。
 
-- [ ] **Step 2: 更新 INDEX 状态**
+- [x] **Step 2: 更新 INDEX 状态**
 
 将 INDEX.md 中 01–09 行状态改为 `done`(异常篇按实情标 `unreadable` 并在该行加注)。
 
-- [ ] **Step 3: 占位符检查**
+- [x] **Step 3: 占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/0*.md`
 Expected: 无输出(exit 1)。命中则修复该笔记后重跑至干净。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/
 git commit -s -m "docs(digest): R1 生产机队实证 9 篇精读笔记(01-09)"
 ```
 
-- [ ] **Step 5: 模板校准(spec §6 风险条款)**
+- [x] **Step 5: 模板校准(spec §6 风险条款)**
 
 R1 读完后评估:分类学 4 字段是否够用、归类口径是否清晰、模板是否需增删字段。结论(含"不调整"或具体调整)追加到 INDEX.md 末尾 `## 模板校准记录` 小节;若调整,后续批次一律用调整后模板。
 
@@ -199,18 +199,18 @@ R1 读完后评估:分类学 4 字段是否够用、归类口径是否清晰、�
 - Consumes: 分配表 R2 行;SOP 模板(含 Task 1 Step 5 校准后的版本);R1 笔记的结论(横向对比注记用)
 - Produces: 9 篇笔记
 
-- [ ] **Step 1: 逐篇精读 10–18**
+- [x] **Step 1: 逐篇精读 10–18**
 
 按 SOP Step A–C 逐篇执行(Read "1-20",超页续读 → 提取 → Write 笔记)。每 3 篇落盘。注意:本批老论文(2003–2012)页脚身份核实尤其重要,勘误记入"身份核实"字段。
 
-- [ ] **Step 2: 更新 INDEX 状态(10–18 行 → done)**
+- [x] **Step 2: 更新 INDEX 状态(10–18 行 → done)**
 
-- [ ] **Step 3: 占位符检查**
+- [x] **Step 3: 占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/1*.md`
 Expected: 无输出。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/
@@ -229,18 +229,18 @@ git commit -s -m "docs(digest): R2 AVF 理论与故障传播 9 篇精读笔记(1
 - Consumes: 分配表 R3 行;SOP 模板;R1/R2 笔记结论
 - Produces: 6 篇笔记
 
-- [ ] **Step 1: 逐篇精读 19–24**
+- [x] **Step 1: 逐篇精读 19–24**
 
 按 SOP Step A–C 逐篇执行(Read "1-20",超页续读 → 提取 → Write 笔记)。每 3 篇落盘。
 
-- [ ] **Step 2: 更新 INDEX 状态(19–24 行 → done)**
+- [x] **Step 2: 更新 INDEX 状态(19–24 行 → done)**
 
-- [ ] **Step 3: 占位符检查**
+- [x] **Step 3: 占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/{19,20,21,22,23,24}-*.md`
 Expected: 无输出。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/
@@ -259,18 +259,18 @@ git commit -s -m "docs(digest): R3 故障注入与软错误实测 6 篇精读笔
 - Consumes: 分配表 R4 行;SOP 模板;R1–R3 笔记结论
 - Produces: 8 篇笔记
 
-- [ ] **Step 1: 逐篇精读 25–32**
+- [x] **Step 1: 逐篇精读 25–32**
 
 按 SOP Step A–C 逐篇执行(Read "1-20",超页续读 → 提取 → Write 笔记)。每 3 篇落盘。注意 30(IRPS'25)、31(SDF 模式)、32(Strategies)可能是半导体测试界文档,文档类型按页脚如实标注。
 
-- [ ] **Step 2: 更新 INDEX 状态(25–32 行 → done)**
+- [x] **Step 2: 更新 INDEX 状态(25–32 行 → done)**
 
-- [ ] **Step 3: 占位符检查**
+- [x] **Step 3: 占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/{25,26,27,28,29,30,31,32}-*.md`
 Expected: 无输出。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/
@@ -289,18 +289,18 @@ git commit -s -m "docs(digest): R4 测试生成与制造测试 8 篇精读笔记
 - Consumes: 分配表 R5 行;SOP 模板;R1–R4 笔记结论
 - Produces: 7 篇笔记
 
-- [ ] **Step 1: 逐篇精读 33–39**
+- [x] **Step 1: 逐篇精读 33–39**
 
 按 SOP Step A–C 逐篇执行(Read "1-20",超页续读 → 提取 → Write 笔记)。每 3 篇落盘。
 
-- [ ] **Step 2: 更新 INDEX 状态(33–39 行 → done)**
+- [x] **Step 2: 更新 INDEX 状态(33–39 行 → done)**
 
-- [ ] **Step 3: 占位符检查**
+- [x] **Step 3: 占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/{33,34,35,36,37,38,39}-*.md`
 Expected: 无输出。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/
@@ -319,18 +319,18 @@ git commit -s -m "docs(digest): R5 运行时检测 7 篇精读笔记(33-39)"
 - Consumes: 分配表 R6 行;SOP 模板;R1–R5 笔记结论
 - Produces: 4 篇笔记
 
-- [ ] **Step 1: 逐篇精读 40–43**
+- [x] **Step 1: 逐篇精读 40–43**
 
 按 SOP Step A–C 逐篇执行(Read "1-20",超页续读 → 提取 → Write 笔记)。4 篇一批一次落盘。
 
-- [ ] **Step 2: 更新 INDEX 状态(40–43 行 → done)**
+- [x] **Step 2: 更新 INDEX 状态(40–43 行 → done)**
 
-- [ ] **Step 3: 占位符检查**
+- [x] **Step 3: 占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/{40,41,42,43}-*.md`
 Expected: 无输出。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/
@@ -349,18 +349,18 @@ git commit -s -m "docs(digest): R6 运行时容错与复制 4 篇精读笔记(40
 - Consumes: 分配表 R7 行;SOP 模板;R1–R6 笔记结论
 - Produces: 7 篇笔记
 
-- [ ] **Step 1: 逐篇精读 44–50**
+- [x] **Step 1: 逐篇精读 44–50**
 
 按 SOP Step A–C 逐篇执行(Read "1-20",超页续读 → 提取 → Write 笔记)。每 3 篇落盘。注意 47(Dark Side)、48(Special Issue)、49(Stealthy Saboteurs)很可能是观点/导言文章——"业界观点摘录"字段为主战场,文档类型如实标注。
 
-- [ ] **Step 2: 更新 INDEX 状态(44–50 行 → done)**
+- [x] **Step 2: 更新 INDEX 状态(44–50 行 → done)**
 
-- [ ] **Step 3: 占位符检查**
+- [x] **Step 3: 占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/{44,45,46,47,48,49,50}-*.md`
 Expected: 无输出。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/
@@ -379,18 +379,18 @@ git commit -s -m "docs(digest): R7 软件栈上层·AI·视野 7 篇精读笔记
 - Consumes: 分配表 R8 行;SOP 模板;R1–R7 笔记结论
 - Produces: 3 篇笔记(53 号为白皮书,"业界观点摘录"为主)
 
-- [ ] **Step 1: 逐篇精读 51–53**
+- [x] **Step 1: 逐篇精读 51–53**
 
 按 SOP Step A–C 逐篇执行(Read "1-20",超页续读 → 提取 → Write 笔记)。53(proteanTecs)明确标注"白皮书"类型。
 
-- [ ] **Step 2: 更新 INDEX 状态(51–53 行 → done)**
+- [x] **Step 2: 更新 INDEX 状态(51–53 行 → done)**
 
-- [ ] **Step 3: 占位符检查**
+- [x] **Step 3: 占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/{51,52,53}-*.md`
 Expected: 无输出。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/
@@ -408,7 +408,7 @@ git commit -s -m "docs(digest): R8 GPU·器件·工业白皮书 3 篇精读笔�
 - Consumes: 53 篇笔记的"机构"+"企业合作证据"字段(只从笔记抄录,页码随之;不回 PDF、不凭记忆)
 - Produces: `corporate-collab.md`(阶段 B 生态章的直接素材)
 
-- [ ] **Step 1: 汇总 53 条**
+- [x] **Step 1: 汇总 53 条**
 
 `Write` `corporate-collab.md`,按批分组,每篇一行:
 
@@ -424,12 +424,12 @@ git commit -s -m "docs(digest): R8 GPU·器件·工业白皮书 3 篇精读笔�
 
 (一行一论文,53 行;无企业证据的写"未发现企业合作证据";一二级都没有的如实呈现。)
 
-- [ ] **Step 2: 行数与一致性检查**
+- [x] **Step 2: 行数与一致性检查**
 
 Run: `grep -cE "^\| [0-9]" docs/paper/ref-paper-fullread-digest/corporate-collab.md`
 Expected: `53`。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/paper/ref-paper-fullread-digest/corporate-collab.md
@@ -447,41 +447,41 @@ git commit -s -m "docs(digest): 53 篇企业合作信息总表 corporate-collab"
 - Consumes: spec §7 验收标准;全部产物
 - Produces: 阶段 A 完成的确认;推送后的 feature 分支
 
-- [ ] **Step 1: 笔记数量检查**
+- [x] **Step 1: 笔记数量检查**
 
 Run: `ls docs/paper/ref-paper-fullread-digest/*.md | grep -v -E "INDEX|corporate" | wc -l`
 Expected: `53`。
 
-- [ ] **Step 2: 全量占位符检查**
+- [x] **Step 2: 全量占位符检查**
 
 Run: `grep -lE "TBD|TODO|【待|待补|占位|……" docs/paper/ref-paper-fullread-digest/*.md`
 Expected: 无输出。
 
-- [ ] **Step 3: 企业证据页码抽查**
+- [x] **Step 3: 企业证据页码抽查**
 
 Run: `grep -L "p\." docs/paper/ref-paper-fullread-digest/0*.md docs/paper/ref-paper-fullread-digest/1*.md docs/paper/ref-paper-fullread-digest/2*.md docs/paper/ref-paper-fullread-digest/3*.md docs/paper/ref-paper-fullread-digest/4*.md docs/paper/ref-paper-fullread-digest/5*.md`
 Expected: 无输出(每篇笔记都含页码引用)。
 
-- [ ] **Step 4: INDEX 一致性检查**
+- [x] **Step 4: INDEX 一致性检查**
 
 Run: `grep -c "| done |" docs/paper/ref-paper-fullread-digest/INDEX.md`(或当前状态列写法)
 Expected: 与实际完成数一致(53 或 53 − unreadable 数)。
 
-- [ ] **Step 5: commit 签名合规检查(spec 验收第 5 条)**
+- [x] **Step 5: commit 签名合规检查(spec 验收第 5 条)**
 
 Run: `git log -15 --grep="Signed-off-by: wangxu <wangxumarshall@qq.com>" --oneline | wc -l && git log -15 --oneline | wc -l && git log -15 | grep -c "Co-Authored-By" || true`
 Expected: 前两数相等(本阶段所有 commit 均带签名行);第三数为 0(无 Co-Authored-By)。
 
-- [ ] **Step 6: 修复(如有)并 commit**
+- [x] **Step 6: 修复(如有)并 commit**
 
 任何检查不过 → 修复对应笔记/INDEX/补签名 → 重跑至全过 → `git add` + `git commit -s -m "docs(digest): 阶段 A 验收自检修复"`。全过则跳过本步。
 
-- [ ] **Step 7: Push**
+- [x] **Step 7: Push**
 
 ```bash
 git push -u origin research/survey-fullread-20260928
 ```
 
-- [ ] **Step 8: 报告验收结果**
+- [x] **Step 8: 报告验收结果**
 
 对照 spec §7 五条标准逐条报告通过情况(含 unreadable 清单,如有),等用户确认后进入阶段 B(基于笔记制定报告计划)。

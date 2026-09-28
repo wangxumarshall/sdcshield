@@ -44,10 +44,10 @@
 | 37 | R5 | Efficient_Instruction_Vulnerability_Prediction_With_Heterogeneous_SDC_Propagation_Knowledge_Graph.pdf | kg-vulnpred | done |
 | 38 | R5 | SENTRY A Dual-Layer Technique for Silent Data Corruption Detection in Deterministic Database Systems.pdf | sentry | done |
 | 39 | R5 | Detection and Prevention of Silent Data Corruption in an Exabyte-scale Database System.pdf | exabyte-db | done |
-| 40 | R6 | Protecting Futures against Silent Data Corruption -- Efficient Task Replication for Dynamic Data Dependencies.pdf | futures-replication | pending |
-| 41 | R6 | Parallaft Runtime-Based CPU Fault Tolerance via Heterogeneous Parallelism.pdf | parallaft | pending |
-| 42 | R6 | ParaVerser Harnessing Heterogeneous Parallelism for Affordable Fault Detection in Data Centers, dsn25.pdf | paraverser | pending |
-| 43 | R6 | Deploying Lightweight Input-Aware Selective Instruction Duplication in HPC Applications.pdf | hpc-duplication | pending |
+| 40 | R6 | Protecting Futures against Silent Data Corruption -- Efficient Task Replication for Dynamic Data Dependencies.pdf | futures-replication | done |
+| 41 | R6 | Parallaft Runtime-Based CPU Fault Tolerance via Heterogeneous Parallelism.pdf | parallaft | done |
+| 42 | R6 | ParaVerser Harnessing Heterogeneous Parallelism for Affordable Fault Detection in Data Centers, dsn25.pdf | paraverser | done |
+| 43 | R6 | Deploying Lightweight Input-Aware Selective Instruction Duplication in HPC Applications.pdf | hpc-duplication | done |
 | 44 | R7 | Understanding_Recommendation_System_Robustness_Against_Silent_Data_Corruption_An_Empirical_Study.pdf | recommendation | pending |
 | 45 | R7 | On the Vulnerability of FHE Computation to Silent Data Corruption.pdf | fhe | pending |
 | 46 | R7 | Be Aware of Metadata Corruption in Parallel File System It can be Silent and Catastrophic.pdf | fs-metadata | pending |

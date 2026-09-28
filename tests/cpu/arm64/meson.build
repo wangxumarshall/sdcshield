@@ -222,8 +222,48 @@ if host_machine.cpu_family() == 'aarch64'
         ],
     )
 
-    sandstone_tests += [
-        arm64_tests_lib,
-        arm64_sve_lib,
-    ]
+    # SME/ZA tile-view SDC stress (sme_za_tileview_arm). Own static_library
+    # because the naked-asm ZA kernel needs armv9-a+sve+sme+sme-f64f64, which
+    # neither the tests_arm64 baseline (armv8.1-a+crc+crypto) nor the SVE
+    # library (armv8.2-a+sve) can host, and which GCC-12 cannot parse at all.
+    # Compiler-support probed with the C++ compiler object so GCC builds
+    # degrade gracefully (test simply absent, the gmp/acl/openblas pattern);
+    # the test itself re-gates at runtime on HWCAP2_SME and the measured
+    # 512-bit SVL geometry, so it only ever executes on characterized SME
+    # hardware. Built only on aarch64.
+    sme_march = '-march=armv9-a+sve+sme+sme-f64f64'
+    if cpp.has_argument(sme_march)
+        arm64_sme_lib = static_library(
+            'tests_arm64_sme',
+            files('sme_za_tileview_arm.cpp'),
+            build_by_default: false,
+            include_directories: [
+                framework_incdir,
+            ],
+            dependencies: [
+                boost_dep,
+            ],
+            cpp_args: [
+                debug_c_flags,
+                default_cpp_warn,
+                default_cpp_flags,
+                march_generic_flags,
+                sme_march,
+                sve_sanitize_exempt,
+            ],
+        )
+
+        sandstone_tests += [
+            arm64_tests_lib,
+            arm64_sve_lib,
+            arm64_sme_lib,
+        ]
+    else
+        message('Compiler lacks SME support (' + sme_march + ') - '
+                + 'sme_za_tileview_arm is not built')
+        sandstone_tests += [
+            arm64_tests_lib,
+            arm64_sve_lib,
+        ]
+    endif
 endif

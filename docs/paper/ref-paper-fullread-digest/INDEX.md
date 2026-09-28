@@ -37,13 +37,13 @@
 | 30 | R4 | Improved Silent Data Error Detection through Test Optimization using Reinforcement Learning, IRPS Improved SDE Detection 2025.pdf | irps25-rl | done |
 | 31 | R4 | Robust_Pattern_Generation_for_Small_Delay_Faults_under_the_Impact_of_Variations.pdf | sdf-pattern | done |
 | 32 | R4 | Strategies For Detecting Sources Of Silent Data Corruption.pdf | strategies-detect | done |
-| 33 | R5 | SOSP2025 Orthrus Efficient and Timely Detection of Silent User Data Corruption in the Cloud with Resource-Adaptive Computation Validation.pdf | orthrus | pending |
-| 34 | R5 | Detecting Silent Data Corruption in Sparse Matrices using Hardware Performance Counter.pdf | sparse-pmc | pending |
-| 35 | R5 | Detecting Silent Data Corruption from Hardware Counters.pdf | hw-counters | pending |
-| 36 | R5 | SHOUT-Trainer_Closed-loop_Trainer_for_Silent_Data_Corruption_Hunting_and_Observation_Using_Transformers.pdf | shout-trainer | pending |
-| 37 | R5 | Efficient_Instruction_Vulnerability_Prediction_With_Heterogeneous_SDC_Propagation_Knowledge_Graph.pdf | kg-vulnpred | pending |
-| 38 | R5 | SENTRY A Dual-Layer Technique for Silent Data Corruption Detection in Deterministic Database Systems.pdf | sentry | pending |
-| 39 | R5 | Detection and Prevention of Silent Data Corruption in an Exabyte-scale Database System.pdf | exabyte-db | pending |
+| 33 | R5 | SOSP2025 Orthrus Efficient and Timely Detection of Silent User Data Corruption in the Cloud with Resource-Adaptive Computation Validation.pdf | orthrus | done |
+| 34 | R5 | Detecting Silent Data Corruption in Sparse Matrices using Hardware Performance Counter.pdf | sparse-pmc | done |
+| 35 | R5 | Detecting Silent Data Corruption from Hardware Counters.pdf | hw-counters | done |
+| 36 | R5 | SHOUT-Trainer_Closed-loop_Trainer_for_Silent_Data_Corruption_Hunting_and_Observation_Using_Transformers.pdf | shout-trainer | done |
+| 37 | R5 | Efficient_Instruction_Vulnerability_Prediction_With_Heterogeneous_SDC_Propagation_Knowledge_Graph.pdf | kg-vulnpred | done |
+| 38 | R5 | SENTRY A Dual-Layer Technique for Silent Data Corruption Detection in Deterministic Database Systems.pdf | sentry | done |
+| 39 | R5 | Detection and Prevention of Silent Data Corruption in an Exabyte-scale Database System.pdf | exabyte-db | done |
 | 40 | R6 | Protecting Futures against Silent Data Corruption -- Efficient Task Replication for Dynamic Data Dependencies.pdf | futures-replication | pending |
 | 41 | R6 | Parallaft Runtime-Based CPU Fault Tolerance via Heterogeneous Parallelism.pdf | parallaft | pending |
 | 42 | R6 | ParaVerser Harnessing Heterogeneous Parallelism for Affordable Fault Detection in Data Centers, dsn25.pdf | paraverser | pending |

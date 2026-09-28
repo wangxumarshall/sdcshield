@@ -14,15 +14,15 @@
 | 07 | R1 | ASPLOS 2025 Hardware Sentinel Protecting Software Applications from Hardware Silent Data Corruptions.pdf | hwsentinel | done |
 | 08 | R1 | Silent_Data_Corruptions_Microarchitectural_Perspectives.pdf | tc23-micropersp | done |
 | 09 | R1 | Silent Data Corruption by 10x Test Escapes Threatens Reliable Computing.pdf | test-escapes | done |
-| 10 | R2 | Measuring_architectural_vulnerability_factors.pdf | measuring-avf | pending |
-| 11 | R2 | A Systematic Methodology to Compute the Architectural Vulnerability Factors for a High-Performance Microprocessor.pdf | systematic-avf | pending |
-| 12 | R2 | Computing_architectural_vulnerability_factors_for_address-based_structures.pdf | addr-avf | pending |
-| 13 | R2 | A First-Order Mechanistic Model for Architectural Vulnerability Factor.pdf | first-order-avf | pending |
-| 14 | R2 | Applying Architectural Vulnerability Analysis to Hard Faults in the Microprocessor.pdf | hard-faults-ava | pending |
-| 15 | R2 | MICRO2024 DelayAVF_Calculating_Architectural_Vulnerability_Factors_for_Delay_Faults.pdf | delay-avf | pending |
-| 16 | R2 | MeRLiN Exploiting Dynamic Instruction Behavior for Fast and Accurate Microarchitecture Level Reliability Assessment.pdf | merlin | pending |
-| 17 | R2 | Demystifying_the_System_Vulnerability_Stack_Transient_Fault_Effects_Across_the_Layers.pdf | vuln-stack | pending |
-| 18 | R2 | From_Gates_to_SDCs_Understanding_Fault_Propagation_Through_the_Compute_Stack.pdf | gates-to-sdc | pending |
+| 10 | R2 | Measuring_architectural_vulnerability_factors.pdf | measuring-avf | done |
+| 11 | R2 | A Systematic Methodology to Compute the Architectural Vulnerability Factors for a High-Performance Microprocessor.pdf | systematic-avf | done |
+| 12 | R2 | Computing_architectural_vulnerability_factors_for_address-based_structures.pdf | addr-avf | done |
+| 13 | R2 | A First-Order Mechanistic Model for Architectural Vulnerability Factor.pdf | first-order-avf | done |
+| 14 | R2 | Applying Architectural Vulnerability Analysis to Hard Faults in the Microprocessor.pdf | hard-faults-ava | done |
+| 15 | R2 | MICRO2024 DelayAVF_Calculating_Architectural_Vulnerability_Factors_for_Delay_Faults.pdf | delay-avf | done |
+| 16 | R2 | MeRLiN Exploiting Dynamic Instruction Behavior for Fast and Accurate Microarchitecture Level Reliability Assessment.pdf | merlin | done |
+| 17 | R2 | Demystifying_the_System_Vulnerability_Stack_Transient_Fault_Effects_Across_the_Layers.pdf | vuln-stack | done |
+| 18 | R2 | From_Gates_to_SDCs_Understanding_Fault_Propagation_Through_the_Compute_Stack.pdf | gates-to-sdc | done |
 | 19 | R3 | GemFI_A_Fault_Injection_Tool_for_Studying_the_Behavior_of_Applications_on_Unreliable_Substrates.pdf | gemfi | pending |
 | 20 | R3 | Chaos Controlled Hardware Fault Injector System for Gem5.pdf | chaos | pending |
 | 21 | R3 | Differential_Fault_Injection_on_Microarchitectural_Simulators.pdf | diff-fi | pending |

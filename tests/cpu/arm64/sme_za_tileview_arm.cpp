@@ -38,6 +38,19 @@
  * @endparblock
  */
 
+/* Clang defines __ARM_FEATURE_BTI for any armv8.5+/v9 -march even when no
+ * BTI landing pad is emitted (this TU builds with branch protection
+ * disabled; objdump of the object shows zero bti instructions). Sandstone's
+ * generated feature header maps that macro into compiler_minimum_device,
+ * which would gate this test on HWCAP2_BTI — a bit the SME-capable
+ * HiSilicon 0xd22 does not expose, silently skipping the whole SME family
+ * on exactly the hardware it exists to test. Undefine the false macro so
+ * the only gates that remain are the honest runtime ones below (HWCAP2_SME
+ * and the measured SVL geometry). */
+#ifdef __ARM_FEATURE_BTI
+#undef __ARM_FEATURE_BTI
+#endif
+
 #include <sandstone.h>
 
 #include <cstddef>

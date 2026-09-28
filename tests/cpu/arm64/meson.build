@@ -246,6 +246,13 @@ if host_machine.cpu_family() == 'aarch64'
     # 512-bit SVL geometry, so it only ever executes on characterized SME
     # hardware. Built only on aarch64.
     sme_march = '-march=armv9-a+sve+sme+sme-f64f64'
+    sme_args = [sme_march]
+    # Clang keeps __ARM_FEATURE_BTI defined for v8.5+/v9 marches regardless
+    # of emission; the TU undefines the macro (see its header comment), and
+    # this flag keeps that claim true by explicitly disabling BTI emission.
+    if cpp.has_argument('-mbranch-protection=none')
+        sme_args += ['-mbranch-protection=none']
+    endif
     if cpp.has_argument(sme_march)
         arm64_sme_lib = static_library(
             'tests_arm64_sme',
@@ -262,7 +269,7 @@ if host_machine.cpu_family() == 'aarch64'
                 default_cpp_warn,
                 default_cpp_flags,
                 march_generic_flags,
-                sme_march,
+                sme_args,
                 sve_sanitize_exempt,
             ],
         )

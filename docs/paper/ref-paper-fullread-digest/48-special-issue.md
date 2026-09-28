@@ -38,7 +38,7 @@ Dimitris Gizopoulos(单作者,客座主编;雅典大学信息与电信系教授,
 8. **成本-优化框架**: 大规模系统设计是性能/功耗/弹性/良率/成本的竞争优化;"SDC 缓解的问题在于成本落在哪里——牺牲性能?系统更贵?更耗能?**'以上皆是'是最可能的答案**"。
 9. **领域状态自评**: "问题升级近十年后,我们的**问题多于答案**"——但这是预期的(规模/复杂度/密度持续增长);希望在于全巨头的投入将使 SDC 芯片率比"千分之一"低若干数量级。
 10. **八篇文章主题矩阵(Table 3,16 个维度×文章)**: CPU(Karystinos/Bose/Shamsa)、GPU(Saxena/Pei/Vallin)、AIA(Chatzopoulos/George);测试、功耗管理(Bose)、推理(Saxena/Chatzopoulos/George)、训练(Saxena/Pei/Vallin/George)、仿真、测量与指标、注入、公有云(Vallin)、数据中心、缓解、行动号召(George)——**专刊即领域版图**。
-11. **各篇一句话(A1–A8)**: A1 Saxena 等(数据 NAND?——NVIDIA 线)主张数据中心最优缓解:ECC 之外补充**基于算法的差错检测(ABED)**;A2 Karystinos 等 **Harpocrates++**:自动功能程序生成+gem5 评分,检出真实 x86 CPU 缺陷;A3 Bose 等鲁棒功耗管理:电源/电压跌落/裕量与 SDC 的紧密耦合;A4 Shamsa 等**从代工厂到机群(foundry to fleet)的系统性 SDE 检测**:边际缺陷表征+各测试阶段改进;A5 Pei 等:缺陷芯片对 LLM 训练的影响+训练旋钮的作用;A6 Vallin 等:AI 公有云部署的 SDC 挑战;A7 Chatzopoulos 等 **Phoebe**:"测量不可测之物"——首个 AI 加速器全系统微架构级 SDC 分析框架;A8 George 等:**OCP 成员公司的整合产业观点**,呼吁产业-学术合作。
+11. **各篇一句话(A1–A8)**: A1 Saxena 等主张数据中心最优缓解:ECC 之外补充**基于算法的差错检测(ABED)**;A2 Karystinos 等 **Harpocrates++**:自动功能程序生成+gem5 评分,检出真实 x86 CPU 缺陷;A3 Bose 等鲁棒功耗管理:电源/电压跌落/裕量与 SDC 的紧密耦合;A4 Shamsa 等**从代工厂到机群(foundry to fleet)的系统性 SDE 检测**:边际缺陷表征+各测试阶段改进;A5 Pei 等:缺陷芯片对 LLM 训练的影响+训练旋钮的作用;A6 Vallin 等:AI 公有云部署的 SDC 挑战;A7 Chatzopoulos 等 **Phoebe**:"测量不可测之物"——首个 AI 加速器全系统微架构级 SDC 分析框架;A8 George 等:**OCP 成员公司的整合产业观点**,呼吁产业-学术合作。
 12. **致谢与编辑机制**: 感谢录用与被拒文章的作者、审稿人(紧时间表)、IEEE Micro 编辑部、主编 Hsien-Hsin "Sean" Lee("立即拥抱并欢迎我的专刊提议")。
 
 ## 分类学标注
@@ -88,7 +88,7 @@ Dimitris Gizopoulos(单作者,客座主编;雅典大学信息与电信系教授,
 
 1. **与 [47](Computer 杂志评论)直接成对**: [47]=面向大众的产业经济视角,[48]=面向专业读者的领域快照;Table 2 明列 [47]("IEEE Computer magazine 2025-06 general readership article")——Gizopoulos 2025–2026 双文连发,构成其"SDC 布道"两连击;两文均无企业资助致谢差异([47] 有 Meta/AMD/OCP 行,[48] 无)。
 2. **与 digest [26]/[27] Harpocrates 线**: A2 "Harpocrates++"(Karystinos/Fragkoulis/Chatzopoulos/Gizopoulos/Gurumurthi)= Harpocrates 系列的 Micro'26 延伸版——**同一方法(gem5 评分的功能程序生成)从会议论文升级为杂志版**;且 [47] 的 [17] 引文 venue 疑云(ISCA'24 vs INDEX 标 micro26)在 A2 的存在下更可能是**系列多篇**(isca24 原版+A2++版),Task 10 核对时按此线索查。
-3. **与 digest [03] Ripple / [44] recommendation**: A7 Phoebe 作者含 **Dixit 与 Sankar(均 Meta)**+ Trakosa(AMD,= digest [51] NAVIgator 作者)+ Chatzopoulos/Gizopoulos——**Meta×AMD×雅典大学三角**再现;Sankar 的第四次出场(03/44/47 引言圈/48-A7),其人脉网络是 Meta-学界合作的活体样本。
+3. **与 digest [03] Ripple / [44] recommendation**: A7 Phoebe 作者含 **Dixit 与 Sankar(均 Meta)**+ Trakosa(雅典大学,= digest [51] NAVIgator 作者;**[51] 证实其 2025 年时隶属雅典大学,Phoebe 中的机构归属本表未标注**) + Chatzopoulos/Gizopoulos——**Meta×雅典大学三角**再现;Sankar 的第四次出场(03/44/47 引言圈/48-A7),其人脉网络是 Meta-学界合作的活体样本。
 4. **与 digest [50] iolts24-quantify**: A4 Shamsa 等"foundry to fleet"作者含 **Macieira(AMD,[50] 作者)**——Macieira 从 IOLTS 量化研究进入 Micro 产业实践文章;A4 的 Shamsa 为 Meta(产业作者名单位列)——Meta 从披露方(Dixit)扩展到检测方法供给方。
 5. **语料外新披露实体(综述须引用本 Table 1)**: DeepSeek(SC'24,LLM 训练/GPU/ML 训练芯片)、Amazon(arXiv 2025-02,ML 训练芯片)、Tesla(X 帖 2025-06)——**中国 AI 实验室与美国电商/车厂入局**,SDC 披露主体从超大规模云厂商扩展到 AI 原生公司与终端厂商;Tesla 的 X 帖是首个社交媒体披露。
 6. **vs R1 批次披露论文([01] 等)**: Table 1 把 [01] Alibaba SOSP23 定位为五事件时间线的第三站——R1 论文在产业叙事中的坐标由此锚定;[02] PinDrop/[03] Ripple(Meta 后续)未入 Table 1(2024-06 ISCA 可能在截稿后)——时间线边界效应,综述引用时注意。

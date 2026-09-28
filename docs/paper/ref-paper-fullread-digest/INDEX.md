@@ -55,6 +55,6 @@
 | 48 | R7 | Special Issue on Silent Data Corruptions—From Silicon to Cloud Data Centers and AI Systems of Huge Scale.pdf | special-issue | done |
 | 49 | R7 | Silent_Data_Corruptions_The_Stealthy_Saboteurs_of_Digital_Integrity.pdf | stealthy-saboteurs | done |
 | 50 | R7 | Silent Data Corruptions in Computing Understand and Quantify iolts2024_macieira.pdf | iolts24-quantify | done |
-| 51 | R8 | NAVIgator Exploring the Voltage Limits of AMD NAVI GPUs for Energy Efficient Computing iolts2025_trakosa.pdf | navigator-gpu | pending |
-| 52 | R8 | Reliability assessment of AMD MicroBlaze-V TMR architecture using fault injection and proton irradiation.pdf | microblaze-tmr | pending |
-| 53 | R8 | proteanTecs White Paper_Outsmarting Silent Data Corruption in AI Processors With Two-Stage Detection.pdf | proteantecs-wp | pending |
+| 51 | R8 | NAVIgator Exploring the Voltage Limits of AMD NAVI GPUs for Energy Efficient Computing iolts2025_trakosa.pdf | navigator-gpu | done |
+| 52 | R8 | Reliability assessment of AMD MicroBlaze-V TMR architecture using fault injection and proton irradiation.pdf | microblaze-tmr | done |
+| 53 | R8 | proteanTecs White Paper_Outsmarting Silent Data Corruption in AI Processors With Two-Stage Detection.pdf | proteantecs-wp | done |

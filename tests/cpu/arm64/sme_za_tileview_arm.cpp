@@ -215,6 +215,18 @@ static int sme_za_tileview_arm_init(struct test *test)
                     static_cast<double>((i * 131 + j) % 977) + 0.5 * (i + 1);
                 data->b[ij] =
                     static_cast<double>((i * 197 + j) % 883) + 0.25 * (j + 1);
+            }
+
+        /* Goldens must be derived only after a/b are fully populated: the
+         * transpose reads a[ji] and the slice-shift reads a[rot], both of
+         * which point at later rows for i < n-1 — reading them inside the
+         * fill loop above would pick up resize-zeroed elements and poison
+         * every cross-row golden. */
+        for (long i = 0; i < n; ++i)
+            for (long j = 0; j < n; ++j) {
+                const size_t ij = static_cast<size_t>(i) * n + j;
+                const size_t ji = static_cast<size_t>(j) * n + i;
+                const size_t rot = static_cast<size_t>((i + 1) % n) * n + j;
                 data->golden_id_a[ij] = data->a[ij];
                 /* za0v.d[c] stores column c: the transpose. */
                 data->golden_tr_a[ij] = data->a[ji];
@@ -242,7 +254,8 @@ static int sme_za_tileview_arm_run(struct test *test, int cpu)
 #else
     auto *d = static_cast<SmeZaTileviewData *>(test->data);
     constexpr long n = kTileN;
-    constexpr size_t bytes = static_cast<size_t>(n) * n * sizeof(double);
+    constexpr size_t count = static_cast<size_t>(n) * n;
+    constexpr size_t bytes = count * sizeof(double);
 
     /* Per-thread output buffers: 608 CPUs run this concurrently and a
      * shared dst would be a cross-thread race. Every byte of each
@@ -262,27 +275,27 @@ static int sme_za_tileview_arm_run(struct test *test, int cpu)
         za_tileview_kernel(&params);
 
         if (memcmp(id_a, d->golden_id_a.data(), bytes) != 0) {
-            memcmp_or_fail(id_a, d->golden_id_a.data(), bytes,
+            memcmp_or_fail(id_a, d->golden_id_a.data(), count,
                            "sme_za_tileview_arm: za0h.d[slice, 0] round-trip "
                            "mismatch");
         }
         if (memcmp(tr_a, d->golden_tr_a.data(), bytes) != 0) {
-            memcmp_or_fail(tr_a, d->golden_tr_a.data(), bytes,
+            memcmp_or_fail(tr_a, d->golden_tr_a.data(), count,
                            "sme_za_tileview_arm: za0v.d vertical read is not "
                            "the transpose of the za0h loads");
         }
         if (memcmp(rot_a, d->golden_rot_a.data(), bytes) != 0) {
-            memcmp_or_fail(rot_a, d->golden_rot_a.data(), bytes,
+            memcmp_or_fail(rot_a, d->golden_rot_a.data(), count,
                            "sme_za_tileview_arm: za0h.d[slice, 1] read does "
                            "not track the slice+1 vector select");
         }
         if (memcmp(id_b, d->golden_id_b.data(), bytes) != 0) {
-            memcmp_or_fail(id_b, d->golden_id_b.data(), bytes,
+            memcmp_or_fail(id_b, d->golden_id_b.data(), count,
                            "sme_za_tileview_arm: za1h.d[slice, 0] round-trip "
                            "mismatch");
         }
         if (memcmp(id_a2, d->golden_id_a.data(), bytes) != 0) {
-            memcmp_or_fail(id_a2, d->golden_id_a.data(), bytes,
+            memcmp_or_fail(id_a2, d->golden_id_a.data(), count,
                            "sme_za_tileview_arm: za1h writes disturbed the "
                            "za0h tile (tile isolation violation)");
         }

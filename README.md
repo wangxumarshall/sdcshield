@@ -335,7 +335,7 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 | OpenSSL SHA | `openssl_sha`、`openssl_sha3`、`openssl_sm3sm4` | SHA-256/384/512（SHA-2 加法链）、SHA-3-224/256/384/512 + SHAKE128 XOF（Keccak 置换 AND/旋转/χθ 步，与 SHA-2 正交的 FU 混合）、SM3 摘要 + SM4-CBC 加解密往返（国密整数通路）vs golden（默认构建，优先 vendored OpenSSL） |
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
-| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`、`sme_za_tileview_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀）、SME ZA tile 语义压力（h 装载 round-trip / v 列转置读出 / 向量选择 imm 旋转 / za1h 独立 round-trip + za0 隔离，逐字节 golden；无 HWCAP2_SME 或 SVL≠512-bit 诚实 SKIP；需 clang +sme 工具链，gcc 构建自动剔除） |
+| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`、`sve512_xlswave_ctx_arm`、`sme_za_tileview_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀）、XLSDFT 复合上下文触发器（同一 per-core 循环内交错 64× stencil 轴核、SVD 尺度 gather/scatter 与 7 槽指针表金丝雀 + 每轮 VA[63:48] 金丝雀，三阶段字节精确 memcmp，复现已知故障窗口配方而无 MPI/libomp 脚手架；无 SVE 或 VL≠512-bit 诚实 SKIP）、SME ZA tile 语义压力（h 装载 round-trip / v 列转置读出 / 向量选择 imm 旋转 / za1h 独立 round-trip + za0 隔离，逐字节 golden；无 HWCAP2_SME 或 SVL≠512-bit 诚实 SKIP；需 clang +sme 工具链，gcc 构建自动剔除） |
 | ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别（uint64x2 旋转 ALU + 向量 store/reload/store）、ldr_at_top 扫描顺序变体（升/降序交替，区分槽位局部 vs 前进位置特征）、core-179 字节交换往返触发探针组 |
 | SVE 版 avx53 套件（tests/cpu/sve/，53 个） | `fma_tail_sve{,_wide}`、`fmatail_sve{,_wide}`×4 对、`fma_patterns_sve_wide_{ps,pd}`、`mesh_upi_sve_*` 18 个、`eigen_svd_bidiag_sve`、`ipsec_*_sve{,_wide}` 24 个 | 53 个 avx 命名 NEON 测试的 SVE1 移植（负载环境不变：向量宽度/随机域/特殊值注入/块结构/原子协议/golden 模式全保留；命名 `_avx/_avx2→_sve`、`_avx512→_sve_wide`）。FMA 10 + Mesh 18 = 纯指令替换（SVE 谓词访存）；eigen 1 = 自写 Householder 双对角化 SVE 负载（替代崩溃的 Eigen-SVE 后端路径）；ipsec 17 = EVP 加密 + 多流 SVE HMAC（SHA 内核与 OpenSSL 全向量比对 5200+1360 全对，lane0=原 MAC 语义+变体填 lane），7 个 EVP-only（GCM/CMAC/XCBC）如实标注计算路径。构建于 `tests_sve_avx53`/`tests_sve_avx53_ipsec` 库（`-march=armv8.2-a+sve`，init 探 HWCAP_SVE 干净 skip） |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
@@ -346,8 +346,10 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 4 |
-| 2 | PROD（默认）| `quality >= 2` | 282（clang +sme 构建另含 `sme_za_tileview_arm`，+1） |
+| 2 | PROD（默认）| `quality >= 2` | 282（gcc 参考平台实测 2026-09-17） |
 | | **合计** | | **291** |
+
+> 上表为 gcc 参考平台（2026-09-17 实测）口径。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 321，`--quality=-1` 全量 332；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm_crypto`、`ist_sbaf`、`neon_add`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`

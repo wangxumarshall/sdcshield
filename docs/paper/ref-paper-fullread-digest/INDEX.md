@@ -5,15 +5,15 @@
 
 | 编号 | 批 | PDF 文件名(ref/ 下) | 笔记 slug | 状态 |
 |---|---|---|---|---|
-| 01 | R1 | SOSP23 Understanding Silent Data Corruptions in a Large Production CPU Population.pdf | sosp23-fleet | pending |
-| 02 | R1 | HPCA2026 PinDrop_Breaking_the_Silence_on_SDCs_in_a_Large-Scale_Fleet.pdf | pindrop | pending |
-| 03 | R1 | Fleetscanner_Ripple Detecting silent data corruptions in the wild.pdf | ripple | pending |
-| 04 | R1 | Veritas__Demystifying_Silent_Data_Corruptions_Arch-Level_Modeling_and_Fleet_Data_of_Modern_x86_CPUs.pdf | veritas | pending |
-| 05 | R1 | ASPOLOS 2026 SEVI Silent Data Corruption of Vector Instructions in Hyper-Scale Datacenters.pdf | sevi | pending |
-| 06 | R1 | ITHICA Intra-Thread Instruction Checking Approach for Defect-Induced Silent Data Corruptions.pdf | ithica | pending |
-| 07 | R1 | ASPLOS 2025 Hardware Sentinel Protecting Software Applications from Hardware Silent Data Corruptions.pdf | hwsentinel | pending |
-| 08 | R1 | Silent_Data_Corruptions_Microarchitectural_Perspectives.pdf | tc23-micropersp | pending |
-| 09 | R1 | Silent Data Corruption by 10x Test Escapes Threatens Reliable Computing.pdf | test-escapes | pending |
+| 01 | R1 | SOSP23 Understanding Silent Data Corruptions in a Large Production CPU Population.pdf | sosp23-fleet | done |
+| 02 | R1 | HPCA2026 PinDrop_Breaking_the_Silence_on_SDCs_in_a_Large-Scale_Fleet.pdf | pindrop | done |
+| 03 | R1 | Fleetscanner_Ripple Detecting silent data corruptions in the wild.pdf | ripple | done |
+| 04 | R1 | Veritas__Demystifying_Silent_Data_Corruptions_Arch-Level_Modeling_and_Fleet_Data_of_Modern_x86_CPUs.pdf | veritas | done |
+| 05 | R1 | ASPOLOS 2026 SEVI Silent Data Corruption of Vector Instructions in Hyper-Scale Datacenters.pdf | sevi | done |
+| 06 | R1 | ITHICA Intra-Thread Instruction Checking Approach for Defect-Induced Silent Data Corruptions.pdf | ithica | done |
+| 07 | R1 | ASPLOS 2025 Hardware Sentinel Protecting Software Applications from Hardware Silent Data Corruptions.pdf | hwsentinel | done |
+| 08 | R1 | Silent_Data_Corruptions_Microarchitectural_Perspectives.pdf | tc23-micropersp | done |
+| 09 | R1 | Silent Data Corruption by 10x Test Escapes Threatens Reliable Computing.pdf | test-escapes | done |
 | 10 | R2 | Measuring_architectural_vulnerability_factors.pdf | measuring-avf | pending |
 | 11 | R2 | A Systematic Methodology to Compute the Architectural Vulnerability Factors for a High-Performance Microprocessor.pdf | systematic-avf | pending |
 | 12 | R2 | Computing_architectural_vulnerability_factors_for_address-based_structures.pdf | addr-avf | pending |

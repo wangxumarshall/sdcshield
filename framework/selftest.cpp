@@ -963,7 +963,7 @@ static void cause_sigill()
      * binutils versions. Same machine encoding, same SIGILL. */
     asm volatile(".inst 0x00001234"
                  :
-                 : "x"(local_thread_num), "x"(rnd), "x"(errno_location),
+                 : "r"(local_thread_num), "r"(rnd), "r"(errno_location),
                    "w"(d1), "w"(d2), "w"(v0), "w"(v1)
                  : "memory");
 #else

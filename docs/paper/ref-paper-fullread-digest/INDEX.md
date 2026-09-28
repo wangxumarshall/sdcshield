@@ -23,12 +23,12 @@
 | 16 | R2 | MeRLiN Exploiting Dynamic Instruction Behavior for Fast and Accurate Microarchitecture Level Reliability Assessment.pdf | merlin | done |
 | 17 | R2 | Demystifying_the_System_Vulnerability_Stack_Transient_Fault_Effects_Across_the_Layers.pdf | vuln-stack | done |
 | 18 | R2 | From_Gates_to_SDCs_Understanding_Fault_Propagation_Through_the_Compute_Stack.pdf | gates-to-sdc | done |
-| 19 | R3 | GemFI_A_Fault_Injection_Tool_for_Studying_the_Behavior_of_Applications_on_Unreliable_Substrates.pdf | gemfi | pending |
-| 20 | R3 | Chaos Controlled Hardware Fault Injector System for Gem5.pdf | chaos | pending |
-| 21 | R3 | Differential_Fault_Injection_on_Microarchitectural_Simulators.pdf | diff-fi | pending |
-| 22 | R3 | Gem5-MARVEL_Microarchitecture-Level_Resilience_Analysis_of_Heterogeneous_SoC_Architectures.pdf | gem5-marvel | pending |
-| 23 | R3 | Estimating_the_Failures_and_Silent_Errors_Rates_of_CPUs_Across_ISAs_and_Microarchitectures.pdf | cross-isa | pending |
-| 24 | R3 | Soft_Error_Effects_on_Arm_Microprocessors_Early_Estimations_versus_Chip_Measurements.pdf | arm-soft-error | pending |
+| 19 | R3 | GemFI_A_Fault_Injection_Tool_for_Studying_the_Behavior_of_Applications_on_Unreliable_Substrates.pdf | gemfi | done |
+| 20 | R3 | Chaos Controlled Hardware Fault Injector System for Gem5.pdf | chaos | done |
+| 21 | R3 | Differential_Fault_Injection_on_Microarchitectural_Simulators.pdf | diff-fi | done |
+| 22 | R3 | Gem5-MARVEL_Microarchitecture-Level_Resilience_Analysis_of_Heterogeneous_SoC_Architectures.pdf | gem5-marvel | done |
+| 23 | R3 | Estimating_the_Failures_and_Silent_Errors_Rates_of_CPUs_Across_ISAs_and_Microarchitectures.pdf | cross-isa | done |
+| 24 | R3 | Soft_Error_Effects_on_Arm_Microprocessors_Early_Estimations_versus_Chip_Measurements.pdf | arm-soft-error | done |
 | 25 | R4 | silifuzz.pdf | silifuzz | pending |
 | 26 | R4 | Harpocrates_Automated_Functional_Program_Generation_Against_CPU_Faults_and_Silent_Data_Corruptions.pdf | harpocrates-isca24 | pending |
 | 27 | R4 | Harpocrates_Breaking_the_Silence_of_CPU_Faults_through_Hardware-in-the-Loop_Program_Generation.pdf | harpocrates-micro26 | pending |

@@ -100,7 +100,7 @@ Yu Yan(闫昱), Sijia Cheng, Yuqi Zhang, Zhiyu Dai, Hongzhi Wang(王宏志)—�
 - **同行评审状态**: SSRN 预印本,每页明示 "not been peer reviewed"——**综述引用必须标注预印本身份**;无 DOI/版权行,仅 SSRN 摘要号 6018559。
 - **文件名与论文标题不一致**: 文件名 "SENTRY A Dual-Layer Technique for Silent Data Corruption Detection in Deterministic Database Systems" vs 论文标题 "SENTRY: A Layered Silent Data Corruption Detection Technique Based on Deterministic Transaction Execution"——疑为版本更名,以论文内标题为准。
 - **效率提升数字三处互斥**: 摘要 73.03% / §6.4 70.73% / 结论 70.83%——同一对比(vs RIVA)三个值,未peer review 的典型疏漏;三值并录,不强行归一。
-- **占位作者名**: 参考文献 [25] ATTNChecker 作者列为 "Y. Liang, Y. **AuthorTwo**, and Y. **AuthorThree**"——引用管理未完成的直接证据。
+- **源文献作者名未完成**: 参考文献 [25] ATTNChecker 作者列为 "Y. Liang, Y. **AuthorTwo**, and Y. **AuthorThree**"——引用管理未完成的直接证据。
 - **引文-内容错配(重要)**: §2.1 "exabyte-scale database systems [26]" 的描述(end-to-end checksums/fail-stop invariants/SQL 复杂操作)是 Google Spanner SDC 论文(=digest [39] Bacon et al.)的内容,但 [26] 实际指向 Yakhchi et al. IEEE Canadian J.(SDC 无注入估计)——预印本引文错误;精读 [39] 后可确认。
 - **引文 [3]/[10] 与叙述的匹配疑点**: 正文 [3] 处叙述腾讯云 2018 迁移事故,但 [3](51CTO)与 [10](腾讯云社区)两文标题均为"Oracle 数据库如何应对静默数据损坏"——事故叙述与所引文章内容不严格对应(疑引错源),如实记录。
 - **Table 2 检测率算术疑点**: 每组注入 3 处 SDC、5 次重复,报告检测率 25%/50%——与 3 的整除性不吻合(1/3≈33%、2/3≈67%);可能为跨重复某种聚合口径,文本层无从裁决,照录并标注。

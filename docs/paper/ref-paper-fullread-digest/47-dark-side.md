@@ -95,7 +95,7 @@ Dimitris Gizopoulos(单作者;雅典大学信息与电信系教授,Computer Arch
 
 1. **与 digest 群的直接互证**: [4]=[01] SOSP23(Alibaba)、[15]=[49] stealthy-saboteurs IOLTS'23、[16]=[50] iolts24-quantify、[17]=[27] harpocrates——本文是 R7/R8 批次的**枢纽文本**:Gizopoulos 学派(Papadimitriou 等)+ Gurumurthi(AMD/弗吉尼亚大学)学术圈的自我综述;**Task 10 须核对 [27] 的 venue**(本文标注 ISCA 2024 pp.516–531,doi 10.1109/ISCA59077.2024.00045;INDEX 现标 micro26,二者必有一误——可能 INDEX 误标或同系列两篇)。
 2. **vs [49]/[50](同作者群前作)**: 47 是 Computer 杂志版的大图景评述(经济学+全栈动员),49/50 是 IOLTS 的技术性量化——同一学派的"学术版/产业版"双轨输出。
-3. **vs [01] SOSP23**: 本文转述 Alibaba 披露"3.61%…的 CPU"并解释为 **361 DPPM**=3.61/万(0.0361%)——文本层的"%"疑为"‰"或"/万"的提取损坏;**这直接支持 Task 10 的单位复核**:若 SOSP23 原文为 3.61/万,则 note 01 的"3.61‰"(=3610 DPPM)应更正为 3.61/万。
+3. **vs [01] SOSP23**: 本文转述 Alibaba 披露"3.61%…的 CPU"并解释为 **361 DPPM**=3.61/万(0.0361%)——文本层的"%"疑为"‰"或"/万"的提取损坏;**这直接支持 Task 10 的单位复核**:若 SOSP23 原文为 3.61/万,则 note 01 的"3.61‰"(=3610 DPPM)应更正为 3.61/万。**(2026-09-28 终核已落地:单位确为 3.61/万=361 DPPM,note 01 已更正;依据 [27] Fig.1"3.61 CPUs per 10,000"原文 + [53] §1 + [02] PinDrop 转述 0.348→"0.0035%"三重旁证,本文的 361 DPPM 解释完全正确,唯文本层"%"应读作"/万")**
 4. **vs [08] tc23-micropersp(Gizopoulos 自己的 TC'23)**: 08 是微架构视角的技术综述,47 是产业经济视角的评论——同作者的问题意识从"怎么发生"扩展到"谁买单"。
 5. **Meta 资助链条闭环**: Meta Research 2022 SDC RFP [9] → Veritas HPCA'25([04],digest)/Dr.DNA ASPLOS'24([6])/Ripple——本文致谢"Research is supported by Meta, AMD, and the OCP"把 R1 批次观察到的 Meta-学界合作(digest 04 Veritas 致谢 Meta RFP)上升到资助人自述;**Meta 通过 RFP 定向孵化 SDC 学术研究**是综述企业生态的关键机制。
 6. **OCP 产业联盟**: AMD/Intel/NVIDIA/Arm+超大规模厂商在 OCP 的 Server Resilience Initiative 与 SDC 学术研究奖(2024)——**产业界集体行动的制度化证据**;对综述"业界观点"章节:披露(Meta/Google/Alibaba)→确认(AMD/Intel/NVIDIA/Arm 加入)→资助(OCP 奖)三阶段。

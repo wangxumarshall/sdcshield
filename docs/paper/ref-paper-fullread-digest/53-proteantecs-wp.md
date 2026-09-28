@@ -104,7 +104,7 @@ PDF 14 页(p.1、p.14 空白;正文 p.2–13),经 ocr32 提取为 53-proteantecs
 
 ## 身份核实
 
-- **361 DPPM 归属第三方确认(Task 10 关键)**:白皮书明确"Alibaba recently published exact statistics revealing 361 DPPM"(§1),与 [47] Table 1 一致;结合 2023.10=SOSP23=[01](Alibaba),note 27 所记"Meta 2023.10, 3.61/万"的归属疑误进一步坐实——**361 DPPM=3.61/万 应归 Alibaba(SOSP23)**,Task 10 终核时以此为准。
+- **361 DPPM 归属第三方确认(Task 10 关键)**:白皮书明确"Alibaba recently published exact statistics revealing 361 DPPM"(§1),与 [47] Table 1 一致;结合 2023.10=SOSP23=[01](Alibaba),note 27 所记"Meta 2023.10, 3.61/万"的归属疑误进一步坐实——**361 DPPM=3.61/万 应归 Alibaba(SOSP23)**,Task 10 终核时以此为准。**(2026-09-28 终核已完成:note 01(单位 ‰→/万)与 note 27(归属 Meta→Alibaba)均已按此更正;[27] 原文参考文献 [3] 即 S. Wang et al. SOSP'23,归属链坐实;连带更正 note 05 SEVI fleet 率 0.072 ‰→/万——其原文自证与 [01] 0.348"aligns"同单位对比)**
 - **软错误/SDC 混同**:Fig.1 题注"Soft errors such as SDC"并把 Upasani TC'15(声学波探测器,软错误方向)的 65nm→16nm 数据用作 SDC 上升趋势论据——软错误(辐射根因)与 SDC(制造缺陷/老化根因)在学术谱系中分属两族(参见 [52]),白皮书混用属营销口径的宽松,综述引用须拆分。
 - **Meta 案例转写**:§4 "producing zero instead of 156 when executing Int(1.153)" 将计算(Int(1.153) 应为 1)与结果(大小 0 而非 156)压缩在一句;与 Meta 原文(arXiv 2102.11245,语料外)对照时留意转写差异,本笔记按白皮书原文记录。
 - **证据等级**:40% 降幅、22→4 裕量、44% PI 均为单一未具名客户案例或示例截图,无方法学细节;白皮书自称"industry-only""first time"为营销修辞。

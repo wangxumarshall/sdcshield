@@ -103,7 +103,7 @@ Bao Wen(文博,一作,博士生), Jingjing Gu(顾晶晶,Member, IEEE,通讯作�
 - **与 R3 故障注入工具([19]–[24])**: 本文建基于 LLFI(IR 级注入,[16] Lu et al.)并二次开发细粒度位翻转机制;注入合法性论证链([41][42] Palazzi:IR 级 ≈ 汇编级)是所有 IR 级 FI 工作的公共前提。
 - **与 [08] tc23-micropersp**: 引 Papadimitriou/Gizopoulos TC 2023 为 [48]——雅典学派的微架构 SDC 视角进入本文相关工作;间接连接 R7 [49][50]。
 - **与 [24] arm-soft-error**: 引 Bodmann/Papadimitriou/Gizopoulos/Rech TC 2022 为 [46](早期估计 vs 芯片实测)——本文的模型预测与之同属"预测 vs 实测"验证文化。
-- **与 R6 [43] hpc-duplication**: 加固验证用的指令复制即 Didehban/Shrivastava 谱系([7] TDSC 2024;[36] 亦引为 [18])——预测([37])与加固([43])构成"指哪打哪"的上下游。
+- **与 R6 [43] hpc-duplication**: 加固验证用的指令复制即 Didehban/Shrivastava 谱系([7] TDSC 2024;[36] 亦引为 [18])——预测([37])与加固([43])构成"指哪打哪"的上下游。(Task 10 已核:本文 [7] 与 [36][18] 同指 Didehban et al. gZDC TDSC vol.21 no.1 pp.78–92,语料外论文,均非 digest [43];"[43]=Didehban"读前假设链已由 [43] 精读证伪,正式关闭)
 - **与 [01][09] 产业数据流**: Meta RFP/ISCA 2022 脚注引证说明产业 SDC 事件(2021–2022 公开化)直接点燃了这条学术线;"少数指令主导 SDC"论断([9] Huang SC 2022)与 Google test-escape 数据([09])在同一成本逻辑下汇合。
 - **引用瑕疵同族**: 本文 [8]≈[13](GPU-Trident SC 2020 重复引用)——与 [36] 的三组重复引用同类,反映该团队引文管理习惯(两文共享作者圈)。
 

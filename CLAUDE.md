@@ -129,6 +129,13 @@ END_DECLARE_TEST
 - **Literature rationale** (why these workloads/libs — 31-paper synthesis):
   `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`; fault-injection experiment
   plan: `docs/paper/SDC_FAULT_INJECTION_EXPERIMENT_PLAN_CN.md`.
+- **Academic survey** (53-paper full-read taxonomy report, 2026-09):
+  `docs/paper/SDC_ACADEMIC_SURVEY_CN.md` — SDC core-characteristics /
+  root-cause / fault-mode / detection / handling taxonomies,
+  academia-vs-industry comparison, collab ecosystem, full-stack ×
+  full-lifecycle implications; per-paper digests:
+  `docs/paper/ref-paper-fullread-digest/` (INDEX.md = NN↔PDF map; note
+  the 26/27 filename swap).
 - **Theory**: `docs/hypothesis/ARM64-SDC-uArch.md`; **output schema**:
   `docs/sdcshield-cpu.schema.json`; **provenance/compliance**:
   `docs/misc/OPEN_SOURCE_PROVENANCE.md`.

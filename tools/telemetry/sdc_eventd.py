@@ -284,10 +284,16 @@ class EventdLoop:
                     continue
                 self._append_jsonl(self._sp(EVENTS_FILE), ev)
                 out.append(ev)
+        # 直写（非 tmp+replace）：掉电只丢 offset/dedup（重扫/重入流，不炸守护）；
+        # fsync 使其持久（2026-09-28 硬重启清零同类耐久性修复）。
         with open(self._sp(OFFSET_FILE), "w") as f:
             json.dump(self.offsets, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
         with open(self._sp(DEDUP_FILE), "w") as f:
             json.dump(list(self._seen), f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
         return out
 
 # ---------------------------------------------------------------------------

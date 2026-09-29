@@ -204,6 +204,20 @@ if host_machine.cpu_family() == 'aarch64'
             # 1.5*iterations*(j+1) (RADIUS=6), the stale RADIUS=4 formula
             # iterations*(j+1) was a software false positive.
             'sve512_stencil_axis_arm.cpp',
+            # XLSDFT composite-context SDC stress (escalation T1):
+            # interleaves the stencil axis kernel (phase A), the SVD-format
+            # gather/scatter over an L2-overflow working set (phase B) and
+            # a workspace pointer-table canary (phase C) in one per-core
+            # loop — the known fault-window ingredients without the MPI/
+            # libomp scaffolding.
+            'sve512_xlswave_ctx_arm.cpp',
+            # libomp fork/join context emulation (escalation T2):
+            # SVE FMLA bursts alternating with time-synchronized
+            # collective park windows + function-pointer-table/counter
+            # metadata canaries — the runtime-interaction ingredient of
+            # the fault window, access-pattern only (layout honestly not
+            # replicated). Deadlock-free by construction.
+            'libomp_ctx_arm.cpp',
         ),
         build_by_default: false,
         include_directories: [
@@ -222,8 +236,55 @@ if host_machine.cpu_family() == 'aarch64'
         ],
     )
 
-    sandstone_tests += [
-        arm64_tests_lib,
-        arm64_sve_lib,
-    ]
+    # SME/ZA tile-view SDC stress (sme_za_tileview_arm). Own static_library
+    # because the naked-asm ZA kernel needs armv9-a+sve+sme+sme-f64f64, which
+    # neither the tests_arm64 baseline (armv8.1-a+crc+crypto) nor the SVE
+    # library (armv8.2-a+sve) can host, and which GCC-12 cannot parse at all.
+    # Compiler-support probed with the C++ compiler object so GCC builds
+    # degrade gracefully (test simply absent, the gmp/acl/openblas pattern);
+    # the test itself re-gates at runtime on HWCAP2_SME and the measured
+    # 512-bit SVL geometry, so it only ever executes on characterized SME
+    # hardware. Built only on aarch64.
+    sme_march = '-march=armv9-a+sve+sme+sme-f64f64'
+    sme_args = [sme_march]
+    # Clang keeps __ARM_FEATURE_BTI defined for v8.5+/v9 marches regardless
+    # of emission; the TU undefines the macro (see its header comment), and
+    # this flag keeps that claim true by explicitly disabling BTI emission.
+    if cpp.has_argument('-mbranch-protection=none')
+        sme_args += ['-mbranch-protection=none']
+    endif
+    if cpp.has_argument(sme_march)
+        arm64_sme_lib = static_library(
+            'tests_arm64_sme',
+            files('sme_za_tileview_arm.cpp'),
+            build_by_default: false,
+            include_directories: [
+                framework_incdir,
+            ],
+            dependencies: [
+                boost_dep,
+            ],
+            cpp_args: [
+                debug_c_flags,
+                default_cpp_warn,
+                default_cpp_flags,
+                march_generic_flags,
+                sme_args,
+                sve_sanitize_exempt,
+            ],
+        )
+
+        sandstone_tests += [
+            arm64_tests_lib,
+            arm64_sve_lib,
+            arm64_sme_lib,
+        ]
+    else
+        message('Compiler lacks SME support (' + sme_march + ') - '
+                + 'sme_za_tileview_arm is not built')
+        sandstone_tests += [
+            arm64_tests_lib,
+            arm64_sve_lib,
+        ]
+    endif
 endif

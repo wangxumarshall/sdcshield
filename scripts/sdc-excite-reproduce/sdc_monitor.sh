@@ -155,9 +155,9 @@ fi
 # events.jsonl 同风格——追加不覆盖）。字段不可得 → null + source 注记 unavailable
 # （不伪造 0）。核时积分状态存 monitor/exposure_state.json：跨重启沿 last_epoch
 # 锚点续积分（dt=实际间隔；首启无锚点按名义 600s）、跨日归零、dt 有界 24h。
-# as-built 驱动的 driver.log 日汇总行只有「日汇总完成（历史 YAML 已压缩）」——
-# daily_summary() 不产 loop-count 累计，该行补记 token 前 valid_iterations_today
-# 如实为 null（M4 rate_table 的"不可得"降级路径为此保留）。
+# T2 起 daily_summary() 在 driver.log 日汇总行补记「loop-count 日累计: N（YAML 文件数 M）」
+# token（N=今日 logs/YYYYMMDD/ 逐文件 'loop-count:' 行数之和）→ valid_iterations_today 得真值；
+# 旧档/as-built 无 token 的行仍如实降级 null（M4 rate_table 的"不可得"路径保留）。
 write_exposure() {
     local dlog="$EXCITE_REPRODUCE_DIR/driver.log" today summary=""
     today=$(date '+%F')
@@ -192,8 +192,9 @@ def _online_count():
     return n or None
 
 # driver 今日日汇总行 → loop-count 累计 + cycle（token 提取；行在而无 token → None）
+# 兼容两种 token 形：`loop-count=123456`（旧档）与 `loop-count 日累计: 123456`（T2 起）
 iters = cyc = None
-m = re.search(r"loop[-_]count\s*[:=]?\s*(\d+)", summary)
+m = re.search(r"loop[-_]count(?:\s*日累计)?\s*[:=：]?\s*(\d+)", summary)
 if m:
     iters = int(m.group(1))
 m = re.search(r"cycle\s*[:=]?\s*(\d+)", summary)

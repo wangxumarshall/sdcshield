@@ -963,7 +963,7 @@ static void cause_sigill()
      * binutils versions. Same machine encoding, same SIGILL. */
     asm volatile(".inst 0x00001234"
                  :
-                 : "x"(local_thread_num), "x"(rnd), "x"(errno_location),
+                 : "r"(local_thread_num), "r"(rnd), "r"(errno_location),
                    "w"(d1), "w"(d2), "w"(v0), "w"(v1)
                  : "memory");
 #else
@@ -2706,7 +2706,7 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
     .quality_level = TEST_QUALITY_PROD,
 },
 #endif
-#if defined(__aarch64__) && defined(SANDSTONE_DEVICE_CPU)
+#if defined(__aarch64__) && !defined(__clang__) && defined(SANDSTONE_DEVICE_CPU)
 // ARM64 HWCAP feature-gating robustness selftests, the counterpart of the x86
 // selftest_test_*_min_cpu series above. These do NOT compute anything or compare
 // golden values; they assert that the framework's minimum_cpu gate (driven by

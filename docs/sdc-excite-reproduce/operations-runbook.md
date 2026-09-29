@@ -381,16 +381,23 @@ ras/日志 <1；v5 §5.6）。参考机实况（2026-09-27）：数据根 7.6G�
 
 ## 9. 欠账与部署重启待办清单（T1 评审移交 + M5 收敛清单）
 
-### 9.1 驱动 daily_summary 补 loop-count token（独立补丁单元，未实施）
+### 9.1 驱动 daily_summary 补 loop-count token（T2 已实施，待重启生效）
 
-- **欠账**：`daily_summary()`（`sdc-excite-reproduce.sh`）的 driver.log 日汇总行只有
+- **原欠账**：`daily_summary()`（`sdc-excite-reproduce.sh`）的 driver.log 日汇总行只有
   「日汇总完成（历史 YAML 已压缩）」，无 loop-count 累计 → monitor 的
   `write_exposure` 解析不到 token → `exposure.json` 的 `valid_iterations_today`
   **如实为 null**（source 注记 `unavailable(...)`），报告迭代口径降级（§5.3）。
-- **修法**（monitor 解析器已按此 token 格式就绪，`loop[-_]count[:=]?<N>` 正则）：
-  日汇总行补 token，如 `日汇总完成：cycle=N loop-count=M（历史 YAML 已压缩）`——
-  M 为当日全部 YAML 的 loop-count 累计。属驱动侧独立补丁单元（一补丁一单元），
-  建议与下次驱动重启同窗实施。
+- **修法（T2 as-built，`feat/sdc-excite-reproduce-m5-tail`）**：`daily_summary()`
+  统计**今日** `logs/YYYYMMDD/` 下逐文件 `loop-count:` 行数之和 `N` 与文件数 `M`，
+  把 `loop-count 日累计: <N>（YAML 文件数 M）` 写入 driver.log 日汇总行
+  （`日汇总完成 loop-count 日累计: N（YAML 文件数 M）（历史 YAML 已压缩）`），
+  同时写入 `daily_summary.log` 块。monitor 解析器兼容 token 形
+  `loop[-_]count(?:\s*日累计)?[:=：]?\s*<N>`（旧档 `loop-count=N` 与 T2 `loop-count 日累计: N`），
+  旧档无 token 仍降级 null。
+- **口径注记**：`N` = 今日 YAML 里 `loop-count:` 行数合计（= 各线程 main-loop 记录数，
+  非 loop 次数值之和；框架仅 `-vvv` 下产该行，无则计 0）。压缩只作用于昨日及更早，
+  故今日文件多为 `.yaml`（未压）——实现同时计 `.yaml` 与 `.yaml.gz`，避免恒 0 假真值。
+  日汇总行**不含 cycle token**，`exposure.json` 的 `cycle` 仍为 null（既有状态，未在本单元扩围）。
 - **生效链**：补丁合入 → 驱动重启（§9.2）→ 次个日汇总点 → monitor 聚合真值 →
   report 迭代分母 `n=` 从「不可得」转真值。
 
@@ -399,7 +406,7 @@ ras/日志 <1；v5 §5.6）。参考机实况（2026-09-27）：数据根 7.6G�
 | 改动 | commit | 生效条件 | 现状 |
 |---|---|---|---|
 | monitor `write_exposure`（exposure.json 生产） | 208bbcff（2026-09-27 12:49） | **重启 sdc-monitor.service** | 运行进程 00:17 启动=旧代码；**待重启**。建议低负载时段执行（BMC 轮询中断 <1 周期；联锁语义不变） |
-| 驱动 M5 改动 | — | 无（M5 未触驱动脚本） | 不需重启；M3 的 enqueue_repro/consume_verify_request 接线已于 09-27 00:17 重启生效（`cmd/verify.done.*` 在案实证） |
+| 驱动 daily_summary 补 loop-count token（§9.1，T2） | 本单元提交 | **重启驱动（sdc-excite-reproduce.service）** | 运行进程=旧代码；**待重启**——重启后次个日汇总点写 token。另：M3 的 enqueue_repro/consume_verify_request 接线已于 09-27 00:17 重启生效（`cmd/verify.done.*` 在案实证） |
 | tools/analysis（T2 机读 hint/标签接续） | 5ad565a5 | 无（离线工具零部署，按需调用即新代码） | 已生效 |
 | drills / deploy_81machine.sh | f2b551fb..f51dc0a4 | 无（按需脚本） | 已生效 |
 

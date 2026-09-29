@@ -423,3 +423,14 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
 - [ ] 观察周一 cron(UTC 02:37)与日常 push run 持续绿(自然回归)
 - [ ] progress-log 头部"按时间倒序"声明与 09-25 起实际底部追加不一致,
       待统一(本条目沿用底部追加惯例)
+
+> **2026-09-30 补记(根因终局)**:昨日 09-29 07:08–07:43 间,本私有仓的
+> GitHub Pro(或试用)订阅到期/降级——分支保护 API 实测返回 "Upgrade to
+> GitHub Pro or make this repository public to enable this feature",而
+> 09-25 分支保护尚在(上文"10 个必过检查")。付费特性同时失效:
+> code scanning 禁用(CodeQL analyze 与 zizmor 的 SARIF 上传 403)、分支
+> 保护消失(红叉 PR 可合并)、token scope 收紧(gitleaks/zizmor 403,已由
+> PR #214 显式权限声明修复并验证)。"找不到设置开关"实为付费墙。
+> 待用户决策:恢复订阅 / 转公开仓 / 接受降级(SARIF 改存 artifact)。
+> 另:PR #202 的 5 个缺签提交已于 09-29 补签强推(14a82a92→f9e79b65,
+> 树零变化),git-sanity 转绿。

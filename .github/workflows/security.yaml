@@ -23,6 +23,10 @@ jobs:
       # 缺 security-events: write 时审计本身过码 0,上传 403 连坐整个 job
       contents: read
       security-events: write
+      # 2026-09-29 07:08-07:43 起,action 内部 GET /actions/workflow-runs/{id}
+      # (遥测+SARIF 指纹路径)被严格执行 actions: read,缺它 403 连坐整个
+      # job(与 gitleaks 同窗口翻转,见 gitleaks job 注释)
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:

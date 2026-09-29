@@ -1077,6 +1077,8 @@ def _finish_queue_entry(rec, done_path, qpath):
     tmp = done_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(rec, f, ensure_ascii=False, indent=1)
+        f.flush()
+        os.fsync(f.fileno())            # 掉电耐久：replace 前落盘（见 sdc_controller）
     os.replace(tmp, done_path)
     os.unlink(qpath)
 

@@ -140,10 +140,15 @@ class RingLoop:
 
     @staticmethod
     def _atomic_json(path, obj):
-        """原子写：tmp + os.replace——崩溃不留半截 JSON（Important-1 修复）。"""
+        """原子写：tmp + os.replace——崩溃不留半截 JSON（Important-1 修复）。
+
+        os.replace 前 fsync：掉电时 rename journal 可能恢复空目标
+        （2026-09-28 硬重启致 controller_state.json 清零同类根因）。"""
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(obj, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
 
     def _load_state(self):

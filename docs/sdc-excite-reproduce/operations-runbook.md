@@ -412,15 +412,20 @@ ras/日志 <1；v5 §5.6）。参考机实况（2026-09-27）：数据根 7.6G�
 | 驱动 daily_summary 补 loop-count token（§9.1，T2） | 本单元提交 | **重启驱动（sdc-excite-reproduce.service）** | 运行进程=旧代码；**待重启**——重启后次个日汇总点写 token。另：M3 的 enqueue_repro/consume_verify_request 接线已于 09-27 00:17 重启生效（`cmd/verify.done.*` 在案实证） |
 | tools/analysis（T2 机读 hint/标签接续） | 5ad565a5 | 无（离线工具零部署，按需调用即新代码） | 已生效 |
 | drills / deploy_81machine.sh | f2b551fb..f51dc0a4 | 无（按需脚本） | 已生效 |
+| systemd 单元加固（NoNewPrivileges+PrivateTmp，5 模板） | befbef7c | **install.sh 重装单元 + 重启对应服务** | 模板已合入；/etc/systemd/ 现行单元未动，**待用户重启窗口** |
 
 ### 9.3 其他移交待办（按优先级）
 
 1. **81 机风扇联锁用户决策**（T4 移交）：TG225 B1 的 FAN3 恒 0rpm 会使战役持续
    fan PAUSE（模拟量联锁不查 known_faults）——选项 A 维持联锁只采集 / B 授权后加
    豁免代码路径（独立补丁单元）/ C 先修传感器。**入役前必须决策，不得静默绕过**。
-2. **systemd 单元沙箱加固**（M2 评审 Minor 移交）：`NoNewPrivileges`/`ProtectSystem`
-   等加固指令——须先核实各服务实际读写面（root-helper 写 /sys、monitor/驱动写数据根、
-   采集器只读系统接口）的兼容性，独立补丁单元。
+2. ~~**systemd 单元沙箱加固**（M2 评审 Minor 移交）~~ **已闭环**（befbef7c）：核实五个
+   服务实际读写面后，模板仅加 `NoNewPrivileges=yes` + `PrivateTmp=yes`（只收紧写面；
+   root-helper 写 sysfs cpu online/offline、monitor 读 /dev/ipmi0/sysfs/journalctl、
+   三采集器读写数据根均不受影响；经核这五服务不用 /tmp，spool/状态全在数据根）。
+   `ProtectSystem=full`/`ProtectHome` 未纳入（ProtectHome 会切断用户级服务对 /home
+   数据根的写；root-helper 写 sysfs 亦须保留）。`systemd-analyze verify` 五个渲染后
+   模板无本单元诊断。生效条件：重装单元（install.sh）→ 重启服务，属用户决策窗口。
 3. **status.sh 呈现扩展**（v5 单元 14 未完部分）：纳入九服务活性/controller 状态/
   repro_queue 看板（§4.1 巡检项目前靠手工组合命令）。
 4. **README 运维段引用**：仓库 README 尚无 sdc-excite-reproduce 运维入口——本手册

@@ -37,6 +37,17 @@ jobs:
     name: gitleaks (credential leaks)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      # gitleaks-action 在每个 pull_request 事件都先 GET /pulls/N/commits
+      # 枚举扫描范围(x-accepted-github-permissions: pull_requests=read),
+      # 发现泄漏时还要 createReviewComment 标注位置。workflow 级只有
+      # contents: read → 2026-09-29 08:15 起(07:43 的 PR#210 仍绿,08:15
+      # 的 PR#211 起红,期间本文件与 action 版本零变化)该调用 403
+      # "Resource not accessible by integration" 连坐整个 job——与 zizmor
+      # 2026-09-25 的 security-events 教训同类。write 而非 read:真泄漏时
+      # 评论失败会以同样的 403 崩溃,与"发现泄漏"的红混为一谈不可诊断。
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:

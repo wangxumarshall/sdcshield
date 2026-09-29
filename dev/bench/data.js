@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790591174109,
+  "lastUpdate": 1790677893333,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -536,6 +536,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 8.198,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "1550f82682cd6f8d3f40a4ed40f3fe44c1647314",
+          "message": "Merge pull request #211 from wangxumarshall/fix/codeql-telemetry-cleanup\n\nci(codeql): 清理合并残留——遥测注释与死代码",
+          "timestamp": "2026-09-29T08:08:24Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/1550f82682cd6f8d3f40a4ed40f3fe44c1647314"
+        },
+        "date": 1790677891818,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 9.018,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 6.336,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 3.437,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 56.22,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.391,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.412,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.694,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.591,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 13.596,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.416,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 8.079,
             "unit": "s"
           }
         ]

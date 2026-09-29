@@ -194,11 +194,16 @@ class ControllerLoop:
         self.offsets = st["offsets"]
 
     def _save_state(self):
-        """原子写（tmp + os.replace）——崩溃不留半截 JSON（T2 教训）。"""
+        """原子写（tmp + os.replace）——崩溃不留半截 JSON（T2 教训）。
+
+        os.replace 前 fsync：掉电时 rename journal 可能恢复空目标
+        （2026-09-28 硬重启致 controller_state.json 清零根因）。"""
         tmp = self._sp(STATE_FILE + ".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"state": self.machine.state, "offsets": self.offsets}, f,
                       ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, self._sp(STATE_FILE))
 
     @staticmethod
@@ -227,6 +232,8 @@ class ControllerLoop:
                 tmp = path + ".tmp"
                 with open(tmp, "w", encoding="utf-8") as f:   # 原子写：helper 不读半截
                     json.dump(req, f, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())                # 掉电耐久（见 _save_state）
                 os.replace(tmp, path)                   # 多槽：后写不覆盖先写
             elif a == "verify_only":
                 # interlock→BLACK 只读校验请求（M3 消费；单槽——black 终态，
@@ -240,6 +247,8 @@ class ControllerLoop:
                 tmp = path + ".tmp"
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(req, f, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())                # 掉电耐久（见 _save_state）
                 os.replace(tmp, path)
 
     def poll_once(self):

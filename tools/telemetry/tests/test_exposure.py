@@ -12,10 +12,11 @@
            valid_iterations_today=null + source 注记 "unavailable"——不伪造 0。
 
 fixture 真实形态：driver.log 行风格逐字取自 ~/sdc-excite-reproduce/driver.log
-（2026-09-27 实机）。as-built 驱动的日汇总行只有「日汇总完成（历史 YAML 已压缩）」
-——不含 loop-count（daily_summary() 只写 daily_summary.log 多行块）。含 loop-count
-的行形是本任务约定的解析格式（token 提取），驱动侧补记后即得真值；在此之前
-as-built 根上如实降级 null（报告侧保留"不可得"路径）。
+（2026-09-27 实机）。T2 起 daily_summary() 在 driver.log 日汇总行补记
+「loop-count 日累计: N（YAML 文件数 M）」token（N=今日 logs/YYYYMMDD/ 逐文件
+'loop-count:' 行数之和）→ valid_iterations_today 得真值；旧档/as-built 的日汇总行
+（如「日汇总完成（历史 YAML 已压缩）」）无该 token → 如实降级 null，报告侧保留
+"不可得"路径。monitor 解析兼容 `loop-count=N`（旧档）与 `loop-count 日累计: N`（T2）。
 
 消费接线：sdc_report.py 读 spool/exposure.json **最后一个有效快照**的
 valid_iterations_today / core_hours_today → rate_table 分母（缺/坏/null → 不可得）。
@@ -54,6 +55,16 @@ DRIVER_LOG_AS_BUILT = f"""\
 DRIVER_LOG_NO_SUMMARY = f"""\
 [{TODAY} 00:17:09] [cycle 8] 冷机首轮（L1 代表集）。基线温度: 35,72
 [{TODAY} 00:47:21] [cycle 8] L2 谱系扫档（复用 run_sdc_spectrum.sh + ipsec/memcpy 扩展）
+"""
+# T2：daily_summary() 补记 token 后的 driver.log 日汇总行真形（`loop-count 日累计: N`）
+DRIVER_LOG_DAILY_ACCUMULATE = f"""\
+[{TODAY} 00:17:06] 战役启动 mode=full bin=/home/sdc/wangxu/sdcshield/builddir/sdcshield cycle起点=7 NPROC=128 热联锁=95C(监控侧) mdim全核上限=1024
+[{TODAY} 07:30:00] 日汇总完成 loop-count 日累计: 98765（YAML 文件数 42）（历史 YAML 已压缩）
+[{TODAY} 09:32:34] L4 深驻留：6 个对象 × 13174s（关 fracturing 固定模式）
+"""
+# 日汇总行在、含 cycle 但无 loop-count token（旧档/as-built 混合；cycle 仍应可解析）
+DRIVER_LOG_SUMMARY_WITHOUT_TOKEN = f"""\
+[{TODAY} 07:30:00] 日汇总完成：cycle=9（历史 YAML 已压缩）
 """
 
 
@@ -122,6 +133,26 @@ def test_null_when_no_summary_line_today(tmp_path):
     assert s["valid_iterations_today"] is None
     assert s["source"].startswith("unavailable")
     assert s["core_hours_today"] is not None
+
+
+def test_valid_iterations_from_loopcount_daily_accumulate_token(tmp_path):
+    # T2：driver.log 日汇总行含 `loop-count 日累计: N` → valid_iterations_today = N（真值）
+    run_monitor(tmp_path, DRIVER_LOG_DAILY_ACCUMULATE)
+    s = _snaps(tmp_path)[0]
+    assert s["valid_iterations_today"] == 98765
+    assert "unavailable" not in s["source"]             # 有两口径真值 → 非降级注记
+    assert s["source"] == "driver.log日汇总loop-count + online核数积分"
+    assert s["core_hours_today"] is not None            # 核时口径不受牵连
+
+
+def test_null_when_summary_line_lacks_daily_accumulate_token(tmp_path):
+    # 日汇总行在、含 cycle 但无 loop-count token → valid_iterations 降级 null；
+    # cycle 仍独立解析（token 缺失不牵连其它字段）
+    run_monitor(tmp_path, DRIVER_LOG_SUMMARY_WITHOUT_TOKEN)
+    s = _snaps(tmp_path)[0]
+    assert s["valid_iterations_today"] is None
+    assert s["cycle"] == 9
+    assert s["source"].startswith("unavailable")
 
 
 def test_jsonl_append_and_core_hours_accumulate(tmp_path):

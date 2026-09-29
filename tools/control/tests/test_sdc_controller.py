@@ -100,6 +100,36 @@ def test_state_persists_across_restart(tmp_path):
     led = [json.loads(l) for l in open(f"{d}/spool/controller_ledger.jsonl")]
     assert [x["rule"] for x in led] == ["exact_mismatch", "heartbeat"]
 
+def test_save_state_fsync_nonempty_parseable(tmp_path, monkeypatch):
+    """_save_state 后 state 文件非空且可解析，且 os.replace 前确已 fsync
+    （2026-09-28 硬重启致 controller_state.json 清零根因的回归护栏）——不模拟
+    掉电，只断言写入顺序：fsync 先于 replace、tmp 不残留。"""
+    d = str(tmp_path / "data")
+    for p in ("spool", "cmd", "events"): os.makedirs(f"{d}/{p}")
+    loop = sc.ControllerLoop(d, f"{d}/spool", RULES, heartbeat=False)
+    synced, replaced = [], []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def spy_fsync(fd):
+        synced.append(fd)
+        return real_fsync(fd)
+
+    def spy_replace(src, dst):
+        replaced.append((synced[-1] if synced else None, dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "fsync", spy_fsync)
+    monkeypatch.setattr(os, "replace", spy_replace)
+    loop._save_state()
+    assert synced, "_save_state 未调用 fsync（掉电耐久缺失）"
+    assert replaced and replaced[-1][1] == loop._sp(sc.STATE_FILE)
+    assert replaced[-1][0] is not None, "fsync 未在 os.replace 之前执行"
+    txt = open(loop._sp(sc.STATE_FILE)).read()
+    assert txt.strip(), "state 文件为空（清零根因未修复）"
+    st = json.loads(txt)                       # 可解析
+    assert st["state"] in sc.STATES and isinstance(st["offsets"], dict)
+    assert not os.path.exists(loop._sp(sc.STATE_FILE + ".tmp"))
+
 # ---- 行级兜底：坏 JSON 行隔离不炸守护（T1/T2 毒丸教训同类关法）----
 
 def test_poison_line_quarantined(tmp_path):

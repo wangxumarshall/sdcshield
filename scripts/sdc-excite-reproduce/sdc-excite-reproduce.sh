@@ -401,6 +401,21 @@ phase_l4() {
 }
 
 daily_summary() {
+    # T2：日累计 loop-count 真值生产前置——今日 logs/YYYYMMDD/ 逐文件数 'loop-count:' 行数
+    # （= 各线程 main-loop 记录数；框架仅在 -vvv 下产该行，无则计 0）。今日文件尚未压缩
+    # （压缩只作用于昨日及更早），故 .yaml 与 .yaml.gz 都计；逐文件成本 ≈ 文件数 × grep，
+    # 今日文件通常 < 100 个。该 token 写入 driver.log 日汇总行 → monitor write_exposure
+    # 提取为 valid_iterations_today（此前 as-built 无此 token，恒 null）。
+    local day n=0 m=0 f
+    day=$(date +%F | tr -d -)
+    for f in "$LOG_ROOT/$day"/*.yaml "$LOG_ROOT/$day"/*.yaml.gz; do
+        [ -e "$f" ] || continue
+        m=$((m + 1))
+        case "$f" in
+            *.gz) n=$(( n + $(zcat "$f" 2>/dev/null | grep -c 'loop-count:') ));;
+            *)    n=$(( n + $(grep -c 'loop-count:' "$f" 2>/dev/null) ));;
+        esac
+    done
     {
         echo "=== 日汇总 $(date '+%F %T') cycle=$CYCLE ==="
         echo "事件数: $(wc -l < "$EVENTS_DIR/ledger.csv" 2>/dev/null || echo 0)"
@@ -408,6 +423,7 @@ daily_summary() {
         echo "fail/crash 文件数: $(grep -lE 'result: *(fail|crash)' "$LOG_ROOT"/*/*.yaml "$LOG_ROOT"/spectrum_c*_files/*.yaml 2>/dev/null | wc -l)"
         echo "timeout/oserror 行数: $(grep -hE 'result: *(timeout|oserror)' "$LOG_ROOT"/*/*.yaml 2>/dev/null | wc -l)"
         echo "阶段边界终止次数: $(grep -c '被阶段边界终止' "$EXCITE_REPRODUCE_DIR/driver.log" 2>/dev/null || echo 0)（异常增多=疑似框架 hang）"
+        echo "loop-count 日累计: $n（YAML 文件数 $m）"
         echo "最新工况: $(tail -1 "$MON_DIR/monitor.csv" 2>/dev/null)"
     } >> "$EXCITE_REPRODUCE_DIR/daily_summary.log"
     # 磁盘保护：压缩昨日及更早的 YAML（实测 gzip 比 ≈12×；L3 体量 ~30GB/天原始 → ~2.5GB）
@@ -418,7 +434,7 @@ daily_summary() {
         find "$d" -name '*.yaml' ! -name '*.gz' -mtime +0 -print0 2>/dev/null \
             | xargs -0 -r gzip -q 2>/dev/null
     done
-    log "日汇总完成（历史 YAML 已压缩）"
+    log "日汇总完成 loop-count 日累计: $n（YAML 文件数 $m）（历史 YAML 已压缩）"
 }
 
 # ---------------- 主循环 ----------------

@@ -448,6 +448,17 @@ Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑
 
 ARM64 能力：CPU 特性检测（FP/NEON/CRC32/Crypto/SVE/SVE2）、拓扑检测（ACPI PPTT/sysfs/device tree）、SDC 检测（EDAC ECC、CRC32/CRC64）、SIMD（NEON 128 位 + 256/512 仿真）、RAS/ECC（EDAC/ACPI APEI）。
 
+## 运维入口
+
+SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite-reproduce/`：
+
+```console
+bash scripts/sdc-excite-reproduce/status.sh    # 只读状态一览：9 服务 / 战役进度 / M2 事件流+controller 状态+采集器丢样 / 电压频率 / SEL / 磁盘 / 告警
+bash scripts/sdc-excite-reproduce/start.sh     # 启动战役（需 root）；stop.sh 停止
+```
+
+完整运维流程（9 服务、BLACK 恢复、演练排期、巡检模板）见 [docs/sdc-excite-reproduce/operations-runbook.md](docs/sdc-excite-reproduce/operations-runbook.md)。
+
 ## 延伸
 
 - [编写测试指南](docs/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码

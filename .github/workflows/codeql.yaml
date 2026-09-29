@@ -59,11 +59,10 @@ jobs:
             libgtest-dev libhwloc-dev libssl-dev libzstd-dev zlib1g-dev
       - name: Build (meson, for CodeQL injection)
         run: |
-          # 复现取证(仅 debug 分支):实时内存曲线 + 内核消息流,输出随步骤
-          # 日志实时上传——即使 runner 被杀,死前现场仍在日志里。保持默认
-          # -j4 不修 bug,先拿到死亡现场的直接证据。
-          sudo dmesg --follow --notime 2>/dev/null &
-          DMESG_PID=$!
+          # 内存遥测:free 5s 采样随步骤日志实时上云。本 job 内存敏感(见
+          # 文件头根因勘定),保留采样让任何未来内存回退在日志里直接可见、
+          # runner 被杀也有死前现场——36529815144 的死亡曲线正是它拍的。
+          # (dmesg --follow 探针已删:托管 runner 上实测零输出。)
           ( while sleep 5; do free -m | sed "s/^/[$(date +%T)] /"; done ) &
           FREE_PID=$!
           # eigen 一律用 vendored eigen5(aarch64: GCC12+ 下系统 3.3.x 断;
@@ -75,9 +74,8 @@ jobs:
           PKG_CONFIG_PATH="$PWD/third-party/eigen5" meson setup builddir --buildtype=plain
           # -j2:j4 时 4 条重模板 eigen 边(编译器+CodeQL 提取器)并发峰值
           # 实测 80s 内冲满 16GB RAM + 3GB swap(run 36529815144 取证),
-          # runner 服务被杀。-j2 压回单边 ~2.5GB 编译 + 提取峰值。
+          # runner 服务被杀。-j2 后实测峰值 5.1GB(run 36530572140),
+          # Build 不慢反快(提取串行化主导关键路径)。
           ninja -C builddir -j2
-          rc=$?
-          kill $DMESG_PID $FREE_PID 2>/dev/null || true
-          exit $rc
+          kill $FREE_PID 2>/dev/null || true
       - uses: github/codeql-action/analyze@v3

@@ -4,10 +4,17 @@ name: CodeQL
 # meson 项目 autobuild 不可靠,显式 meson 构建供注入(eigen5 为 in-repo
 # vendored,无需 submodule)。
 # 跑 arm64 裸 VM(ubuntu-24.04-arm):本项目全线 arm64-only(尤其 Kunpeng),
-# SVE 等 aarch64 专属测试直接进分析库。平台回收事件两机群皆有(arm
-# 2026-09-25 当天 16/19 个 run、x86 2026-09-26 晨均构建中段收 shutdown
-# signal,非编译错误),对策:concurrency + plain 构建缩短暴露 + 失败重试
-# (每次 push/周一 cron 自动重试,或 rerun-failed-jobs)。
+# SVE 等 aarch64 专属测试直接进分析库。
+#
+# 2026-09-29 根因勘定:此前 62% 失败并非"平台回收机群"——是 CodeQL 跟踪
+# 构建下重模板 eigen TU 并发内存峰值耗尽 runner 内存(16GB RAM + 3GB
+# swap,CODEQL_RAM=14535)。取证 run 36529815144(-j4 带内存探针):eigen
+# 区 80 秒内 used 4→15.7GB、swap 填满 88%,runner 服务被杀("received a
+# shutdown signal",exit 143);13/13 历史失败同死点(eigen_svd_jacobi /
+# eigen_gemm 簇)。同款 runner 无 CodeQL 的 multi-os-verify 编译同一批
+# TU 每 job 仅 ~3% 失败;x86 机群(同 16GB)历史同样死法——变量是提取器
+# 内存叠加,与机群/架构无关。对策:ninja -j2(实测峰值降至 5.1GB、
+# 余量 9.4GB、Build 7m10s,见 run 36530572140)。
 
 on:
   push:

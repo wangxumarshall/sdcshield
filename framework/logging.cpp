@@ -807,7 +807,10 @@ static void terminate_handler() noexcept
         msg = SANDSTONE_LOG_ERROR "Caught C++ exception of type ";
         bool appended_name = [&] {
             int status = -1;
-#if __has_include(<cxxabi.h>)
+#if __has_include(<cxxabi.h>) && defined(__GLIBCXX__)
+            // exception_ptr::__cxa_exception_type() is a libstdc++
+            // private member; libc++ (clang builds) lacks it and
+            // falls through to the rethrow + typeid() path below.
             const std::type_info *ti = ex.__cxa_exception_type();
             char *demangled = abi::__cxa_demangle(ti->name(), nullptr, nullptr, &status);
             if (status == 0)

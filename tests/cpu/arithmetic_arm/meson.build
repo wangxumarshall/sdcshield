@@ -39,11 +39,22 @@ arm_cpp_flags = [
 # ---------------------------------------------------------------------------
 gmp_dep = dependency('gmp', static : dep_static, required : false)
 if not gmp_dep.found()
-    gmp_lib = cc.find_library('gmp', required : false, static : dep_static)
-    gmp_dep = declare_dependency(
-        compile_args : ['-isystem', '/usr/include'],
-        dependencies : [gmp_lib],
-    )
+    # No gmp.pc: probe header and library separately; both must exist.
+    # A runtime-only libgmp install (libgmp.so.10, no gmp.h, no dev
+    # libgmp.so) must leave gmp_dep not-found: declare_dependency() is
+    # always found(), so wrapping a missing library in it would push the
+    # 8 GMP-backed tests into the build only to fail on the missing
+    # gmp.h. Left not-found, the found() gate below drops the sources -
+    # the same graceful degrade as acl/openblas/sleef.
+    if cc.has_header('gmp.h')
+        gmp_lib = cc.find_library('gmp', required : false, static : dep_static)
+        if gmp_lib.found()
+            gmp_dep = declare_dependency(
+                compile_args : ['-isystem', '/usr/include'],
+                dependencies : [gmp_lib],
+            )
+        endif
+    endif
 endif
 
 # ---------------------------------------------------------------------------
@@ -125,7 +136,8 @@ endif
 # table (0x0000...<->0xFFFF... alternating, walking-one) instead of uniform
 # random, to force maximum per-cycle gate toggling (the "版图一.1 操作数空间"
 # coverage dimension that uniform-random operands miss).
-gmp_sources = files(
+if gmp_dep.found()
+    gmp_sources = files(
     'adcx_arm.cpp',
     'adcxlong_arm.cpp',
     'adox_arm.cpp',
@@ -134,7 +146,14 @@ gmp_sources = files(
     'gmp_bigadd.cpp',
     'gmp_bignum.cpp',
     'operand_space_arm.cpp',
-)
+    )
+else
+    gmp_sources = []
+    message('GMP not found on this host - the 8 GMP-backed '
+            + 'arithmetic tests (adcx/adox/adcxlong/interleaved/'
+            + 'bigint_mulx/gmp_bigadd/gmp_bignum/operand_space) '
+            + 'are not built.')
+endif
 
 # 2 ACL-backed tests: acl_gemm (NEON GEMM), fisttp_arm (FCVTZS cast). Both are
 # REAL tests: the historical acl_gemm SIGSEGV was root-caused to a missing

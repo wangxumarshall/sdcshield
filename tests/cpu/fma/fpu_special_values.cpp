@@ -149,7 +149,15 @@ static int sweep_f32(const float a_t[NUM_SPECIALS],
 
                 // Byte-exact compare of every lane (1-bit ULP flip is caught).
                 for (int lane = 0; lane < 4; ++lane) {
-                    hw_lane = vgetq_lane_f32(vd, lane);
+                    // vgetq_lane requires a compile-time lane
+                    // index under clang (gcc tolerates the loop
+                    // variable); switch keeps the same intrinsic.
+                    switch (lane) {
+                    case 0: hw_lane = vgetq_lane_f32(vd, 0); break;
+                    case 1: hw_lane = vgetq_lane_f32(vd, 1); break;
+                    case 2: hw_lane = vgetq_lane_f32(vd, 2); break;
+                    default: hw_lane = vgetq_lane_f32(vd, 3); break;
+                    }
                     if (bits_of(hw_lane) != sw_bits) {
                         if (mismatches == 0) {
                             out_a = a; out_b = b; out_c = c;
@@ -193,7 +201,10 @@ static int sweep_f64(const double a_t[NUM_SPECIALS],
 
                 // Byte-exact compare of every lane (1-bit ULP flip is caught).
                 for (int lane = 0; lane < 2; ++lane) {
-                    hw_lane = vgetq_lane_f64(vd, lane);
+                    switch (lane) {
+                    case 0: hw_lane = vgetq_lane_f64(vd, 0); break;
+                    default: hw_lane = vgetq_lane_f64(vd, 1); break;
+                    }
                     if (bits_of(hw_lane) != sw_bits) {
                         if (mismatches == 0) {
                             out_a = a; out_b = b; out_c = c;

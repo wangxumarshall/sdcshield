@@ -406,6 +406,11 @@ struct aes_engine
         state[1] = veorq_u8(pattern, vdupq_n_u8(0xff));
     }
 
+#if defined(__clang__)
+    // #pragma GCC target is silently ignored by clang, which then
+    // rejects the vaeseq/vaesmcq intrinsics for the plain TU march.
+    __attribute__((target("+crypto")))
+#endif
     uint8x16_t generateM128()
     {
         // AESE (SubBytes/ShiftRows/AddRoundKey) + AESMC (MixColumns)

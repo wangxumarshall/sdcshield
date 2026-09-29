@@ -30,6 +30,7 @@
 #include <cinttypes>
 #include <cstring>
 #include <cmath>
+#include <algorithm>  // std::fill: libc++ does not pull <algorithm> transitively (libstdc++ does)
 #include <memory>
 #include <vector>
 

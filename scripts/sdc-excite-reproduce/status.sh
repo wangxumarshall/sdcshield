@@ -14,6 +14,16 @@ print('  phase:', d.get('phase', '?'))
 print('  cmd:', str(d.get('phase_cmd', ''))[:110])
 led = '$DIR/events/ledger.csv'
 print('  事件数:', sum(1 for _ in open(led)) if os.path.exists(led) else 0)"
+echo "=== M2 事件流/控制器 ==="
+EVN=$(wc -l < "$DIR/spool/events.jsonl" 2>/dev/null || echo 0)
+LEDN=$(wc -l < "$DIR/spool/controller_ledger.jsonl" 2>/dev/null || echo 0)
+CSTATE=$(python3 -c "
+import json
+try: print(json.load(open('$DIR/spool/controller_state.json')).get('state', '?'))
+except Exception: print('na')" 2>/dev/null)
+echo "  events=${EVN} controller=${CSTATE} ledger=${LEDN}"
+DROPPED=$(awk -F, 'FNR>1{s+=$4} END{print s+0}' "$DIR/monitor/collector_self.csv" 2>/dev/null)
+echo "  采集器丢样=${DROPPED:-0}"
 echo "=== 最新工况（monitor.csv 末行）==="
 tail -1 "$DIR/monitor/monitor.csv" 2>/dev/null
 echo "=== 电压/频率（CSV v2 末行解析）==="

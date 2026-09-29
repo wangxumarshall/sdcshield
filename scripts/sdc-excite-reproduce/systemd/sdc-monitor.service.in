@@ -11,6 +11,8 @@ Restart=always
 RestartSec=10
 TimeoutStopSec=30
 KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

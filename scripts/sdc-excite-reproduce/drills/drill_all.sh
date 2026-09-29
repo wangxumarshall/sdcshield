@@ -1,13 +1,14 @@
 #!/bin/bash
 # drill_all.sh — M5 故障演练编排器（v5 §17.2 验收基准全覆盖，M5 退出标准
-# 的核心验收器）。顺序跑 14 类（每类独立——前类失败不阻断后类）+ 汇总
+# 的核心验收器）。顺序跑 15 类（每类独立——前类失败不阻断后类）+ 汇总
 # PASS/FAIL 表 + 退出码（0=全过）。
 #
-# v5 §17.2 清单 → drill 映射（清单 13 项；CE/UE 拆分为 d04/d05 → 14 类）：
+# v5 §17.2 清单 → drill 映射（清单 13 项；CE/UE 拆分为 d04/d05 → 14 类；
+# M5 终审 Minor #2 补 d15 kdump 只读探针 → 15 类）：
 #   合成 byte mismatch → d01　测试 bug 样本 → d02　spurious fault 日志 → d03
 #   CE → d04　UE → d05　panic → d06　runner hang → d07　BMC 超时 → d08
 #   collector 崩溃 → d09　网络断开 → d10　磁盘满 → d11　时间跳变 → d12
-#   温度越限 → d14　restore 失败 → d13
+#   温度越限 → d14　kdump 只读探针 → d15　restore 失败 → d13
 #
 # 用法: bash drill_all.sh [--only d01,d05] [--out DIR]
 #   --only   子集过滤（dXX 前缀或全名，逗号分隔；DRILL_ONLY 环境变量同效
@@ -33,12 +34,13 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-# 14 类（序=验收清单序；restore 收尾——收敛动作恒最后，root_helper 通道同序）
+# 15 类（序=验收清单序；restore 收尾——收敛动作恒最后，root_helper 通道同序；
+# d15 kdump 只读探针无状态，置 restore 前）
 ALL_DRILLS=(
     d01_synthetic_mismatch d02_test_bug d03_spurious_fault
     d04_ce d05_ue d06_panic d07_runner_hang d08_bmc_timeout
     d09_collector_crash d10_network_split d11_disk_full
-    d12_clock_jump d14_thermal_overlimit d13_restore_fail
+    d12_clock_jump d14_thermal_overlimit d15_kdump_probe d13_restore_fail
 )
 
 # 子集过滤（dXX 前缀或全名匹配）
@@ -75,7 +77,7 @@ done
 # ---- 汇总表 ----
 SUMMARY="$OUT/summary.txt"
 {
-    echo "== M5 故障演练汇总（v5 §17.2 全 13 项（含温度越限）+ restore，$(( ${#SELECTED[@]} - FAIL_N ))/${#SELECTED[@]} PASS）=="
+    echo "== M5 故障演练汇总（v5 §17.2 全 13 项（含温度越限）+ restore + d15 kdump 只读探针，$(( ${#SELECTED[@]} - FAIL_N ))/${#SELECTED[@]} PASS）=="
     for i in "${!NAMES[@]}"; do
         printf '%-24s %s\n' "${NAMES[$i]}" "${RESULTS[$i]}"
     done

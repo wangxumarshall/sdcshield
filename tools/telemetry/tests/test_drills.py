@@ -1,5 +1,6 @@
 """M5 故障演练脚本族（v5 §17.2 验收基准全覆盖——清单 13 项，CE/UE 拆分
-为 d04/d05 共 14 类）——pytest 可执行规格。
+为 d04/d05 共 14 类；M5 终审 Minor #2 补 d15 kdump 只读探针 → 15 类）
+——pytest 可执行规格。
 
 驱动 scripts/sdc-excite-reproduce/drills/ 演练本体（bash 子进程，与人工/CI
 驱动同入口）：每类断言 ① 演练退出码 0 + PASS 行；② 证据目录形态
@@ -7,7 +8,7 @@
 
 安全边界（全程）：DRILL_OUT 指 pytest tmp_path——演练绝不写仓库内默认位、
 绝不指向真实战役根（真实根形态守卫在 drill_lib.drill_init，此处直测）。
-14 类全跑耗时较长（d07/d09 进程生命周期 + d14 热联锁跨周期 ~50s）——
+15 类全跑耗时较长（d07/d09 进程生命周期 + d14 热联锁跨周期 ~50s）——
 pytest 默认只跑快速子集（d01-d03）+ 各类独立用例，全量跑由 drill_all.sh
 本体承担（SDC_DRILLS_FULL=1 环境变量开启全量 pytest 路径）。
 """
@@ -19,11 +20,13 @@ DRILL_ALL = os.path.join(DRILLS, "drill_all.sh")
 
 # 快速子集：事件链纯 --once 工具调用（无进程等待）——CI/回归默认跑
 FAST_SUBSET = ("d01_synthetic_mismatch", "d02_test_bug", "d03_spurious_fault")
-# v5 §17.2 全 13 项（CE/UE 拆分 → 14 类；映射表见 drill_all.sh 头注释）
+# v5 §17.2 全 13 项（CE/UE 拆分 → 14 类；M5 终审 Minor #2 补 d15 kdump 只读探针
+# → 15 类；映射表见 drill_all.sh 头注释）
 FULL_LIST = FAST_SUBSET + (
     "d04_ce", "d05_ue", "d06_panic", "d07_runner_hang", "d08_bmc_timeout",
     "d09_collector_crash", "d10_network_split", "d11_disk_full",
-    "d12_clock_jump", "d14_thermal_overlimit", "d13_restore_fail",
+    "d12_clock_jump", "d14_thermal_overlimit", "d15_kdump_probe",
+    "d13_restore_fail",
 )
 
 
@@ -101,6 +104,30 @@ def test_d14_thermal_overlimit(tmp_path):
     assert not (root / "PAUSE").exists()                     # RESUME 后标志移除
 
 
+def test_d15_kdump_probe(tmp_path):
+    """kdump 只读探针（M5 终审 Minor #2——v5 §17.2 "panic/kdump" kdump 半项补齐）。
+
+    独立复核（详细断言在 drill 内）：healthy 三探针全 PASS（kdumpctl operational
+    /cmdline crashkernel= 回退/转储位可写）、kmsg OR 第二支 PASS、degraded 三
+    FAIL（负向：探针非 no-op）、真机 /var/crash 内容零变化（只读实证）。
+    """
+    r = run_drill("d15_kdump_probe", tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "== d15_kdump_probe: PASS ==" in r.stdout
+    root = assert_drill_evidence(tmp_path, "d15_kdump_probe")
+    mon = root / "monitor"
+    healthy = (mon / "kdump_probe_healthy.txt").read_text().splitlines()
+    assert healthy == ["CHECK kdumpctl_status=PASS",
+                       "CHECK crashkernel_reserved=PASS",
+                       "CHECK crash_dir_writable=PASS"]
+    assert (mon / "kdump_probe_kmsg.txt").read_text().count("=PASS") == 3
+    degraded = (mon / "kdump_probe_degraded.txt").read_text().splitlines()
+    assert degraded == ["CHECK kdumpctl_status=FAIL",
+                        "CHECK crashkernel_reserved=FAIL",
+                        "CHECK crash_dir_writable=FAIL"]
+    assert "ZERO_TOUCH /var/crash" in (mon / "real_system.txt").read_text()
+
+
 # ---------------------------------------------------------------------------
 # 守卫：DRILL_OUT 形似真实战役根 → 拒绝（绝不缺省/误指到真实根）
 
@@ -130,7 +157,7 @@ def test_drill_all_fast_subset_passes_with_summary(tmp_path):
     """d01-d03 子集全过 + 汇总表格式（14 类全跑耗时较长——留给 drill_all 本体）。"""
     r = run_drill_all(only=FAST_SUBSET, out_dir=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "== M5 故障演练汇总（v5 §17.2 全 13 项（含温度越限）+ restore，3/3 PASS）==" in r.stdout
+    assert "== M5 故障演练汇总（v5 §17.2 全 13 项（含温度越限）+ restore + d15 kdump 只读探针，3/3 PASS）==" in r.stdout
     summary = (tmp_path / "summary.txt").read_text()
     lines = summary.strip().splitlines()
     assert lines[0].startswith("== M5 故障演练汇总")
@@ -152,8 +179,9 @@ def test_drill_all_only_filter_selects_subset(tmp_path):
     assert not (tmp_path / "d02_test_bug").exists()  # 未选类不跑不建目录
 
 
-def test_drill_all_full_run_14_classes():
-    """14 类全链验收（v5 §17.2 全 13 项含温度越限 + restore——退出标准核心验收器）。
+def test_drill_all_full_run_15_classes():
+    """15 类全链验收（v5 §17.2 全 13 项含温度越限 + restore + d15 kdump 只读探针
+    ——退出标准核心验收器）。
 
     全跑含真实进程生命周期等待（d07 超时兜底/d09 collector 重启/d12 锚点
     2s 间隔/d14 热联锁跨周期 ~50s），总时长分钟级——pytest 默认不跑，留给
@@ -162,7 +190,7 @@ def test_drill_all_full_run_14_classes():
     """
     if os.environ.get("SDC_DRILLS_FULL") != "1":
         import pytest
-        pytest.skip("全量 14 类跑留给 drill_all.sh 本体（SDC_DRILLS_FULL=1 开启）")
+        pytest.skip("全量 15 类跑留给 drill_all.sh 本体（SDC_DRILLS_FULL=1 开启）")
     import tempfile
     with tempfile.TemporaryDirectory(prefix="drill-all-") as out:
         r = run_drill_all(out_dir=out, timeout=1800)
@@ -170,7 +198,8 @@ def test_drill_all_full_run_14_classes():
         summary = open(os.path.join(out, "summary.txt"), encoding="utf-8").read()
         lines = summary.strip().splitlines()
         assert lines[0] == \
-            "== M5 故障演练汇总（v5 §17.2 全 13 项（含温度越限）+ restore，14/14 PASS）=="
-        assert len(lines) == 15
+            "== M5 故障演练汇总（v5 §17.2 全 13 项（含温度越限）+ restore + d15 kdump 只读探针，15/15 PASS）=="
+        assert len(lines) == 16
         assert all(re.fullmatch(r"d\d{2}\S*\s+PASS", l) for l in lines[1:])
         assert re.search(r"d14_thermal_overlimit\s+PASS", summary)  # 温度越限在场
+        assert re.search(r"d15_kdump_probe\s+PASS", summary)        # kdump 探针在场

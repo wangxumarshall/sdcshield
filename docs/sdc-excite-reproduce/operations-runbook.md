@@ -172,27 +172,30 @@ BLACK 并可能对陈旧事件分派特权动作（M2 部署教训，见 §1.2.1
 
 - **节奏**：每季度首周一次全量；此外**触发式加练**——9 服务单元文件/联锁代码/规则表
   （rules_m2.json）任一变更后、新单板入役前、大版本 sdcshield 更换后。
-- 一键（14 类 ≈5 分钟，2026-09-27 实测 `SDC_DRILLS_FULL=1 pytest test_drills.py`
-  8 passed in 275.51s 同工作量）：
+- 一键（15 类 ≈5 分钟；2026-09-29 `SDC_DRILLS_FULL=1 pytest test_drills.py`
+  实测 9 passed in 267.76s——含 d15；2026-09-27 14 类时 8 passed in 275.51s）：
 
 ```bash
-bash scripts/sdc-excite-reproduce/drills/drill_all.sh          # 退出码 0 = 14/14 PASS
+bash scripts/sdc-excite-reproduce/drills/drill_all.sh          # 退出码 0 = 15/15 PASS
 #   子集：--only d01,d05（或 DRILL_ONLY 环境变量）；产物：--out DIR（默认 drills/out/）
 #   产物：drills/out/<类名>/root/（隔离根证据）+ drill_all.log + summary.txt
 ```
 
-14 类 = v5 §17.2 清单 13 项（CE/UE 拆分 d04/d05）+ restore（d13）：合成 mismatch（d01）/
+15 类 = v5 §17.2 清单 13 项（CE/UE 拆分 d04/d05）+ restore（d13）+ kdump 只读探针（d15，
+M5 终审 Minor #2 补 panic/kdump 中 kdump 半项）：合成 mismatch（d01）/
 测试 bug（d02）/spurious（d03）/CE（d04）/UE（d05）/panic（d06）/runner hang（d07）/
 BMC 超时（d08）/collector 崩溃（d09）/网络断开（d10）/磁盘满（d11）/时间跳变（d12）/
-温度越限（d14）/restore 失败（d13）。**安全边界**：全部在隔离数据根 + 测试进程上
-（drill_lib 真实根形态守卫：DRILL_OUT 已含 spool/+driver.log 即拒）——绝不注入真实
-spool、绝不 kill 真实服务、绝不真断网/真满盘/真写 sysfs、绝不打真 BMC。
+温度越限（d14）/kdump 只读探针（d15）/restore 失败（d13）。**安全边界**：全部在隔离
+数据根 + 测试进程上（drill_lib 真实根形态守卫：DRILL_OUT 已含 spool/+driver.log 即拒）
+——绝不注入真实 spool、绝不 kill 真实服务、绝不真断网/真满盘/真写 sysfs、绝不打真 BMC；
+d15 三项（kdumpctl status/crashkernel 预留/转储位可写）为只读探针（真 kdumpctl 非只读，
+演练用假二进制回显；`[ -w ]`=access(2) 判定，绝不写 /var/crash 内容）。
 
 ### 3.2 pytest 门控（SDC_DRILLS_FULL）
 
-`tools/telemetry/tests/test_drills.py` 默认**跳过**全量 14 类（留给 drill_all 本体承担，
+`tools/telemetry/tests/test_drills.py` 默认**跳过**全量 15 类（留给 drill_all 本体承担，
 避免日常回归被 ~5 分钟演练拖慢）；`SDC_DRILLS_FULL=1` 开启（CI/人工门控）。日常回归
-只跑子集断言（d01/d02/d03/d14 + 守卫 + 编排格式）。
+只跑子集断言（d01/d02/d03/d14/d15 + 守卫 + 编排格式）。
 
 ### 3.3 新演练类准入流程（六步）
 
@@ -202,7 +205,7 @@ spool、绝不 kill 真实服务、绝不真断网/真满盘/真写 sysfs、绝�
 3. 加入 `drill_all.sh` 的 `ALL_DRILLS` 数组（restore 类收尾的排序惯例）；
 4. `test_drills.py` 补子集用例（默认跑、非 SDC_DRILLS_FULL 档）；
 5. 安全边界自查：对照 §3.1 红线逐条过（真 root 动作只读探针除外）；
-6. 一次 `drill_all.sh` 全量回归 14+N/14+N PASS 后合入。
+6. 一次 `drill_all.sh` 全量回归 15+N/15+N PASS 后合入。
 
 ---
 

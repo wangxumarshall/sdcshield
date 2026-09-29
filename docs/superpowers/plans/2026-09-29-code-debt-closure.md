@@ -6,10 +6,10 @@
 
 | # | 任务 | 优先级 | 状态 |
 |---|---|---|---|
-| 1 | **fsync 补丁**：`tools/telemetry/sdc_eventd.py`/`tools/control/sdc_controller.py`/`tools/analysis/sdc_timeline.py` 的 `_atomic_json` 补 `f.flush()+os.fsync()`（今晨 controller 崩溃循环的根因，下次硬重启必复现） | P0（生产缺陷） | 待 |
-| 2 | **驱动日汇总 loop-count token**：`daily_summary` 追加逐文件 loop-count 累计，exposure 生产端拿真值 | P1 | 待 |
-| 3 | **status.sh 扩展 + README 运维入口**（补丁单元 14 尾巴）：status.sh 增 M2/M4 事件流/controller 状态/采集器丢样列 | P1 | 待 |
-| 4 | **d15 kdump 只读探针演练**（M5 终审 Minor #2） | P2 | 待 |
+| 1 | **fsync 补丁**：`tools/telemetry/sdc_eventd.py`/`tools/control/sdc_controller.py`/`tools/analysis/sdc_timeline.py` 的 `_atomic_json` 补 `f.flush()+os.fsync()`（今晨 controller 崩溃循环的根因，下次硬重启必复现）。注：实际落点为存在的 `_atomic_json` 位（eventd/controller/ring；`sdc_timeline.py` 无此函数） | P0（生产缺陷） | 已完成（a9065c48） |
+| 2 | **驱动日汇总 loop-count token**：`daily_summary` 追加逐文件 loop-count 累计，exposure 生产端拿真值 | P1 | 已完成（c8abdf64） |
+| 3 | **status.sh 扩展 + README 运维入口**（补丁单元 14 尾巴）：status.sh 增 M2/M4 事件流/controller 状态/采集器丢样列 | P1 | 已完成（4a234469） |
+| 4 | **d15 kdump 只读探针演练**（M5 终审 Minor #2） | P2 | 已完成 |
 | 5 | **systemd 单元加固**（NoNewPrivileges + ProtectSystem 埽） | P2 | 待 |
 | 6 | **kdump 验收 + PR + 部署**：全部合入后重打包 81 机 | P2 | 待 |
 

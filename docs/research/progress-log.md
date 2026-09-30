@@ -362,3 +362,75 @@
 
 M4 终审其余移交已随 M5 T1/T2 交付（exposure 生产端 + 机读 hint 契约/嫌疑核标签接续）；
 M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §14.2 状态列如实标注为 ◐。
+
+## 2026-09-29（会话：CodeQL workflow 62% 失败根因勘定——构建期 OOM,非机群回收）
+
+> 勘误:2026-09-25/26 条目中"平台侧事件/两机群 runner 回收"的归因**有误**。
+> 同样的 shutdown signal 死亡,x86 与 arm 机群皆现,与机群无关——是本仓
+> CodeQL job 自身的内存峰值把 runner 压死。证据链见下。
+
+### 完成内容
+
+**任务**:codeql.yaml 近 100 run 62 failure(63%),全部死在 Build 步骤
+(exit 143 + "The runner has received a shutdown signal"),彻底解决。
+
+1. **根因勘定**(systematic-debugging 全程取证):
+   - 14 个失败 run 抽样:全部死在 eigen 模板簇编译区([200/455]
+     eigen_svd_jacobi_svd_cdouble 同死点),唯一 failure 注解 exit 143,
+     无任何编译错误;连 docs-only PR 也死在同点。
+   - 单编译器内存实测(本机 aarch64 GCC12.3 plain):BDCSVD 簇
+     1.8–2.7GB/文件、JacobiSVD 簇 ~0.9GB、GEMM ~0.5GB。
+   - 鉴别对照:multi-os-verify 同款 ubuntu-24.04-arm 编译同一批 TU
+     (无 CodeQL)每 job 仅 ~3% 失败 → 变量是 CodeQL 提取器内存叠加。
+   - 决定性取证(debug/codeql-oom-proof 分支,run 36529815144,
+     -j4 + free 实时探针):used 4GB→15.7GB(80 秒)→ RAM 耗尽后 swap
+     以 ~500MB/5s 填满 88% → runner 被杀。CODEQL_RAM=14535 实证 16GB
+     上限;runner 自带 3GB swap(此前"无 swap"认知错误)。
+2. **修复**(PR #206,merge d4c358c7):`ninja -j2` + timeout 45→60min
+   + 头部注释修正错误归因。构建时长未受损:同 run 实测 Build 7m10s
+   (36530572140;arm 机群性能方差 ~2x,另一样本 14.9min,总时长 ~21min)。
+3. **验证**:峰值 used 5.1GB / available 最低 10.8GB / swap 0(修复前
+   15.7GB+swap 88%);-j2 后 5/5 run Build 步骤全绿、0 OOM 死亡。
+   合并后 main 的 3 个 run(36534939891/36534904559/36534628654)Build
+   全过,analyze 死在 SARIF 上传 403——仓库 code scanning 设置被误关
+   (07:09–07:30 间),与代码无关,待网页恢复。
+4. **过程**:探针版(带 free/dmesg 遥测)经 **PR #208**(直接合并
+   debug/codeql-oom-proof,merge aa5eb409)先进 main,4 分钟后 #206
+   (干净修复)合并 → main = 修复+遥测。PR #211 清理了矛盾注释、删
+   dmesg 死代码(保留 free 遥测);PR #212 补 EXIT trap(评审 Important:
+   bash -e 失败路径 watcher 持 stdout 管道,编译错误 PR 会挂到 60min
+   超时,actions/runner#2415;本地 RED→GREEN 实证)。
+5. **评审**:fresh-context 全分支评审 verdict fix-then-ship;根因数字/
+   -j2 充分性/sed 引号/concurrency/x86 零回归/DCO 逐项复核无恙;
+   Important+Minor 均已闭环(见 PR #212 与 issue #213)。
+
+### 实证记录(当天真实运行,run ID 均可在 Actions 检索)
+
+- -j4 死亡取证:run 36529815144(内存曲线:4GB→15.7GB/80s→swap 88%→杀)
+- -j2 仪器化验证:run 36530572140,峰值 5.1GB,success
+- PR #206 attempt 1:run 36531963900,06:36:44→06:55:55 端到端 success
+  (Build 14.9min,含 SARIF 上传);attempt 2 被 PR 合并级联取消(非失败)
+- 本机 17 个 eigen TU 峰值 RSS 表 + 完整证据链:
+  docs/superpowers/plans/2026-09-29-codeql-runner-oom.md
+
+### 下一步
+
+- [ ] **恢复 code scanning 仓库设置**(用户网页操作)后 rerun
+      36534939891 验证 main 端到端全绿
+- [ ] 设置恢复后把 `analyze (cpp)` 加入分支保护必过检查
+      (原"平台回收未稳"的保留理由已失效)
+- [ ] issue #213:codeql-action v3→v4 迁移(2026-12 弃用截止)
+- [ ] 观察周一 cron(UTC 02:37)与日常 push run 持续绿(自然回归)
+- [ ] progress-log 头部"按时间倒序"声明与 09-25 起实际底部追加不一致,
+      待统一(本条目沿用底部追加惯例)
+
+> **2026-09-30 补记(根因终局)**:昨日 09-29 07:08–07:43 间,本私有仓的
+> GitHub Pro(或试用)订阅到期/降级——分支保护 API 实测返回 "Upgrade to
+> GitHub Pro or make this repository public to enable this feature",而
+> 09-25 分支保护尚在(上文"10 个必过检查")。付费特性同时失效:
+> code scanning 禁用(CodeQL analyze 与 zizmor 的 SARIF 上传 403)、分支
+> 保护消失(红叉 PR 可合并)、token scope 收紧(gitleaks/zizmor 403,已由
+> PR #214 显式权限声明修复并验证)。"找不到设置开关"实为付费墙。
+> 待用户决策:恢复订阅 / 转公开仓 / 接受降级(SARIF 改存 artifact)。
+> 另:PR #202 的 5 个缺签提交已于 09-29 补签强推(14a82a92→f9e79b65,
+> 树零变化),git-sanity 转绿。

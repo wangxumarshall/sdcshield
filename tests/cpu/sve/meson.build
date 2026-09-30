@@ -163,6 +163,9 @@ if host_machine.cpu_family() == 'aarch64'
 'core179/mrn_rmw_dump_sve.cpp',
 'core179/neon_rot_2src_sve.cpp',
 'core179/mite_sve.cpp',
+'core179/movbe_slf_sweep_sve.cpp',
+'core179/neon_rot_ldr_at_top_sve.cpp',
+'core179/neon_rot_ldr_at_top_rowmajor_sve.cpp',
         # Batch 6 (first 2 of 7): partial-width predicated stores (the
         # native SVE form of partial stores) with store-buffer partial-hit
         # loads; AGU 2-source vector-load throughput with the rotating

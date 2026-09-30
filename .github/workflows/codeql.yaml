@@ -65,6 +65,12 @@ jobs:
           # (dmesg --follow 探针已删:托管 runner 上实测零输出。)
           ( while sleep 5; do free -m | sed "s/^/[$(date +%T)] /"; done ) &
           FREE_PID=$!
+          # bash -e 下 ninja 失败时脚本立即中止,后置 kill 行不可达 → watcher
+          # 持有 stdout 管道写端,actions/runner 要等全部输出 FD 关闭才终结
+          # 步骤(actions/runner#2415)——编译错误的 PR 会把 Build 挂到
+          # 60min 超时而非快速失败。EXIT trap 在 -e 中止时同样执行,
+          # 成功/失败两路都回收 watcher,且不改写退出码。
+          trap 'kill $FREE_PID 2>/dev/null || true' EXIT
           # eigen 一律用 vendored eigen5(aarch64: GCC12+ 下系统 3.3.x 断;
           # x86: meson 走 pkg-config 找 eigen3)。必须用 $PWD 绝对路径:
           # ninja -C builddir 时编译器 cwd 是 builddir,相对 -I 解析到
@@ -74,8 +80,8 @@ jobs:
           PKG_CONFIG_PATH="$PWD/third-party/eigen5" meson setup builddir --buildtype=plain
           # -j2:j4 时 4 条重模板 eigen 边(编译器+CodeQL 提取器)并发峰值
           # 实测 80s 内冲满 16GB RAM + 3GB swap(run 36529815144 取证),
-          # runner 服务被杀。-j2 后实测峰值 5.1GB(run 36530572140),
-          # Build 不慢反快(提取串行化主导关键路径)。
+          # runner 服务被杀。-j2 后实测峰值 5.1GB(run 36530572140)。
+          # 构建时长未受损:同 run 实测 7m10s;ARM 机群性能方差 ~2x,
+          # 另一样本 Build 14.9min(36531963900),总时长 ~21min。
           ninja -C builddir -j2
-          kill $FREE_PID 2>/dev/null || true
       - uses: github/codeql-action/analyze@v3

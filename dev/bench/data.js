@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790851852169,
+  "lastUpdate": 1791463552733,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -767,6 +767,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 7.858,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "f5cc6c1113843b7d3a2b9ec7c0fda1b11820e0b8",
+          "message": "Merge pull request #216 from wangxumarshall/dependabot/github_actions/github/codeql-action-4\n\nbuild(deps): bump github/codeql-action from 3 to 4",
+          "timestamp": "2026-10-08T12:33:12Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/f5cc6c1113843b7d3a2b9ec7c0fda1b11820e0b8"
+        },
+        "date": 1791463551751,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 9.62,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 5.589,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.404,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 30.681,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.641,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.666,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.404,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.748,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 13.173,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.776,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 8.177,
             "unit": "s"
           }
         ]

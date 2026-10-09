@@ -16,7 +16,7 @@
 #
 # 用法:
 #   bash scripts/run/sdc_detect.sh                 # 一键检测（默认，长驻留）
-#   bash scripts/run/sdc_detect.sh --smoke         # 冒烟（约 30s，验证链路与优先序）
+#   bash scripts/run/sdc_detect.sh --smoke         # 冒烟（约 35s：每桶前 2 用例各 2s 的单遍）
 #   SDC_BIN=<路径> bash scripts/run/sdc_detect.sh  # 显式指定二进制
 #   其余参数原样透传给 sdcshield（如 -t 30s、--cpuset 0-47）
 set -euo pipefail
@@ -53,8 +53,7 @@ fi
 
 QUALITY=0          # PROD+BETA：不加则 arm64_sdc 等 6 个 BETA 用例被跳过（实测）
 if [ "$SMOKE" = 1 ]; then
-    T_PER_TEST=2s
-    TOTAL_ARGS=(-T 25s)
+    T_PER_TEST=2s    # 单遍：每桶前 2 用例 × 2s ≈ 35s 自然结束（不传 -T）
 else
     T_PER_TEST=60s  # SEVI：>80% 首错 <10s，60s 有 6 倍余量
     TOTAL_ARGS=(-T forever)   # 故障窗口稀疏（CPU179 占空比 ~0.06%）→ 长驻留
@@ -62,6 +61,7 @@ fi
 STAMP=$(date +%m%d-%H%M%S)
 OUT="sdc-detect-${STAMP}.yaml"
 LISTFILE="sdc-detect-testlist-${STAMP}.txt"
+SMOKEFILE="sdc-detect-testlist-${STAMP}-smoke.txt"   # --smoke 短名单（每桶前 2 + P7 前 2）
 
 # ---------------- 生成优先序测试列表 ----------------
 "$BIN" --quality="$QUALITY" --list-tests > "${LISTFILE}.all" 2>/dev/null \
@@ -82,17 +82,25 @@ NAMES=("P1 向量FMA/矩阵        " "P2 ARM64 SDC 专项     " "P3 memcpy/store
 # 分桶：顺序过滤（首个匹配获胜）；原始名单与每轮中间结果用独立文件，
 # 严禁原地覆写（grep 输入与输出同文件会在读取前被截断——redirect-to-input 竞态）
 : > "$LISTFILE"
+if [ "$SMOKE" = 1 ]; then : > "$SMOKEFILE"; fi
 REST="${LISTFILE}.all"
 SUM=0
 for i in "${!BUCKETS[@]}"; do
     CNT=$(grep -cE "${BUCKETS[$i]}" "$REST" || true)
     grep -E "${BUCKETS[$i]}" "$REST" >> "$LISTFILE" || true
+    if [ "$SMOKE" = 1 ]; then
+        # 冒烟短名单：本桶前 2 个（顺序即 .all 中的注册序）
+        grep -E "${BUCKETS[$i]}" "$REST" | head -2 >> "$SMOKEFILE" || true
+    fi
     grep -vE "${BUCKETS[$i]}" "$REST" > "${LISTFILE}.rest.new" || true
     mv "${LISTFILE}.rest.new" "${LISTFILE}.rest"
     REST="${LISTFILE}.rest"
     echo "  ${NAMES[$i]}: ${CNT} 个用例"
     SUM=$((SUM + CNT))
 done
+if [ "$SMOKE" = 1 ]; then
+    LC_ALL=C sort "$REST" | head -2 >> "$SMOKEFILE" || true
+fi
 LC_ALL=C sort "$REST" >> "$LISTFILE"
 echo "  P7 其余（字母序）      : $((TOTAL_N - SUM)) 个用例"
 rm -f "${LISTFILE}.all" "${LISTFILE}.rest"
@@ -103,9 +111,20 @@ LISTED=$(wc -l < "$LISTFILE")
 
 # ---------------- 运行 ----------------
 echo "sdcshield : $BIN"
-echo "测试列表  : $LISTFILE（$TOTAL_N 个，优先序）"
-echo "日志      : $OUT"
-echo "停止方式  : Ctrl-C（干净停止，日志完整落盘）；检出 FAIL 即自动停（-F）"
-exec "$BIN" --quality="$QUALITY" --test-list-file "$LISTFILE" \
-    "${TOTAL_ARGS[@]}" -t "$T_PER_TEST" -Y -F -o "$OUT" \
-    ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
+if [ "$SMOKE" = 1 ]; then
+    echo "冒烟名单  : $SMOKEFILE（$(wc -l < "$SMOKEFILE") 个：每桶前 2 + P7 前 2，单遍）"
+    sed 's/^/    /' "$SMOKEFILE"
+    echo "日志      : $OUT"
+    echo "停止方式  : 单遍自然结束（约 35s）；Ctrl-C 干净停止；300s 兜底；检出 FAIL 即自动停（-F）"
+    # 兜底：300s 绝对上限防意外挂死（SIGINT 干净停止已实测验证）
+    exec timeout -s INT 300 "$BIN" --quality="$QUALITY" --test-list-file "$SMOKEFILE" \
+        -t "$T_PER_TEST" -Y -F -o "$OUT" \
+        ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
+else
+    echo "测试列表  : $LISTFILE（$TOTAL_N 个，优先序）"
+    echo "日志      : $OUT"
+    echo "停止方式  : Ctrl-C（干净停止，日志完整落盘）；检出 FAIL 即自动停（-F）"
+    exec "$BIN" --quality="$QUALITY" --test-list-file "$LISTFILE" \
+        "${TOTAL_ARGS[@]}" -t "$T_PER_TEST" -Y -F -o "$OUT" \
+        ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
+fi

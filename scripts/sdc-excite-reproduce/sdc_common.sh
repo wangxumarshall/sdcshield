@@ -5,6 +5,12 @@
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="${SDC_BIN:-$REPO_DIR/builddir/sdcshield}"
+# fail-loud：BIN 缺失曾导致驱动静默空转（--list-tests 空输出 → 全部阶段"跳过"）
+if [ ! -x "$BIN" ]; then
+    echo "FATAL: sdcshield 二进制不存在或不可执行: $BIN" >&2
+    echo "       构建后重试（README「从源码构建」），或 export SDC_BIN=<路径>" >&2
+    exit 1
+fi
 EXCITE_REPRODUCE_DIR="${SDC_EXCITE_REPRODUCE_DIR:-${SDC_CAMPAIGN_DIR:-$HOME/sdc-excite-reproduce}}"
 STATE_FILE="$EXCITE_REPRODUCE_DIR/state.json"
 PAUSE_FLAG="$EXCITE_REPRODUCE_DIR/PAUSE"

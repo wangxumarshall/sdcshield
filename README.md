@@ -8,41 +8,86 @@ SDCShield is derived from OpenDCDiag (which contains the Intel `sandstone` frame
 
 ## 一行命令检测鲲鹏 CPU SDC（傻瓜化）
 
-**预构建二进制路径（无需编译）**——clone 后进入对应 SP 目录：
+**源码树（推荐）**：
 
 ```bash
-git clone --recurse-submodules https://github.com/wangxumarshall/sdcshield.git
-cd sdcshield/third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
-./run-sdcshield.sh --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
+bash scripts/run/sdc_detect.sh
 ```
 
-**源码构建路径**（构建见下节）：
+**预构建二进制**（需 2026-10-09 之后由 `scripts/offline-build/package-built-artifacts.sh` 打包、随包 `sdc_detect.sh` 的版本，`detect` 子命令自动调用它；CI tarball 与旧包未含——用下方等效命令。获取与进入目录见下节「直接运行预构建二进制」）：
 
 ```bash
-./builddir/sdcshield --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
+./run-sdcshield.sh detect
 ```
 
-**命令逐项解释**：
+**冒烟自检**（约 35 秒，验证链路与优先序）：`bash scripts/run/sdc_detect.sh --smoke`
+
+**优先序机制**：脚本从当前二进制动态生成优先序测试列表（框架 `--test-list-file`，顺序即执行序，对新用例自适应），先跑 SDC 敏感度最高的负载：
+
+| 优先级 | 负载域 | 依据 |
+|---|---|---|
+| P1 | 向量 FMA/矩阵（GEMM/SVD/SLEEF/FFT/sve512-f 链） | SEVI(ASPLOS'26)：>92% SDC 事故由 FMA 指令贡献 |
+| P2 | ARM64 SDC 专项（LSU/OoO/L2 跨行/di-t/sve512 上下文） | 本仓库为已知鲲鹏故障签名定向编写 |
+| P3 | memcpy/store→reload 访存通路 | CPU179 实证触发判别条件 |
+| P4 | 位扩散（压缩/哈希/CRC/加密） | From Gates to SDCs(DATE'25)：sha 类位掩蔽最少 |
+| P5 | 标量浮点/大整数 | — |
+| P6 | 一致性/原子/SIMD | 控制流类故障多 crash 化，SDC 倾向低 |
+| P7 | 其余（字母序） | 完整多样性保留 |
+
+**命令逐项解释**（脚本已内建，无需手输；其余参数原样透传，如 `-t 30s`、`--cpuset`）：
 
 | 旗标 | 作用 |
 |---|---|
 | `--quality=0` | 跑 PROD+BETA 全部 434 用例（源码构建口径；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
+| `--test-list-file` | 优先序测试列表：由脚本从当前二进制动态生成（顺序即执行序，对新用例自适应） |
 | `-T forever` | 整套用例无限轮转。SDC 故障窗口极稀疏（CPU179 实测占空比 ~0.06%），长驻留是检出关键；一轮 ≈ 7 小时 |
 | `-t 60s` | 每用例 60 秒。SEVI 实测 >80% 的首错在 10 秒内出现，60s 有 6 倍余量 |
 | `-Y` | 结构化 YAML 日志（取证格式） |
 | `-F` | 首个 FAIL 即停——停下就是信号。SKIP 不算失败，占位用例不会误停 |
 | `-o sdc-*.yaml` | 日志落盘为固定文件名（便于归档取证）。不带 `-o` 时框架会在当前目录自动生成 `sdcshield-<UTC时间戳>.yaml`，文件名不可预测；且全过退出（exit: pass）时该文件被自动删除，仅失败/中断时留存 |
 
-**为什么是这条命令**：CPU179 故障核的实证——全套件全核轮转约 100 秒出首错，而单测试单跑（含 11180 个 seed 轮换）零复现。全核并发 + 负载多样性 + 长驻留三者齐备才有检出率，这条命令一次配齐。
+**等效命令（无脚本时；注意：默认注册序无优先级）**——不带 `--test-list-file` 时框架按默认注册序执行，SDC 敏感负载不会先跑：
+
+```bash
+# 源码构建
+./builddir/sdcshield --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
+# 预构建二进制（旧 tarball；clone 后进入对应 SP 的 built 目录）
+./run-sdcshield.sh --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
+```
+
+**为什么是这条命令**：CPU179 故障核的实证——优先序全套件全核轮转约 100 秒出首错，而单测试单跑（含 11180 个 seed 轮换）零复现。全核并发 + 负载多样性 + 长驻留三者齐备才有检出率，这条命令一次配齐。
 
 **结果判读**：
 
 1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
 2. **停下且有 FAIL**：先看挂在哪个测试——
-   - 挂在 `eigen_svd_double` / `eigen_sparse`：大核数机器全核多线程下的已知 ULP 级良性抖动。用 `./run-sdcshield.sh -e <测试名> -t 5000 -n 1` 单线程复跑：**单线程过 = 良性**（假阳性），单线程也挂 = 真嫌疑。
+   - 挂在 `eigen_svd_double` / `eigen_sparse`：大核数机器全核多线程下的已知 ULP 级良性抖动。用 `-e <测试名> -t 5000 -n 1` 单线程复跑（源码树 `./builddir/sdcshield`、预构建 `./run-sdcshield.sh`）：**单线程过 = 良性**（假阳性），单线程也挂 = 真嫌疑。
    - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
+
+## 一键最大程度激发 SDC（7×24 战役总入口）
+
+```bash
+sudo bash scripts/sdc-excite-reproduce/excite.sh          # 一键上线 7×24 战役
+bash  scripts/sdc-excite-reproduce/excite.sh --smoke      # 只预检+冒烟（无需 root）
+bash  scripts/sdc-excite-reproduce/excite.sh --status     # 只读巡检
+sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断点）
+```
+
+一条命令完成：预检（二进制 fail-loud + L0 冒烟门）→ 按需安装 systemd 单元 →
+先起 sdc-monitor 联锁眼睛 → 战役冒烟门（不过不上线）→ 上线 L1-L5 状态机战役
+（冷机代表集 → 谱系扫档 → 多样性轮转 → 专项轮换 di/dt·热·NUMA → 深驻留，
+事件取证 + 定向复测，断点续跑）。M2 事件栈（root-helper/eventd/controller/ring）
+为单板相关人工步骤，按 [运维手册](docs/sdc-excite-reproduce/operations-runbook.md) 拉起。
+
+**三工具路由**：
+
+| 场景 | 命令 |
+|---|---|
+| 快速检测（检出即停） | `bash scripts/run/sdc_detect.sh` |
+| 24h 自包含定位（自动失败分类 + 逐核二分） | `bash scripts/run/run_sdc_campaign.sh` |
+| 7×24 最大激发（工程化战役 + 事件闭环） | `sudo bash scripts/sdc-excite-reproduce/excite.sh` |
 
 ## 快速开始
 
@@ -431,12 +476,14 @@ ARM64 能力：CPU 特性检测（FP/NEON/CRC32/Crypto/SVE/SVE2）、拓扑检�
 
 ## 运维入口
 
-SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite-reproduce/`：
+SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite-reproduce/`，总入口为 excite.sh（用法与战役编排见上节「一键最大程度激发 SDC」）：
 
 ```console
-bash scripts/sdc-excite-reproduce/status.sh    # 只读状态一览：9 服务 / 战役进度 / M2 事件流+controller 状态+采集器丢样 / 电压频率 / SEL / 磁盘 / 告警
-bash scripts/sdc-excite-reproduce/start.sh     # 启动战役（需 root）；stop.sh 停止
+sudo bash scripts/sdc-excite-reproduce/excite.sh    # 一键总入口：预检 → systemd 单元 → sdc-monitor → 冒烟门 → 上线
+bash  scripts/sdc-excite-reproduce/excite.sh --smoke / --status / --stop    # 只冒烟 / 只读巡检 / 停止（留断点）
 ```
+
+细分脚本（excite.sh 即其首启序列的固化）：`status.sh` 只读状态一览——9 服务 / 战役进度 / M2 事件流+controller 状态+采集器丢样 / 电压频率 / SEL / 磁盘 / 告警（即 `--status`）；`start.sh` 直接启动战役（需 root，跳过预检与冒烟门）；`stop.sh` 停止战役（保留断点，即 `--stop`）。
 
 完整运维流程（9 服务、BLACK 恢复、演练排期、巡检模板）见 [docs/sdc-excite-reproduce/operations-runbook.md](docs/sdc-excite-reproduce/operations-runbook.md)。
 

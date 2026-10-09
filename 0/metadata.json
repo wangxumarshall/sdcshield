@@ -3,28 +3,21 @@
   "checkpoint_id": "01M4G5G3BJDFNTDKP0EVQK4KB7",
   "session_id": "95f53bc4-5682-4737-8dc1-4e11a7804f9e",
   "strategy": "manual-commit",
-  "created_at": "2026-10-09T11:06:46.718450688Z",
+  "created_at": "2026-10-09T11:07:04.647845098Z",
   "branch": "feat/sdc-detect-priority-and-excite-entry",
   "checkpoints_count": 1,
-  "save_step_count": 2,
+  "save_step_count": 1,
   "files_touched": [],
   "agent": "Claude Code",
   "model": "GLM-5.3[1m]",
   "turn_id": "7546f5b83286",
   "compact_transcript_start": 0,
   "token_usage": {
-    "input_tokens": 1276598,
+    "input_tokens": 1277843,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 34369664,
-    "output_tokens": 166190,
-    "api_call_count": 206,
-    "subagent_tokens": {
-      "input_tokens": 577744,
-      "cache_creation_tokens": 0,
-      "cache_read_tokens": 12239616,
-      "output_tokens": 93799,
-      "api_call_count": 357
-    }
+    "cache_read_tokens": 35013312,
+    "output_tokens": 166801,
+    "api_call_count": 208
   },
   "skill_events_version": 1,
   "skill_events": [
@@ -217,21 +210,5 @@
   ],
   "session_metrics": {
     "turn_count": 4
-  },
-  "prompt_attributions": [
-    {
-      "checkpoint_number": 2,
-      "user_lines_added": 0,
-      "user_lines_removed": 0,
-      "agent_lines_added": 0,
-      "agent_lines_removed": 0
-    },
-    {
-      "checkpoint_number": 3,
-      "user_lines_added": 0,
-      "user_lines_removed": 0,
-      "agent_lines_added": 1815,
-      "agent_lines_removed": 0
-    }
-  ]
+  }
 }

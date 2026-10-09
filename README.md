@@ -6,6 +6,44 @@ SDCShield is an open-source project designed to identify defects and bugs in ARM
 
 SDCShield is derived from OpenDCDiag (which contains the Intel `sandstone` framework), licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for full derivation and upstream provenance.
 
+## 一行命令检测鲲鹏 CPU SDC（傻瓜化）
+
+**预构建二进制路径（无需编译）**——clone 后进入对应 SP 目录：
+
+```bash
+git clone --recurse-submodules https://github.com/wangxumarshall/sdcshield.git
+cd sdcshield/third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
+./run-sdcshield.sh --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
+```
+
+**源码构建路径**（构建见下节）：
+
+```bash
+./builddir/sdcshield --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
+```
+
+**命令逐项解释**：
+
+| 旗标 | 作用 |
+|---|---|
+| `--quality=0` | 跑 PROD+BETA 全部 434 用例（源码构建口径）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
+| `-T forever` | 整套用例无限轮转。SDC 故障窗口极稀疏（CPU179 实测占空比 ~0.06%），长驻留是检出关键；一轮 ≈ 7 小时 |
+| `-t 60s` | 每用例 60 秒。SEVI 实测 >80% 的首错在 10 秒内出现，60s 有 6 倍余量 |
+| `-Y` | 结构化 YAML 日志（取证格式） |
+| `-F` | 首个 FAIL 即停——停下就是信号。SKIP 不算失败，占位用例不会误停 |
+| `-o sdc-*.yaml` | 日志落盘。不带 `-o` 时 YAML 只走 stdout，检出后无证据可查 |
+
+**为什么是这条命令**：CPU179 故障核的实证——全套件全核轮转约 100 秒出首错，而单测试单跑（含 11180 个 seed 轮换）零复现。全核并发 + 负载多样性 + 长驻留三者齐备才有检出率，这条命令一次配齐。
+
+**结果判读**：
+
+1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
+2. **停下且有 FAIL**：先看挂在哪个测试——
+   - 挂在 `eigen_svd_double` / `eigen_sparse`：大核数机器全核多线程下的已知 ULP 级良性抖动。用 `./run-sdcshield.sh -e <测试名> -t 5000 -n 1` 单线程复跑：**单线程过 = 良性**（假阳性），单线程也挂 = 真嫌疑。
+   - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
+3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
+4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
+
 ## 快速开始
 
 两条入口，按需选一。
@@ -20,13 +58,15 @@ SDCShield is derived from OpenDCDiag (which contains the Intel `sandstone` frame
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（428）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
+
 ```bash
 git clone --recurse-submodules <repo-url>   # 含子模块
 cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 ./run-sdcshield.sh --list-tests            # 自动设 LD_LIBRARY_PATH=./libs
 ./run-sdcshield.sh -T forever -t 60s -Y -F                # 首次检测到SDC后，停止 
 ./run-sdcshield.sh -T forever -t 60s -Y -ignore-timeout   # 一起跑，就算检测到SDC后，也一直往后跑
-./run-sdcshield.sh -T forever -t 600s -Y -e "eigen_svd*" -e "eigen_gemm*" -e "fma*" -e "zstd*" -e "zlib*" 
+./run-sdcshield.sh -T forever -t 600s -Y -e "eigen_svd*" -e "eigen_gemm*" -e "fma*" -e "zstd*" -e "zlib*" # 定向子集，检出率低于全套件轮转
 ./run-sdcshield.sh -t 60s -n 1 -e zstd19 # 单线程，规避大核数 ULP 数值 flakiness
 ```
 
@@ -37,7 +77,7 @@ cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 ### 从源码构建
 
 ```bash
-# openEuler 24.03（基准平台）依赖；Ubuntu/Fedora 见 docs/offline-build-dependencies.md
+# openEuler 24.03（基准平台）依赖；Ubuntu/Fedora 见 docs/build-deploy/offline-build-dependencies.md
 sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel libisa-l-devel gtest-devel
 # 首次构建前：依次构建 5 个 vendored 依赖库（幂等，install/ 已存在则秒过；
 # pocketfft 无需此步——头文件+源码直接编入测试库）
@@ -48,12 +88,12 @@ sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzs
 ./third-party/acl/build.sh               # → install/lib/libarm_compute-core.a（acl_gemm NEGEMM + fisttp_arm；NEON runtime core 目标，v23.02）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
-./builddir/sdcshield --list-tests        # 应列出 282 个 PROD 用例（实测于 2026-09-17）
+./builddir/sdcshield --list-tests        # 应列出 428 个 PROD 用例（gcc + 全部 vendored 依赖，实测于 2026-10-09）
 ```
 
 > ARM64 要求 Eigen 5.0.0+（系统 Eigen 3.3.x 在 GCC 12+ 下编译失败）。仓库自带 `third-party/eigen5/`，aarch64 构建路径在 `tests/cpu/meson.build` 中直接 `include_directories` 指向它，**无需系统安装 eigen3**；`PKG_CONFIG_PATH` 仅为兼容 x86 路径而保留，带上无害。
 >
-> 四个 `build.sh` 均为可选步骤：任一 `install/` 缺失时 meson 打印提示并跳过对应测试组或回退系统库（不阻断构建、不影响其余用例；isa-l 缺失时回退系统 `libisal`，两者皆无才剔除 `isal_*` 测试）。vendored 库的选型依据（向量 FMA GEMM > 哈希/加密 > 压缩 > SVE 超越函数）见 [docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md](docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md)（31 篇 SDC 文献综合）。
+> 五个 `build.sh` 均为可选步骤：任一 `install/` 缺失时 meson 打印提示并跳过对应测试组或回退系统库（不阻断构建、不影响其余用例；isa-l 缺失时回退系统 `libisal`，两者皆无才剔除 `isal_*` 测试；acl 缺失时 `acl_gemm`/`fisttp_arm` 两个 ACL 库测试不构建，SVE 变体为 svmla 重实现、不受影响）。vendored 库的选型依据（向量 FMA GEMM > 哈希/加密 > 压缩 > SVE 超越函数）见 [docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md)（31 篇 SDC 文献综合）。
 >
 > **clang/BiSheng 工具链（HPC 节点路径）**：GCC 缺 C++ 或需要 SME 用例时，可用 BiSheng clang 5.2.0
 > （LLVM 19.1.7，HPCKit）构建：`source <HPCKit>/setvars.sh`、`export TMPDIR=/tmp` 后 meson/ninja
@@ -95,90 +135,23 @@ cd scripts/offline-build/
 
 > **22.03 / 20.03 适配仅在容器内进行**：旧工具链（gcc-10、meson 0.59/0.54、binutils 2.34）缺 C++20/23 特性。`container-build.sh` 只读挂载源码树，在可丢弃副本上注入 `framework/compat/cpp23_polyfill.h`、版本宏（`OPENEULER_22_03`/`OPENEULER_20_03`）和 `-D` meson option（`-Denable_acl=disabled`）——host 源码不动，x86/24.03 参考路径不受影响。历史上的 `sed` 补丁（`string::contains`→`.find()`、`udf`→`.inst`、ACL 置空、`meson_version` 放宽）**已全部收敛到源码/meson option**，容器内对源码副本零修改，只剩 CXXFLAGS/polyfill 注入。
 
-完整依赖与排坑见 [docs/offline-build-dependencies.md](docs/offline-build-dependencies.md)。
+完整依赖与排坑见 [docs/build-deploy/offline-build-dependencies.md](docs/build-deploy/offline-build-dependencies.md)。
 
 ### 多版本一键构建与部署（15 个 OS 版本）
 
-上面 D→E→F 的单 SP 手动链，由 `build-all.sh` 自动化封装（含镜像烘焙、哈希 skip、`-P` 并行、`--since`、smoke/full 五档）。要一次性构建全 15 个版本（20.03/22.03/24.03 × LTS+SP1~SP4）并发布现场包：
-
-```console
-# 克隆（含 RPM 依赖子模块）→ 切到方案分支
-git clone --recurse-submodules https://github.com/wangxumarshall/sdcshield.git
-cd sdcshield && git checkout feat/multi-version-build-deploy
-# 全 15 版本构建 + 纯净验证（发布闸门）→ 各 SP 产物进 built/
-./scripts/offline-build/build-all.sh --all --full --jobs 3   # 期望 PASS: 15
-# 产出现场 tarball（~6MB，含自动检测 OS 的 run.sh）
-./scripts/offline-build/package-release.sh 24.03 SP3
-# 目标机：解压后 ./run.sh -e zstd19 -t 2000 -n 1   # run.sh 自动精确匹配 OS 版本，不匹配则硬停指路
-#          ./run.sh full -t 120s                    # 全核满载 eigen 运算（两段式，详见下注）
-```
-
-> `run.sh` 部署逻辑：检测本机 OS → 精确匹配 `built-index.tsv`（不跨版本回退）→ 校验 `binary-sha256` → `exec run-sdcshield.sh`（设 `LD_LIBRARY_PATH` 指向随包 `libs/`）。
->
-> `run-sdcshield.sh full`（首参数 `full`）：两段式全核 eigen 满载——第一段 11 个稳定 eigen 测试不带 `-n`（默认使用系统全部 CPU）；第二段 4 个数值敏感测试（`eigen_svd_double`/`eigen_sparse`/`eigen_svd_cdouble`/`eigen_svd_cdouble_sve`）以 `-n 1` 补跑，规避大规模多线程下的 ULP 级偶发假 FAIL（平台已知特性）。默认每测试 60s（可 `-t` 覆盖）；透传的 `-n` 只作用于第一段；`eigen_svd_cdouble_sve` 自 2026-09-19 起为真实 SVE 向量化压测（vendored Eigen 已补 `double`/`complex<double>` packet，本机 VL=256 上 300×300 复数 BDCSVD ~0.7 s），无 SVE 的机器上报 `CpuNotSupported`。
-
-#### 一键式全流程：`release-all.sh`（agent/CI 首选入口）
-
-**一条命令完成全部工作**：base 镜像拉取（docker hub 加速器拉取→podman load→tag 为 quay.io 命名，绕过 quay 直连挂起）→ 15 版本镜像烘焙 → 容器内构建 → 打包 → full 纯净验证 → 提交推送（3 个 RPM submodule + 主仓）：
-
-```console
-./scripts/offline-build/release-all.sh              # 全流程（唯一需要记住的命令）
-./scripts/offline-build/release-all.sh --skip-base  # base 镜像已齐时（推荐，省去 docker 桥接）
-./scripts/offline-build/release-all.sh --help       # 全部选项
-```
-
-五个阶段（幂等，已就位自动 skip；任何阶段失败即停，退出码非零）：
-
-| 阶段 | 内容 | 通过标准 |
-|---|---|---|
-| 1 preflight | 分支/submodule/RPM 树自检 | 在 `main` 或 detached HEAD 上**拒绝**运行（CLAUDE.md 禁止推 main） |
-| 2 base | 15 个 `quay.io/openeuler/openeuler:*-lts[-spN]` 缺失则补齐 | `podman images` 核验 15/15 |
-| 3 build | `build-all.sh --all --full`（哈希 skip：输入未变的 SP 自动复用） | 退出码 0 |
-| 4 check | 日志硬闸 | **15 × `RESULT: PASS` 且 0 FAIL**，否则绝不进入推送 |
-| 5 push | 3 个 submodule `built/` 产物（快进校验后推 `origin/main`）+ 主仓指针/manifest（推当前特性分支） | 全部推送成功 |
-
-**给 agent 的调用要点**：
-- 耗时约 2~3 小时（15 × 构建+full 验证），建议后台运行 + 定期轮询 `build-out/release-all-build.latest.log` 中的 `RESULT:` 行。
-- 全程日志：`build-out/release-all-<时间戳>.log`（gitignored）；完成后核对末尾 `release-all 完成`。
-- stage 2 拉 base 需要 root docker（sudo 交互提示）；已有全部镜像时该阶段秒级 skip，无需 sudo。
-- 提交信息由脚本自动生成（含当日日期与验证结论），无需人工干预。
-
-> 2026-09-02/03 全链路实测：15 × `RESULT: PASS`（fail=0, crashes=0, eigen_fails=[]），stage 5 自动完成 3 个 submodule + 主仓的提交与推送。
-
-完整设计与操作指南见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md)（设计方案）与 [docs/build-deploy/multi-version-build-deploy-usermanual.md](docs/build-deploy/multi-version-build-deploy-usermanual.md)（用户手册：原回顾报告，一键复现指南 + 15 SP 全 full 验证基线 + 复现 gotcha）。快速开始速查见 [scripts/offline-build/README.md](scripts/offline-build/README.md)。
+单 SP 手动链（上节 D→E→F）由 `build-all.sh` 自动化封装（镜像烘焙、哈希 skip、`-P` 并行、`--since`、smoke/full 五档）：`./scripts/offline-build/build-all.sh --all --full --jobs 3` 一次构建全 15 个版本（20.03/22.03/24.03 × LTS+SP1~SP4），以纯净容器 full 验证为发布闸门（期望 `PASS: 15`）；`./scripts/offline-build/package-release.sh <series> <sp>` 产出 ~6MB 现场 tarball，内含自动检测 OS 的 `run.sh`（精确匹配版本、校验 sha256，不匹配硬停指路；`run.sh full` 为两段式全核 eigen 满载，4 个数值敏感测试 `-n 1` 补跑规避 ULP 级假 FAIL）。一键式全流程 `release-all.sh` 是 agent/CI 首选入口：base 镜像拉取 → 15 版本烘焙 → 构建 → full 验证 → 提交推送（3 个 RPM submodule + 主仓），五阶段幂等，check 阶段 **15 × `RESULT: PASS` 且 0 FAIL** 硬闸、不过绝不推送，在 `main` 上拒绝运行；`--skip-base` 跳过 base 拉取。完整设计、一键复现指南（含 15 SP 全 full 验证基线）与速查见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md)（设计方案）、[docs/build-deploy/multi-version-build-deploy-usermanual.md](docs/build-deploy/multi-version-build-deploy-usermanual.md)（用户手册）与 [scripts/offline-build/README.md](scripts/offline-build/README.md)。
 
 ### GitHub Actions 每日多 OS 自动验证（`.github/workflows/multi-os-verify.yml`）
 
-上面的 `release-all.sh` 是**发布链路**（本地/agent 一键）。仓库另配了一条 **CI 哨兵**：`.github/workflows/multi-os-verify.yml`，用 GitHub Actions **原生 `container:` 属性**（作业直接运行在 ghcr.io 构建镜像里，代码由 checkout 自动挂载，最简洁高效），每天 **UTC 04:00 = 北京时间 12:00** 自动触发（也可手动 `workflow_dispatch`）：
-
-- **15 个镜像 × 15 个 job 并行**（`fail-fast: false`，互不拖累，全跑完出结论）：openEuler 20.03 / 22.03 / 24.03 × LTS+SP1~SP4。
-- **每 job**：`actions/checkout`（`submodules: false`，镜像已烘焙依赖）→ `actions/cache` 缓存 vendored 库构建 → 镜像内 `meson+ninja` 构建原生二进制 → `scripts/gha/verify-params.py` 做**全量用例的全量参数**功能测试 → `scripts/gha/benchmark.sh` 采跨 OS 基准 → 上传日志/基准。
-- **全量参数扫描**（`verify-params.py`，纯 stdlib 适配容器无 PyYAML）：`--quality=-1` 覆盖 PROD+BETA+SKIP；`-n 1/4/8` 三档并发；openblas `mdim` 扫谱；selftests `@positive` + 逐条负面 selftest（断言非零退出且非 insn 崩溃）。
-- **基准与结果矩阵**：固定 `--max-test-loop-count`（同工作量墙钟）对三系列交集的 11 个测试采 `benchmark.tsv`（24.03-SP3 档推 gh-pages 趋势，见下节）；`report` job 另汇总 15 份 `allquality.yaml` 成「用例 × 版本」结果矩阵写入 job summary，每格 `结果[耗时s (±Δs)]`——Δ 为相对上次成功全量运行同用例同版本的耗时变化（增加为正，仅对比耗时）。
-- **运行器**：`ubuntu-24.04-arm`（GitHub hosted aarch64，GA）；换自建 kunpeng920 runner 改一行 `runs-on` 即可。
-- **前置**：15 个镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`（manifest `remote=yes`）。
-
-详见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
+CI 哨兵（与上节 `release-all.sh` 发布链路互补）：每天 UTC 04:00（北京时间 12:00）自动触发，也可手动 `workflow_dispatch`；15 个镜像 × 15 个 job 并行（`fail-fast: false`）——openEuler 20.03/22.03/24.03 × LTS+SP1~SP4，运行在 `ubuntu-24.04-arm` 托管 aarch64 runner 的 ghcr.io 构建镜像内。每 job 原生 `meson+ninja` 构建后由 `scripts/gha/verify-params.py` 做全量用例 × 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），`scripts/gha/benchmark.sh` 采跨 OS 基准，`report` job 汇总 15 份结果成「用例 × 版本」矩阵。镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。详见 [docs/build-deploy/multi-version-build-deploy.md](docs/build-deploy/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
 
 ### PR CI 门禁、安全扫描与基准趋势
 
-PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历史/DCO（人工提交必须 Signed-off-by；GitHub 生成的 Copilot Autofix 机器提交豁免——双标记识别 GitHub 提交者 + `github-advanced-security[bot]` trailer，git-sanity 输出 notice 可审计）→ `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，quick 结果以「用例 × 结果[耗时]」矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3，源码/适配层改动才跑，docs-only PR 自动跳过）。同 PR 推新 commit 自动取消旧 run；所有 job 有超时上限。
-
-安全（`security.yaml` + `codeql.yaml`，每周一全量 + PR 增量）：zizmor（workflow 自身安全，噪声策略见 `zizmor.yml`）、gitleaks（全历史凭据扫描）、osv-scanner（vendored 依赖 CVE）、CodeQL cpp（arm64 构建，排除 `third-party/`；SVE 等 aarch64 专属测试进分析库）。全部 checkout `persist-credentials: false`；Dependabot 管 action 版本（分组 + 7 天冷却）。
-
-基准趋势：nightly 的 24.03-LTS-SP3 `benchmark.tsv` 由 `benchmark-trend` job 转换后经 github-action-benchmark 推到 gh-pages 分支，出跨 commit 趋势图 + 150% 回归告警（观测期不硬门）。网页侧操作清单（原生失败通知、分支保护、Code scanning 确认）见 [docs/build-deploy/ci-web-operations.md](docs/build-deploy/ci-web-operations.md)。
+PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历史/DCO（人工提交必须 Signed-off-by，Copilot Autofix 机器提交豁免）→ `build-cpu`（GCC-arm64：构建 + unittests + selftests + quick 全量跑，结果矩阵写入 PR 页 summary）→ `multi-version` 角落三（20.03-LTS/22.03-SP3/24.03-SP3；源码/适配层改动才跑，docs-only PR 自动跳过）。安全（`security.yaml` + `codeql.yaml`，每周全量 + PR 增量）：zizmor / gitleaks / osv-scanner / CodeQL cpp。基准趋势：nightly 的 24.03-LTS-SP3 `benchmark.tsv` 经 github-action-benchmark 推 gh-pages 分支，出跨 commit 趋势图 + 150% 回归告警（观测期不硬门）。网页侧操作清单（原生失败通知、分支保护、Code scanning 确认）见 [docs/build-deploy/ci-web-operations.md](docs/build-deploy/ci-web-operations.md)。
 
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
-本地 podman 上的**最严格**验证入口（GHA 日报的本地超集,29 条目选项矩阵 × 全部测试用例,含 `--quality=-1` SKIP 级、三 RNG 引擎、cpuset 跨 NUMA、全部 `-O` 测试旋钮、selftests、`--on-crash=context` 等）:
-
-```console
-./scripts/lts-stability/run-all-15.sh            # 15 镜像 × 29 条目(3 系列并行,~5h)
-./scripts/lts-stability/run-all-15.sh --smoke    # 链路快检(每镜像只跑 m01 基线)
-./scripts/lts-stability/run-lts-stability.sh 24.03 SP3   # 单镜像全矩阵
-```
-
-每镜像流程:容器内原生构建全功能二进制（`-Dssl_link_type=static` + vendored openssl/openblas/isa-l,glibc 不匹配时容器内重建）→ 29 条目严格矩阵 → `RESULT: PASS|FAIL <tag>`。全部 15 PASS 才 exit 0。2026-09-17 全链路实测 **15/15 PASS**(main `ebe0bf1`,290 测试集),过程中发现并修复 8 个跨版本软件 bug(详见 [docs/cases/lts-stability-2026-09-17/README.md](docs/cases/lts-stability-2026-09-17/README.md))。
+本地 podman 上的**最严格**验证入口（GHA 日报的本地超集）：15 个镜像 × 29 条目严格选项矩阵 × 全部测试用例（含 `--quality=-1` SKIP 级、三 RNG 引擎、cpuset 跨 NUMA、全部 `-O` 测试旋钮、selftests、`--on-crash=context` 等）。`run-all-15.sh` 一键全矩阵（`--smoke` 链路快检），`run-lts-stability.sh <series> <sp>` 单镜像全矩阵；每镜像容器内原生构建全功能二进制（`-Dssl_link_type=static` + vendored 库）后跑严格矩阵，全部 15 PASS 才 exit 0。2026-09-17 全链路实测 **15/15 PASS**（main `ebe0bf1`，290 测试集），过程中发现并修复 8 个跨版本软件 bug。用法与设计见 [scripts/lts-stability/README.md](scripts/lts-stability/README.md)。
 
 
 
@@ -205,17 +178,17 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 
 ## Vendored 计算库（third-party/，SDC 负载扩展）
 
-自 2026-09-15 起，仓库 vendor 了高优化度计算库作为 SDC 压测负载（2026-09-16 增补 isa-l）——文献结论（见 `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`，31 篇论文综合）：高度优化的第三方库等价于人工写好的数据流型 FU 饱和序列，其中向量 FMA/GEMM 是第一大 SDC 源（SEVI：>92% SDC 事故由 FMA 指令贡献）。每个目录保留上游官方 tag tarball 以溯源，`build.sh` 幂等构建出静态归档到 `install/`（gitignore；meson 探测 `install/`，缺失时打提示跳过对应测试或回退系统库，不阻断构建）。
+自 2026-09-15 起，仓库 vendor 了高优化度计算库作为 SDC 压测负载（2026-09-16 增补 isa-l）——文献结论（见 `docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md`，31 篇论文综合）：高度优化的第三方库等价于人工写好的数据流型 FU 饱和序列，其中向量 FMA/GEMM 是第一大 SDC 源（SEVI：>92% SDC 事故由 FMA 指令贡献）。每个目录保留上游官方 tag tarball 以溯源，`build.sh` 幂等构建出静态归档到 `install/`（gitignore；meson 探测 `install/`，缺失时打提示跳过对应测试或回退系统库，不阻断构建）。
 
 | 目录 | 内容 | 产出 | 测试 |
 |---|---|---|---|
-| `third-party/openssl/` | OpenSSL 3.5.0 | 静态 `libcrypto.a` | `openssl_sha`（SHA-2）+ `openssl_sha3`（SHA-3/SHAKE Keccak）+ `openssl_sm3sm4`（国密 SM3 摘要 + SM4-CBC 加解密往返）+ 46 个 `ipsec_*`（默认启用） |
+| `third-party/openssl/` | OpenSSL 3.5.0 | 静态 `libcrypto.a` | `openssl_sha`（SHA-2）+ `openssl_sha3`（SHA-3/SHAKE Keccak）+ `openssl_sm3sm4`（国密 SM3 摘要 + SM4-CBC 加解密往返）+ 70 个 `ipsec_*`（46 NEON + 24 SVE 移植变体，默认启用） |
 | `third-party/openblas/` | OpenBLAS 0.3.29（TSV110 内核，单线程 + USE_LOCKING=1） | 静态 `libopenblas.a` | `openblas_dgemm` / `openblas_sgemm` / `openblas_zgemm` / `openblas_cgemm`（NEON FMA 微内核，每迭代 copy/compute/verify）+ `openblas_lu`（LAPACK dgesv 主元分解） |
 | `third-party/sleef/` | SLEEF 3.9.0（TLFLOAT=OFF） | 静态 `libsleef.a` | `sleef_neon`（NEON 多项式 FMA 链：sin/cos/exp/log double+float × u10/u35 双精度档 + asin/atan/cbrt/log10/sinh/tanh/pow 函数族，足迹旋钮 `-O sleef_neon.nelems=N`）；`sleef_sve`（SVE 变体，double+float × u10/u35，**需 SVE 硬件**——无 SVE 的机器如鲲鹏 920 干净 skip：`CpuNotSupported`） |
 | `third-party/pocketfft/` | pocketfft C 版（BSD-3，头文件+源码直接入库，无需 build.sh） | 编入测试库 | `pocketfft_fft`（位反转抽取重排 + 旋转因子 FMA 蝶形链） |
 | `third-party/isa-l/` | Intel isa-l 2.32.1（BSD-3，Makefile.unx 路径，aarch64 无需 autoconf/nasm） | 静态 `libisal.a` | `isal_igzip`（igzip deflate/inflate 往返，aarch64 汇编内核）；10 个 `isal_crc*`（NEON pmull CRC16/32/64）。`install/` 缺失时**回退系统 `libisal`**（openssl 式两级 gate） |
 
-OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁后 128 核（本机全核）30s 压力零错配，见 `docs/cases/allcore-2026-09-15/`），锁只保护缓冲表元数据、不改计算结果。
+OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁后 128 核（本机全核）30s 压力零错配），锁只保护缓冲表元数据、不改计算结果。
 
 isa-l（`isal_igzip` + 10 个 `isal_crc*`）自 2026-09-16 起 vendor 到 `third-party/isa-l/`（v2.32.1，静态 `libisal.a`）；`install/` 缺失时回退系统 `libisal`，两者皆无才剔除 `isal_*` 测试。
 
@@ -284,27 +257,27 @@ done
     -t 30m
 ```
 
-**模式 D：全谱战役脚本 `scripts/run/run_sdc_spectrum.sh`**——把模式 A/B/C 与全部 test knob（mdim/transab/beta_permille/nelems/n/level）合并为一条命令的两阶段战役（§7.4 战役协议的可执行化）：
+**模式 D：全谱战役脚本 `scripts/run/run_sdc_spectrum.sh`**——把模式 A/B/C 与全部 test knob 合并为一条命令的两阶段战役：
 
 ```bash
 bash scripts/run/run_sdc_spectrum.sh                    # 默认：15m/档扫谱 + 2h 深驻留
 SWEEP_TIME=30s DWELL_TIME=1m bash scripts/run/run_sdc_spectrum.sh   # 冒烟（约 10 分钟）
 ```
 
-- **阶段 1 谱系广域扫**（每档独立日志，多样性 = 检出率）：1a GEMM 尺寸谱（mdim 64/256/512/1024，四个 gemm 同跑）；1b GEMM 形态谱（transab 0..3 × beta_permille=500）；1c SLEEF 足迹谱（nelems 1024/16384/262144）；1d FFT 因子谱（n 4096/4099/6144/10000 = pow2/Bluestein 质数/混合 radix）；1e 压缩 level 谱（isal_igzip level 0..3）；1f 加密/哈希全家族（openssl_sha/sha3/sm3sm4 + CRC）+ `openblas_lu` + 混合多样性轮（六种负载同跑）。
-- **阶段 2 深驻留**：`--max-test-loop-count=0` 关闭 fracturing，全绿档四负载（dgemm/sleef/pocketfft/isal）固定 seed 持续运行——CORE179 类单模式持续暴露。
-- 时长经 env 旋钮覆盖：`SWEEP_TIME`（默认 15m，阶段 1 每档）、`DWELL_TIME`（默认 2h，阶段 2）。日志按阶段/档位分文件存 `./sdc_spectrum_<时间戳>/`，脚本末尾汇总各日志 pass/fail。
+- **阶段 1 谱系广域扫**（每档独立日志，多样性 = 检出率）：GEMM 尺寸谱（mdim 64..1024）+ 形态谱（transab × beta_permille）、SLEEF 足迹谱、FFT 因子谱（pow2/Bluestein 质数/混合 radix）、压缩 level 谱、加密/哈希全家族 + 混合多样性轮。
+- **阶段 2 深驻留**：`--max-test-loop-count=0` 关闭 fracturing，全绿档四负载固定 seed 持续运行——CORE179 类单模式持续暴露。
+- 时长经 `SWEEP_TIME`/`DWELL_TIME` env 旋钮覆盖；日志按阶段/档位分文件存 `./sdc_spectrum_<时间戳>/`，末尾汇总 pass/fail。
 
-模式选择依据：CORE179 探针证明 store→reload 的 cache-domain 与跨线模式是触发判别条件（模式 A 逐层覆盖）；文献共识"负载多样性即检出率"（模式 B 与模式 D 阶段 1，详见 `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`）；大矩阵档把分块 GEMM 的 packing/回写路径推进 DRAM 与 NUMA 远端域（模式 C）；固定 seed 长驻留提升单模式的统计采样深度（模式 D 阶段 2）。mdim>256 档在固定时间窗内迭代数按 mdim³ 骤减，是计算密度换覆盖广度的交换——统计采样请加长 `-t`。
+模式选择依据：CORE179 探针证明 store→reload 的 cache-domain 与跨线模式是触发判别条件（模式 A 逐层覆盖）；文献共识"负载多样性即检出率"（模式 B 与模式 D 阶段 1，详见 `docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md`）；大矩阵档把分块 GEMM 的 packing/回写路径推进 DRAM 与 NUMA 远端域（模式 C）；固定 seed 长驻留提升单模式的统计采样深度（模式 D 阶段 2）。mdim>256 档在固定时间窗内迭代数按 mdim³ 骤减，是计算密度换覆盖广度的交换——统计采样请加长 `-t`。
 
-**模式 E：单板机器扫描 `scripts/run/sdc_machine_scan.sh`**——压测战役第 0 步，新单板可直接复用：一次性采集 DMI/BMC 传感器/SEL/NUMA 内存位置/RAS/软件栈，产出 `capabilities.env` 能力开关（`NCORES/HAS_SVE/HAS_CPUFREQ/HAS_IPMI/...`）与人读摘要，并自动标记硬件异常（SEL 周期故障、无本地内存 node、无 SVE/cpufreq 等），战役参数据此适配：
+**模式 0：单板机器扫描 `scripts/run/sdc_machine_scan.sh`**——压测战役第 0 步，新单板可直接复用：一次性采集 DMI/BMC 传感器/SEL/NUMA/RAS/软件栈，产出 `capabilities.env` 能力开关与人读摘要，自动标记硬件异常（SEL 周期故障、无本地内存 node、无 SVE/cpufreq 等），战役参数据此适配：
 
 ```bash
 SUDO_PW=<密码> bash scripts/run/sdc_machine_scan.sh          # root 全量模式
 bash scripts/run/sdc_machine_scan.sh                         # 无 root 降级模式
 ```
 
-**模式 F：24h+ 压测执行器 `scripts/run/run_sdc_campaign.sh`**——把模式 D 的两阶段协议扩展为 24h+ 持续测试（PinDrop 模式：持续高频测试比快照式多数量级地抓出缺陷）：P1 全量广域扫（`--quality=0` 全测试 × 全核，fracturing seed 自动轮换）→ P2 文献优先级加权 soak（GEMM 尺寸/形态谱×三调度、crypto、压缩 level 谱、SLEEF 足迹谱、FFT 因子谱、mesh 一致性、混合负载×RNG 引擎）→ P3 固定 seed 深驻留 → P4×N 循环（`--test-list-randomize` 随机序重扫 + NUMA 拓扑/并发档 + 轮换驻留）。全程 ipmitool/EDAC/SEL 环境监测（30s 采样 → monitor.csv），fail-continue + 自动失败分类（known_benign_ulp / full_core_only / sdc_suspect）+ 可复现嫌疑自动逐核二分（CORE179 式定位），`.done` 阶段标记支持断点续跑：
+**模式 F：24h+ 压测执行器 `scripts/run/run_sdc_campaign.sh`**——把模式 D 的两阶段协议扩展为 24h+ 持续测试（持续高频测试比快照式多数量级地抓出缺陷）：P1 全量广域扫 → P2 文献优先级加权 soak → P3 固定 seed 深驻留 → P4×N 循环（随机序重扫 + NUMA 拓扑/并发档轮换）。全程 ipmitool/EDAC/SEL 环境监测，fail-continue + 自动失败分类（known_benign_ulp / full_core_only / sdc_suspect）+ 可复现嫌疑自动逐核二分（CORE179 式定位），`.done` 阶段标记支持断点续跑：
 
 ```bash
 nohup setsid bash scripts/run/run_sdc_campaign.sh > campaign.log 2>&1 &   # 24h+ 正式
@@ -315,12 +288,12 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 
 ## 测试用例与检测能力
 
-当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3，vendored 依赖齐备时）默认 quality 下共 **329 个用例**（`--list-tests` 实测，含 SVE 全向量长家族）。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）默认 quality 下共 **428 个用例**（gcc + 全部 vendored 依赖齐备时，`--list-tests` 实测 2026-10-09；`--quality=0` 434、`--quality=-1` 439），含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
 | 内存 / 拷贝 | `memcpy_l{1d,2,3}_cache_size`、`memcpy_rewr`、`mem_disambiguation`、`mmu_stress_arm`、`random_access_sweep` | 各级缓存带宽、store-to-load 转发、跨行一致性与内存序、TLB 扰动、大 mmap 随机偏移/块长扫掠（L1..DRAM 尺度 + NEON RMW 字节精确校验，knob: mode/valmode/size_mb） |
-| 缓存 / 互联 | `cachebounce`、`mesh_upi_*`（39，含 12 个 SVE 变体） | cache line 弹跳、CLFLUSH 压力、MESH/UPI 多核读写协同 |
+| 缓存 / 互联 | `cachebounce`、`mesh_upi_*`（45，含 18 个 SVE 变体） | cache line 弹跳、CLFLUSH 压力、MESH/UPI 多核读写协同 |
 | 锁 / 原子 | `lock*`、`lockless_cmpxchg*`、`atomic_simd_*`、`spinlock_*`（31） | 锁指令、无锁 cmpxchg、128/256/512 位原子、自旋锁各类竞争（ARM64 atomic） |
 | 向量 / SIMD | `swizzle`、`insert_extract`、`kreg1`–`kreg9`、`gather*` | NEON 排列/插入抽取、掩码寄存器（x86 k-reg 仿真）、gather/scatter |
 | FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values` | FMA 模式与尾数精度穷举、特殊值逐字节 golden 比对 |
@@ -331,11 +304,11 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 | 线性代数（OpenBLAS） | `openblas_dgemm`、`openblas_sgemm`、`openblas_zgemm`、`openblas_cgemm`、`openblas_lu` | OpenBLAS NEON FMA 微内核 GEMM（double/float/complex-double/complex-float 四种 lane 组织），每迭代 copy/compute/verify；矩阵尺寸 `-O <testid>.mdim=N`（16..4096，默认 256）可扫 L1D→L2→LLC→DRAM→NUMA 工作集；`-O <testid>.transab=0..3` + `.beta_permille` 扫 packing/读改写相位；`openblas_lu` = LAPACK dgesv 主元分支 + 行交换 store + 三重 golden 比对（vendored，见上节） |
 | 超越函数（SLEEF） | `sleef_neon`、`sleef_sve` | 多项式 FMA 依赖链 × 宽向量，逐字节 golden 比对；u10 + u35 双精度档（两套独立多项式链）+ asin/atan/cbrt/log10/sinh/tanh/pow 函数族；`sleef_neon` 足迹旋钮 `-O sleef_neon.nelems=N`（128..262144，默认 1024，4 的倍数）扫 L1/L2/LLC 工作集；`sleef_sve` 需 SVE 硬件（无则干净 skip）（vendored，见上节） |
 | FFT（pocketfft） | `pocketfft_fft` | 复数 FFT + 实数 rfft 前向 golden 比对：位反转抽取重排（store→load scatter）+ 旋转因子 FMA 蝶形链；`-O pocketfft_fft.n=N` 扫因子谱系（512..16384 pow2 / 4099/8191 质数触发 Bluestein 卷积化 / 6144/10000 混合 radix）（vendored，见上节） |
-| IPSec / 密码 | `ipsec_*`（46） | AES-CBC/CTR/GCM、HMAC-SHA1/2、XCBC/CMAC/3DES-DOCSIS 于 NEON |
+| IPSec / 密码 | `ipsec_*`（70，含 24 个 SVE 移植变体） | AES-CBC/CTR/GCM、HMAC-SHA1/2、XCBC/CMAC/3DES-DOCSIS 于 NEON / SVE |
 | OpenSSL SHA | `openssl_sha`、`openssl_sha3`、`openssl_sm3sm4` | SHA-256/384/512（SHA-2 加法链）、SHA-3-224/256/384/512 + SHAKE128 XOF（Keccak 置换 AND/旋转/χθ 步，与 SHA-2 正交的 FU 混合）、SM3 摘要 + SM4-CBC 加解密往返（国密整数通路）vs golden（默认构建，优先 vendored OpenSSL） |
 | ARM 加密扩展 | `arm_crypto` | AES（AESE/AESMC）crypto 数据通路 |
 | 虚拟化 / 系统寄存器 | `vmx_vmexit_*`、`vmxmsr` | guest 触发 vmexit 退出路径一致性 |
-| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`、`sve512_xlswave_ctx_arm`、`libomp_ctx_arm`、`sme_za_tileview_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀）、XLSDFT 复合上下文触发器（同一 per-core 循环内交错 64× stencil 轴核、SVD 尺度 gather/scatter 与 7 槽指针表金丝雀 + 每轮 VA[63:48] 金丝雀，三阶段字节精确 memcmp，复现已知故障窗口配方而无 MPI/libomp 脚手架；无 SVE 或 VL≠512-bit 诚实 SKIP）、libomp fork/join 上下文仿真（SVE FMLA 突发 × 时间同步集体停放窗口交替 + 函数指针表/计数器元数据金丝雀——指针比对、间接调用返回值、逐字节 memcmp 三层校验；只仿真访问模式、不复刻真实 libomp TLS/元数据布局（如实标注），无等待对端进度的设计天然无死锁；无 SVE 或 VL≠512-bit 诚实 SKIP）、SME ZA tile 语义压力（h 装载 round-trip / v 列转置读出 / 向量选择 imm 旋转 / za1h 独立 round-trip + za0 隔离，逐字节 golden；无 HWCAP2_SME 或 SVL≠512-bit 诚实 SKIP；需 clang +sme 工具链，gcc 构建自动剔除） |
+| ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm`、`sve512_stencil_axis_arm`、`sve512_xlswave_ctx_arm`、`sve512_f64_chain_svd`、`sve512_f64_special_svd`、`sve512_f32_chain_svd`、`sve512_gather_scatter_svd`、`libomp_ctx_arm`、`sme_za_tileview_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀）、XLSDFT 复合上下文触发器（同一 per-core 循环内交错 64× stencil 轴核、SVD 尺度 gather/scatter 与 7 槽指针表金丝雀 + 每轮 VA[63:48] 金丝雀，三阶段字节精确 memcmp，复现已知故障窗口配方而无 MPI/libomp 脚手架；无 SVE 或 VL≠512-bit 诚实 SKIP）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、libomp fork/join 上下文仿真（SVE FMLA 突发 × 时间同步集体停放窗口交替 + 函数指针表/计数器元数据金丝雀——指针比对、间接调用返回值、逐字节 memcmp 三层校验；只仿真访问模式、不复刻真实 libomp TLS/元数据布局（如实标注），无等待对端进度的设计天然无死锁；无 SVE 或 VL≠512-bit 诚实 SKIP）、SME ZA tile 语义压力（h 装载 round-trip / v 列转置读出 / 向量选择 imm 旋转 / za1h 独立 round-trip + za0 隔离，逐字节 golden；无 HWCAP2_SME 或 SVL≠512-bit 诚实 SKIP；需 clang +sme 工具链，gcc 构建自动剔除） |
 | ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别（uint64x2 旋转 ALU + 向量 store/reload/store）、ldr_at_top 扫描顺序变体（升/降序交替，区分槽位局部 vs 前进位置特征）、core-179 字节交换往返触发探针组 |
 | SVE 版 avx53 套件（tests/cpu/sve/，53 个） | `fma_tail_sve{,_wide}`、`fmatail_sve{,_wide}`×4 对、`fma_patterns_sve_wide_{ps,pd}`、`mesh_upi_sve_*` 18 个、`eigen_svd_bidiag_sve`、`ipsec_*_sve{,_wide}` 24 个 | 53 个 avx 命名 NEON 测试的 SVE1 移植（负载环境不变：向量宽度/随机域/特殊值注入/块结构/原子协议/golden 模式全保留；命名 `_avx/_avx2→_sve`、`_avx512→_sve_wide`）。FMA 10 + Mesh 18 = 纯指令替换（SVE 谓词访存）；eigen 1 = 自写 Householder 双对角化 SVE 负载（替代崩溃的 Eigen-SVE 后端路径）；ipsec 17 = EVP 加密 + 多流 SVE HMAC（SHA 内核与 OpenSSL 全向量比对 5200+1360 全对，lane0=原 MAC 语义+变体填 lane），7 个 EVP-only（GCM/CMAC/XCBC）如实标注计算路径。构建于 `tests_sve_avx53`/`tests_sve_avx53_ipsec` 库（`-march=armv8.2-a+sve`，init 探 HWCAP_SVE 干净 skip） |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
@@ -345,13 +318,13 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 | 级别 | 名称 | 运行条件 | 实有数量 |
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
-| 0 | BETA | `quality >= 0` | 4 |
-| 2 | PROD（默认）| `quality >= 2` | 282（gcc 参考平台实测 2026-09-17） |
-| | **合计** | | **291** |
+| 0 | BETA | `quality >= 0` | 6 |
+| 2 | PROD（默认）| `quality >= 2` | 428（gcc + 全部 vendored 依赖，实测 2026-10-09） |
+| | **合计** | | **439** |
 
-> 上表为 gcc 参考平台（2026-09-17 实测）口径。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
+> 上表为 gcc 参考平台（2026-10-09 实测）口径。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
-- **BETA（`--quality=0`）**：`arm64_sdc`、`arm_crypto`、`ist_sbaf`、`neon_add`
+- **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
 
 ### 占位用例的诚实跳过
@@ -418,7 +391,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 # 形态扫谱：转置组合 + β 读改写路径
 ./builddir/sdcshield -e openblas_zgemm -O openblas_zgemm.transab=3 -O openblas_zgemm.beta_permille=500 -t 15m
 
-# ipsec 载荷 1024B→16MB：AES/3DES/SHA 数据路径从 L1 压到 DRAM（全部 46 个 ipsec 用例同款参数名）
+# ipsec 载荷 1024B→16MB：AES/3DES/SHA 数据路径从 L1 压到 DRAM（46 个 NEON ipsec 用例同款参数名；24 个 SVE 变体无此 knob）
 ./builddir/sdcshield -e ipsec_aes128_cbc_hmac_sha1_sse -O ipsec_aes128_cbc_hmac_sha1_sse.datasize=16777216 -t 5000
 
 # SLEEF 足迹扩到 6MB（默认 1024 元素 ≈ 128KB）
@@ -443,10 +416,10 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `isal_igzip` | `.level` | 0..3 | 1 | deflate 级别（不同匹配查找器；2/3 有独立 level_buf） |
 | `zstd` / `zstd1` / `zstd19` / `zfuzz` | `.level` / `.maxbuffersize` | 1..22 / 4096.. | 按变体 | 压缩级别 / 每迭代缓冲上限 |
 | `eigen_svd_cdouble_sve` | `.mdim` | 300..6000 | **按内存自适应** | 强制矩阵维度（覆盖自适应选择） |
-| `ipsec_*`（全部 46 个） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM——AES/3DES/SHA 数据路径全谱扫（2026-09-19；默认 1024 与历史逐字节一致） |
+| `ipsec_*`（46 个 NEON 变体；24 个 SVE 变体无此 knob） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM——AES/3DES/SHA 数据路径全谱扫（2026-09-19；默认 1024 与历史逐字节一致） |
 | `memcpy_rewr` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
 
-仍无 knob 的测试（eigen NEON 家族、isal_crc×10、openssl×3 等）参数为编译期常量——参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态；ipsec×46 已于 2026-09-19 补齐 `datasize`。
+仍无 knob 的测试（eigen NEON 家族、isal_crc×10、openssl×3 等）参数为编译期常量——参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态；ipsec×46（NEON）已于 2026-09-19 补齐 `datasize`。
 
 Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑在 SVE 向量后端（vendored Eigen 5.0 已补 `PacketXd`/`PacketXcd` double 与 complex<double> packet——svcmla 复数乘法、ptranspose 复数转置、gather/scatter 等全套，2026-09-19）。本机（VL=256）实测 300×300 复数 BDCSVD ~0.7 s（标量回退时代 >10 分钟）；VL=512 场景在 gem5 SE 模式功能验证（`scripts/eigen-sve-double/gem5/`）。注意：size-specific SVE 代码要求运行时向量长度等于编译期 `-msve-vector-bits`（128），本机 256 硬件上独立运行该测试需 prctl 固定任务 VL。
 
@@ -472,8 +445,8 @@ bash scripts/sdc-excite-reproduce/start.sh     # 启动战役（需 root）；st
 
 ## 延伸
 
-- [编写测试指南](docs/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
-- [离线构建依赖与排坑](docs/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
-- [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据
+- [编写测试指南](docs/misc/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
+- [离线构建依赖与排坑](docs/build-deploy/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
+- [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据
 - [SDC 学术综述报告](docs/paper/SDC_ACADEMIC_SURVEY_CN.md) — 53 篇论文全文精读（笔记在 `docs/paper/ref-paper-fullread-digest/`）写成的分类学综述：核心特征/根因/故障模式/检测/处理五层分类学，学术界×产业界对比、合作生态与全栈×全生命周期启示
 - [贡献指南](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md)

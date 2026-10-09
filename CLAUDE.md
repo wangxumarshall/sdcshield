@@ -51,7 +51,7 @@ ninja -C builddir
 # Fresh clone: run the vendored build.sh first (openssl/openblas/sleef/isa-l/
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
-./builddir/sdcshield --list-tests             # 422 tests at default PROD quality
+./builddir/sdcshield --list-tests             # 428 tests at default PROD quality (gcc + vendored, 2026-10-09)
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
 ./builddir/sdcshield --quality=-1 -e <test>   # include SKIP-level tests
@@ -127,7 +127,7 @@ END_DECLARE_TEST
   `docs/cpu/arm64/armv8-isa/` (per-instruction), `neoverse-*-trm/`;
   gem5+CHAOS fault injection: `docs/gem5-doc/`.
 - **Literature rationale** (why these workloads/libs — 31-paper synthesis):
-  `docs/paper/SDC_RESEARCH_SYNTHESIS_CN.md`; fault-injection experiment
+  `docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md`; fault-injection experiment
   plan: `docs/paper/SDC_FAULT_INJECTION_EXPERIMENT_PLAN_CN.md`.
 - **Academic survey** (53-paper full-read taxonomy report, 2026-09):
   `docs/paper/SDC_ACADEMIC_SURVEY_CN.md` — SDC core-characteristics /

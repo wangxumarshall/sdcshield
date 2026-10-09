@@ -19,6 +19,17 @@ ensure_dirs() {
              "$EXCITE_REPRODUCE_DIR/inventory"
 }
 
+# fail-loud：BIN 缺失曾导致驱动静默空转（--list-tests 空输出 → 全部阶段"跳过"）。
+# 仅由真正执行 $BIN 的消费者显式调用（驱动/excite.sh）；纯函数消费者（pytest/
+# drill_lib/sdc_profile）与 sdc_monitor.sh（眼睛：负载坏时仍须存活观测）不调用。
+ensure_bin() {
+    if [ ! -x "$BIN" ]; then
+        echo "FATAL: sdcshield 二进制不存在或不可执行: $BIN" >&2
+        echo "       构建后重试（README「从源码构建」），或 export SDC_BIN=<路径>" >&2
+        exit 1
+    fi
+}
+
 log() {
     echo "[$(date '+%F %T')] $*" >> "$EXCITE_REPRODUCE_DIR/driver.log"
     echo "[driver] $*"

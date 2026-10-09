@@ -81,9 +81,14 @@ flag_ok --temperature-threshold=95000 && FLAGS+=(--temperature-threshold="$THERM
 log "旗标集: ${FLAGS[*]:-无}"
 
 # ---------------- 用例名解析（--list-tests 实测名单，防硬编码）----------------
+ensure_bin   # fail-loud：BIN 缺失拒绝空转（显式调用，纯函数消费者不受影响）
 LIST_CACHE=$(mktemp /tmp/.sdc_list_tests.XXXXXX)
 trap 'rm -f "$LIST_CACHE"' EXIT
 "$BIN" --list-tests 2>/dev/null | awk '{print $1}' > "$LIST_CACHE"
+if [ ! -s "$LIST_CACHE" ]; then
+    echo "FATAL: --list-tests 输出为空（二进制异常或损坏）——拒绝空转" >&2
+    exit 1
+fi
 resolve() { # resolve 'pat1,pat2' → 实际存在的用例名（逗号连接；* 转正则 .*）
     local out="" p t
     for p in ${1//,/ }; do

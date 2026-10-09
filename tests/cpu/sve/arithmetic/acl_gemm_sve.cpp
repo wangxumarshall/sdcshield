@@ -8,12 +8,19 @@
  * SVE port of acl_gemm: F32 GEMM (M=N=K=64) computed on SVE svmla
  * micro-kernels (outer-product accumulation per K-step, VL-agnostic
  * predicated loads) replacing the Arm Compute Library NEGEMM run path;
- * the golden stays the naive triple loop exactly as the original. Any
- * mismatch indicates silent corruption in the FPU/FMA/SVE pipeline.
+ * the golden stays the naive triple loop, computed with std::fmaf so
+ * golden and SVE path share the identical fused single-rounding
+ * multiply-add (the compiler fuses the SVE svmul+svadd pattern into
+ * FMLA anyway, so an unfused double-rounding golden can never match
+ * bit-exactly) and compare byte-exact on finite inputs (matrix entries
+ * are filtered to finite values; NaN payload propagation is
+ * implementation freedom, see fpu_special_values_sve). Any mismatch
+ * indicates silent corruption in the FPU/FMA/SVE pipeline.
  * @endparblock
  */
 
 #include "sandstone.h"
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -41,8 +48,11 @@ static void naive_gemm(const float *A, const float *B, float *C)
     for (int i = 0; i < GEMM_DIM; ++i)
         for (int j = 0; j < GEMM_DIM; ++j) {
             float acc = 0.0f;
-            for (int k = 0; k < GEMM_DIM; ++k)
-                acc += A[i * GEMM_DIM + k] * B[k * GEMM_DIM + j];
+            for (int k = 0; k < GEMM_DIM; ++k) {
+                /* fmaf: 单次舍入 fused 乘加, 与 SVE svmla(FMLA)舍入序
+                 * 一致 -> 有限值输入下位级可比较。 */
+                acc = std::fmaf(A[i * GEMM_DIM + k], B[k * GEMM_DIM + j], acc);
+            }
             C[i * GEMM_DIM + j] = acc;
         }
 }
@@ -63,6 +73,16 @@ static int acl_gemm_sve_init(struct test *test)
     d->golden.resize(GEMM_DIM * GEMM_DIM);
     memset_random(d->A.data(), d->A.size() * sizeof(float));
     memset_random(d->B.data(), d->B.size() * sizeof(float));
+    /* memset_random 任意位模式, 每矩阵约 1/256 元素为 NaN/Inf。NaN
+     * payload 传播是 IEEE-754 实现自由(同类定性见 fpu_special_values_sve),
+     * GEMM golden 无法对 NaN 位级比较; 过滤为有限值。特殊值边界行为
+     * 由 fpu_special_values_sve 专门覆盖。 */
+    for (size_t idx = 0; idx < d->A.size(); ++idx)
+        if (!std::isfinite(d->A[idx]))
+            d->A[idx] = 1.5f;
+    for (size_t idx = 0; idx < d->B.size(); ++idx)
+        if (!std::isfinite(d->B[idx]))
+            d->B[idx] = 1.5f;
     naive_gemm(d->A.data(), d->B.data(), d->golden.data());
     test->data = d;
     return EXIT_SUCCESS;
@@ -88,10 +108,10 @@ static int acl_gemm_sve_run(struct test *test, int cpu)
                     /* B 行 k 的 jbase..jbase+n 列 → 向量 (谓词控) */
                     for (int c = 0; c < n; ++c) brow[c] = d->B[k * GEMM_DIM + jbase + c];
                     svfloat32_t vb = svld1_f32(pg, brow);
-                    /* mul+add (非融合): 与 naive golden 的标量乘加序位级一致;
-                     * svmla 是单次舍入, 会与 golden 产生 ULP 级差异 */
-                    acc = svadd_f32_x(pg, acc,
-                              svmul_f32_x(pg, svdup_f32(d->A[i * GEMM_DIM + k]), vb));
+                    /* svmla = FMLA fused 乘加(单次舍入), 与 golden 的
+                     * fmaf 舍入序一致, 有限值输入下位级一致 */
+                    acc = svmla_f32_x(pg, acc,
+                              svdup_f32(d->A[i * GEMM_DIM + k]), vb);
                 }
                 svst1_f32(pg, C.data() + i * GEMM_DIM + jbase, acc);
             }

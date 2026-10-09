@@ -26,7 +26,7 @@ cd sdcshield/third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 
 | 旗标 | 作用 |
 |---|---|
-| `--quality=0` | 跑 PROD+BETA 全部 434 用例（源码构建口径）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
+| `--quality=0` | 跑 PROD+BETA 全部 434 用例（源码构建口径；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
 | `-T forever` | 整套用例无限轮转。SDC 故障窗口极稀疏（CPU179 实测占空比 ~0.06%），长驻留是检出关键；一轮 ≈ 7 小时 |
 | `-t 60s` | 每用例 60 秒。SEVI 实测 >80% 的首错在 10 秒内出现，60s 有 6 倍余量 |
 | `-Y` | 结构化 YAML 日志（取证格式） |
@@ -64,11 +64,13 @@ cd sdcshield/third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 git clone --recurse-submodules <repo-url>   # 含子模块
 cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 ./run-sdcshield.sh --list-tests            # 自动设 LD_LIBRARY_PATH=./libs
-./run-sdcshield.sh -T forever -t 60s -Y -F                # 首次检测到SDC后，停止 
-./run-sdcshield.sh -T forever -t 60s -Y -ignore-timeout   # 一起跑，就算检测到SDC后，也一直往后跑
+./run-sdcshield.sh --quality=0 -T forever -t 60s -Y -F                # 首次检测到SDC后，停止
+./run-sdcshield.sh --quality=0 -T forever -t 60s -Y -ignore-timeout   # 一起跑，就算检测到SDC后，也一直往后跑
 ./run-sdcshield.sh -T forever -t 600s -Y -e "eigen_svd*" -e "eigen_gemm*" -e "fma*" -e "zstd*" -e "zlib*" # 定向子集，检出率低于全套件轮转
 ./run-sdcshield.sh -t 60s -n 1 -e zstd19 # 单线程，规避大核数 ULP 数值 flakiness
 ```
+
+检测命令的完整解释与结果判读见「一行命令检测鲲鹏 CPU SDC」节（`--quality=0` 为何必须加亦见该节）。
 
 > **SP 必须与目标机一致**：SP3 的 `glibc-devel` 携带 `Requires: glibc = <sp3-N>`，装到 SP4 会触发受保护 `glibc` 降级死结。`install-deps.sh` 通过 `.os-version` 标记在安装前拦截错配。
 
@@ -103,8 +105,6 @@ ninja -C builddir
 > 运行需 HPCKit 环境（libc++/libc++abi 动态库须在 LD_LIBRARY_PATH）。cn23154（HiSilicon 0xd22，
 > 608 核）实测 2026-09-28：默认 quality 320 用例（该节点 vendored 依赖可用集下的实测值），
 > `zstd19 -t 2000 -n 1` 回归 pass。
-
-
 
 ## 离线与多版本构建
 
@@ -153,8 +153,6 @@ PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ git 历�
 
 本地 podman 上的**最严格**验证入口（GHA 日报的本地超集）：15 个镜像 × 29 条目严格选项矩阵 × 全部测试用例（含 `--quality=-1` SKIP 级、三 RNG 引擎、cpuset 跨 NUMA、全部 `-O` 测试旋钮、selftests、`--on-crash=context` 等）。`run-all-15.sh` 一键全矩阵（`--smoke` 链路快检），`run-lts-stability.sh <series> <sp>` 单镜像全矩阵；每镜像容器内原生构建全功能二进制（`-Dssl_link_type=static` + vendored 库）后跑严格矩阵，全部 15 PASS 才 exit 0。2026-09-17 全链路实测 **15/15 PASS**（main `ebe0bf1`，290 测试集），过程中发现并修复 8 个跨版本软件 bug。用法与设计见 [scripts/lts-stability/README.md](scripts/lts-stability/README.md)。
 
-
-
 ## OpenSSL SHA（`openssl_sha`，默认构建）
 
 `openssl_sha` 经 OpenSSL 计算 SHA-256/384/512 与 golden 比对。默认 `ssl_link_type=dynamic`，优先使用 vendored OpenSSL（`third-party/openssl/`，需先执行 `./third-party/openssl/build.sh` 构建），若 `install/` 缺失则回退系统 `libcrypto`，两者都不可用时 meson 打印提示并跳过 SSL 测试。
@@ -188,7 +186,7 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 | `third-party/pocketfft/` | pocketfft C 版（BSD-3，头文件+源码直接入库，无需 build.sh） | 编入测试库 | `pocketfft_fft`（位反转抽取重排 + 旋转因子 FMA 蝶形链） |
 | `third-party/isa-l/` | Intel isa-l 2.32.1（BSD-3，Makefile.unx 路径，aarch64 无需 autoconf/nasm） | 静态 `libisal.a` | `isal_igzip`（igzip deflate/inflate 往返，aarch64 汇编内核）；10 个 `isal_crc*`（NEON pmull CRC16/32/64）。`install/` 缺失时**回退系统 `libisal`**（openssl 式两级 gate） |
 
-OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁后 128 核（本机全核）30s 压力零错配），锁只保护缓冲表元数据、不改计算结果。
+OpenBLAS 单线程（`USE_THREAD=0`）是刻意设计：库内多线程会引入非确定性归约顺序（假阳性）；`USE_LOCKING=1` 仅为让框架"每核一 worker 线程"并发调用 `cblas_*gemm` 时内部 packing 缓冲池不互相踩踏（实证：无锁 8 线程×10s 出 62 字节错配，加锁后 128 核（本机全核）30s 压力零错配，2026-09-15 全核压测实证），锁只保护缓冲表元数据、不改计算结果。
 
 isa-l（`isal_igzip` + 10 个 `isal_crc*`）自 2026-09-16 起 vendor 到 `third-party/isa-l/`（v2.32.1，静态 `libisal.a`）；`install/` 缺失时回退系统 `libisal`，两者皆无才剔除 `isal_*` 测试。
 
@@ -284,7 +282,6 @@ nohup setsid bash scripts/run/run_sdc_campaign.sh > campaign.log 2>&1 &   # 24h+
 SMOKE=1 bash scripts/run/run_sdc_campaign.sh                            # 冒烟（~15min）
 bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析器自测
 ```
-
 
 ## 测试用例与检测能力
 

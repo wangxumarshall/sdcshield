@@ -22,6 +22,16 @@ bash scripts/run/sdc_detect.sh
 
 **冒烟自检**（约 35 秒，验证链路与优先序）：`bash scripts/run/sdc_detect.sh --smoke`
 
+**脚本使用方法**：`bash scripts/run/sdc_detect.sh [--smoke] [透传参数…]`（`-h`/`--help` 看完整帮助）。
+
+| 项 | 说明 |
+|---|---|
+| `--smoke` | 冒烟自检：每桶前 2 用例各 2 秒的单遍运行（约 35 秒），验证链路与优先序 |
+| 透传参数 | 其余参数原样交给 sdcshield（如 `-t 30s`、`--cpuset 0-47`） |
+| `SDC_BIN` 环境变量 | 显式指定二进制；默认依次发现 `./builddir/sdcshield`、`./builddir-gcc/sdcshield`，找不到即报错退出并给出构建指引 |
+| 产物 | 当前目录留下 `sdc-detect-testlist-*.txt`（本次优先序名单，可复现）与 `sdc-detect-*.yaml`（日志） |
+| 停止 | Ctrl-C 干净停止；检出 FAIL 自动停（`-F`） |
+
 **优先序机制**：脚本从当前二进制动态生成优先序测试列表（框架 `--test-list-file`，顺序即执行序，对新用例自适应），先跑 SDC 敏感度最高的负载：
 
 | 优先级 | 负载域 | 依据 |
@@ -44,7 +54,7 @@ bash scripts/run/sdc_detect.sh
 | `-t 60s` | 每用例 60 秒。SEVI 实测 >80% 的首错在 10 秒内出现，60s 有 6 倍余量 |
 | `-Y` | 结构化 YAML 日志（取证格式） |
 | `-F` | 首个 FAIL 即停——停下就是信号。SKIP 不算失败，占位用例不会误停 |
-| `-o sdc-*.yaml` | 日志落盘为固定文件名（便于归档取证）。不带 `-o` 时框架会在当前目录自动生成 `sdcshield-<UTC时间戳>.yaml`，文件名不可预测；且全过退出（exit: pass）时该文件被自动删除，仅失败/中断时留存 |
+| `-o sdc-detect-*.yaml` | 日志落盘为固定文件名（便于归档取证）。不带 `-o` 时框架会在当前目录自动生成 `sdcshield-<UTC时间戳>.yaml`，文件名不可预测；且全过退出（exit: pass）时该文件被自动删除，仅失败/中断时留存 |
 
 **等效命令（无脚本时；注意：默认注册序无优先级）**——不带 `--test-list-file` 时框架按默认注册序执行，SDC 敏感负载不会先跑：
 
@@ -74,6 +84,8 @@ bash  scripts/sdc-excite-reproduce/excite.sh --smoke      # 只预检+冒烟（�
 bash  scripts/sdc-excite-reproduce/excite.sh --status     # 只读巡检
 sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断点）
 ```
+
+**使用方法要点**（`excite.sh -h` 看完整帮助）：`--smoke` 模式无需 root、不触碰 systemd（预检 + 战役冒烟门）；run 模式需 root（sudo），幂等可重入——已安装/已活跃的服务自动跳过，`state.json` 断点保留，重复执行安全。环境变量：`SDC_BIN` 指定 sdcshield 二进制；`SMOKE_TIMEOUT_S` 覆盖战役冒烟门上限（默认 2400 秒；冒烟为 L1-L5 短时长单遍，实测约 23 分钟，L5 专项每次轮换一支分支——慢板机器可调大）。
 
 一条命令完成：预检（二进制 fail-loud + L0 冒烟门）→ 按需安装 systemd 单元 →
 先起 sdc-monitor 联锁眼睛 → 战役冒烟门（不过不上线）→ 上线 L1-L5 状态机战役

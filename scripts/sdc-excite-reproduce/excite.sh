@@ -85,7 +85,7 @@ fi
 # 的 ~10 分钟估算（-T 预算只拦新用例，在飞用例须跑满 -t 才停）：门限 env 可覆盖，
 # 默认 2400s——覆盖最慢 L5 变体（heatsoak 的 300s 预算 + 600s 单测上限）加余量。
 SMOKE_TIMEOUT_S="${SMOKE_TIMEOUT_S:-2400}"
-echo "[smoke] 战役冒烟（L1-L5 短时长全链路，最长 $((SMOKE_TIMEOUT_S / 60)) 分钟）"
+echo "[smoke] 战役冒烟（L1-L5 短时长单遍，L5 专项每次轮换一支分支，最长 $((SMOKE_TIMEOUT_S / 60)) 分钟）"
 if ! timeout "$SMOKE_TIMEOUT_S" bash "$SCRIPT_DIR/sdc-excite-reproduce.sh" smoke; then
     echo "FATAL: 战役冒烟未过——拒绝上线 full（详见 $EXCITE_REPRODUCE_DIR/driver.log）" >&2
     exit 1

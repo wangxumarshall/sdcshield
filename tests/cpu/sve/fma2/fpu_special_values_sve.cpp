@@ -10,7 +10,11 @@
  * Every SVE lane of the broadcast vector is checked byte-for-byte against
  * the libm single-rounding reference (fmaf/fma) — a per-lane SDC signature
  * in any lane is caught. Framework SNaN quieting applies uniformly so the
- * byte-exact compare stays sound.
+ * byte-exact compare stays sound. NaN results compare NaN-class-only:
+ * IEEE-754 leaves NaN payload propagation implementation-defined (the
+ * hardware svmla ORs input NaN payloads, libm fma forwards the first
+ * operand's), so only NaN-ness is checked; all non-NaN results (incl.
+ * -0.0 sign flips, the SDC signal) remain byte-exact.
  * @endparblock
  */
 
@@ -127,10 +131,21 @@ static int sweep_f32_sve(const float a_t[NUM_SPECIALS],
                 sw_lane = fmaf(a, b, c);
                 uint32_t sw_bits = bits_of(sw_lane);
 
-                /* Byte-exact compare of every lane (1-bit ULP flip is caught). */
+                /* Per-lane compare: NaN class-only for NaN results,
+                 * byte-exact otherwise (1-bit ULP flip is caught). */
                 for (int lane = 0; lane < lanes32 && lane < 32; ++lane) {
                     hw_lane = hwv[lane];
-                    if (bits_of(hw_lane) != sw_bits) {
+                    bool hw_nan = std::isnan(hw_lane);
+                    bool sw_nan = std::isnan(sw_lane);
+                    /* NaN class-only: IEEE-754 leaves NaN payload
+                     * propagation implementation-defined (hardware svmla
+                     * ORs the input NaN payloads, libm fma forwards the
+                     * first operand's) - only NaN-ness is checked when
+                     * either side is NaN; all non-NaN results (incl. -0.0
+                     * sign flips, the SDC signal) stay byte-exact. */
+                    bool lane_ok = (hw_nan || sw_nan) ? (hw_nan && sw_nan)
+                                                      : (bits_of(hw_lane) == sw_bits);
+                    if (!lane_ok) {
                         if (mismatches == 0) {
                             out_a = a; out_b = b; out_c = c;
                             out_hw = hw_lane; out_sw = sw_lane;
@@ -173,7 +188,17 @@ static int sweep_f64_sve(const double a_t[NUM_SPECIALS],
 
                 for (int lane = 0; lane < lanes64 && lane < 16; ++lane) {
                     hw_lane = hwv[lane];
-                    if (bits_of(hw_lane) != sw_bits) {
+                    bool hw_nan = std::isnan(hw_lane);
+                    bool sw_nan = std::isnan(sw_lane);
+                    /* NaN class-only: IEEE-754 leaves NaN payload
+                     * propagation implementation-defined (hardware svmla
+                     * ORs the input NaN payloads, libm fma forwards the
+                     * first operand's) - only NaN-ness is checked when
+                     * either side is NaN; all non-NaN results (incl. -0.0
+                     * sign flips, the SDC signal) stay byte-exact. */
+                    bool lane_ok = (hw_nan || sw_nan) ? (hw_nan && sw_nan)
+                                                      : (bits_of(hw_lane) == sw_bits);
+                    if (!lane_ok) {
                         if (mismatches == 0) {
                             out_a = a; out_b = b; out_c = c;
                             out_hw = hw_lane; out_sw = sw_lane;

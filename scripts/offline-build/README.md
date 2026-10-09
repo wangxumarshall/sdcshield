@@ -71,7 +71,8 @@ SP4   ...LTS_SP4                 ...LTS_SP4                 ...LTS_SP4
 - 五阶段幂等(preflight → base → build → check → push),已就位自动 skip;任何阶段失败即停。
 - **硬闸**:check 阶段要求 15 × `RESULT: PASS` 且 0 FAIL,否则绝不推送;主仓在 `main`/detached 时拒绝运行。
 - 耗时约 2~3 小时;后台跑 + 轮询 `build-out/release-all-build.latest.log` 的 `RESULT:` 行。
-- 详细用法与 agent 调用要点见根 README「一键式全流程:release-all.sh」节。
+- stage 2 拉 base 镜像需要 root docker(`sudo docker pull` 会有 sudo 交互提示);已有全部 base 镜像时该阶段秒级 skip,无需 sudo。
+- 提交信息由脚本自动生成(含当日日期与 full 验证结论),无需人工干预;agent 尤其注意:勿重复提交。
 
 ### RPM 目录结构
 

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M4FY5GF0KFYRC5JXBXJ09PBJ",
+  "strategy": "manual-commit",
+  "branch": "feat/sdc-detect-priority-and-excite-entry",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "scripts/sdc-excite-reproduce/excite.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 437033,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 24951936,
+    "output_tokens": 146313,
+    "api_call_count": 172
+  }
+}

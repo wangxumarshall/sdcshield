@@ -35,8 +35,12 @@
 set -u
 
 BAD_CORE=122
-CPU_SYSFS=/sys/devices/system/cpu
+# 测试钩子: TEST_MODE 下 CPU_SYSFS/MOD_SYSFS 可指向假树（仅测试使用，板上勿设）
+CPU_SYSFS=${CPU_SYSFS:-/sys/devices/system/cpu}
+MOD_SYSFS=${MOD_SYSFS:-/sys/module/cpu122_capfreq/parameters}
 GRUB_DEFAULT=/etc/default/grub
+CAP_HARD_MAX=2900000     # 板上物理最高频（kHz）
+CAP_WARN_MAX=2000000     # 超出即高危警告（2.0G 实验档以上）
 # 激活状态 CPU 自动上线规则的匹配模式（以 # 开头的注释行天然不匹配，天然幂等；
 # 覆盖 SUBSYSTEM 在行首 与 ACTION=="add" 在行首两种写法）
 UDEV_CPU_ONLINE_RE='^[[:space:]]*(ACTION=="add",[[:space:]]*)?SUBSYSTEM=="cpu".*ATTR\{online\}="1"'
@@ -46,30 +50,42 @@ die() { log "错误: $*"; exit 1; }
 
 usage() {
     cat <<EOF
-用法: $0 {上线|on|1|下线|off|0}
-  上线|on|1  -> echo 1 > $CPU_SYSFS/cpu$BAD_CORE/online
-  下线|off|0 -> echo 0 > $CPU_SYSFS/cpu$BAD_CORE/online
-参数强制二选一，没有默认值。
+用法: $0 {上线|on|1|下线|off|0}          坏核上下线
+      $0 {封顶|cap} <kHz>               在线改频率上限（免上下线, 0=解锁）
+  上线|on|1   -> 门0(模块就绪)+门1(编号预检) -> echo 1 -> 后验(MPIDR+频率)
+  下线|off|0  -> echo 0 -> cpu122/online
+  封顶|cap    -> 写 /sys/module/cpu122_capfreq/parameters/cap_khz
+参数强制显式指定，没有默认值。
 示例:
-  sudo $0 下线      # CPU122 下线
-  sudo $0 on        # CPU122 上线
+  sudo $0 上线            # 三门齐过后上线（封顶由模块在上线路径内完成）
+  sudo $0 下线            # CPU122 下线
+  sudo $0 封顶 2000000    # 切 2.0G 档（在线生效, 无需上下线）
+  sudo $0 封顶 0          # 解锁（仅限满频 A/B, 高危）
 EOF
 }
 
 # ---------- 参数解析（先于 root 检查，无参数/错误参数直接报用法） ----------
-if [ $# -ne 1 ]; then
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
     usage
     exit 1
 fi
 case "$1" in
-    上线|on|1)   ACT=1; ACT_TXT="上线" ;;
-    下线|off|0)  ACT=0; ACT_TXT="下线" ;;
-    -h|--help)   usage; exit 0 ;;
-    *)           usage; exit 1 ;;
+    上线|on|1)  [ $# -eq 1 ] || { usage; exit 1; }
+                ACT=1; ACT_TXT="上线" ;;
+    下线|off|0) [ $# -eq 1 ] || { usage; exit 1; }
+                ACT=0; ACT_TXT="下线" ;;
+    封顶|cap)   ACT=2; ACT_TXT="封顶"
+                [ $# -eq 2 ] || { usage; exit 1; }
+                case "$2" in ''|*[!0-9]*) usage; exit 1 ;; esac
+                CAP_ARG=$2 ;;
+    -h|--help)  usage; exit 0 ;;
+    *)          usage; exit 1 ;;
 esac
 
 # ---------- root 权限（sysfs / udev / grub 写操作均需要） ----------
-if [ "$(id -u)" -ne 0 ]; then
+if [ "${CPU122_CAPFREQ_TEST_MODE:-}" = "1" ]; then
+    log "TEST MODE: 跳过 root 检查与准备1/2（仅 fake sysfs 测试用）"
+elif [ "$(id -u)" -ne 0 ]; then
     log "需要 root 权限，通过 sudo 重新执行..."
     exec sudo bash "$0" "$@"
     die "sudo 不可用，请以 root 手动运行"
@@ -227,31 +243,81 @@ online_all_except_bad() {
 
 # ============================== 主流程 ==============================
 log "===== 准备工作 ====="
-block_udev_autoonline
-ensure_grub_params
+if [ "${CPU122_CAPFREQ_TEST_MODE:-}" != "1" ]; then
+    block_udev_autoonline
+    ensure_grub_params
+else
+    log "TEST MODE: 准备1/2 已跳过"
+fi
 online_all_except_bad
 
-log "===== 主功能: CPU$BAD_CORE 【$ACT_TXT】 (online=$ACT) ====="
-err=$( { echo "$ACT" > "$CPU_SYSFS/cpu$BAD_CORE/online"; } 2>&1 ) \
-    || die "CPU$BAD_CORE $ACT_TXT 失败: $err"
-cur=$(cat "$CPU_SYSFS/cpu$BAD_CORE/online")
-[ "$cur" = "$ACT" ] || die "CPU$BAD_CORE 状态验证失败: online=$cur（期望 $ACT）"
-log "CPU$BAD_CORE $ACT_TXT 成功，当前 online=$cur"
+# ---------- 门0: 模块就绪检查（上线/封顶共用；成功时置全局 MOD_CAP） ----------
+module_ready() {
+    local p="$MOD_SYSFS/cap_khz"
+    if [ ! -d "${MOD_SYSFS%/*}" ]; then
+        log "门0: 模块 cpu122_capfreq 未加载 — 拒绝（裸奔上线封顶无从谈起）"
+        log "门0: 排查: lsmod | grep cpu122_capfreq; dmesg | grep cpu122-capfreq; 内核升级后需按模块 README 重编"
+        return 1
+    fi
+    if [ ! -r "$p" ]; then
+        log "门0: 参数文件 $p 不可读 — 拒绝"
+        return 1
+    fi
+    MOD_CAP=$(cat "$p" 2>/dev/null)
+    case "$MOD_CAP" in ''|*[!0-9]*)
+        log "门0: cap_khz 非法值 '$MOD_CAP' — 拒绝"; return 1 ;;
+    esac
+    return 0
+}
+
+case "$ACT" in
+2)  # ---- 封顶: 在线改模块频率上限（qos 自动传导, 无需上下线） ----
+    log "===== 主功能: 封顶 CPU$BAD_CORE @ ${CAP_ARG}kHz ====="
+    module_ready || die "封顶需要模块就绪"
+    if [ "$CAP_ARG" -gt "$CAP_HARD_MAX" ]; then
+        die "封顶值 $CAP_ARG 超出物理最高频 $CAP_HARD_MAX"
+    fi
+    [ "$CAP_ARG" -gt "$CAP_WARN_MAX" ] \
+        && log "高危警告: 封顶 $CAP_ARG 超出 2.0G 实验档（坏核满频曾 <4s 致死）"
+    [ "$CAP_ARG" -eq 0 ] \
+        && log "警告: 封顶 0 = 解锁（解除限制: kprobe 直通 + qos 失效）— 仅限满频 A/B 且风险自担"
+    err=$( { echo "$CAP_ARG" > "$MOD_SYSFS/cap_khz"; } 2>&1 ) \
+        || die "写 cap_khz 失败: $err"
+    MOD_CAP=$(cat "$MOD_SYSFS/cap_khz")
+    [ "$MOD_CAP" = "$CAP_ARG" ] || die "cap_khz 回读不符: $MOD_CAP ≠ $CAP_ARG"
+    log "封顶 $CAP_ARG kHz 已生效"
+    if [ "$(cat "$CPU_SYSFS/cpu$BAD_CORE/online" 2>/dev/null)" = "1" ]; then
+        sleep 0.2    # qos notifier 经 schedule_work 异步生效
+        fmax=$(cat "$CPU_SYSFS/cpu$BAD_CORE/cpufreq/scaling_max_freq" 2>/dev/null)
+        if [ -n "$fmax" ] && [ "$fmax" -gt $((MOD_CAP + 1000)) ]; then
+            log "警告: 在线读数 scaling_max_freq=$fmax 未跟随 cap=$MOD_CAP（qos 疑未挂载, 检查 dmesg 'cpu122-capfreq'）"
+        else
+            log "在线验证: scaling_max_freq=$fmax ≤ cap=$MOD_CAP ✓"
+        fi
+    else
+        log "CPU$BAD_CORE 当前离线 — cap 将在下次上线路径内生效"
+    fi
+    ;;
+1)  # ---- 上线 ----（Task 3 完整实现; 本任务先保留既有主功能行为）
+    log "===== 主功能: CPU$BAD_CORE 【上线】 (online=1) ====="
+    err=$( { echo 1 > "$CPU_SYSFS/cpu$BAD_CORE/online"; } 2>&1 ) \
+        || die "CPU$BAD_CORE 上线失败: $err"
+    cur=$(cat "$CPU_SYSFS/cpu$BAD_CORE/online")
+    [ "$cur" = "1" ] || die "CPU$BAD_CORE 状态验证失败: online=$cur（期望 1）"
+    log "CPU$BAD_CORE 上线成功，当前 online=$cur"
+    ;;
+0)  # ---- 下线 ----
+    log "===== 主功能: CPU$BAD_CORE 【下线】 (online=0) ====="
+    err=$( { echo 0 > "$CPU_SYSFS/cpu$BAD_CORE/online"; } 2>&1 ) \
+        || die "CPU$BAD_CORE 下线失败: $err"
+    cur=$(cat "$CPU_SYSFS/cpu$BAD_CORE/online")
+    [ "$cur" = "0" ] || die "CPU$BAD_CORE 状态验证失败: online=$cur（期望 0）"
+    log "CPU$BAD_CORE 下线成功，当前 online=$cur"
+    ;;
+esac
 
 # ---------- 最终状态 ----------
 off=$(cat "$CPU_SYSFS/offline" 2>/dev/null)
 log "online : $(cat "$CPU_SYSFS/online")"
 log "offline: ${off:-（空）}"
-if [ "$cur" = "1" ]; then
-    fmax=$(cat "$CPU_SYSFS/cpu$BAD_CORE/cpufreq/scaling_max_freq" 2>/dev/null)
-    if [ -n "$fmax" ]; then
-        log "CPU$BAD_CORE scaling_max_freq=$fmax"
-        if [ "$fmax" != "1450000" ]; then
-            log "提示: 坏核此前曾降额 1.45GHz 运行，本次上线为当前频率；如需降额执行: echo 1450000 > $CPU_SYSFS/cpu$BAD_CORE/cpufreq/scaling_max_freq"
-        fi
-    fi
-    log "提示: 重启后 CPU$BAD_CORE 将回到离线（maxcpus=$BAD_CORE 启动限制），上线仅为运行时状态"
-else
-    log "提示: 重启后 CPU$BAD_CORE 同样保持离线（maxcpus=$BAD_CORE 启动限制 + udev 自动上线已屏蔽）"
-fi
 log "完成。"

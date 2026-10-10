@@ -108,6 +108,88 @@ out=$(run_script 封顶 0);           assert_rc $? 0 "T2.5e 0=解锁放行 rc=0"
 assert_has "$out" "解锁" "T2.5e 解锁警告"
 rm -rf "$ENVROOT"
 
+# ============================== T3 用例 ==============================
+
+echo "== T3.1 上线·模块未加载 → 拒绝且不写 online =="
+new_env; mod_unload
+out=$(run_script 上线); rc=$?
+assert_rc $rc 1 "T3.1 rc=1"
+assert_has "$out" "门0" "T3.1 门0 拦截输出"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.1 online 保持 0（未裸奔上线）"
+rm -rf "$ENVROOT"
+
+echo "== T3.2 上线·cap=0 → 拒绝 =="
+new_env; mod_setcap 0
+out=$(run_script 上线); rc=$?
+assert_rc $rc 1 "T3.2 rc=1"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.2 online 保持 0"
+rm -rf "$ENVROOT"
+
+echo "== T3.3 上线·cap 越界与高危档 =="
+new_env; mod_setcap 3100000
+run_script 上线 >/dev/null; assert_rc $? 1 "T3.3a cap=3100000 拒绝"
+rm -rf "$ENVROOT"
+new_env; mod_setcap 2500000
+echo 2500000 > "$ENVROOT/cpu/cpu122/cpufreq/scaling_max_freq"
+echo 2500000 > "$ENVROOT/cpu/cpu122/cpufreq/scaling_cur_freq"
+out=$(run_script 上线); rc=$?
+assert_rc $rc 0 "T3.3b cap=2500000 高危警告后放行"
+assert_has "$out" "高危" "T3.3b 高危警告输出"
+rm -rf "$ENVROOT"
+
+echo "== T3.4 门1·present 漂移 → 拒绝 =="
+new_env; echo "0-126" > "$ENVROOT/cpu/present"
+out=$(run_script 上线); rc=$?
+assert_rc $rc 1 "T3.4 present=0-126 拒绝"
+assert_has "$out" "门1" "T3.4 门1 拦截输出"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.4 online 保持 0"
+rm -rf "$ENVROOT"
+
+echo "== T3.5 门1·offline 异常 → 拒绝 =="
+new_env; echo "121,122" > "$ENVROOT/cpu/offline"
+run_script 上线 >/dev/null; assert_rc $? 1 "T3.5 offline≠122 拒绝"
+rm -rf "$ENVROOT"
+
+echo "== T3.6 门1·拓扑漂移 → 拒绝 =="
+new_env; echo 7 > "$ENVROOT/cpu/cpu122/topology/physical_package_id"
+run_script 上线 >/dev/null; assert_rc $? 1 "T3.6 拓扑不符拒绝"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.6 online 保持 0"
+rm -rf "$ENVROOT"
+
+echo "== T3.7 上线 happy path =="
+new_env
+out=$(run_script 上线); rc=$?
+assert_rc $rc 0 "T3.7 rc=0"
+assert_file "$ENVROOT/cpu/cpu122/online" 1 "T3.7 online 写 1"
+assert_has "$out" "0x0900060200" "T3.7 MPIDR 核对输出"
+assert_has "$out" "后验2" "T3.7 频率后验输出"
+rm -rf "$ENVROOT"
+
+echo "== T3.8 后验1·MPIDR 不符 → 自动下线 =="
+new_env
+echo "localhost kernel: CPU122: Booted secondary processor 0x0800060200" > "$ENVROOT/journal/boot.log"
+out=$(run_script 上线); rc=$?
+assert_rc $rc 1 "T3.8 rc=1"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.8 自动下线（online 回 0）"
+assert_has "$out" "MPIDR" "T3.8 MPIDR 报错输出"
+rm -rf "$ENVROOT"
+
+echo "== T3.9 后验2·qos 疑失效（max 越界）→ 自动下线 =="
+new_env
+echo 2900000 > "$ENVROOT/cpu/cpu122/cpufreq/scaling_max_freq"
+out=$(run_script 上线); rc=$?
+assert_rc $rc 1 "T3.9 rc=1"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.9 自动下线"
+assert_has "$out" "qos 疑失效" "T3.9 qos 失效提示"
+rm -rf "$ENVROOT"
+
+echo "== T3.10 后验1·journal 无 Booted 行 → 自动下线 =="
+new_env
+echo "unrelated line" > "$ENVROOT/journal/boot.log"
+run_script 上线 >/dev/null; assert_rc $? 1 "T3.10 无 Booted 行 rc=1"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.10 自动下线"
+rm -rf "$ENVROOT"
+
 echo "======================================"
 echo "PASS=$PASS FAIL=$FAIL"
 [ $FAIL -eq 0 ] || { echo "$FAILED_NAMES"; exit 1; }

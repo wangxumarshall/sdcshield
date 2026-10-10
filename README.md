@@ -46,7 +46,7 @@ sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzs
 ./third-party/acl/build.sh               # → install/lib/libarm_compute-core.a（acl_gemm NEGEMM + fisttp_arm；NEON runtime core 目标，v23.02）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
-./builddir/sdcshield --list-tests        # 应列出 282 个 PROD 用例（实测于 2026-09-17）
+./builddir/sdcshield --list-tests        # 应列出 450 个 PROD 用例（实测于 2026-10-11）
 ```
 
 > ARM64 要求 Eigen 5.0.0+（系统 Eigen 3.3.x 在 GCC 12+ 下编译失败）。仓库自带 `third-party/eigen5/`，aarch64 构建路径在 `tests/cpu/meson.build` 中直接 `include_directories` 指向它，**无需系统安装 eigen3**；`PKG_CONFIG_PATH` 仅为兼容 x86 路径而保留，带上无害。
@@ -289,6 +289,7 @@ SWEEP_TIME=30s DWELL_TIME=1m bash scripts/run/run_sdc_spectrum.sh   # 冒烟（�
 | ARM64 SDC 专项 | `arm64_sdc`、`power_virus_dit`、`ooo_dep_chain_arm`、`lsu_store_forward_arm`、`l2c_cross_cache_line_arm`、`mmu_split_tlb_arm`、`sve512_gather_scatter_arm`、`sve512_f64_chain_arm`、`sve512_f64_special_arm`、`sve512_f32_chain_arm` | di/dt 电压骤降、乱序依赖链、LSU 转发、L2 跨行、MMU/TLB/页表遍历器、SVE 全向量长度 gather/scatter 间接索引数据通路、SVE 全向量长度 f64 FMLA 串行依赖链、SVE f64 特殊值链（NaN/Inf 类别比对）、SVE f32 FMLA 串行依赖链（16-lane f32 数据通路）、SVD 尺度工作集 f64 FMLA 链（L2 溢出 + 16x16 块遍历）、SVD 尺度工作集 f64 特殊值链、SVD 尺度工作集 f32 FMLA 链（16-lane f32 通路）、SVD 尺度工作集 gather/scatter 往返（2-D 块索引置换）、SCF/stencil 轴核触发配方复现器（svdup 系数装载 + RADIUS=6 双向 svmla 链 + VA[63:48] 累加器地址金丝雀） |
 | ARM64 触发配方 | `agu_stress_2src`、`neon_rot_2src`、`neon_rot_ldr_at_top_rowmajor`、`movbe` 系列（`movbe`、`movbe_dump`、11 个 `movbe_dump_probe_*`） | AGU 吞吐施压（2 源加载 + 旋转 ALU + store/reload/store）、core-179 配方的 NEON 向量通路判别（uint64x2 旋转 ALU + 向量 store/reload/store）、ldr_at_top 扫描顺序变体（升/降序交替，区分槽位局部 vs 前进位置特征）、core-179 字节交换往返触发探针组 |
 | SVE 版 avx53 套件（tests/cpu/sve/，53 个） | `fma_tail_sve{,_wide}`、`fmatail_sve{,_wide}`×4 对、`fma_patterns_sve_wide_{ps,pd}`、`mesh_upi_sve_*` 18 个、`eigen_svd_bidiag_sve`、`ipsec_*_sve{,_wide}` 24 个 | 53 个 avx 命名 NEON 测试的 SVE1 移植（负载环境不变：向量宽度/随机域/特殊值注入/块结构/原子协议/golden 模式全保留；命名 `_avx/_avx2→_sve`、`_avx512→_sve_wide`）。FMA 10 + Mesh 18 = 纯指令替换（SVE 谓词访存）；eigen 1 = 自写 Householder 双对角化 SVE 负载（替代崩溃的 Eigen-SVE 后端路径）；ipsec 17 = EVP 加密 + 多流 SVE HMAC（SHA 内核与 OpenSSL 全向量比对 5200+1360 全对，lane0=原 MAC 语义+变体填 lane），7 个 EVP-only（GCM/CMAC/XCBC）如实标注计算路径。构建于 `tests_sve_avx53`/`tests_sve_avx53_ipsec` 库（`-march=armv8.2-a+sve`，init 探 HWCAP_SVE 干净 skip） |
+| 179 机转移用例 SVE 移植（tests/cpu/sve/，44 个，2026-10-11） | `movbe_{l1d,l2,dump_golden}_sve` 3、`mrn_rmw_*_sve` 11（fwd/l1d/diff/diff_64k/diff_1m/nop×6）、`mrn_nuke_{2,3,4}src_alu_sve`+`dense/pairs/reloaded` 6、`agu_stress_store_only/neon_rot_store_only/neon_rot_u8x16/mem_disambig_alu_sve` 4、`neon_rot_ldr_at_top_{sub,mla,offdiag,str3,ldr4}_sve` 5、`rowmajor_{dump,gps,dualcmp}_sve`+`str3_checkall_sve` 4、K-cells 7（`k5far/k5inter_rand/k3res/k7p_{zero,one,rand,hiham}`）、`arm0102_{kreg_select,kreg_not,kreg_logic,fma_f32}_sve` 4 | 姊妹机 179 SDC 用例转移包（`missing_testcases_20261009/`，38 有效 + 6 同文件 0-fail 对照；eigen 1 项已有 SVE 口 `eigen_svd_cdouble_sve` 不重复移植）的全量 SVE 移植。三范式：批处理（svwhilelt 批 + 相位谓词旋转 ALU）、槽范式（SLOTS×lanes 定容 + asm `ldr %0,[%1]` 满 VL 加载 + init/run VL 失配 fail-closed）、pg4 子块（4×32 位保 NEON 语义 + 尾部松弛防 asm 全宽读过界）；所有"reload 刚存储地址"的配对加载一律 asm ldr z（防 CSE/前递/重排）。详见 `docs/docs_xu/2026-10-10-missing-testcases-sve-port.md` |
 | IST 硬件自检 | `ist`、`ist_array`、`ist_sbaf` | ARM64 In-Silicon Test（当前 placeholder，见下表） |
 
 ### 用例质量分级

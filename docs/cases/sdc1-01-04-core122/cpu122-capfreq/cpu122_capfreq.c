@@ -108,6 +108,22 @@ static int policy_event(struct notifier_block *nb, unsigned long event, void *da
 {
 	struct cpufreq_policy *policy = data;
 
+	/* policy 销毁（设备移除 / cpufreq_online 失败路径，cpufreq_policy_free
+	 * 前广播）时精确回收 qos 请求，避免请求悬挂于已释放 constraints（UAF）；
+	 * 同时复位 qos_active，使同 CPU 重建 policy 时 CREATE_POLICY 重新挂载
+	 * （评审 I3）。 */
+	if (event == CPUFREQ_REMOVE_POLICY && policy->cpu == target_cpu) {
+		mutex_lock(&state_lock);
+		if (qos_active) {
+			freq_qos_remove_request(&qos_req);
+			qos_active = false;
+			pr_info(LOGTAG "policy for CPU%u destroyed, qos request removed\n",
+				target_cpu);
+		}
+		mutex_unlock(&state_lock);
+		return NOTIFY_DONE;
+	}
+
 	if (event != CPUFREQ_CREATE_POLICY || policy->cpu != target_cpu)
 		return NOTIFY_DONE;
 
@@ -177,6 +193,12 @@ static const struct kernel_param_ops cap_khz_ops = {
 module_param_cb(cap_khz, &cap_khz_ops, &cap_khz, 0644);
 MODULE_PARM_DESC(cap_khz, "freq cap in kHz (0=disabled, default 1450000, runtime-writable)");
 
+/* 换算状态只读暴露：脚本门0 据此拒绝"cap_perf=0（kprobe 钳位未武装）"态的
+ * 上线——加载期换算失败时 CREATE_POLICY 兜底重试晚于驱动 init slam，
+ * 首次上线的时刻②仅 qos 在场、kprobe 直通，不能放行（评审 I1）。 */
+module_param(cap_perf, uint, 0444);
+MODULE_PARM_DESC(cap_perf, "cap in CPPC perf units (0 = conversion pending, kprobe clamp inert)");
+
 static int __init cpu122_capfreq_init(void)
 {
 	struct cpufreq_policy *policy;
@@ -213,13 +235,21 @@ static int __init cpu122_capfreq_init(void)
 		return ret;
 	}
 
-	/* 迟加载兜底：本启动 target 已在线（policy 已存在）→ 直接挂 qos */
+	/* 迟加载兜底：本启动 target 已在线（policy 已存在）→ 直接挂 qos；
+	 * 失败即拒载并清理已注册项（spec §4.5，评审 I4） */
 	policy = cpufreq_cpu_get(target_cpu);
 	if (policy) {
 		mutex_lock(&state_lock);
-		if (!qos_active &&
-		    freq_qos_add_request(&policy->constraints, &qos_req,
-					 FREQ_QOS_MAX, qos_value()) >= 0) {
+		if (!qos_active) {
+			ret = freq_qos_add_request(&policy->constraints, &qos_req,
+						   FREQ_QOS_MAX, qos_value());
+			if (ret < 0) {
+				mutex_unlock(&state_lock);
+				cpufreq_cpu_put(policy);
+				pr_err(LOGTAG "late-bind freq_qos_add_request failed: %d, refusing load\n",
+				       ret);
+				goto err_late_bind;
+			}
 			qos_active = true;
 			pr_info(LOGTAG "late-bind: FREQ_QOS_MAX=%u kHz (CPU%u already online)\n",
 				qos_value(), target_cpu);
@@ -233,16 +263,27 @@ static int __init cpu122_capfreq_init(void)
 		cap_perf ? "ok" : "pending-perf-conv",
 		qos_active ? "ok" : "pending-policy");
 	return 0;
+
+err_late_bind:
+	cpufreq_unregister_notifier(&policy_nb, CPUFREQ_POLICY_NOTIFIER);
+	unregister_kprobe(&kp_cppc_set_perf);
+	return ret;
 }
 
 static void __exit cpu122_capfreq_exit(void)
 {
-	mutex_lock(&state_lock);
-	if (qos_active)
-		freq_qos_remove_request(&qos_req);
-	mutex_unlock(&state_lock);
+	/* 先注销 notifier/kprobe（blocking 注销会等待在途回调返回），再复查
+	 * qos：CREATE_POLICY 若在"早前移除之后、notifier 注销之前"的窗口内
+	 * 重新挂载，此处补刀回收——关闭 rmmod 与并发上线竞态的 UAF 窗口
+	 * （评审 I2）。 */
 	cpufreq_unregister_notifier(&policy_nb, CPUFREQ_POLICY_NOTIFIER);
 	unregister_kprobe(&kp_cppc_set_perf);
+	mutex_lock(&state_lock);
+	if (qos_active) {
+		freq_qos_remove_request(&qos_req);
+		qos_active = false;
+	}
+	mutex_unlock(&state_lock);
 	pr_info(LOGTAG "disarmed%s (clamp_count=%lu)\n",
 		cpu_online(target_cpu) ? " - WARNING: target online, no cap protection now" : "",
 		clamp_count);

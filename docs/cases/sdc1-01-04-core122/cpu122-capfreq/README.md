@@ -25,10 +25,14 @@ udev cap 脚本架构性必输：KOBJ_ONLINE uevent 在 write() 返回前才广�
   热插拔 offline/online 存活 → 一次挂载、后续上线自动生效；qos 变更经
   policy 自带 notifier（schedule_work 异步）自动传导 governor，
   **改档无需上下线**。
-- 失败即拒载：kprobe / cpufreq notifier 注册失败 → 模块加载失败
-  （宁可不上线，不可裸奔上线；脚本门0 拦截失载）。
-- qos 挂载失败（CREATE_POLICY 返回值被 core 忽略，无法中止上线）→
+- 失败即拒载：kprobe / cpufreq notifier 注册失败、迟加载（late-bind）qos
+  添加失败 → 模块加载失败（宁可不上线，不可裸奔上线；脚本门0 拦截失载）。
+- qos 挂载失败于运行期（CREATE_POLICY 返回值被 core 忽略，无法中止上线）→
   dmesg `qos UNARMED` ERROR + 脚本后验2 频率读数兜底并自动下线。
+- policy 销毁（CPUFREQ_REMOVE_POLICY）时精确回收 qos 请求并复位状态，
+  同 CPU 重建 policy 时自动重挂——无悬挂 UAF、无"skip re-add 失保护"窗口。
+- `cap_perf` 只读参数暴露 kHz→perf 换算状态；脚本门0 拒绝 `cap_perf=0`
+  （kprobe 钳位未武装，首次 slam 将直通）态的上线。
 
 ## 参数
 

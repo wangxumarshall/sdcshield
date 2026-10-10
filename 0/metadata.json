@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4JZN6EXF6ED3A8WNCW5Z7G3",
+  "session_id": "2ad62b37-278b-4981-b4ae-06daadb73bec",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-10T13:22:25.26932057Z",
+  "branch": "feat/sve-port-avx53",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "GLM-5.3[1m]",
+  "turn_id": "c347ff8dbde6",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 383114,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 7088832,
+    "output_tokens": 111171,
+    "api_call_count": 42
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-call_c5398cdc425c48c69994ef14",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c347ff8dbde6",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 177,
+        "end": 178,
+        "entry_ids": [
+          "ad51cd4d-9d35-4578-b78a-2e20953be875"
+        ],
+        "tool_use_id": "call_c5398cdc425c48c69994ef14"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "call_c5398cdc425c48c69994ef14"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-call_377df46f27084f2f9b94e2e0",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:executing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c347ff8dbde6",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 258,
+        "end": 259,
+        "entry_ids": [
+          "7e4bb93c-c070-4d44-b77a-ec1befbf99dd"
+        ],
+        "tool_use_id": "call_377df46f27084f2f9b94e2e0"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "call_377df46f27084f2f9b94e2e0"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:executing-plans",
+        "default_collapsed": true
+      }
+    }
+  ]
+}

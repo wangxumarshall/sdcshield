@@ -42,9 +42,11 @@ new_env() {                     # 每个 case 一个干净假树
     chmod +x "$ENVROOT/fakebin/"*
     echo "localhost kernel: CPU122: Booted secondary processor 0x0900060200" > "$ENVROOT/journal/boot.log"
     echo "cpu122-capfreq: armed: target=CPU122 cap=1450000 kHz" > "$ENVROOT/journal/dmesg.log"
-    # 模块默认已加载（cap=1450000）；"未加载" case 用 mod_unload 覆写
+    # 模块默认已加载（cap=1450000, target=122, perf 已换算）；"未加载" case 用 mod_unload 覆写
     mkdir -p "$ENVROOT/mod/params"
     echo 1450000 > "$ENVROOT/mod/params/cap_khz"
+    echo 122    > "$ENVROOT/mod/params/target_cpu"
+    echo 148    > "$ENVROOT/mod/params/cap_perf"
 }
 
 mod_unload() { rm -rf "$ENVROOT/mod"; }
@@ -188,6 +190,29 @@ new_env
 echo "unrelated line" > "$ENVROOT/journal/boot.log"
 run_script 上线 >/dev/null; assert_rc $? 1 "T3.10 无 Booted 行 rc=1"
 assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.10 自动下线"
+rm -rf "$ENVROOT"
+
+echo "== T3.11 门0·模块 target_cpu 演练态（123）→ 上线拒绝 =="
+new_env; echo 123 > "$ENVROOT/mod/params/target_cpu"
+out=$(run_script 上线); rc=$?
+assert_rc $rc 1 "T3.11 rc=1"
+assert_has "$out" "target_cpu" "T3.11 target_cpu 拦截输出"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.11 online 保持 0（未裸奔上线）"
+rm -rf "$ENVROOT"
+
+echo "== T3.12 门0·模块 target_cpu 演练态（123）→ 封顶拒绝 =="
+new_env; echo 123 > "$ENVROOT/mod/params/target_cpu"
+out=$(run_script 封顶 2000000); rc=$?
+assert_rc $rc 1 "T3.12 rc=1"
+assert_has "$out" "target_cpu" "T3.12 target_cpu 拦截输出"
+rm -rf "$ENVROOT"
+
+echo "== T3.13 门0·cap_perf 未换算（kprobe 未武装）→ 上线拒绝 =="
+new_env; echo 0 > "$ENVROOT/mod/params/cap_perf"
+out=$(run_script 上线); rc=$?
+assert_rc $rc 1 "T3.13 rc=1"
+assert_has "$out" "cap_perf" "T3.13 cap_perf 拦截输出"
+assert_file "$ENVROOT/cpu/cpu122/online" 0 "T3.13 online 保持 0"
 rm -rf "$ENVROOT"
 
 echo "======================================"

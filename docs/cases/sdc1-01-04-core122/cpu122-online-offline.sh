@@ -251,7 +251,7 @@ online_all_except_bad
 
 # ---------- 门0: 模块就绪检查（上线/封顶共用；成功时置全局 MOD_CAP） ----------
 module_ready() {
-    local p="$MOD_SYSFS/cap_khz"
+    local p="$MOD_SYSFS/cap_khz" t
     if [ ! -d "${MOD_SYSFS%/*}" ]; then
         log "门0: 模块 cpu122_capfreq 未加载 — 拒绝（裸奔上线封顶无从谈起）"
         log "门0: 排查: lsmod | grep cpu122_capfreq; dmesg | grep cpu122-capfreq; 内核升级后需按模块 README 重编"
@@ -265,6 +265,11 @@ module_ready() {
     case "$MOD_CAP" in ''|*[!0-9]*)
         log "门0: cap_khz 非法值 '$MOD_CAP' — 拒绝"; return 1 ;;
     esac
+    t=$(cat "$MOD_SYSFS/target_cpu" 2>/dev/null)
+    if [ "$t" != "$BAD_CORE" ]; then
+        log "门0: 模块 target_cpu='$t' ≠ $BAD_CORE（V1 演练态/参数异常, 钳位与 qos 不在坏核上）— 拒绝"
+        return 1
+    fi
     return 0
 }
 
@@ -272,6 +277,11 @@ module_ready() {
 cap_sanity_for_online() {
     if [ "$MOD_CAP" -eq 0 ]; then
         log "门0: cap_khz=0（模块停用态）— 拒绝上线（如需满频 A/B, 先执行: $0 封顶 2900000 显式解锁）"
+        return 1
+    fi
+    if [ "$(cat "$MOD_SYSFS/cap_perf" 2>/dev/null)" = "0" ]; then
+        log "门0: 模块 cap_perf=0（kHz→perf 换算未就绪, kprobe 钳位未武装, 首次 slam 将直通）— 拒绝上线"
+        log "门0: 排查: dmesg | grep 'cpu122-capfreq'（cppc_get_perf_caps 失败记录）"
         return 1
     fi
     if [ "$MOD_CAP" -gt "$CAP_HARD_MAX" ]; then

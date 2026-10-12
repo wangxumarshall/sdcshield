@@ -1,0 +1,22 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4RGAQECNGXEZCX2M4285KDP",
+  "strategy": "manual-commit",
+  "branch": "feat/sve-port-avx53",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/cpu/sve/core179/movbe_sve.cpp",
+    "tests/cpu/sve/kreg/arm0102_fma_f32_sve.cpp",
+    "tests/cpu/sve/kreg/arm0102_kreg_logic_sve.cpp",
+    "tests/cpu/sve/kreg/arm0102_kreg_mask_sve.cpp",
+    "tests/cpu/sve/kreg/arm0102_kreg_not_sve.cpp",
+    "tests/cpu/sve/kreg/arm0102_kreg_select_sve.cpp",
+    "tests/cpu/sve/vector2/swizzle_sve.cpp"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "prompt": ""
+    }
+  ]
+}

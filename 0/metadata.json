@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4RQKWR7JH0FSBHPVMTW44KW",
+  "session_id": "66d73d9b-11da-403a-a8c8-e55a6bdb6429",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-12T18:57:19.1187482Z",
+  "branch": "feat/sve-port-avx53",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "GLM-5.3",
+  "turn_id": "203575e51bf1",
+  "checkpoint_transcript_start": 720,
+  "transcript_lines_at_start": 720,
+  "compact_transcript_start": 91,
+  "token_usage": {
+    "input_tokens": 2009,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 256576,
+    "output_tokens": 2737,
+    "api_call_count": 1
+  }
+}

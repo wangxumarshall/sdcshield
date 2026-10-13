@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791714951703,
+  "lastUpdate": 1791890860475,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -1148,6 +1148,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 7.766,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "ebd7059eda85634090a9cb7e6d0fdeb668275ec1",
+          "message": "Merge pull request #237 from wangxumarshall/feat/sdc-seed-randomization\n\nMake fracture seed-dependent for 4 deterministic-input tests (PR #234 follow-up)",
+          "timestamp": "2026-10-13T09:50:15Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/ebd7059eda85634090a9cb7e6d0fdeb668275ec1"
+        },
+        "date": 1791890859213,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 8.517,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 6.826,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.313,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 82.84,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.693,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.649,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.3,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.329,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 11.375,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.68,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 8.206,
             "unit": "s"
           }
         ]

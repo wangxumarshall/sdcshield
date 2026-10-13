@@ -1,0 +1,54 @@
+你在研究234 pr的所有检视意见，解决他们，尤其“This is a comment left during a code review.
+Path: README.md
+Line: 83
+
+Comment:
+**激进模式命令无效**
+
+新的“更激进”命令不会改变运行方式：脚本没有读取 `SDC_EXTRA_ARGS`，启动的服务也没有传递它。用户照抄后仍运行默认模式。
+
+注释还把选项含义写反了：`--max-test-loop-count=0` 会关闭分片，不会启用自动分片。请恢复直接传给程序的有效命令，并说明它用于固定种子的连续运行。
+
+---
+
+For each issue above, determine whether it is valid and should be fixed. If so, fix it directly.”
+
+---
+
+调用superpower执行：git pull，合并 main上的 claude.md 和agents.md 这两个文件，agents.md中引用 claude.md即可。 然后 解决“sme_fmopa_stress_arm（(k*37+i*11)%64 公式）、sme_za_tileview_arm、sve512_stencil_axis_arm（全
+  constexpr）、fpu_special_values_sve（固定 12 特殊值表）的 init 不读任何种子 —— 对这 4 个测试，fracture 只增加 fork + golden
+  重算开销，不增加输入组合（对照：fma_sve 每片段重新播种 mt19937，数据确实变化）”，确保这些用例种子都是随机的，而不是固定模式。
+
+---
+
+用 ~/wangxu/operator/gem5-fi 做仿真验证SME/SVE512等，需要通过故障注入形式验证效果
+
+---
+
+完成。要求顺便吧 sve和sme所有版本、规格都支持起来。
+
+---
+
+已安装。root 密码是 SDC@2026，你自己解决后续所有依赖问题。
+
+---
+
+<task-notification>
+<task-id>bd8ldp4px</task-id>
+<tool-use-id>call_034e176d25df43f7950f444b</tool-use-id>
+<output-file>/tmp/claude-1000/-home-sdc-wangxu-operator-sdcshield/e44776dd-180c-48ef-8d28-c4fa67cbed03/tasks/bd8ldp4px.output</output-file>
+<status>completed</status>
+<summary>Background command "运行 FI pilot（4 kernel × 2 注入器 × 2 模式 × 5 seed）" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+调用superpower skill 执行： 解决“sme_fmopa_stress_arm（(k*37+i*11)%64 公式）、sme_za_tileview_arm、sve512_stencil_axis_arm（全
+  constexpr）、fpu_special_values_sve（固定 12 特殊值表）的 init 不读任何种子 —— 对这 4 个测试，fracture 只增加 fork + golden
+  重算开销，不增加输入组合（对照：fma_sve 每片段重新播种 mt19937，数据确实变化）”，确保这些用例种子都是随机的，而不是固定模式。 检测用例支持sve和sme所有规格版本，并在gem5中验证通过（因为物理本机不支持）。
+
+---
+
+调用superpower skill 执行： 解决“sme_fmopa_stress_arm（(k*37+i*11)%64 公式）、sme_za_tileview_arm、sve512_stencil_axis_arm（全
+  constexpr）、fpu_special_values_sve（固定 12 特殊值表）的 init 不读任何种子 —— 对这 4 个测试，fracture 只增加 fork + golden
+  重算开销，不增加输入组合（对照：fma_sve 每片段重新播种 mt19937，数据确实变化）”，确保这些用例种子都是随机的，而不是固定模式。 检测用例支持sve和sme所有规格版本，并在gem5中验证通过（因为物理本机不支持）。

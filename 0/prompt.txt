@@ -1,0 +1,1 @@
+深度分析 https://github.com/wangxumarshall/sdcshield/pull/234 pr上的所有检视意见，解决问题，要求：“fracture_loop_count 建议改成默认模式，显示指定 "fracture_loop_count == 0" . 并在readme中（尤其一句话命令的最大化激发SDC），指定“ --max-test-loop-count 参考”为更激进的方式。”

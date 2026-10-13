@@ -1,0 +1,14 @@
+你在研究234 pr的所有检视意见，解决他们，尤其“This is a comment left during a code review.
+Path: README.md
+Line: 83
+
+Comment:
+**激进模式命令无效**
+
+新的“更激进”命令不会改变运行方式：脚本没有读取 `SDC_EXTRA_ARGS`，启动的服务也没有传递它。用户照抄后仍运行默认模式。
+
+注释还把选项含义写反了：`--max-test-loop-count=0` 会关闭分片，不会启用自动分片。请恢复直接传给程序的有效命令，并说明它用于固定种子的连续运行。
+
+---
+
+For each issue above, determine whether it is valid and should be fixed. If so, fix it directly.”

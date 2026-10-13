@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M4TBRXHNYDPZ3W6R2PV1VQ3A",
+  "strategy": "manual-commit",
+  "branch": "feat/sve-sme-all-vl",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "tests/cpu/arm64/sve512_stencil_axis_arm.cpp"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5544,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2259840,
+    "output_tokens": 4044,
+    "api_call_count": 5
+  }
+}

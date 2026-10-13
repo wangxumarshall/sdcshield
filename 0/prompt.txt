@@ -1,0 +1,20 @@
+你在研究234 pr的所有检视意见，解决他们，尤其“This is a comment left during a code review.
+Path: README.md
+Line: 83
+
+Comment:
+**激进模式命令无效**
+
+新的“更激进”命令不会改变运行方式：脚本没有读取 `SDC_EXTRA_ARGS`，启动的服务也没有传递它。用户照抄后仍运行默认模式。
+
+注释还把选项含义写反了：`--max-test-loop-count=0` 会关闭分片，不会启用自动分片。请恢复直接传给程序的有效命令，并说明它用于固定种子的连续运行。
+
+---
+
+For each issue above, determine whether it is valid and should be fixed. If so, fix it directly.”
+
+---
+
+调用superpower执行：git pull，合并 main上的 claude.md 和agents.md 这两个文件，agents.md中引用 claude.md即可。 然后 解决“sme_fmopa_stress_arm（(k*37+i*11)%64 公式）、sme_za_tileview_arm、sve512_stencil_axis_arm（全
+  constexpr）、fpu_special_values_sve（固定 12 特殊值表）的 init 不读任何种子 —— 对这 4 个测试，fracture 只增加 fork + golden
+  重算开销，不增加输入组合（对照：fma_sve 每片段重新播种 mt19937，数据确实变化）”，确保这些用例种子都是随机的，而不是固定模式。

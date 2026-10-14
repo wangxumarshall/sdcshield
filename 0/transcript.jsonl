@@ -1,0 +1,2 @@
+{"v":1,"agent":"claude-code","cli_version":"0.10.2","type":"user","ts":"2026-10-14T03:52:05.390Z","content":[{"id":"a90fe01d-adb5-4d88-b11a-a65ba2728ade","text":"Reply with exactly: OK-HEADLESS"}]}
+{"v":1,"agent":"claude-code","cli_version":"0.10.2","type":"assistant","ts":"2026-10-14T03:52:13.249Z","id":"msg_e8061633-e8e8-45e8-9dca-4c78d24f500b","input_tokens":24605,"output_tokens":6,"content":[{"text":"OK-HEADLESS","type":"text"}]}

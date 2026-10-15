@@ -340,6 +340,9 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                 ok = false;
             }
         }
+        if (!ok)
+            report_fail_msg("sve512_stencil_axis: Shape A bit-exact mismatch "
+                            "(see per-lane warnings above)");
 
         if (!ok) {
             report_fail_msg(
@@ -409,8 +412,8 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                                 j, static_cast<void *>(&b_res0));
                 }
                 axis_generic_16x2(
-                    r_base, coord, extent, stride, ptrue, r_coeff,
-                    bt, b_res0, b_res1);
+                    r_base, coord, extent, stride, ptrue, r_coeff, bt,
+                    b_res0, b_res1);
             }
 
             double b_result[kTileMax];

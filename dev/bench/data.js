@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791970054734,
+  "lastUpdate": 1792054345494,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -1302,6 +1302,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 8.108,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "79996129d4d69cbc2e0eca2b8473458761903378",
+          "message": "Merge pull request #256 from wangxumarshall/fix/stencil-axis-arm-compile-btile\n\nfix(sve512): repair stencil_axis_arm compile break + lost fail path",
+          "timestamp": "2026-10-15T07:58:07Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/79996129d4d69cbc2e0eca2b8473458761903378"
+        },
+        "date": 1792054344188,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 11.465,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 7.193,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 77.978,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 57.912,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.793,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.823,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.659,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.598,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 13.642,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.829,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 8.882,
             "unit": "s"
           }
         ]

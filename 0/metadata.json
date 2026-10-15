@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M504JY111QY489XT8T0K6YQ4",
+  "session_id": "8f7949d7-58d7-4c8a-83f1-6e0cb5db1986",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-15T15:58:41.735824324Z",
+  "branch": "feat/sdc-run-scan",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/plans/2026-10-15-sdc-run-scan-excitation.md",
+    "scripts/run/sdc-run.sh"
+  ],
+  "agent": "Claude Code",
+  "model": "GLM-5.3",
+  "turn_id": "6c4f2dcddc2b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 119036,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2306176,
+    "output_tokens": 50410,
+    "api_call_count": 34
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-goal-2026-10-15T15:32:00.852115303Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "goal"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6c4f2dcddc2b",
+      "timestamp": "2026-10-15T15:32:00.852115303Z",
+      "native": {
+        "command": "/goal"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/goal",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-call_90d9d8fc2fbc47bb9bb0e535",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6c4f2dcddc2b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 154,
+        "end": 155,
+        "entry_ids": [
+          "532601b7-eb66-47be-afed-7e100b4904d0"
+        ],
+        "tool_use_id": "call_90d9d8fc2fbc47bb9bb0e535"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "call_90d9d8fc2fbc47bb9bb0e535"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-10-15T15:58:41.655661661Z",
+    "agent_lines": 707,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 707,
+    "total_lines_changed": 707,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 2896,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cluster_anchored_logs/round1_control.yaml": 41,
+        "cluster_anchored_logs/round1_target.yaml": 41,
+        "docs/cases/hpc/HPC-CORE145-SDC-DIAGNOSIS-REPORT-V2.md": 163,
+        "docs/cpu/cn23154.md": 111,
+        "docs/superpowers/plans/2026-09-06-rebuild-15-sp-binaries.md": 50,
+        "docs/superpowers/plans/2026-09-17-sdc-excitation-enhancement.md": 559,
+        "docs/superpowers/plans/2026-10-09-readme-refactor-sdc-quickstart.md": 247,
+        "docs/superpowers/plans/2026-10-09-sdc-detect-priority-and-excite-entry.md": 685,
+        "docs/superpowers/plans/2026-10-11-merge-excitation-enhancement-and-max-detect.md": 699,
+        "docs/superpowers/plans/2026-10-12-codex-pr232-sve-vl-safety.md": 300
+      }
+    }
+  ]
+}

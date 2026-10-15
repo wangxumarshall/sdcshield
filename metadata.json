@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M4Z3FCYRZFWB2HATDT2Q6M8H",
+  "strategy": "manual-commit",
+  "branch": "feat/sve-port-avx53",
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".superpowers/sdd/2026-10-12-sve-fail-bit-dump/progress.md",
+    "scripts/run/run-freq1700-57sve-15min-20261013.sh",
+    "sdc_hunt_logs/2026-10-13-freq1700-57sve-15min/STATUS.txt",
+    "sdc_hunt_logs/2026-10-13-freq1700-57sve-15min/movbe_sve.console",
+    "sdc_hunt_logs/2026-10-13-freq1700-57sve-15min/movbe_sve.yaml",
+    "sdc_hunt_logs/2026-10-13-freq1700-57sve-15min/nohup.out",
+    "tests/cpu/sve/arithmetic/acl_gemm_sve.cpp",
+    "tests/cpu/sve/arithmetic/gmp_bigadd_sve.cpp",
+    "tests/cpu/sve/arithmetic/operand_space_sve.cpp",
+    "tests/cpu/sve/fma2/fma_sve.cpp",
+    "tests/cpu/sve/fma2/movdq2q_sve.cpp"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1136424,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 21577472,
+    "output_tokens": 127811,
+    "api_call_count": 110
+  }
+}

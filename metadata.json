@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M52A9MEHEF5YYF6D46WS062A",
+  "strategy": "manual-commit",
+  "branch": "feat/sdc-run-scan",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1081252,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 89186752,
+    "output_tokens": 257824,
+    "api_call_count": 356,
+    "subagent_tokens": {
+      "input_tokens": 44538,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 46592,
+      "output_tokens": 1000,
+      "api_call_count": 6
+    }
+  }
+}

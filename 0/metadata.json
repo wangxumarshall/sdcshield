@@ -1,0 +1,142 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M52A9MEHEF5YYF6D46WS062A",
+  "session_id": "8f7949d7-58d7-4c8a-83f1-6e0cb5db1986",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-16T12:16:57.877651147Z",
+  "branch": "feat/sdc-run-scan",
+  "checkpoints_count": 3,
+  "save_step_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "GLM-5.3",
+  "turn_id": "712b655600be",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1081252,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 89186752,
+    "output_tokens": 257824,
+    "api_call_count": 356,
+    "subagent_tokens": {
+      "input_tokens": 44538,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 46592,
+      "output_tokens": 1000,
+      "api_call_count": 6
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-goal-2026-10-15T15:32:00.852115303Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "goal"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6c4f2dcddc2b",
+      "timestamp": "2026-10-15T15:32:00.852115303Z",
+      "native": {
+        "command": "/goal"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/goal",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-call_90d9d8fc2fbc47bb9bb0e535",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "712b655600be",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 154,
+        "end": 155,
+        "entry_ids": [
+          "532601b7-eb66-47be-afed-7e100b4904d0"
+        ],
+        "tool_use_id": "call_90d9d8fc2fbc47bb9bb0e535"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "call_90d9d8fc2fbc47bb9bb0e535"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 839,
+      "user_lines_removed": 495,
+      "agent_lines_added": 9798097,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "tests/cpu/mesh/mesh_upi_avx2_asymm_distrib_write_int.cpp": 106,
+        "tests/cpu/mesh/mesh_upi_avx2_asymm_write_int.cpp": 114,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_distrib_int.cpp": 68,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_distrib_write_int.cpp": 69,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_int.cpp": 85,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_write_int.cpp": 90,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_write_only_int.cpp": 90,
+        "tests/cpu/mesh/mesh_upi_sse_asymm_distrib_write_int.cpp": 69,
+        "tests/cpu/mesh/mesh_upi_sse_asymm_write_int.cpp": 69,
+        "tests/cpu/mesh/mesh_upi_sse_write_only_int.cpp": 79
+      },
+      "user_removed_per_file": {
+        "tests/cpu/mesh/mesh_upi_avx2_asymm_distrib_write_int.cpp": 83,
+        "tests/cpu/mesh/mesh_upi_avx2_asymm_write_int.cpp": 90,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_distrib_int.cpp": 44,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_distrib_write_int.cpp": 25,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_int.cpp": 68,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_write_int.cpp": 52,
+        "tests/cpu/mesh/mesh_upi_avx512_asymm_write_only_int.cpp": 52,
+        "tests/cpu/mesh/mesh_upi_sse_asymm_distrib_write_int.cpp": 25,
+        "tests/cpu/mesh/mesh_upi_sse_asymm_write_int.cpp": 27,
+        "tests/cpu/mesh/mesh_upi_sse_write_only_int.cpp": 29
+      }
+    }
+  ]
+}

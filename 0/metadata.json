@@ -1,0 +1,141 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M52GGFVXR4SPYF5SE0CG7XYG",
+  "session_id": "c3509c0f-26c8-41ce-89a4-77de4bde5f22",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-16T14:05:47.392978021Z",
+  "branch": "feat/sdc-run-scan",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "scripts/sdc-excite-reproduce/sdc-excite-reproduce.sh"
+  ],
+  "agent": "Claude Code",
+  "model": "GLM-5.3[1m]",
+  "turn_id": "40c78e85fe50",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 95111,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4773888,
+    "output_tokens": 45600,
+    "api_call_count": 65
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-goal-2026-10-16T12:49:38.492695008Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "goal"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "40c78e85fe50",
+      "timestamp": "2026-10-16T12:49:38.492695008Z",
+      "native": {
+        "command": "/goal"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/goal",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-call_c995791b46094eacb5420bdc",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "40c78e85fe50",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 329,
+        "end": 330,
+        "entry_ids": [
+          "9c915ea0-443a-4368-a063-dd73043b567a"
+        ],
+        "tool_use_id": "call_c995791b46094eacb5420bdc"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "call_c995791b46094eacb5420bdc"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-call_b89aa6f30af64b45b41a41f2",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:executing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "40c78e85fe50",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 349,
+        "end": 350,
+        "entry_ids": [
+          "c7d88bd5-0c8a-422d-bbc7-d31180e082cb"
+        ],
+        "tool_use_id": "call_b89aa6f30af64b45b41a41f2"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "call_b89aa6f30af64b45b41a41f2"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:executing-plans",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-10-16T14:05:41.744177659Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 4,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 4,
+    "total_lines_changed": 6,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 18459211,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "cluster_anchored_logs/round1_control.yaml": 6277787,
+        "cluster_anchored_logs/round1_target.yaml": 7020739,
+        "cluster_anchored_logs/round2_control.yaml": 2306115,
+        "cluster_anchored_logs/round2_target.yaml": 2396347,
+        "cluster_anchored_logs/round3_control.yaml": 126655,
+        "cluster_anchored_logs/round3_target.yaml": 113597,
+        "cluster_anchored_logs/round4_control.yaml": 104566,
+        "cluster_anchored_logs/round4_target.yaml": 113405
+      }
+    }
+  ]
+}

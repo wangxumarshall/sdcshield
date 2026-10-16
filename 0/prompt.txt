@@ -1,1 +1,45 @@
 同意
+
+---
+
+<task-notification>
+<task-id>a5a7b867aca94e758</task-id>
+<tool-use-id>call_8eaeb11c55b64bc4854d147e</tool-use-id>
+<output-file>/tmp/claude-1000/-home-sdc-wangxu-sdcshield/b3114b53-2dad-47a7-a29f-1713930e566e/tasks/a5a7b867aca94e758.output</output-file>
+<status>completed</status>
+<summary>Agent "移植 distrib/write 四件" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>4 个文件全部复核完毕。以下为最终简报。
+
+---
+
+## 移植简报：4 个 mesh 测试 reset-winner 协议 → 感知反转屏障（sense-reversal + epoch）
+
+### 1. `tests/cpu/mesh/mesh_upi_avx512_asymm_distrib_int.cpp`（1 写者 + N 读者，64 块×16 元）
+- **改动段**：`TestData`（删 `reset_lock`/`readers_done`，增 `arrived`/`epoch`）；init 对应 store；run 删 `total_readers=thread_count()-1` 改 `total_threads=thread_count()`；写者填充循环 `while(ttc)` → 无守卫 `while(true)`（预算防烧，同参考版）；删写者尾部 next_block 自旋、读者等待改 1024 一档节流；删 readers_done 注册 + reset-winner CAS 整段；if/else 后接公共轮屏障。
+- **协议新结构**：每轮 = 写者串行填 64 块 → 读者节流等 `allocated_blocks==NUM_BLOCKS` → 快照 expected_sum → 全量读+校验 → 全员到屏障：`arrived.fetch_add(acq_rel)`，最后到达者复位 `global_sum/next_block/allocated_blocks` 后 `epoch.store(my_epoch+1, release)`，其余按 131072 一档节流自旋 `epoch==my_epoch`，到期 `goto out_of_budget`。
+- **自查**：旧协议代码零残留（关键词仅存于移除理由注释）；`.store(0` 仅剩 init 与屏障最后到达者；ttc 调用点 = 2 处节流自旋 + do-while；判定语义（含 block_ok 软记录、失败打印、report_fail_msg）一字未动；花括号配平。
+
+### 2. `tests/cpu/mesh/mesh_upi_avx512_asymm_distrib_write_int.cpp`（N 写者 + 1 读者，64 块×16 元，写者硬 FAIL 读回）
+- **改动段**：同上五段（struct/init/prologue/尾部自旋/读者等待+复位段）。读者等待改 **131072 一档**节流（读者 id 0 为首入场者，须桥接同族实测 2.7~6.7ms 写者启动滞后）；写者填充本就无守卫，compute 未动。
+- **协议新结构**：每轮 = 写者们 `next_block.fetch_add` 竞争填块（越界即出）→ 读者节流等 `allocated_blocks==NUM_BLOCKS` → 读+校验（含一致性）→ 公共感知反转屏障（参与者 = 全体写者+读者），最后到达者复位三元计数器并翻转 epoch。
+- **自查**：同文件 1 全项通过；写者立即读回的硬 FAIL 判定与打印原样保留。
+
+### 3. `tests/cpu/mesh/mesh_upi_avx2_asymm_distrib_write_int.cpp`（N 写者竞争 1 块×8 元 + 1 读者）
+- **改动段**：struct/init/prologue 同上；删写者尾部自旋；**拆掉读者内层 `while(test_time_condition)` 循环**（读写校验段整体去一层缩进，内容逐字未动，其 131072 档等待注释原样保留）；删 reset-winner CAS（含“next_block 最后归零”栅栏）。
+- **协议新结构**：每轮 = 写者一次 fetch_add（胜者写 8 元、败者即出）→ 读者 131072 档等 `write_done==NUM_BLOCKS` → 读+sum 校验 → 公共屏障复位 `global_sum/write_done/next_block` 并翻转 epoch（原释放栅栏意图由屏障整体接管）。
+- **自查**：同上全项通过；本轮结构上每轮恰一次 write→verify→barrier，胜者写语义不变。
+
+### 4. `tests/cpu/mesh/mesh_upi_sse_asymm_distrib_write_int.cpp`（N 写者 + 1 读者，256 块×4 元，软记录读回）
+- **改动段**：与文件 2 完全同型五段（struct/init/prologue/尾部自旋/读者等待 131072 档+删复位段）。
+- **协议新结构**：与文件 2 相同（屏障参与者 = 全体写者+读者；复位三元计数器 = `global_sum/next_block/allocated_blocks`）。
+- **自查**：同上全项通过；写者软记录空分支与读者失败打印原样保留。
+
+### 通用正确性与自查汇总
+- **旧协议根除**：4 文件 grep 确认 `reset_lock`/`readers_done`/`expected_lock`/`total_readers` 代码引用为 0（仅注释记载移除理由）；每迭代计数器复位不复存在——`.store(0` 仅剩 init 一次性复位与屏障最后到达者复位。
+- **时间退出全覆盖**：所有屏障/等待自旋均为“条件每自旋查 + ttc 按档节流查（1024 或 131072）+ `goto out_of_budget`”；任一线程到期退出后其余线程亦在自身 ttc 到期时有界退出，无死锁。
+- **判定语义零变化**：通过/失败比较、`fprintf` 失败证据路径、`report_fail_msg` 字符串、`EXIT_FAILURE`/`EXIT_SUCCESS` 路径全部原样；compute 段（随机数生成、NEON 存取、读回校验、求和记账）逐字未动（仅文件 3 因拆内层循环去一层缩进）。
+- **结构校验**：4 文件花括号配平（35/35、34/34、26/26、29/29）；圆括号差值与参考文件同为注释跨行伪差；diff 逐文件人工复核确认无越界改动。
+- **边界**：未构建、未运行（遵嘱，主会话统一验证）；git diff 中其余 mesh 文件的改动系主会话此前工作，本任务只改了上述 4 个文件。未 commit。</result>
+<usage><subagent_tokens>0</subagent_tokens><tool_uses>40</tool_uses><duration_ms>2163170</duration_ms></usage>
+</task-notification>

@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792384954928,
+  "lastUpdate": 1792405314098,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -1687,6 +1687,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 20.237,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "fe6805bffa0bb468376f104cf3a1161f34f6bc27",
+          "message": "Merge pull request #266 from wangxumarshall/fix/monitor-sel-window-count\n\nWIP: fix/monitor-sel-window-count",
+          "timestamp": "2026-10-16T09:28:21Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/fe6805bffa0bb468376f104cf3a1161f34f6bc27"
+        },
+        "date": 1792405312857,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 170449.586,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 90694.679,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 187.383,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 19.08,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.847,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.964,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 5.792,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 6.972,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 40835.463,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.524,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 22.32,
             "unit": "s"
           }
         ]

@@ -1,0 +1,35 @@
+swap 健康复查（一次性）：(1) s1=$(awk '/^pswpin/{print $2}' /proc/vmstat); sleep 10; s2=$(awk '/^pswpin/{print $2}' /proc/vmstat); 差分 $((s2-s1))；(2) pswpout 同法差分；(3) tail -2 /home/sdc/sdc-run/scan-maxparam-1016-2230/scan.log 看波次进度（22:42 首波完成 16 核，此后每波 ~35min，23:20 应 ≥32 核）；(4) grep -h '  result:' 已完成 core_*.yaml | sort | uniq -c 看 fail/crash。判定：pswpin 差分持续 >10000/10s 或波次停滞 → 执行干预：kill backfill 主循环（腾出 CPU/内存），观察 10min 后仍恶化则重启 scan par=12（--cores 从未完成核续）。健康则一行记录 ~/sdc-run/patrol.log 收队。
+
+---
+
+scan 深度检查（一次性，接近尾声）：(1) ls /home/sdc/sdc-run/scan-maxparam-1016-2230/core_*.yaml | wc -l 与完整核数（grep -l 'test: openssl_sha' 计数），04:03 应 ≈96-110 完整/126；(2) grep -h '  result:' 全部 yaml | sort | uniq -c —— 任何 fail/crash 立即按已知噪声表定性（crash+code9=OOM、sm3sm4、mesh、eigen ULP）；(3) pswpin 差分（10s）确认零回读；(4) 若 scan 已完成（matrix.tsv 存在）且无未决事件：按 plan docs/superpowers/plans/2026-10-16-campaign-maxparam-intensification.md Task 2 Step 3 执行 oblas mdim=1536 满核实测（MemAvailable 低点>8GiB 才过）→ 通过则按 Task 2 Step 5 模板 git commit -s 提交 → 再执行 Task 3（启动引擎 sdc-excite-reproduce.sh full + mem_saturate.sh + 验证三件套）。结果记 patrol.log。若 scan 未完成则一行记录进度收队。
+
+---
+
+SDC 战役巡检（2026-10-17 起 v3，全栈+功率监控运行态）。所有启动/重启必须幂等：先精确判活（ps -o pid=,ppid= -p $(pgrep -f <模式>) 里 ppid==1 的行数），已存活绝不重启。检查项记 ~/sdc-run/patrol.log（[YYYY-MM-DD HH:MM] 前缀）：
+
+1. **引擎**: ppid==1 的 sdc-excite-reproduce.sh full 存活（死了才重启: cd /home/sdc/wangxu/sdcshield && nohup bash scripts/sdc-excite-reproduce/sdc-excite-reproduce.sh full >> ~/sdc-excite-reproduce/driver.log 2>&1 & disown）。tail -3 driver.log；~/sdc-excite-reproduce/events/ 新目录=fail/crash 事件 → 读 stdout_summary.out 提取测试+种子，按已知噪声表定性（mesh=已修可信、sm3sm4=已规避、eigen svd/sparse=满核ULP、crash+code9=OOM）；疑似自然 SDC → 簇锚定对照复现后定性并详细记录（战役核心产出）
+2. **伴层 5 件**: ppid==1 判 mem_saturate.sh([8,10]G带)/user_monitor.sh/cpu_backfill.sh(BF_METHOD=crc16)/power_monitor.sh。死了才 nohup 重启（power_monitor 若 ipmi 报错先 sudo modprobe ipmi_devintf ipmi_si——sudoers 已免密 ipmitool，modprobe 需密码 SDC@2026: echo 'SDC@2026' | sudo -S modprobe ipmi_devintf ipmi_si）
+3. **功率遥测**: tail -2 ~/sdc-run/power.csv——CPU power 突变 >50W 或 VDDAVS 带[0.75,1.0]V 外或核心 ≥85C → 告警记录（power_monitor.log 有明细）
+4. **温度/内存/磁盘**: thermal_zone ≥85C 记录；MemAvailable <1.5G 且 pswpin>10000/10s = thrash 告警；df /home >80% → gzip 当日已完结 .out/.yaml（引擎 .out 与 .yaml 双份冗余，昨日由引擎日压缩）
+5. 无异常一行总结。异常定性结论必须写 patrol.log。
+
+---
+
+SDC 战役巡检（2026-10-17 起 v3，全栈+功率监控运行态）。所有启动/重启必须幂等：先精确判活（ps -o pid=,ppid= -p $(pgrep -f <模式>) 里 ppid==1 的行数），已存活绝不重启。检查项记 ~/sdc-run/patrol.log（[YYYY-MM-DD HH:MM] 前缀）：
+
+1. **引擎**: ppid==1 的 sdc-excite-reproduce.sh full 存活（死了才重启: cd /home/sdc/wangxu/sdcshield && nohup bash scripts/sdc-excite-reproduce/sdc-excite-reproduce.sh full >> ~/sdc-excite-reproduce/driver.log 2>&1 & disown）。tail -3 driver.log；~/sdc-excite-reproduce/events/ 新目录=fail/crash 事件 → 读 stdout_summary.out 提取测试+种子，按已知噪声表定性（mesh=已修可信、sm3sm4=已规避、eigen svd/sparse=满核ULP、crash+code9=OOM）；疑似自然 SDC → 簇锚定对照复现后定性并详细记录（战役核心产出）
+2. **伴层 5 件**: ppid==1 判 mem_saturate.sh([8,10]G带)/user_monitor.sh/cpu_backfill.sh(BF_METHOD=crc16)/power_monitor.sh。死了才 nohup 重启（power_monitor 若 ipmi 报错先 sudo modprobe ipmi_devintf ipmi_si——sudoers 已免密 ipmitool，modprobe 需密码 SDC@2026: echo 'SDC@2026' | sudo -S modprobe ipmi_devintf ipmi_si）
+3. **功率遥测**: tail -2 ~/sdc-run/power.csv——CPU power 突变 >50W 或 VDDAVS 带[0.75,1.0]V 外或核心 ≥85C → 告警记录（power_monitor.log 有明细）
+4. **温度/内存/磁盘**: thermal_zone ≥85C 记录；MemAvailable <1.5G 且 pswpin>10000/10s = thrash 告警；df /home >80% → gzip 当日已完结 .out/.yaml（引擎 .out 与 .yaml 双份冗余，昨日由引擎日压缩）
+5. 无异常一行总结。异常定性结论必须写 patrol.log。
+
+---
+
+SDC 战役巡检（2026-10-17 起 v3，全栈+功率监控运行态）。所有启动/重启必须幂等：先精确判活（ps -o pid=,ppid= -p $(pgrep -f <模式>) 里 ppid==1 的行数），已存活绝不重启。检查项记 ~/sdc-run/patrol.log（[YYYY-MM-DD HH:MM] 前缀）：
+
+1. **引擎**: ppid==1 的 sdc-excite-reproduce.sh full 存活（死了才重启: cd /home/sdc/wangxu/sdcshield && nohup bash scripts/sdc-excite-reproduce/sdc-excite-reproduce.sh full >> ~/sdc-excite-reproduce/driver.log 2>&1 & disown）。tail -3 driver.log；~/sdc-excite-reproduce/events/ 新目录=fail/crash 事件 → 读 stdout_summary.out 提取测试+种子，按已知噪声表定性（mesh=已修可信、sm3sm4=已规避、eigen svd/sparse=满核ULP、crash+code9=OOM）；疑似自然 SDC → 簇锚定对照复现后定性并详细记录（战役核心产出）
+2. **伴层 5 件**: ppid==1 判 mem_saturate.sh([8,10]G带)/user_monitor.sh/cpu_backfill.sh(BF_METHOD=crc16)/power_monitor.sh。死了才 nohup 重启（power_monitor 若 ipmi 报错先 sudo modprobe ipmi_devintf ipmi_si——sudoers 已免密 ipmitool，modprobe 需密码 SDC@2026: echo 'SDC@2026' | sudo -S modprobe ipmi_devintf ipmi_si）
+3. **功率遥测**: tail -2 ~/sdc-run/power.csv——CPU power 突变 >50W 或 VDDAVS 带[0.75,1.0]V 外或核心 ≥85C → 告警记录（power_monitor.log 有明细）
+4. **温度/内存/磁盘**: thermal_zone ≥85C 记录；MemAvailable <1.5G 且 pswpin>10000/10s = thrash 告警；df /home >80% → gzip 当日已完结 .out/.yaml（引擎 .out 与 .yaml 双份冗余，昨日由引擎日压缩）
+5. 无异常一行总结。异常定性结论必须写 patrol.log。

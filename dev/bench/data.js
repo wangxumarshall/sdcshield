@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792490206330,
+  "lastUpdate": 1792576620453,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -1841,6 +1841,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 17.776,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "d72ae0c3ce92a468d51af564b49797531de8d159",
+          "message": "Merge pull request #267 from wangxumarshall/fix/pr-local-review-idempotency-claude-tag\n\nWIP: fix/pr-local-review-idempotency-claude-tag",
+          "timestamp": "2026-10-21T09:29:19Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/d72ae0c3ce92a468d51af564b49797531de8d159"
+        },
+        "date": 1792576618803,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 166562.694,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 90454.849,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 91.132,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 60.256,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 4.22,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.708,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.57,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 9.527,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 41800.472,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 3.229,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 22.378,
             "unit": "s"
           }
         ]

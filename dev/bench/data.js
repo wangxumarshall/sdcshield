@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792663142699,
+  "lastUpdate": 1792672461901,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -1993,6 +1993,81 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 36.615,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "committer": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "id": "c8ac06fe4f0674c40b267814b225c8bdd73ce887",
+          "message": "fix(sve-case): 14 个 ldr-at-top SVE 探针补 svundef 初始化, 恢复 release 构建\n\nmain 的 release(-O2 -Werror) 全量构建被 tests/cpu/sve/case/ 的 11+ 个\nneon_rot_ldr_at_top*_sve.cpp 阻塞: 'res' may be used uninitialized。\n根因: 与能干净编译的 NEON 父文件(misc/neon_rot_ldr_at_top*)结构完全\n一致——switch(i%4) 四 case 全覆盖后使用, 无 default; GCC 对 SVE\nsizeless 类型(svuint64_t)在 -O2 下的 maybe-uninitialized 分析比 NEON\n向量类型保守, 属误报形态(运行时每路径先赋值)。debug(-O0) 不触发该\n分析所以此前全量能过。\n\n修复: 28 处 switch 赋值的 'svuint64_t res;' → '= svundef_u64()'\n(ARM 官方'显式未定义向量'惯用法, 编译为空指令, 零运行时语义变化;\n仅改紧邻 switch 的声明, asm 输出的 res 不动)。mla_sve 无此模式跳过。\n\n验证: release 全量续编 [37/37] 0 失败 0 告警, sdcshield 链接完成;\n26 个 neon_rot_ldr_at_top* 注册用例批量 -t 2000 -n 1 → exit: pass\n无 skip; 回归 zstd19 → exit: pass。x86 非回归: sve/case 仅\n__aarch64__+SVE 编译, 构造上不影响 x86(inspection)。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-10-22T01:19:24Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/c8ac06fe4f0674c40b267814b225c8bdd73ce887"
+        },
+        "date": 1792672460097,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 171126.772,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 90144.067,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 8.259,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 62.483,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 3.54,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 3.576,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 4.217,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 13.028,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 41265.706,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 3.525,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 20.49,
             "unit": "s"
           }
         ]

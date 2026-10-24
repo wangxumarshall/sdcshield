@@ -115,10 +115,12 @@ END_DECLARE_TEST
   SVE/SME — all SVE/SME functional verification is gem5-fi only
   (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). Earlier "host is
   VL=256" records refer to a different machine (cortex x3b,
-  docs/architecture.md:130). `tests_sve` still compiles at fixed 128-bit; on
-  SVE hosts with VL≠128 the eigen SVD test needs a VL-pinning launcher
-  (`scripts/eigen-sve-double/` precedent; the external `/tmp/vlrun` tool no
-  longer exists); `sleef_sve` stays at 128 by design.
+  docs/architecture.md:130). All-VL Phase 2 P5: `tests_sve` (eigen×2 only)
+  still compiles at fixed 128-bit — the tests self-pin each worker thread to
+  the compile-time VL inside `test_run` (`arm64_sve_pin_vl(16)`, no external
+  launcher; pin failure skips honestly); `sleef_sve` + sve_rot×5 migrated to
+  the true-VLA `tests_sve_vla` library (no `-msve-vector-bits`, all-VL
+  128..1024-bit).
 
 ## Documentation map — consult before guessing
 

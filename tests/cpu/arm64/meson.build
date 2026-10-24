@@ -140,14 +140,24 @@ if host_machine.cpu_family() == 'aarch64'
     # +sve target, while the tests_arm64 baseline stays armv8.1-a+crc+crypto:
     # enabling +sve for the whole library could let GCC auto-vectorize the
     # NEON tests into SVE instructions, which would SIGILL on SVE-less CPUs
-    # such as this Kunpeng 920. Every test probes HWCAP_SVE first thing in
-    # test_init and returns a clean EXIT_SKIP on SVE-less CPUs, so their SVE
+    # such as this Kunpeng 920. Every test self-gates in test_init and
+    # returns a clean EXIT_SKIP on SVE-less CPUs, so their SVE
     # codegen only ever executes on SVE-capable hardware. Built only on
-    # aarch64.
+    # aarch64. (Gate split as of all-VL Phase 2 P6: every SVE1 test in
+    # this library gates via the framework layer — arm64_require_sve_vl:
+    # HWCAP_SVE capability + 128..1024-bit range in one call. The only
+    # getauxval hand-probes left under tests/cpu/arm64/ are the SVE2
+    # composite-gate files sve512_fmmla_arm/sve2_cross_precision_arm
+    # (tests_arm64_sve2 below): their SVE2|F32MM|F64MM / SVE2|SVEBF16
+    # HWCAP2 conjunctions are the tests' own semantics and stay hand-
+    # probed by design, while their pure-SVE gate goes through the
+    # require helper.)
     #
     # NOTE: sve512_fma_arm.cpp is committed (ea879f68) but deliberately NOT
-    # wired into any sources list yet — wiring + all-VL validation is
-    # scheduled for all-VL Phase 2 P3
+    # wired into any sources list yet — its source side was migrated to
+    # the all-VL form in P6 batch C (require + lanes + drift guard, commit
+    # d8e6f625), so wiring it in only needs the meson entry plus the
+    # all-VL validation run; the original wiring plan (P3) lapsed unclaimed
     # (docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
     arm64_sve_lib = static_library(
         'tests_arm64_sve',
@@ -168,30 +178,32 @@ if host_machine.cpu_family() == 'aarch64'
             # does not require deterministic NaN payload propagation.
             'sve512_f64_special_arm.cpp',
             # workload 3: the same serial FMLA chain structure at f32 width
-            # (svmla_f32_x), exercising the 16-lane f32 FMA/predicate
-            # datapath at full 512-bit width, byte-exact vs a scalar
-            # fmaf() golden recomputed with the identical operation order.
+            # (svmla_f32_x), exercising the svcntw() f32 FMA/predicate
+            # lanes at the runtime VL (all-VL Phase 2, 128..1024-bit),
+            # byte-exact vs a scalar fmaf() golden recomputed with the
+            # identical operation order.
             'sve512_f32_chain_arm.cpp',
             # SVD-format variant of workload 1: same serial svmla_f64_x
             # chain, but the operand streams are walked through a 16x16
             # nested block traversal (BDCSVD-style block-of-matrix access)
-            # over an SVD-scale allocation (300*300*512*VL elements per
-            # stream, ~2.7 GiB each at a 512-bit VL). The per-iteration
-            # touched set (~24 MB, 5.76 MB step stride) overflows L2 and
-            # pressures L3/TLB — the first of eigen_svd_cdouble_sve's
-            # SVD-only trigger paths (working set beyond L2).
+            # over an SVD-scale allocation whose size is proportional to
+            # the runtime lane count (m+a streams total ~5.9..47.3 MB
+            # across 128..1024-bit, i.e. ~2.95..23.7 MB per stream;
+            # all-VL Phase 2). The per-iteration touched
+            # set overflows L2 and pressures L3/TLB at every tier — the
+            # first of eigen_svd_cdouble_sve's SVD-only trigger paths
+            # (working set beyond L2).
             'sve512_f64_chain_svd.cpp',
             # SVD-format variant of workload 2: the same SVD-scale block
             # traversal over the IEEE-754 special-value table (64-step
             # chain), compared per lane by category (fsu_byteexact_arm
-            # precedent). Allocation: 300*300*64*VL per stream (~360 MB
-            # each at a 512-bit VL).
+            # precedent). Allocation ∝ lanes (~1.5 MB per stream at
+            # 512-bit, all-VL Phase 2).
             'sve512_f64_special_svd.cpp',
             # SVD-format variant of workload 3: the same SVD-scale block
-            # traversal at f32 width (svmla_f32_x, 16-lane f32 datapath),
-            # byte-exact vs a scalar fmaf() golden. Allocation:
-            # 300*300*512*VL f32 elements per stream (~2.7 GiB each at a
-            # 512-bit VL).
+            # traversal at f32 width (svmla_f32_x, svcntw() lanes),
+            # byte-exact vs a scalar fmaf() golden. Allocation ∝ lanes
+            # (~11.8 MB per stream at 512-bit, all-VL Phase 2).
             'sve512_f32_chain_svd.cpp',
             # SVD-format variant of workload 4: gather/FMA/scatter
             # round-trip over a 2-D 16x16 block-permuted index table
@@ -340,9 +352,9 @@ if host_machine.cpu_family() == 'aarch64'
     # library (armv8.2-a+sve) can host, and which GCC-12 cannot parse at all.
     # Compiler-support probed with the C++ compiler object so GCC builds
     # degrade gracefully (test simply absent, the gmp/acl/openblas pattern);
-    # the test itself re-gates at runtime on HWCAP2_SME and the measured
-    # 512-bit SVL geometry, so it only ever executes on characterized SME
-    # hardware. Built only on aarch64.
+    # every test re-gates at runtime on HWCAP2_SME and the measured SVL
+    # range (128..1024-bit, all-VL Phase 2), so it only ever executes on
+    # characterized SME hardware. Built only on aarch64.
     sme_march = '-march=armv9-a+sve+sme+sme-f64f64'
     sme_args = [sme_march]
     # Clang keeps __ARM_FEATURE_BTI defined for v8.5+/v9 marches regardless
@@ -359,11 +371,12 @@ if host_machine.cpu_family() == 'aarch64'
                 'sme_fmopa_stress_arm.cpp',
                 # SME FMOPA/ZA outer-product chain: 256-step fmopa za0.s
                 # accumulation inside one SMSTART..SMSTOP asm block (operands
-                # staged through memory), row-slice extraction via mova,
-                # byte-exact vs an exact-integer scalar golden, one-step
-                # tile-mapping self-check. Pure inline asm: GCC 12.3's
-                # <arm_sme.h> is an empty shell; runtime-gated on
-                # HWCAP2_SME (kernel >= 5.19 exposure).
+                # staged through memory), column-slice extraction via mova
+                # (four-tier gem5 axis verdict), byte-exact vs an
+                # exact-integer scalar golden, one-step tile-mapping
+                # self-check. Pure inline asm: GCC 12.3's <arm_sme.h> is an
+                # empty shell; runtime-gated via arm64_require_sme_svl
+                # (HWCAP2_SME + 128..1024-bit SVL range, all-VL Phase 2).
                 'sme_fmopa_za_arm.cpp',
             ),
             build_by_default: false,

@@ -598,3 +598,140 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   独立验证(build 零新警告+selftest/zstd19 真实输出),20.03 编译失败用
   v4.19 uapi 模拟复现+修复对照实证。
 - **承接**:P2(SME fmopa_za 收尾)起各阶段另行计划(spec §6)。
+
+## 2026-10-23（all-VL Phase 2 P2：SME fmopa_za 收尾——四重缺陷修复 + 四档实证）
+
+- **发现**:sme_fmopa_za_arm 原形态从未在任何硬件执行过, 全文核验四重独立
+  缺陷:rdsvl imm0 恒 0(cols=0+堆溢出)/asm 步距 #16 字节 vs golden 16-float
+  几何/golden 按行建模而 mova za0v 读列/smstart za-only 下 FMOPA 非法。
+- **重构**(PR feat/sme-fmopa-za-allvl, 堆叠 #277):arm64_require_sme_svl(
+  128,1024) 一行门控+窗口几何 [s*cols+i]+步距寄存器化+精确整数操作数
+  (累加上界 8960<2^24, 舍入零歧义且豁免 gem5 F4 双舍入)+run 侧 SVL 漂移
+  fail-closed+整块 memcmp 首失配定位。
+- **gem5 四档实证**(gem5-fi feat/fmopa-za-dual @ ebe08632, 16 run=四档×
+  {fixed,random×3}):axis=COLUMN 四档一字不差(za_tileview 探针结论二次
+  实证, 原测试 docblock 的 ROW 说法证伪);SMSTART 裁决 za-only 非法——
+  tier-1 pilot 崩于首条 fmopa(gem5 smEnCheckCode 要求 SVCR.SM=1), 改
+  sm+za 双开后 16/16 SDCSHIELD_FAILS=0、cols 逐档 4/8/16/32 精确、16 个
+  checksum 互异(fixed1 各档 150538c2…/95df82c8…/4f59b61a…/4b243679…)。
+- **无回归锚**(诚实声明):原形态无任何有效输出, 验证锚=dual kernel 四档
+  通道 A 对精确整数 golden 的逐字节一致。
+- **writing_tests.md VL 政策节**交付(spec 0c6c9c89 归属 P2):框架层探测/
+  范围检查/fail-closed/几何缩放不变式/逐 lane 字节级比对五条军规。
+- **验证模式**:16 run 由隔离 subagent 执行(用户指令);主 agent 并行完成
+  测试重构与文档, 裁决回报后定稿——工作假设 COLUMN 命中, za-only 假设
+  被实证推翻, 按裁决改 sm+za 双开。
+- **承接**:P3(sve512 家族×10)起另行计划。
+## 2026-10-24（all-VL Phase 2 P3：sve512 家族×10 全 VL 化——issue #182 疑点清除）
+
+- **探索结论**:8/10 文件几何早已 svcnt 动态(512-ism 全为文案), 真重构仅
+  xlswave(Phase A 硬 512 双向量几何: B_TILE=16/n+8/result+8 越界/闭式 golden
+  绑定 512 对齐)与 libomp(micro[8] 栈缓冲 1024-bit 档溢出)。
+- **gem5 四档实证**(feat/sve512-dual @ ea86b681, 3 kernel × 4 档 × {fixed,
+  random×3} = 48 run 全绿): sve512_chain_dual 四模式(f64 链/块 slab 寻址/
+  f32 链/特殊值类别比对)lanes 逐档 2/4/8/16 与 4/8/16/32; sve512_gather_dual
+  两模式(1d_tag 索引标签断言/2d_block whilelt 尾)gn=128..1024;
+  stencil_axis_dual(bt=4..32, 7bed7f0e 全 VL 版+memcpy 告警修复)。**issue
+  #182 疑点清除**: 128-bit 档全部模式字节级全绿——历史 GH runner VL=128
+  golden 失配在 gem5-fi O3 全 VL 语义下不复现。chain 16 checksum 互异;
+  gather 同档 fixed/random checksum 相同系设计属性(FNV 按地址序, dst 内容
+  与排列无关, 源码核实)。
+- **重构**(feat/sve512-allvl, 11 commit): 范本 f64_chain_arm(a08302c0)+
+  xlswave bt 参数化(235a9c47, 闭式→stencil_axis 式标量 golden, result
+  [kTileMax]+result+lanes 修越界)+批量代理 8 文件(隔离 worktree, 五段式:
+  require(128,1024)/lanes=svl÷8|÷4+NDEBUG-proof 范围检查/漂移 fail-closed/
+  文案)+meson 注释同步(a7a8c941, 含 ~360MB/~2.7GiB 先存错误值修正)。libomp
+  micro[8]→[16] 实义容量修复。
+- **验证模式**: 48 run 与 8 文件批改均由隔离 subagent 执行(用户指令);
+  主 agent 并行完成范本/xlswave/P4 计划。每文件构建 TU 零告警+skip 干净
+  (框架编译特性门)+zstd19 pass。
+- **诚实边界**: 本机无 SVE, 各档功能行为以 kernel 家族级四档证据为锚
+  (同 kernel 形态=同验证目标的聚类 scoping, spec §6 "≈5-6 kernel"落实为
+  3 个); splitmix64 死代码系 H12' 先存遗留; f64_special_svd 缺
+  fracture_loop_count 一致性问题记账未动。
+- **承接**:P4(ipsec HMAC×17)计划已就绪(docs/superpowers/plans/
+  2026-10-24-sve-sme-all-vl2-p4.md)。
+
+## 2026-10-24（all-VL Phase 2 P4：ipsec HMAC×17 流数参数化——两个既有缺陷随阶段修复）
+
+- **既有缺陷修复**(评估代理实证, 随 P4 落地): ①门控无上界——旧
+  `svcntw()<8||svcntd()<4` 只查下界, VL≥512 硬件上 svst1 向 8 宽 W 行写
+  16/32 lane(越界栈写+串行污染); 修复=STREAMS_MAX_32/64 定维+require
+  范围门+nstreams 填充三重防线。②data_size knob[1024,16MB] vs HMAC
+  组装栈缓冲 2048B/流——>1975/1903 即溢出; 修复=hmac 层容量守卫
+  (void→int 返回值, 17×3 调用点检查)+测试 knob 上限钳 1900/1830。
+- **重构**(feat/ipsec-allvl, 21 commit): 内核/HMAC 头参数化(内部
+  推导 n=svcntw()/svcntd()——向量通路按 VL 动作是自然律, 调用点最小
+  化; 向量代码零改动, 只动 C 层数组维度/循环边界)+17 测试五段式+
+  verify.cpp 运行时化+meson 注释同步。docblock "Eight lanes"(4 流文件
+  实为 4 lane 的复制残留失实)一并修正。
+- **gem5 四档实证**(feat/sha-dual @ 955f766d, 16 run=四档×{fixed,
+  random×3}, 隔离代理执行): 流数逐档 4/8/16/32(32-bit 族)与 2/4/8/16
+  (64-bit 族); 全部 SDCSHIELD_FAILS=0; **"VL=128 可跑"命题实证**(4/2
+  流全绿); W 定宽 32/16 在 512/1024 档无越界。**两轮验证**: 首轮
+  16/16 FAIL——验证代理抓住 kernel 标量 golden 两缺陷(&sw[0][s] 把
+  [word][stream] 布局当连续状态, 行 1-4 恒 IV; mini-HMAC 两独立块被
+  xN 连续读越界), 依规止步未提交; 修复后同矩阵全绿。findings.md 两轮
+  完整入档——"零告警构建≠正确"的纪律实录。
+- **验证模式**: 16-run 与 20-commit 实施均由隔离 subagent 执行; 每文件
+  TU 零告警+skip 干净(框架编译特性门)+终态全量构建零告警+zstd19 pass。
+- **诚实边界**: verify.cpp 的 5200 向量 OpenSSL 重验需 SVE 硬件(本机
+  仅编译验证, commit 正文记录); hmac 容量守卫的 init 侧失败经
+  report_fail_msg 会表现为 Skipped("Unexpected OS error")而非干净
+  Failed——knob 钳制后不可达, 纯纵深防御, 记账。
+- **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
+  语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
+  遗留手探文件)待做。
+
+## 2026-10-24（all-VL Phase 2 P5：sleef/eigen×8 按 spike 证据分流——真 VLA 迁移 + 自 pin 回退）
+
+- **双 spike 裁定**: sleef_sve+sve_rot×5 **真迁移**(TU 与 vendored SLEEF 3.9.0
+  双双纯 VLA——反汇编实证 cntd/cntp/rdvl 无 ptrue_pat; 三态编译探针零告警;
+  历史 "256 编译回归" 最可能系实验污染——整体翻 flag 连 Eigen 定长 TU 重编的
+  堆损坏张冠李戴, 失败转录无存世); eigen×2 **自 pin 回退**(Eigen packet 为
+  arm_sve_vector_bits 定长, VLA 语言级不可编译——PacketXcd struct 成员禁
+  sizeless/NumTraits sizeof 非法, 七类编译期消费点, 两次独立确证)。
+- **重构**(feat/sleef-eigen-allvl, 10 commit): meson 建 tests_sve_vla 真
+  VLA 库(-march=armv8.2-a+sve 无 vector-bits, sleef_dep 跟随)+sleef_sve
+  全改造+sve_rot×5 兑现迁移预排+eigen×2 自 pin。**两个实证驱动适配**:
+  ①pin 在 test_run 而非 init(fork 模式下 init 线程 VL 不传导给 worker,
+  sandstone_run.cpp:1186-1222 实证——消灭已丢失的 /tmp/vlrun 外部依赖);
+  ②漂移守卫用 arm64_sve_vl_bytes() 而非 svcntb()(128 编译 TU 下 GCC 把
+  svcntb()!=16 折叠为常量使守卫静默蒸发, .inst rdvl 不可折叠)。
+- **gem5 四档实证**(feat/sve512-dual @ 0db77fc7, sleef_vla_dual 终版):
+  kernel 换测试真 12 函数集(f64u10/u35 + f32u10)+真实 f32 输入域;
+  **跨档逐位一致判据达成**——fixed 四档 checksum 逐位相同
+  (8475eeba2772b999 ×4); sve_rot_dual 补证 kernel 48/48 全绿(lanes
+  2/4/8/16)。终版矩阵两 kernel 48/48 全绿。**跨档 oracle 抓到 kernel 自身
+  两缺陷**(double* 形参收 float[] 越界/域外垃圾输入触发 cosfx@128-bit
+  档位相关行为——诚实边界记录, 测试域内无此现象)。
+- **诚实边界**: eigen pin 的 prctl 往返无 SVE 宿主可实证(gem5 SE prctl=
+  ignoreFunc → 走 pin 失败 skip 路径); 其正确性=内核语义文档+汇编三段
+  守卫 objdump 实证。CLAUDE.md/README/architecture/adding-tests 四文档
+  同步(vlrun/sleef-128 失实表述置换)。
+
+## 2026-10-24（all-VL Phase 2 P6：存量迁移收官——142 文件框架层化 + 分支拓扑修复）
+
+- **迁移成果**(feat/p6-allvl = PR #288, 三批并行代理 + P2 回并, 29+1 commit):
+  批 A(sve/case 51+kreg 11+vector2 5+fma 10)/批 B(mesh 18+arithmetic 16+
+  mem 9+fma2 8)/批 C(arm64 13+eigen_bidiag 1+meson 收尾)——全部
+  getauxval 手探 → arm64_require_sve_vl/sme_svl; 23 个 lanes 文件换算
+  svl/8|svl/4+范围检查; 全仓活调用审计**仅剩 2 个设计保留**(fmmla/
+  cross_precision 的 SVE2 HWCAP2 复合门, 测试自有语义)。批 A 净删 279 行。
+- **分支拓扑缺陷发现与修复**: P3 当初从 #277 切出漏掉 P2——P3→P4→P5→P6
+  整条栈缺 P2 的 fmopa_za 重构(批 C 在 P2 之前的旧文件上迁门控被
+  发现)。修复: P2 并入 P6(20a79b88), fmopa_za 取 P2 版本; 新合并顺序
+  #277→#283→#284→#286→#280(任意时点)→#288。
+- **单位约定审计**(P6 Task 4, ac5b1e6b): 298 调用面统计(~200 纯门控/
+  97 换算/pin 全字节)——维持现行约定, 教训与防线入档 arm64_vl.h。
+- **429 预算中断**: 批 C 代理与 chain 重验代理被 API 预算超限终止;
+  批 C 收尾由主 agent 补完(dc4b0121); gem5 补证改主 agent 后台自跑。
+- **先存缺陷掘出**(记账后续硬化单元, 不混入迁移批): 批 B 报告 7 类
+  VL>512 越界(vsum[8] 家族/ai[8]/phase[8]/chunk[64]/fsu 跨行/
+  movmskpspd VL>128 越界读——可移植范式先例 agu_stress_store_only_sve
+  .cpp:126); 批 A 报告 3 文件 init 取整无 run 守卫; stress 测试
+  run 侧 assert 在 release(NDEBUG) 失效(P2 时发现)。
+- **验证**: 三批各自构建零告警+逐文件/逐 ID skip 核验+grep 归零; 合并
+  终态 477 测试构建零告警+zstd19 pass; 全仓审计如上。
+- **战役状态**: P0-P6 全部落地; PR 编队 #277→#283→#284→#286→#288
+  (+计划文档 #279/#281/#282/#285/#287)等人工 merge 门。

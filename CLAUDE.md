@@ -110,15 +110,26 @@ END_DECLARE_TEST
   (2026-10-24, feat/eigen-svd-multithread): both now use the per-thread
   same-source golden (H11' pattern — each worker generates its own input and
   recomputes the golden on the same thread), so cross-thread Eigen
-  SIMD-path divergence can no longer produce false mismatches. Verified
-  64-core full-run green (3×240s×3 seeds, 10-min×2 tiers, 300s rerolls)
-  and gem5-fi FS 2-core `eigen_svd_double -n 2` pass. Run full-core;
-  `-n 1` is no longer required. Adaptive dims are time-calibrated
-  (`sdc_calibrated_dim`: two-probe power-law + k_floor, one solve ≤ ~2s so
-  the `-t` TERM is honoured); explicit `-O <test>.mdim/n` skips calibration.
+  SIMD-path divergence can no longer produce false mismatches. Run
+  full-core; `-n 1` is no longer required. **Verification records
+  provenance**: the branch commits (98188ec9/05819d8e) cite "64-core
+  full-run 3×240s×3 seeds green", "n 5876→~3250", "hi=2798" — those
+  numbers are from the PR branch sessions' machine ("64 核满跑"),
+  which is NOT this host and cannot be identified further from git
+  (shared author account); treat them as unverified provenance. The
+  authoritative anchor is the local re-run on this host (Kunpeng 920
+  0xd01, 128 CPUs = 2×64 cores, 32 GB, lscpu-checked 2026-10-25):
+  full-core `eigen_sparse` 300s×2 seeds pass, calibration k=3.30~3.39 →
+  memory-bound n=1191 with post-extrapolation verify probe 369–825 ms
+  (≤ 2 s budget); single-thread pass; gem5-fi FS 2-core
+  `eigen_svd_double -n 2` pass (branch session). Adaptive dims are
+  time-calibrated (`sdc_calibrated_dim`: two-probe power-law + k_floor
+  3.0 + post-extrapolation verify probe, one solve ≤ 2 s so the `-t`
+  TERM is honoured); explicit `-O <test>.mdim/n` skips calibration.
   The original "192 CPUs" flaky records are from the cortex x3b machine
   (pre-fix code); earlier "-n 1 always passes" advice is obsolete.
-- SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 96 CPUs) has NO
+- SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 128 CPUs = 2×64
+  cores, 32 GB) has NO
   SVE/SME — all SVE/SME functional verification is gem5-fi only
   (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). Earlier "host is
   VL=256" records refer to a different machine (cortex x3b,

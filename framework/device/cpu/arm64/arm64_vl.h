@@ -111,6 +111,9 @@ static inline long arm64_sme_svl_bytes(void)
 
 /* ---- self-pinning (size-specific TUs; call from test_init) ---- */
 /*
+ * Units: the argument is the requested VL in BYTES; the return value is
+ * the applied VL in BYTES (>= 0) or -errno.
+ *
  * Semantics: bytes is masked to the 16-bit VL length field before the prctl,
  * so out-of-range values are silently truncated and bytes == 0 asks the
  * kernel to restore the default VL (not an error). The kernel rounds the
@@ -149,6 +152,14 @@ static inline long arm64_sme_pin_vl(long bytes)
 /* Note: an empty range (min_bits > max_bits) skips unconditionally with the
  * range message — callers own their argument sanity. */
 
+/* Skip-with-reason SVE gate for test_init. UNITS: the range arguments are
+ * BITS; the success return is the current VL in BYTES. bits-in/bytes-out
+ * is a deliberate asymmetry — callers state ranges in the architectural
+ * unit (e.g. 128..1024-bit) but consume memory geometry in bytes — and it
+ * is precisely this seam the pre-fix sme_fmopa_za_arm got wrong
+ * (adversarial review Critical-1: the byte return divided by 32 as if it
+ * were bits — 8x off). A NEGATIVE return means the helper already
+ * log_skip'ed the reason; test_init translates it to EXIT_SKIP (-255). */
 static inline long arm64_require_sve_vl(struct test *test, long min_bits, long max_bits)
 {
     if (!arm64_cpu_has_sve()) {
@@ -166,6 +177,11 @@ static inline long arm64_require_sve_vl(struct test *test, long min_bits, long m
     return bits / 8;
 }
 
+/* Skip-with-reason SME gate for test_init — same units contract as
+ * arm64_require_sve_vl: range in BITS, success return = the streaming
+ * vector length (SVL) in BYTES; negative return = skip already logged
+ * (translate to EXIT_SKIP). See the Critical-1 note above before dividing
+ * the return value. */
 static inline long arm64_require_sme_svl(struct test *test, long min_bits, long max_bits)
 {
     if (!arm64_cpu_has_sme()) {

@@ -300,13 +300,28 @@ static int sve512_xlswave_ctx_arm_run(struct test *test, int cpu)
         for (size_t jj = 0; jj < bt; ++jj)
             expected[jj] *= static_cast<double>(K_AXIS_CALLS);
 
-        for (size_t jj = 0; jj < bt; ++jj) {
-            if (result[jj] != expected[jj]) {
-                log_warning("sve512_xlswave_ctx: axis lane %2zu "
-                            "result=%.1f expected=%.1f",
-                            jj, result[jj], expected[jj]);
+        /* Phase A verification: scan ALL lanes, dump 64-bit bit patterns
+         * (the 1/8 grid means %.1f cannot show low-mantissa flips), and
+         * report the lane distribution — same evidence discipline as
+         * Phase B below. */
+        {
+            size_t bad_lanes = 0;
+            for (size_t jj = 0; jj < bt; ++jj) {
+                if (result[jj] != expected[jj]) {
+                    uint64_t g, a;
+                    memcpy(&g, &expected[jj], 8);
+                    memcpy(&a, &result[jj], 8);
+                    log_warning("sve512_xlswave_ctx: axis lane %2zu/%zu "
+                                "golden=0x%016" PRIx64 " actual=0x%016"
+                                PRIx64 " xor=0x%016" PRIx64, jj, bt, g, a,
+                                g ^ a);
+                    ++bad_lanes;
+                }
+            }
+            if (bad_lanes > 0) {
                 report_fail_msg("sve512_xlswave_ctx_arm: phase A "
-                                "(stencil axis) SDC detected");
+                                "(stencil axis) SDC detected on %zu/%zu "
+                                "lanes", bad_lanes, bt);
                 return EXIT_FAILURE;
             }
         }

@@ -954,13 +954,14 @@ static int selftest_arm64_vl_api_run(struct test *test, int cpu)
 {
     (void)cpu;
 
-    if (arm64_cpu_has_sve() != !!(getauxval(AT_HWCAP) & HWCAP_SVE))
-        report_fail_msg("%s: arm64_cpu_has_sve() disagrees with getauxval(AT_HWCAP)", test->id);
-    if (arm64_cpu_has_sve2() != !!(getauxval(AT_HWCAP2) & HWCAP2_SVE2))
-        report_fail_msg("%s: arm64_cpu_has_sve2() disagrees with getauxval(AT_HWCAP2)", test->id);
-    if (arm64_cpu_has_sme() != !!(getauxval(AT_HWCAP2) & HWCAP2_SME))
-        report_fail_msg("%s: arm64_cpu_has_sme() disagrees with getauxval(AT_HWCAP2)", test->id);
-
+    /* No capability-vs-getauxval assertions here: arm64_cpu_has_{sve,
+     * sve2,sme}() are DEFINED as the very getauxval(AT_HWCAP/HWCAP2) bit
+     * tests an equality assertion would compare them against
+     * (arm64_vl.h), so such assertions are tautologies with zero
+     * detection power — removed (review comment 4). The effective checks
+     * below are cross-oracle: the rdvl/rdsvl INSTRUCTION results must be
+     * consistent with the HWCAP capability bits (nonzero VL iff the bit
+     * is set, 16-byte-aligned within [16,256] when set). */
     long vl = arm64_sve_vl_bytes();
     if (arm64_cpu_has_sve()) {
         if (vl < 16 || vl > 256 || (vl % 16) != 0)
@@ -2935,7 +2936,7 @@ FOREACH_DATATYPE(DATACOMPARE_TEST)
 #if defined(__aarch64__)
 {
     .id = "selftest_arm64_vl_api",
-    .description = "arm64_vl.h API invariants (capability/VL consistency, pin round-trip)",
+    .description = "arm64_vl.h API invariants: cross-oracle capability/VL consistency (rdvl/rdsvl vs HWCAP bits) and the no-capability pin guard; the pin round-trip lives in selftest_arm64_vl_require_sve",
     .groups = DECLARE_TEST_GROUPS(&group_test_hw_features),
     .test_run = selftest_arm64_vl_api_run,
     .desired_duration = -1,

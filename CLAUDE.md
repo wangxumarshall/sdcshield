@@ -106,11 +106,18 @@ END_DECLARE_TEST
   `physical_package_id` is large — firmware/ACPI-PPTT artifact, read as-is.
 - No `cpufreq` → `--vary-frequency`/`--vary-uncore-frequency` skip gracefully;
   no CPU `thermal_zone*` zones → thermal throttle is a no-op here.
-- `eigen_svd_double`/`eigen_sparse` fail sporadically under full-system
-  multithreading (ULP-level diffs vs strict memcmp; the original "192 CPUs"
-  records are from the cortex x3b machine — see the SVE rule below, this host
-  is the 96-CPU 0xd01) — `-n 1` always
-  passes. Eigen/large-core-count limitation, not a port defect.
+- `eigen_svd_double`/`eigen_sparse` full-core flakiness is **FIXED**
+  (2026-10-24, feat/eigen-svd-multithread): both now use the per-thread
+  same-source golden (H11' pattern — each worker generates its own input and
+  recomputes the golden on the same thread), so cross-thread Eigen
+  SIMD-path divergence can no longer produce false mismatches. Verified
+  64-core full-run green (3×240s×3 seeds, 10-min×2 tiers, 300s rerolls)
+  and gem5-fi FS 2-core `eigen_svd_double -n 2` pass. Run full-core;
+  `-n 1` is no longer required. Adaptive dims are time-calibrated
+  (`sdc_calibrated_dim`: two-probe power-law + k_floor, one solve ≤ ~2s so
+  the `-t` TERM is honoured); explicit `-O <test>.mdim/n` skips calibration.
+  The original "192 CPUs" flaky records are from the cortex x3b machine
+  (pre-fix code); earlier "-n 1 always passes" advice is obsolete.
 - SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 96 CPUs) has NO
   SVE/SME — all SVE/SME functional verification is gem5-fi only
   (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). Earlier "host is

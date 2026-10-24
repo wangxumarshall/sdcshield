@@ -25,11 +25,26 @@
 #include <stdbool.h>
 #include <sandstone.h>
 
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__linux__)
 #include <errno.h>
 #include <sys/auxv.h>
 #include <sys/prctl.h>
 #include <asm/hwcap.h>
+
+/* HWCAP fallbacks for build environments whose asm/hwcap.h predates the
+ * feature (e.g. openEuler 20.03-LTS ships kernel headers without
+ * HWCAP2_SME). Values per uapi asm/hwcap.h (verified against
+ * /usr/include/asm/hwcap.h, kernel 6.6: HWCAP_SVE 1<<22, HWCAP2_SVE2 1<<1,
+ * HWCAP2_SME 1<<23). */
+#ifndef HWCAP_SVE
+#define HWCAP_SVE (1UL << 22)
+#endif
+#ifndef HWCAP2_SVE2
+#define HWCAP2_SVE2 (1UL << 1)
+#endif
+#ifndef HWCAP2_SME
+#define HWCAP2_SME (1UL << 23)
+#endif
 
 /* prctl numbers/masks, for build environments whose linux/prctl.h predates
  * kernel 5.19 (SME). Values per uapi linux/prctl.h. */
@@ -167,7 +182,10 @@ static inline long arm64_require_sme_svl(struct test *test, long min_bits, long 
     return bits / 8;
 }
 
-#else /* !__aarch64__: include-safety stubs; x86-64 untouched by design. */
+#else /* !(__aarch64__ && __linux__): include-safety stubs — x86-64 untouched
+ * by design; non-Linux aarch64 has no <sys/auxv.h>/<asm/hwcap.h>, and the
+ * stubs make every query report absence so require-based tests skip cleanly
+ * (EXIT_SKIP via the callers' negative-return translation). */
 
 static inline bool arm64_cpu_has_sve(void)   { return false; }
 static inline bool arm64_cpu_has_sve2(void)  { return false; }
@@ -185,5 +203,5 @@ static inline long arm64_require_sme_svl(struct test *test, long min_bits, long 
     (void)test; (void)min_bits; (void)max_bits; return -1;
 }
 
-#endif /* __aarch64__ */
+#endif /* __aarch64__ && __linux__ */
 #endif /* SANDSTONE_ARM64_VL_H */

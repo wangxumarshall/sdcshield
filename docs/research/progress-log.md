@@ -683,6 +683,33 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   语言级不可编译); sleef 半侧待 spike; P6 存量迁移(含本阶段 6 个
   遗留手探文件)待做。
 
+## 2026-10-24（all-VL Phase 2 P5：sleef/eigen×8 按 spike 证据分流——真 VLA 迁移 + 自 pin 回退）
+
+- **双 spike 裁定**: sleef_sve+sve_rot×5 **真迁移**(TU 与 vendored SLEEF 3.9.0
+  双双纯 VLA——反汇编实证 cntd/cntp/rdvl 无 ptrue_pat; 三态编译探针零告警;
+  历史 "256 编译回归" 最可能系实验污染——整体翻 flag 连 Eigen 定长 TU 重编的
+  堆损坏张冠李戴, 失败转录无存世); eigen×2 **自 pin 回退**(Eigen packet 为
+  arm_sve_vector_bits 定长, VLA 语言级不可编译——PacketXcd struct 成员禁
+  sizeless/NumTraits sizeof 非法, 七类编译期消费点, 两次独立确证)。
+- **重构**(feat/sleef-eigen-allvl, 10 commit): meson 建 tests_sve_vla 真
+  VLA 库(-march=armv8.2-a+sve 无 vector-bits, sleef_dep 跟随)+sleef_sve
+  全改造+sve_rot×5 兑现迁移预排+eigen×2 自 pin。**两个实证驱动适配**:
+  ①pin 在 test_run 而非 init(fork 模式下 init 线程 VL 不传导给 worker,
+  sandstone_run.cpp:1186-1222 实证——消灭已丢失的 /tmp/vlrun 外部依赖);
+  ②漂移守卫用 arm64_sve_vl_bytes() 而非 svcntb()(128 编译 TU 下 GCC 把
+  svcntb()!=16 折叠为常量使守卫静默蒸发, .inst rdvl 不可折叠)。
+- **gem5 四档实证**(feat/sve512-dual @ 0db77fc7, sleef_vla_dual 终版):
+  kernel 换测试真 12 函数集(f64u10/u35 + f32u10)+真实 f32 输入域;
+  **跨档逐位一致判据达成**——fixed 四档 checksum 逐位相同
+  (8475eeba2772b999 ×4); sve_rot_dual 补证 kernel 48/48 全绿(lanes
+  2/4/8/16)。终版矩阵两 kernel 48/48 全绿。**跨档 oracle 抓到 kernel 自身
+  两缺陷**(double* 形参收 float[] 越界/域外垃圾输入触发 cosfx@128-bit
+  档位相关行为——诚实边界记录, 测试域内无此现象)。
+- **诚实边界**: eigen pin 的 prctl 往返无 SVE 宿主可实证(gem5 SE prctl=
+  ignoreFunc → 走 pin 失败 skip 路径); 其正确性=内核语义文档+汇编三段
+  守卫 objdump 实证。CLAUDE.md/README/architecture/adding-tests 四文档
+  同步(vlrun/sleef-128 失实表述置换)。
+
 ## 2026-10-24（all-VL Phase 2 P6：存量迁移收官——142 文件框架层化 + 分支拓扑修复）
 
 - **迁移成果**(feat/p6-allvl = PR #288, 三批并行代理 + P2 回并, 29+1 commit):

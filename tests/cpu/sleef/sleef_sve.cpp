@@ -34,9 +34,11 @@
  * plausibly experiment contamination (the whole-library flag flip
  * recompiled Eigen's fixed-width TUs, whose heap corruption got
  * attributed to sleef). Cross-tier byte-identity of the per-lane-pure
- * kernels is judged by the gem5-fi sleef_vla_dual 16-run matrix (four
- * tiers x {fixed, random x3}; kernel in place, matrix pending at this
- * commit — to be recorded on the gem5-fi side when run). u10 and u35
+ * kernels is judged by the gem5-fi sleef_vla_dual matrix (four tiers
+ * x {fixed, random x3} over the REAL 12-function call set on the
+ * test's own input domains): 48/48 green, fixed-mode checksums
+ * BYTE-IDENTICAL across all four tiers (8475eeba2772b999 x4) —
+ * see gem5-fi findings.md @ 0db77fc7). u10 and u35
  * are
  * SLEEF's two INDEPENDENT implementations of the same mathematics
  * (different coefficients, different FMA-chain schedules), so the

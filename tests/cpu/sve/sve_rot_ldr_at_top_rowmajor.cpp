@@ -28,7 +28,11 @@
  * Buffers are sized in VL slots (VLA by design; all-VL Phase 2 P5
  * migration DONE — compiled in the true-VLA tests_sve_vla library with
  * no -msve-vector-bits; spike evidence: three-state compile probe
- * 128/256/no-flag, zero warnings — see
+ * 128/256/no-flag, zero warnings; runtime evidence (all-VL Phase 2
+ * final review): the sve_rot_dual gem5 kernel (same asm ldr/str +
+ * rotating-ALU shape, 4 tiers x {fixed,random}x3) is 48/48 green
+ * with per-tier lanes 2/4/8/16 — gem5-fi feat/sve512-dual @
+ * 0db77fc7 — see
  * docs/superpowers/specs/2026-10-23-sve-sme-all-vl2-design.md §6).
  * @endparblock
  */

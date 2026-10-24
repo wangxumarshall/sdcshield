@@ -496,7 +496,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 
 仍无 knob 的测试（eigen NEON 家族、isal_crc×10、openssl×3 等）参数为编译期常量——参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态；ipsec×46（NEON）已于 2026-09-19 补齐 `datasize`。
 
-Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑在 SVE 向量后端（vendored Eigen 5.0 已补 `PacketXd`/`PacketXcd` double 与 complex<double> packet——svcmla 复数乘法、ptranspose 复数转置、gather/scatter 等全套，2026-09-19）。本机（VL=256）实测 300×300 复数 BDCSVD ~0.7 s（标量回退时代 >10 分钟）；VL=512 场景在 gem5 SE 模式功能验证（`scripts/eigen-sve-double/gem5/`）。注意（all-VL Phase 2 P5 起）：size-specific SVE 代码要求运行时向量长度等于编译期 `-msve-vector-bits`（128）——Eigen packet 定宽、VLA 语言级不可编译（spike 两次确证），故 `eigen_svd_cdouble_sve` 与 `eigen_gemm_double_max_arm` 在 `test_run` 内经 `arm64_sve_pin_vl(16)` 把 worker 线程自 pin 到编译期 VL，不再需要外部 launcher 先 pin 再 exec（pin 失败（内核限制）诚实 SKIP）。
+Eigen SVD：`eigen_svd_cdouble` 跑在 NEON 后端；`eigen_svd_cdouble_sve` 跑在 SVE 向量后端（vendored Eigen 5.0 已补 `PacketXd`/`PacketXcd` double 与 complex<double> packet——svcmla 复数乘法、ptranspose 复数转置、gather/scatter 等全套，2026-09-19）。cortex x3b 机器（VL=256，本战役前的工作主机）实测 300×300 复数 BDCSVD ~0.7 s（标量回退时代 >10 分钟；当前 0xd01 主机无 SVE）；VL=512 场景在 gem5 SE 模式功能验证（`scripts/eigen-sve-double/gem5/`）。注意（all-VL Phase 2 P5 起）：size-specific SVE 代码要求运行时向量长度等于编译期 `-msve-vector-bits`（128）——Eigen packet 定宽、VLA 语言级不可编译（spike 两次确证），故 `eigen_svd_cdouble_sve` 与 `eigen_gemm_double_max_arm` 在 `test_run` 内经 `arm64_sve_pin_vl(16)` 把 worker 线程自 pin 到编译期 VL，不再需要外部 launcher 先 pin 再 exec（pin 失败（内核限制）诚实 SKIP）。
 
 ## 架构支持
 

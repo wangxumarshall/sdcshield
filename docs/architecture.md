@@ -172,9 +172,14 @@ The vendored Eigen 5.0 SVE backend carries `double`/`complex<double>` packets
 (`PacketXd` in `arch/SVE/PacketMath.h`, `PacketXcd` + `arch/SVE/Complex.h`),
 making `eigen_svd_cdouble_sve` run vectorized SVD (~0.7 s at M_DIM 300 vs
 >10 min scalar). **Runtime-VL rule**: size-specific SVE code requires the
-process vector length to equal the compile-time `-msve-vector-bits`. The
+thread vector length to equal the compile-time `-msve-vector-bits`. The
 earlier "this host is VL=256" record was written on the cortex x3b machine;
 the current host (0xd01, Kunpeng 920) has no SVE at all, so the SVD SVE test
-cleanly skips here — on SVE hosts with VL≠128 it needs a
-`prctl(PR_SVE_SET_VL, 16)` pin (see `scripts/eigen-sve-double/` and
-`arm64_sve_pin_vl()`). `sleef_sve` compiles at 128 by design.
+cleanly skips here. All-VL Phase 2 P5: on SVE hosts with VL≠128 the Eigen
+pair (`eigen_svd_cdouble_sve`, `eigen_gemm_double_max_arm`) self-pins each
+worker thread inside `test_run` via `arm64_sve_pin_vl(16)` — no external
+launcher needed anymore (Eigen's SVE packets are compile-time fixed-width;
+VLA is un-compilable at the C++ language level per the twice-confirmed
+spike, so the 128-bit lock stays; a failed pin skips honestly).
+`sleef_sve` and the sve_rot probe family migrated to the true-VLA
+`tests_sve_vla` library (no `-msve-vector-bits`) — all-VL 128..1024-bit.

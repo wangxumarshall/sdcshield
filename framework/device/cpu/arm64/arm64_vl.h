@@ -114,7 +114,8 @@ static inline long arm64_sme_svl_bytes(void)
  * Semantics: bytes is masked to the 16-bit VL length field before the prctl,
  * so out-of-range values are silently truncated and bytes == 0 asks the
  * kernel to restore the default VL (not an error). The kernel rounds the
- * request to the nearest VL it supports; the return value is the effective
+ * request DOWN to the largest supported VL not exceeding the requested
+ * value; the return value is the effective
  * VL in bytes (>= 0) or -errno — callers MUST check it and must not assume
  * the exact request took effect. New threads created after the call inherit
  * the pinned VL (kernel-documented per-thread semantics). Verification

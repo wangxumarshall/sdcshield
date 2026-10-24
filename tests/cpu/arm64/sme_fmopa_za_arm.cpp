@@ -44,13 +44,15 @@
  * A one-step self-check runs before the chain (golden-vs-hardware on a
  * single FMOPA — a golden bug reports as a test bug, never as SDC).
  *
- * test_init probes getauxval(AT_HWCAP2) & HWCAP2_SME and returns a clean
- * EXIT_SKIP when absent (this Kunpeng 920 and cn23154's 5.10 kernel both
- * skip). If a kernel ever exposes the bit without truly enabling SME,
- * the SMSTART traps (SIGILL) — the fork-isolated child crashes and the
- * framework reports it; that outcome is itself diagnostic (documented
- * expectation, settled definitively by the selftest_sme_sigill_probe).
- * Requires the tests_arm64_sme library (-march=armv9-a+sme).
+ * test_init gates via the framework layer (arm64_require_sme_svl:
+ * HWCAP2_SME capability + 128..1024-bit SVL range in one call, all-VL
+ * Phase 2 P6) and returns a clean EXIT_SKIP when absent (this Kunpeng
+ * 920 and cn23154's 5.10 kernel both skip). If a kernel ever exposes
+ * the bit without truly enabling SME, the SMSTART traps (SIGILL) — the
+ * fork-isolated child crashes and the framework reports it; that
+ * outcome is itself diagnostic (documented expectation, settled
+ * definitively by the selftest_sme_sigill_probe). Requires the
+ * tests_arm64_sme library (-march=armv9-a+sme).
  * @endparblock
  */
 
@@ -63,8 +65,7 @@
 #include <vector>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
 // FMOPA accumulation steps per iteration.
@@ -131,16 +132,16 @@ static int sme_fmopa_za_arm_init(struct test *test)
     (void)test;
     return EXIT_SUCCESS;
 #else
-    unsigned long hwcap2 = getauxval(AT_HWCAP2);
-    if ((hwcap2 & HWCAP2_SME) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SME not exposed by this kernel (HWCAP2_SME unset; needs "
-                 "kernel >= 5.19 and hardware SME — e.g. HiSilicon 0xd22 "
-                 "has the hardware but its 5.10 kernel does not enable it). "
-                 "Run selftest_sme_sigill_probe to settle kernel support "
-                 "in one run.");
+    /* All-VL Phase 2 P6: HWCAP2_SME capability + 128..1024-bit SVL range
+     * in one framework-layer call, replacing the getauxval hand-probe
+     * (the old skip reason's kernel-version narrative lives on in the
+     * file header). The require return value is gate-only here: the
+     * tile_cols geometry below still reads its own rdsvl and is fenced
+     * off from this batch (geometry fixes are their own unit). */
+    const long svl = arm64_require_sme_svl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
+    (void)svl;
 
     try {
         auto data = std::make_unique<SmeFmopaData>();
@@ -149,6 +150,17 @@ static int sme_fmopa_za_arm_init(struct test *test)
         // current vector length; use __ARM_FEATURE_SME's __arm_get_current_vg
         // is clang-only; read SVCR-free via 'rdsvl' which works outside
         // streaming for the SM vector length on SME hardware).
+        //
+        // KNOWN PRE-EXISTING DEFECT (found in the all-VL Phase 2 P6
+        // gate audit, left untouched by its fence): the immediate below
+        // is 0, and RDSVL Xd, #imm computes SVL_bytes * imm — the
+        // encoding assembled here is 0x04bf5800 = rdsvl x0, #0 (vs the
+        // #1 form 0x04bf5820 the framework's arm64_sme_svl_bytes uses),
+        // so svl is ALWAYS 0 and tile_cols with it. On a real SME host
+        // the run-side loops then degenerate to zero columns (vacuous
+        // pass). A full fix — immediate, the bytes-vs-bits divisor, and
+        // the 16-byte asm b_stream stride vs its 16-floats-per-step
+        // layout — belongs to a dedicated geometry unit.
         long svl;
         __asm__ volatile("rdsvl %0, 0" : "=r"(svl));
         data->tile_cols = (size_t)svl / 32;

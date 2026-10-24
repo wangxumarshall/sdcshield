@@ -39,6 +39,15 @@
 #   另要求 head_sha 匹配且 status == completed。PR(issue)评论无 commit 绑定字段,
 #   只能时间锚定——push 时间已是可作下界的最强锚定(timeline 的 committed 事件
 #   无 created_at 字段、head_ref_force_pushed 仅 force push 产生,均实证)。
+# 时钟偏差容差(±300s,见 CLOCK_SKEW_TOLERANCE)仅限回退锚: push_time 与条目
+#   时间同属 GitHub 服务器钟,无本机偏差可言,锚定保持严格(防同 SHA 强推回退,
+#   意见#22 先例);仅回退 committer date(本机钟盖戳,可快/慢于服务器)时,对
+#   commit 锚严格匹配(锚定字段存在且 == head,字段缺失不算)的条目放宽——
+#   严格匹配的条目不可能早于 head 存在,放宽不影响甄别目标(意见 1)。
+#   pr-agent 检视评论是 issue 评论中唯一例外: 尾部 review-state JSON 的
+#   last_run.head_sha 是可证属于当前 head 的严格锚,回退锚容差窗口内严格命中
+#   者计入(与 review/行级评论的 commit_strict_match 前提同构);无 commit 绑定
+#   字段的其余 issue 评论不放宽(意见 2)。
 #
 # 意见计数与「信号」分开: 摘要/LGTM 类不计入待处置意见——APPROVED/DISMISSED
 # review、coderabbit walkthrough/汇总评论(其发现以行级评论另行计入)、bot-coverage
@@ -60,7 +69,7 @@ import sys
 import textwrap
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
 # 第 5 bot(本地 claude)唯一标记: 从 pr_local_review 导入,避免字面量漂移。
@@ -287,6 +296,11 @@ class PRData:
     opinion_count: int = 0                                  # 当前 head 的实质意见数
     opinion_breakdown: dict = field(default_factory=dict)
     annotations_fetch_failed: bool = False
+    # 超带诊断(意见 5): list[(kind, ts, 偏差秒)]——commit 锚严格匹配却被时间锚
+    # 排除、且落在锚前 >容差 的条目。此类条目「可证属于当前 head」却早于锚,
+    # 只剩两种解释: 时钟超带(本机钟远快于服务器)或同 SHA 强推回退,均须人工
+    # 甄别,如实告警而非静默丢弃。
+    skew_suspects: list = field(default_factory=list)
 
 
 # ============ 工具函数 ============
@@ -313,13 +327,6 @@ def bot_of(item: dict) -> Optional[str]:
     return LOGIN_TO_BOT.get((item.get("user") or {}).get("login") or "")
 
 
-def is_after_head(item: dict, ts_key: str, anchor_time: datetime) -> bool:
-    """时间锚定: 条目时间 ≥ 锚定下界(甄别 GitHub 重锚定的旧意见;
-    anchor_time = 当前 head 的 push 时间(可得)或 committer date(回退))。"""
-    ts = parse_ts(item.get(ts_key))
-    return ts is not None and ts >= anchor_time
-
-
 def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
     """commit 锚定: 条目锚定的 commit 匹配当前 head 才计入。
     sha_keys 按优先级取第一个非空字段(review 用 commit_id;行级评论用
@@ -330,6 +337,48 @@ def commit_anchored(item: dict, sha_keys: tuple, head_sha: str) -> bool:
         if sha:
             return sha == head_sha
     return True
+
+
+# 时钟偏差容差: 条目锚定的 commit 严格匹配当前 head 时,时间锚放宽的下界。
+# **仅限回退锚**(committer date,意见 1): push_time 与条目时间同属 GitHub
+# 服务器钟,无本机偏差可言,push_time 锚不放宽(严格锚防同 SHA 强推回退,
+# 意见#22 先例)。背景(2026-10-24 九个 open PR 实证): 本机时钟快于 GitHub
+# 服务器约 1 分钟,commit 的 committer date 由本机钟盖戳;events 窗口(约
+# 300 条)被 9 个 PR 的 bot/CI 事件挤掉 PushEvent 后,时间锚回退 committer
+# date → 合法 bot 信号(greptile 对全部 9 个 PR 当前 head 的 review,
+# commit_id 精确匹配)落在锚前数十秒被整批误杀。commit 锚严格匹配的条目
+# 不可能早于 head 存在,时间锚仅防 force-push 回退同 SHA 等病态场景,按此
+# 容差放宽不影响甄别目标。
+CLOCK_SKEW_TOLERANCE = timedelta(seconds=300)
+
+
+def commit_strict_match(item: dict, sha_keys: tuple, head_sha: str) -> bool:
+    """commit 锚严格匹配: 锚定字段存在且 == 当前 head(区别于 commit_anchored
+    的「字段缺失回退 True」——那只是兜底,不能作为放宽时间锚的依据)。"""
+    for key in sha_keys:
+        sha = item.get(key)
+        if sha:
+            return sha == head_sha
+    return False
+
+
+def head_anchored(item: dict, ts_key: str, anchor: datetime,
+                  sha_keys: tuple, head_sha: str, skew: timedelta) -> bool:
+    """双锚定组合判定(时钟偏差加固版),替代旧实现各调用点
+    「时间锚定(is_after_head,已删)+ commit_anchored」的分离组合:
+    - 常规路径(时间 ≥ anchor): 维持原语义(commit_anchored 含字段缺失回退);
+    - anchor 前 skew 内: 仅 commit 锚严格匹配时计入。
+    skew 由锚来源决定(意见 1,见 fetch_pr 推导): push_time 锚(服务器钟,与
+    条目时间同源无偏差)→ timedelta(0) 严格不放宽,防同 SHA 强推回退
+    (意见#22 先例);仅回退 committer date 锚(本机钟盖戳,可快/慢于服务器)
+    → CLOCK_SKEW_TOLERANCE。"""
+    ts = parse_ts(item.get(ts_key))
+    if ts is None:
+        return False
+    if ts >= anchor:
+        return commit_anchored(item, sha_keys, head_sha)
+    return (ts >= anchor - skew
+            and commit_strict_match(item, sha_keys, head_sha))
 
 
 def is_summary_text(body: str) -> bool:
@@ -456,6 +505,36 @@ def issue_comment_bot(item: dict, head_sha: str) -> Optional[str]:
     return None
 
 
+def pragent_strict_head(item: dict, head_sha: str) -> bool:
+    """pr-agent 评论的严格 commit 锚: 尾部 review-state JSON 的 last_run.head_sha
+    存在且 == 当前 head。区别于 issue_comment_bot 的「head 为 None 回退时间锚定」
+    语义——head 缺失/解析失败时无证据可证属于当前 head,不构成放宽时间锚的
+    依据(与 review/行级评论的 commit_strict_match 同前提)。"""
+    head = pragent_comment_head(item)
+    return head is not None and head == head_sha
+
+
+def issue_comment_anchored(item: dict, anchor: datetime,
+                           head_sha: str, skew: timedelta) -> bool:
+    """issue(PR)评论的计入判定(时钟偏差加固版,意见 2 收窄):
+    - ts ≥ anchor → 计入(常规路径,全体 bot);
+    - anchor 前 skew 窗口内: 仅 pr-agent 检视评论且严格锚命中
+      (last_run.head_sha 存在且 == head)才计入;
+    - 其余(窗口外/无绑定/锚不命中)→ 不计入。
+    无 commit 绑定字段的评论(codex/coderabbit/greptile/local-claude 的 issue
+    评论)不放宽: 放宽的依据是「条目可证属于当前 head」(严格锚),无绑定字段
+    就没有这个证据——窗口内旧 head 的 issue 评论一旦放进,误计损失大于时钟
+    偏差场景下的误杀(超带场景由 skew_suspects 诊断告警)。"""
+    ts = parse_ts(item.get("created_at"))
+    if ts is None:
+        return False
+    if ts >= anchor:
+        return True
+    return (ts >= anchor - skew
+            and pragent_comment(item)
+            and pragent_strict_head(item, head_sha))
+
+
 # ============ 拉取与判定 ============
 
 _EVENTS_CACHE: dict = {}   # slug → events 列表(进程内缓存;status 总览多 PR 只拉一次)
@@ -523,6 +602,10 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # 不可得时回退 committer date(行为不劣于修复前)。
     push_time = fetch_push_time(slug, head.get("ref") or "", head_sha)
     anchor = push_time or head_time
+    # 时钟偏差容差仅限回退锚(意见 1): push_time 与条目时间同属 GitHub 服务器
+    # 钟,无本机偏差可言,锚定保持严格(防同 SHA 强推回退,意见#22 先例);仅
+    # 回退 committer date(本机钟盖戳,可快/慢于服务器)时放宽 300s。
+    skew = timedelta(0) if push_time else CLOCK_SKEW_TOLERANCE
 
     reviews = gh_api_paged(f"repos/{slug}/pulls/{number}/reviews")
     review_comments = gh_api_paged(f"repos/{slug}/pulls/{number}/comments")
@@ -591,8 +674,12 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None or r.get("state") not in REVIEW_SIGNAL_STATES:
             continue
         ts = parse_ts(r.get("submitted_at"))
-        counted = (ts is not None and ts >= anchor
-                   and commit_anchored(r, ("commit_id",), head_sha))
+        counted = head_anchored(r, "submitted_at", anchor,
+                                ("commit_id",), head_sha, skew)
+        if (not counted and ts is not None and ts < anchor - skew
+                and commit_strict_match(r, ("commit_id",), head_sha)):
+            data.skew_suspects.append(
+                ("review", ts, (anchor - ts).total_seconds()))
         data.signals.append(Signal(
             bot=bot, kind="review", time=ts or anchor, counted=counted,
             detail=f'review({r.get("state")})',
@@ -607,8 +694,14 @@ def fetch_pr(slug: str, number: int) -> PRData:
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
-        counted = (ts is not None and ts >= anchor
-                   and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha))
+        counted = head_anchored(c, "created_at", anchor,
+                                ("original_commit_id", "commit_id"),
+                                head_sha, skew)
+        if (not counted and ts is not None and ts < anchor - skew
+                and commit_strict_match(c, ("original_commit_id", "commit_id"),
+                                        head_sha)):
+            data.skew_suspects.append(
+                ("review_comment", ts, (anchor - ts).total_seconds()))
         loc = f'{c.get("path") or "?"}:{c.get("line") or c.get("original_line") or "?"}'
         data.signals.append(Signal(
             bot=bot, kind="review_comment", time=ts or anchor, counted=counted,
@@ -618,14 +711,21 @@ def fetch_pr(slug: str, number: int) -> PRData:
     # ---- PR(issue)评论: pr-agent 评论按内容标记纳入(head_sha 锚定见 issue_comment_bot) ----
     # issue 评论无 commit 绑定字段,时间锚定下界用 push 时间(意见#22: commit→push
     # 窗口内旧 head 的评论不得计入;push 时间不可得时 anchor 已回退 committer date)。
+    # 唯一例外(意见 2): pr-agent 评论有 last_run.head_sha 严格锚,回退锚容差
+    # 窗口内严格命中者计入——见 issue_comment_anchored。
     for c in issue_comments:
         bot = issue_comment_bot(c, head_sha)
         if bot is None:
             continue
         ts = parse_ts(c.get("created_at"))
+        counted = issue_comment_anchored(c, anchor, head_sha, skew)
+        if (not counted and ts is not None and ts < anchor - skew
+                and pragent_comment(c) and pragent_strict_head(c, head_sha)):
+            data.skew_suspects.append(
+                ("issue_comment", ts, (anchor - ts).total_seconds()))
         data.signals.append(Signal(
             bot=bot, kind="issue_comment", time=ts or anchor,
-            counted=ts is not None and ts >= anchor,
+            counted=counted,
             detail='PR 评论',
         ))
 
@@ -653,8 +753,8 @@ def fetch_pr(slug: str, number: int) -> PRData:
             bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
-        if not (is_after_head(r, "submitted_at", anchor)
-                and commit_anchored(r, ("commit_id",), head_sha)):
+        if not head_anchored(r, "submitted_at", anchor,
+                             ("commit_id",), head_sha, skew):
             continue
         if not body or is_summary_text(body):
             continue
@@ -675,14 +775,14 @@ def fetch_pr(slug: str, number: int) -> PRData:
             bot = "local-claude"
         if bot is None:
             continue
-        if (is_after_head(c, "created_at", anchor)
-                and commit_anchored(c, ("original_commit_id", "commit_id"), head_sha)):
+        if head_anchored(c, "created_at", anchor,
+                         ("original_commit_id", "commit_id"), head_sha, skew):
             n_rcomment += 1
     n_icomment = 0
     for c in issue_comments:
         body = (c.get("body") or "")
         if (issue_comment_bot(c, head_sha)
-                and is_after_head(c, "created_at", anchor)
+                and issue_comment_anchored(c, anchor, head_sha, skew)
                 and body.strip() and not is_summary_text(body)):
             if pragent_comment(c):
                 # pr-agent: 按尾部 JSON 的 ACTIVE findings 计(outside-diff 的
@@ -767,6 +867,9 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
     供 verify_reply_completeness 做双向集合差——真实数据,不是自产数组。
     """
     anchor = pr.push_time or pr.head_time
+    # 容差推导与 fetch_pr 同口径(意见 1): push_time 锚严格(timedelta(0)),
+    # 仅回退 committer date 锚放宽 CLOCK_SKEW_TOLERANCE。
+    skew = timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE
     inline = set()
     for c in pr.review_comments:
         bot = bot_of(c)
@@ -775,9 +878,9 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
             bot = "local-claude"
         if bot is None:
             continue
-        if not (is_after_head(c, "created_at", anchor)
-                and commit_anchored(c, ("original_commit_id", "commit_id"),
-                                    pr.head_sha)):
+        if not head_anchored(c, "created_at", anchor,
+                             ("original_commit_id", "commit_id"),
+                             pr.head_sha, skew):
             continue
         path = c.get("path") or ""
         line = c.get("line")
@@ -796,8 +899,8 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
             bot = "local-claude"
         if bot is None or r.get("state") not in REVIEW_OPINION_STATES:
             continue
-        if not (is_after_head(r, "submitted_at", anchor)
-                and commit_anchored(r, ("commit_id",), pr.head_sha)):
+        if not head_anchored(r, "submitted_at", anchor,
+                             ("commit_id",), pr.head_sha, skew):
             continue
         if not raw_body.strip() or is_summary_text(raw_body):
             continue
@@ -810,7 +913,7 @@ def _real_opinion_inventory(pr: PRData) -> tuple:
     for c in pr.issue_comments:
         body = c.get("body") or ""
         if not (issue_comment_bot(c, pr.head_sha)
-                and is_after_head(c, "created_at", anchor)
+                and issue_comment_anchored(c, anchor, pr.head_sha, skew)
                 and body.strip() and not is_summary_text(body)):
             continue
         if pragent_comment(c):
@@ -913,6 +1016,18 @@ def fmt_bots(pr: PRData) -> str:
     return "".join("✓" if pr.bot_done.get(b) else "✗" for b in BOT_ORDER)
 
 
+def format_skew_warning(pr: PRData) -> Optional[str]:
+    """超带诊断行(意见 5): 严格锚定却落在锚前 >容差 的条目汇总,无则 None。
+    阈值随锚来源走(与计入判定同口径): 回退锚 300s / push_time 锚 0s。"""
+    if not pr.skew_suspects:
+        return None
+    worst = max(delta for _, _, delta in pr.skew_suspects)
+    tol = int((timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE)
+              .total_seconds())
+    return (f"⚠ 疑似时钟超带或同 SHA 回退: {len(pr.skew_suspects)} 条严格锚定"
+            f"条目落在锚前 >{tol}s(最远 {int(worst)}s)——请人工甄别,勿静默丢弃")
+
+
 def print_opinions(pr: PRData) -> None:
     bd = pr.opinion_breakdown
     print(f"  当前 head 待处置意见: {pr.opinion_count} 条"
@@ -962,6 +1077,9 @@ def print_detail(pr: PRData, slug: str, quiet: int) -> None:
         age = int((now - pr.latest_signal).total_seconds())
         print(f"  最新信号: {fmt_ts(pr.latest_signal)}(距今 {age}s,静默窗 {quiet}s)")
     print_opinions(pr)
+    warn = format_skew_warning(pr)
+    if warn:
+        print(f"  {warn}")
     if pr.check_runs:
         print(f"  check runs({len(pr.check_runs)} 个):")
         for e in pr.check_runs:
@@ -1105,7 +1223,13 @@ def _collect_entries(pr: PRData) -> list:
     entries = []
 
     def era_mark(ts: datetime) -> str:
-        if ts >= pr.head_time:
+        # 阈值与意见计数同口径: 时间锚下界 = push_time(可得,严格)或 head_time
+        # (回退,放宽 CLOCK_SKEW_TOLERANCE)。否则回退锚容差窗口内(锚前 ≤300s)
+        # 被计入的条目会被标「历史轮次勿重复处置」——计入了却叫人勿处置,自相
+        # 矛盾(自检发现);push_time 锚下窗口为空,同样与计数一致。
+        anchor = pr.push_time or pr.head_time
+        skew = timedelta(0) if pr.push_time else CLOCK_SKEW_TOLERANCE
+        if ts >= anchor - skew:
             return "当前 head"
         return "历史轮次(GitHub 重锚定: 产生于当前 head 之前,仅供参考,勿重复处置)"
 
@@ -1198,6 +1322,9 @@ def render_collect(pr: PRData, slug: str, quiet: int) -> str:
       f"摘要/LGTM 类不计)")
     if pr.annotations_fetch_failed:
         A("- 注意: 部分 annotations 拉取失败,annotations 计数可能低估")
+    warn = format_skew_warning(pr)
+    if warn:
+        A(f"- {warn}")
     A("")
     A("## 五 bot 完成度(当前 head)")
     for bot in BOT_ORDER:

@@ -598,3 +598,88 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   独立验证(build 零新警告+selftest/zstd19 真实输出),20.03 编译失败用
   v4.19 uapi 模拟复现+修复对照实证。
 - **承接**:P2(SME fmopa_za 收尾)起各阶段另行计划(spec §6)。
+
+## 2026-10-24（all-VL Phase 2 P3：sve512 家族×10 全 VL 化——issue #182 疑点清除）
+
+- **探索结论**:8/10 文件几何早已 svcnt 动态(512-ism 全为文案), 真重构仅
+  xlswave(Phase A 硬 512 双向量几何: B_TILE=16/n+8/result+8 越界/闭式 golden
+  绑定 512 对齐)与 libomp(micro[8] 栈缓冲 1024-bit 档溢出)。
+- **gem5 四档实证**(feat/sve512-dual @ ea86b681, 3 kernel × 4 档 × {fixed,
+  random×3} = 48 run 全绿): sve512_chain_dual 四模式(f64 链/块 slab 寻址/
+  f32 链/特殊值类别比对)lanes 逐档 2/4/8/16 与 4/8/16/32; sve512_gather_dual
+  两模式(1d_tag 索引标签断言/2d_block whilelt 尾)gn=128..1024;
+  stencil_axis_dual(bt=4..32, 7bed7f0e 全 VL 版+memcpy 告警修复)。**issue
+  #182 疑点清除**: 128-bit 档全部模式字节级全绿——历史 GH runner VL=128
+  golden 失配在 gem5-fi O3 全 VL 语义下不复现。chain 16 checksum 互异;
+  gather 同档 fixed/random checksum 相同系设计属性(FNV 按地址序, dst 内容
+  与排列无关, 源码核实)。
+- **重构**(feat/sve512-allvl, 11 commit): 范本 f64_chain_arm(a08302c0)+
+  xlswave bt 参数化(235a9c47, 闭式→stencil_axis 式标量 golden, result
+  [kTileMax]+result+lanes 修越界)+批量代理 8 文件(隔离 worktree, 五段式:
+  require(128,1024)/lanes=svl÷8|÷4+NDEBUG-proof 范围检查/漂移 fail-closed/
+  文案)+meson 注释同步(a7a8c941, 含 ~360MB/~2.7GiB 先存错误值修正)。libomp
+  micro[8]→[16] 实义容量修复。
+- **验证模式**: 48 run 与 8 文件批改均由隔离 subagent 执行(用户指令);
+  主 agent 并行完成范本/xlswave/P4 计划。每文件构建 TU 零告警+skip 干净
+  (框架编译特性门)+zstd19 pass。
+- **诚实边界**: 本机无 SVE, 各档功能行为以 kernel 家族级四档证据为锚
+  (同 kernel 形态=同验证目标的聚类 scoping, spec §6 "≈5-6 kernel"落实为
+  3 个); splitmix64 死代码系 H12' 先存遗留; f64_special_svd 缺
+  fracture_loop_count 一致性问题记账未动。
+- **承接**:P4(ipsec HMAC×17)计划已就绪(docs/superpowers/plans/
+  2026-10-24-sve-sme-all-vl2-p4.md)。
+
+## 2026-10-24（all-VL Phase 2 P4：ipsec HMAC×17 流数参数化——两个既有缺陷随阶段修复）
+
+- **既有缺陷修复**(评估代理实证, 随 P4 落地): ①门控无上界——旧
+  `svcntw()<8||svcntd()<4` 只查下界, VL≥512 硬件上 svst1 向 8 宽 W 行写
+  16/32 lane(越界栈写+串行污染); 修复=STREAMS_MAX_32/64 定维+require
+  范围门+nstreams 填充三重防线。②data_size knob[1024,16MB] vs HMAC
+  组装栈缓冲 2048B/流——>1975/1903 即溢出; 修复=hmac 层容量守卫
+  (void→int 返回值, 17×3 调用点检查)+测试 knob 上限钳 1900/1830。
+- **重构**(feat/ipsec-allvl, 21 commit): 内核/HMAC 头参数化(内部
+  推导 n=svcntw()/svcntd()——向量通路按 VL 动作是自然律, 调用点最小
+  化; 向量代码零改动, 只动 C 层数组维度/循环边界)+17 测试五段式+
+  verify.cpp 运行时化+meson 注释同步。docblock "Eight lanes"(4 流文件
+  实为 4 lane 的复制残留失实)一并修正。
+- **gem5 四档实证**(feat/sha-dual @ 955f766d, 16 run=四档×{fixed,
+  random×3}, 隔离代理执行): 流数逐档 4/8/16/32(32-bit 族)与 2/4/8/16
+  (64-bit 族); 全部 SDCSHIELD_FAILS=0; **"VL=128 可跑"命题实证**(4/2
+  流全绿); W 定宽 32/16 在 512/1024 档无越界。**两轮验证**: 首轮
+  16/16 FAIL——验证代理抓住 kernel 标量 golden 两缺陷(&sw[0][s] 把
+  [word][stream] 布局当连续状态, 行 1-4 恒 IV; mini-HMAC 两独立块被
+  xN 连续读越界), 依规止步未提交; 修复后同矩阵全绿。findings.md 两轮
+  完整入档——"零告警构建≠正确"的纪律实录。
+- **验证模式**: 16-run 与 20-commit 实施均由隔离 subagent 执行; 每文件
+  TU 零告警+skip 干净(框架编译特性门)+终态全量构建零告警+zstd19 pass。
+- **诚实边界**: verify.cpp 的 5200 向量 OpenSSL 重验需 SVE 硬件(本机
+  仅编译验证, commit 正文记录); hmac 容量守卫的 init 侧失败经
+  report_fail_msg 会表现为 Skipped("Unexpected OS error")而非干净
+  Failed——knob 钳制后不可达, 纯纵深防御, 记账。
+- **承接**:P5(sleef/eigen×8)Eigen 侧已裁自 pin 回退(spike 证据: VLA
+  语言级不可编译); P6 存量迁移(含本阶段 6 个遗留手探文件)待做。
+
+## 2026-10-24 · P5 sleef 半侧实证收口(PR #286 检视闭环)
+
+- **sleef_sve 真 VLA 迁移的 16-run 矩阵全绿**(merge blocker 解除):
+  gem5-fi `sleef_vla_dual`(feat/sleef-vla-dual @ 6d740525),四档
+  (128/256/512/1024-bit)×{fixed,random×3},全部 SDCSHIELD_FAILS=0;
+  同一输入集 checksum 四档逐位一致(跨档字节同一性成立,per-lane 纯度
+  +尾精确的设计预期);三重保真闭环——gem5 向量 vs 标量 worst 0.00 ulp
+  + 真硬件标量锚(宿主用同一 libsleef.a 逐位一致),阴性对照(金标准/
+  输入 1-ulp 毒化)确认检测链非空转。内核直链 vendored libsleef.a
+  (与 tests_sve_vla 同一机器码),12 函数矩阵镜像 sleef_sve.cpp。
+- **sve_rot×5 家族归并裁定**(诚实边界):与 sleef_sve 同批迁入真 VLA
+  库、迁移机制同构(同库同 flag),但**风险面不同构**——sleef 拉入整库
+  VLA 机器码(深),sve_rot 是自写浅内核(裸 z-ldr/str + 整数 _x 算子,
+  无 whilelt 尾无库代码);本矩阵可背书"库迁移模式"半边,**不能**当作
+  sve_rot 指令面验证。sve_rot 维持 compile-probe-only,若需收口应补
+  小型 sve_rot_vla_dual(z-ldr/str + 整数算子 × 四档)——登记为后续
+  可选工作项,不阻塞本 PR。
+- **gem5 SE 边界新实证**:guest 退出码不传播(exit(7)→gem5 退 0),
+  "真实退出码"记 gem5 进程码;F3(SVE2_MOVI 读回 DEVIATION)根因 open
+  (上下文相关 O3 现象,孤立复现失败),SLEEF 不受影响由价值级证据独立
+  证明——均入档 gem5-fi findings.md。
+- **PR #286 检视闭环累计**:三笔修复(meson 硬件描述勘误/xlswave 失败
+  现场位型 dump/17 处 ipsec 注释口径)+ 47 提交 rebase 线性化
+  (git-sanity)+ 本实证收口。

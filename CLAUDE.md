@@ -128,6 +128,12 @@ END_DECLARE_TEST
   TERM is honoured); explicit `-O <test>.mdim/n` skips calibration.
   The original "192 CPUs" flaky records are from the cortex x3b machine
   (pre-fix code); earlier "-n 1 always passes" advice is obsolete.
+  Detection channel (disclosure): the same-source repeat detects
+  non-deterministic defects (transient/intermittent/marginal — same
+  input, different bits); it is structurally blind to deterministic
+  core defects (golden and re-run go through the same wrong path and
+  match bit-exactly) — those are covered by the independent
+  golden-value test family (fixed golden data).
 - SVE runtime-VL rule: this host (0xd01, Kunpeng 920, 128 CPUs = 2×64
   cores, 32 GB) has NO
   SVE/SME — all SVE/SME functional verification is gem5-fi only

@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792921612754,
+  "lastUpdate": 1793010391603,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -2299,6 +2299,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 20.53,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "61b3d5a0b6e230ab3a806832a0ac809577262ac1",
+          "message": "Merge pull request #293 from wangxumarshall/docs/allvl2-hardening-plan\n\nWIP: docs/allvl2-hardening-plan",
+          "timestamp": "2026-10-26T10:06:25Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/61b3d5a0b6e230ab3a806832a0ac809577262ac1"
+        },
+        "date": 1793010389633,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 169895.153,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 90709.773,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 177.892,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 63.292,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.348,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.96,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.486,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.386,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 41975.816,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 3.306,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 21.851,
             "unit": "s"
           }
         ]

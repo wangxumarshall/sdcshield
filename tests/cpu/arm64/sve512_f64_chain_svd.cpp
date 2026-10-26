@@ -5,20 +5,28 @@
  *
  * @test @b sve512_f64_chain_svd
  * @parblock
- * SVD-format f64 FMLA dependency chain SDC stress — the SVE-512 datapath
+ * SVD-format f64 FMLA dependency chain SDC stress — the SVE datapath
  * with an SVD-scale working set.
  *
  * Differs from sve512_f64_chain_arm:
- *   - working set 1.44 MB (300x300 complex<double>-equivalent) vs 64 KB,
- *     so it overflows L2 (512 KB) and forces continuous L1D<->L2<->L3
- *     traffic, mirroring eigen_svd_cdouble_sve's memory footprint;
+ *   - working set scales with the lanes (5.9..47.3 MB across m and a
+ *     over the 128..1024-bit tiers) vs 64 KB, so it overflows L2
+ *     (512 KB) at every tier and forces continuous L1D<->L2<->L3
+ *     traffic, mirroring eigen_svd_cdouble_sve's complex<double>
+ *     300x300 footprint;
  *   - nested block traversal (BLOCK_ROWS x BLOCK_COLS) matching Eigen
  *     BDCSVD's block-of-matrix access pattern instead of a flat stream.
  *
  * Still a serial svmla_f64_x chain (512 steps), byte-exact compared to a
  * scalar std::fma reference. Compiled WITHOUT -msve-vector-bits so it uses
- * the CPU runtime vector length (512-bit on HiSilicon 0xd22). Non-SVE CPUs
- * return a clean EXIT_SKIP.
+ * the CPU runtime vector length — all-VL (128..1024-bit, all-VL Phase 2
+ * P3; the pre-P3 512-bit single-value gate and its issue #182 caveat are
+ * cleared by the four-tier dual-kernel evidence in gem5-fi
+ * feat/sve512-dual). test_init gates via the framework layer
+ * (arm64_require_sve_vl: HWCAP_SVE capability + range check in one call,
+ * no SVE instruction executes before the probe), returning a clean
+ * EXIT_SKIP on SVE-less CPUs; test_run re-checks the VL and fails closed
+ * on drift.
  * @endparblock
  */
 
@@ -27,15 +35,18 @@
 #include <cinttypes>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <vector>
+#include <atomic>
 
 #ifdef __aarch64__
-#include <sys/auxv.h>
-#include <asm/hwcap.h>
 #include <arm_sve.h>
+#include <device/cpu/arm64/arm64_vl.h>
 #endif
 
+// Serial FMA chain length per iteration — VL-independent (a per-lane
+// dependency sequence; the lane count, not the length, scales with VL).
 static constexpr size_t CHAIN_STEPS = 512;
 
 // SVD-scale working set: 300x300 doubles = 720 KB. With two operand
@@ -137,26 +148,27 @@ static void report_f64_lane_mismatch(const char *tag, size_t lane,
 
 static int sve512_f64_chain_svd_init(struct test *test)
 {
-    unsigned long hwcap = getauxval(AT_HWCAP);
-    if ((hwcap & HWCAP_SVE) == 0) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "ARM64 SVE not available; sve512_f64_chain_svd requires SVE");
+    /* All-VL Phase 2 P3: capability + 128..1024-bit range check in one
+       framework-layer call (the geometry has been svcnt-dynamic all
+       along; only the old single-value gate pinned one tier). The
+       historical VL=128 golden mismatch on a hosted CI runner
+       (issue #182) is cleared by the four-tier dual-kernel evidence
+       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       returns the VL in BYTES — f64 lanes = svl/8, range-checked
+       below (release-effective, NDEBUG-proof). */
+    const long svl = arm64_require_sve_vl(test, 128, 1024);
+    if (svl < 0)
         return EXIT_SKIP;
-    }
-
-    /* 本测试族为 512-bit VL 设计并在 HiSilicon 0xd22 上验证;GH 托管 SVE
-     * runner(运行时 VL=128)上实测 golden 失配(issue #182)。 */
-    if (svcntb() != 64) {
-        log_skip(CpuNotSupportedSkipCategory,
-                 "SVE vector length is not 512-bit on this CPU; the sve512 "
-                 "family is designed and validated at 512-bit VL only "
-                 "(HiSilicon 0xd22, see issue #182)");
-        return EXIT_SKIP;
-    }
 
     try {
         auto data = std::make_unique<SveF64ChainSvdData>();
-        data->vl_d = svcntd();
+        data->vl_d = (size_t)svl / 8;   /* f64 lanes = SVL bytes / 8 */
+        if (data->vl_d < 2 || data->vl_d > 16) {
+            log_error("sve512_f64_chain_svd: f64 lanes %zu outside "
+                      "[2,16] — unit drift (svl %ld bytes)",
+                      data->vl_d, svl);
+            return EXIT_FAILURE;
+        }
 
         /* randomization hardening H12': framework RNG per run (-s
          * reproducible) instead of fixed splitmix/table indices; the
@@ -194,9 +206,11 @@ static int sve512_f64_chain_svd_init(struct test *test)
 
         // SVD-scale operand streams, block-major: one contiguous
         // CHAIN_STEPS x VL slab per 16x16 block origin, 19x19 blocks.
-        // = 361 * 512 * VL f64 elements (~11.8 MB per stream at a 512-bit
-        // VL, 23.7 MB across m and a — 46x L2, matching the SVD working-
-        // set goal without the old layout's 2.7 GiB-per-stream blowup).
+        // = 361 * 512 * VL f64 elements — the working set is proportional
+        // to the lanes: across m and a the four tiers (128/256/512/1024-
+        // bit) total 5.9/11.8/23.7/47.3 MB, every tier far beyond L2,
+        // keeping the SVD overflow intent (and staying far from the old
+        // layout's 2.7 GiB-per-stream blowup).
         const size_t n_blocks_r = (SVD_ROWS + SVD_BLOCK_ROWS - 1) / SVD_BLOCK_ROWS;
         const size_t n_blocks_c = (SVD_COLS + SVD_BLOCK_COLS - 1) / SVD_BLOCK_COLS;
         const size_t total = n_blocks_r * n_blocks_c * CHAIN_STEPS * data->vl_d;
@@ -222,6 +236,120 @@ static int sve512_f64_chain_svd_run(struct test *test, int cpu)
 {
     (void)cpu;
     auto *d = static_cast<SveF64ChainSvdData *>(test->data);
+
+    /* All-VL policy #3: fail closed on init/run VL drift. */
+    if (svcntd() != d->vl_d) {
+        log_error("sve512_f64_chain_svd: VL drifted between init (%zu "
+                  "lanes) and run (%u lanes)", d->vl_d, (unsigned)svcntd());
+        report_fail_msg("sve512_f64_chain_svd: SVE VL drifted between "
+                        "init and run");
+    }
+
+    /* ===================================================================
+     * DEBUG PROBE — debug/n2-sve-zero-probe branch ONLY. REMOVE BEFORE
+     * MERGE. One-shot per process, block (0,0) focus. CI on the hosted
+     * N2 runner (VL=128) shows this test's vector path emitting all-zero
+     * lane values while the scalar golden over the same memory is
+     * correct. The probes below bisect the failing stage:
+     *   P0 environment (VL, FPCR/FPSR, buffer addresses, maps region)
+     *   P1 raw scalar reads of slab (0,0) — is the memory non-zero?
+     *   P2 svld1 round-trip of &m[0] — does the vector LOAD see it?
+     *   P3 one svmla_f64_x step on P2 values — does FMLA compute?
+     *   P4 full 512-step slab-(0,0) chain on the BIG buffer, from this
+     *       probe's own loop (fresh codegen, not f64_chain_hw's)
+     *   P5 the same chain over a fresh small heap copy of slab (0,0)
+     * For block (0,0) block_slab_base() is 0, so P4 addresses are
+     * byte-identical to the passing sve512_f64_chain_arm flat pattern —
+     * any P4-vs-arm divergence isolates buffer/allocation or codegen.
+     * =================================================================== */
+    static std::atomic<int> probe_once{0};
+    if (!probe_once.exchange(1)) {
+        const size_t lanes = d->vl_d;
+        const svbool_t pg = svptrue_b64();
+        uint64_t fpcr = 0, fpsr = 0;
+        asm volatile("mrs %0, fpcr" : "=r"(fpcr)::);
+        asm volatile("mrs %0, fpsr" : "=r"(fpsr)::);
+        const size_t slab00_elems = CHAIN_STEPS * lanes;
+        const size_t buf_bytes = d->m_f64.size() * sizeof(uint64_t);
+        log_error("PROBE P0 env: svcntd=%u vl_d=%zu fpcr=%08" PRIx64
+                  " fpsr=%08" PRIx64 " m=%p a=%p seeds=%p buf_bytes=%zu",
+                  (unsigned)svcntd(), lanes, fpcr, fpsr,
+                  (void *)d->m_f64.data(), (void *)d->a_f64.data(),
+                  (void *)d->seeds_f64.data(), buf_bytes);
+        /* P1 — raw scalar reads of the first slab. */
+        log_error("PROBE P1 mem: seed0=%016" PRIx64 " seed1=%016" PRIx64
+                  " m0=%016" PRIx64 " m1=%016" PRIx64
+                  " a0=%016" PRIx64 " a1=%016" PRIx64,
+                  d->seeds_f64[0], d->seeds_f64[1],
+                  d->m_f64[0], d->m_f64[1], d->a_f64[0], d->a_f64[1]);
+        /* P2 — vector load round-trip on the big buffer. */
+        uint64_t scr2[16] = {0}, scr3[16] = {0}, scr4[16] = {0},
+                scr5[16] = {0};
+        svfloat64_t vm0 = svld1_f64(pg,
+            reinterpret_cast<const double *>(d->m_f64.data()));
+        svst1_f64(pg, reinterpret_cast<double *>(scr2), vm0);
+        log_error("PROBE P2 vld: m_vec0=%016" PRIx64 " m_vec1=%016" PRIx64,
+                  scr2[0], scr2[1]);
+        /* P3 — one FMLA step. */
+        svfloat64_t accp = svld1_f64(pg,
+            reinterpret_cast<const double *>(d->seeds_f64.data()));
+        svfloat64_t va0 = svld1_f64(pg,
+            reinterpret_cast<const double *>(d->a_f64.data()));
+        accp = svmla_f64_x(pg, accp, vm0, va0);
+        svst1_f64(pg, reinterpret_cast<double *>(scr3), accp);
+        log_error("PROBE P3 fma: step0=%016" PRIx64 " step1=%016" PRIx64,
+                  scr3[0], scr3[1]);
+        /* P4 — full slab-(0,0) chain on the big buffer (probe loop). */
+        svfloat64_t acc4 = svld1_f64(pg,
+            reinterpret_cast<const double *>(d->seeds_f64.data()));
+        for (size_t i = 0; i < CHAIN_STEPS; ++i) {
+            const size_t base = block_slab_base(0, 0, lanes) + i * lanes;
+            svfloat64_t m = svld1_f64(pg,
+                reinterpret_cast<const double *>(&d->m_f64[base]));
+            svfloat64_t a = svld1_f64(pg,
+                reinterpret_cast<const double *>(&d->a_f64[base]));
+            acc4 = svmla_f64_x(pg, acc4, m, a);
+        }
+        svst1_f64(pg, reinterpret_cast<double *>(scr4), acc4);
+        log_error("PROBE P4 big: full0=%016" PRIx64 " full1=%016" PRIx64,
+                  scr4[0], scr4[1]);
+        /* P5 — same chain over a fresh small heap copy of slab (0,0). */
+        std::vector<uint64_t> small_m(d->m_f64.begin(),
+                                      d->m_f64.begin() + slab00_elems);
+        std::vector<uint64_t> small_a(d->a_f64.begin(),
+                                      d->a_f64.begin() + slab00_elems);
+        svfloat64_t acc5 = svld1_f64(pg,
+            reinterpret_cast<const double *>(d->seeds_f64.data()));
+        for (size_t i = 0; i < CHAIN_STEPS; ++i) {
+            svfloat64_t m = svld1_f64(pg,
+                reinterpret_cast<const double *>(&small_m[i * lanes]));
+            svfloat64_t a = svld1_f64(pg,
+                reinterpret_cast<const double *>(&small_a[i * lanes]));
+            acc5 = svmla_f64_x(pg, acc5, m, a);
+        }
+        svst1_f64(pg, reinterpret_cast<double *>(scr5), acc5);
+        log_error("PROBE P5 small: full0=%016" PRIx64 " full1=%016" PRIx64
+                  " small_m=%p small_bytes=%zu",
+                  scr5[0], scr5[1], (void *)small_m.data(),
+                  small_m.size() * sizeof(uint64_t));
+        /* P0b — /proc/self/maps region containing the big buffer. */
+        FILE *maps = fopen("/proc/self/maps", "r");
+        if (maps) {
+            char line[512];
+            const uintptr_t mp = (uintptr_t)d->m_f64.data();
+            while (fgets(line, sizeof(line), maps)) {
+                unsigned long s, e;
+                if (sscanf(line, "%lx-%lx", &s, &e) == 2 &&
+                    mp >= (uintptr_t)s && mp < (uintptr_t)e) {
+                    log_error("PROBE P0b maps: %s", line);
+                    break;
+                }
+            }
+            fclose(maps);
+        }
+    }
+    /* ================== END DEBUG PROBE — REMOVE ================== */
+
     std::vector<uint64_t> gold64(d->vl_d);
     std::vector<uint64_t> hw(d->vl_d);
 
@@ -246,7 +374,7 @@ static int sve512_f64_chain_svd_run(struct test *test, int cpu)
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_f64_chain_svd: SVE-512 f64 chain SDC detected");
+                "sve512_f64_chain_svd: SVE f64 chain SDC detected");
             return EXIT_FAILURE;
         }
     } while (test_time_condition(test));
@@ -263,8 +391,9 @@ static int sve512_f64_chain_svd_cleanup(struct test *test)
 #endif // __aarch64__
 
 DECLARE_TEST(sve512_f64_chain_svd,
-             "SVD-format SVE-512 f64 FMLA chain: 1.44 MB working set + "
-             "nested block traversal, byte-exact vs scalar fma()")
+             "SVD-format SVE f64 FMLA chain: lanes-proportional SVD-scale "
+             "working set + nested block traversal (all-VL 128..1024-bit "
+             "via arm64_require_sve_vl), byte-exact vs scalar fma()")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = sve512_f64_chain_svd_init,
     .test_run = sve512_f64_chain_svd_run,

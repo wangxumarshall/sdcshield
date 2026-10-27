@@ -1561,7 +1561,8 @@ class TestPhases(unittest.TestCase):
         lines = [json.loads(x) for x in buf.getvalue().splitlines()
                  if x.startswith("{")]
         self.assertEqual(len(lines), 5)        # p2 = 5 个频点
-        self.assertIn("eigen_svd_double", lines[0]["eigen"])
+        # -e 值是逗号连接的单个列表元素，须用子串匹配（SDD 裁定 11 修正）
+        self.assertTrue(any("eigen_svd_double" in x for x in lines[0]["eigen"]))
 ```
 
 （文件头部需补 `import json`。）

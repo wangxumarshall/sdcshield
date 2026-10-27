@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793075922923,
+  "lastUpdate": 1793096709347,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -2453,6 +2453,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 18.283,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "f9046e4b22d2babee6f161f78e0b6b89b055ae3d",
+          "message": "Merge pull request #299 from wangxumarshall/feat/arm64-spec-policy\n\nfeat(arm64): 芯片规格探测 + 按最高档选/跑用例 + Eigen 逐档分派",
+          "timestamp": "2026-10-27T06:01:25Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/f9046e4b22d2babee6f161f78e0b6b89b055ae3d"
+        },
+        "date": 1793096706979,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 171817.433,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 90908.355,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 8.952,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 4.006,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.769,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 4.052,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 5.843,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.73,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 41477.422,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.519,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 23.119,
             "unit": "s"
           }
         ]

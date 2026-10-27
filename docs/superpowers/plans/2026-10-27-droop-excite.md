@@ -1406,14 +1406,19 @@ def dmesg_text():
 
 
 def refine_iters(step, paths):
-    """高频目标（>=1kHz）先 3s mod-only 探测，按实测频率修正 iters。
-    spec：--freq-hz 独立校准在高频有相位开销偏差，驱动闭环修正。"""
+    """闭环频率修正：mod-only 探测后按实测频率缩放 iters。
+    覆盖规则（SDD 裁定 9）：探测需 ≥2 个门控周期才能测频，探测时长上限
+    30s——覆盖 P1 全部低频点（0.1Hz→20s 探测）；更低的频率直接跑，实测
+    频率由摘要如实报告。动因：T2 修正轮 2 发现代码布局会使 stall 的
+    独立校准（2.0 cyc/iter）偏离门内实际（~1.0），低频直射的 off 相位
+    因此减半、duty 轴失真——闭环探测度量的是门内真实节拍，不受布局影响。"""
     if step.get("on_iters") is not None or not step.get("freq_hz"):
         return
-    if step["freq_hz"] < 1e3:
+    two_periods = 2.0 / step["freq_hz"]
+    if two_periods > 30.0:
         return
     probe = dict(step)
-    probe["duration"] = 3
+    probe["duration"] = max(3.0, two_periods)
     probe["dir"] = os.path.join(step["dir"], "probe")
     os.makedirs(probe["dir"], exist_ok=True)
     cmd = build_mod_cmd(probe, paths)

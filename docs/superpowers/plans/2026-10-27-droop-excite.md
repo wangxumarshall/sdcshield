@@ -1933,7 +1933,11 @@ def step_metrics(step_dir):
         s = json.load(f)
     rows = load_bmc_csv(os.path.join(step_dir, "bmc.csv"))
     t = s["timeline"]
-    pre = window(rows, t["pre_start"], t["dwell_start"])
+    # 基线取 pre 窗口的空闲尾部：refine probe 突发落在窗口头部（SDD T3 审查
+    # 发现⑤/裁定 13），整窗均值会系统性抬高基线、失真 V_sag。
+    # 15.0 与 run_step 的 pre_secs 默认值耦合，改动需同步。
+    pre = window(rows, max(t["pre_start"], t["dwell_start"] - 15.0),
+                 t["dwell_start"])
     dwell = window(rows, t["dwell_start"], t["dwell_end"])
     psu = psu_total_series(dwell)
     temps = [v for r in dwell

@@ -1,0 +1,18 @@
+Outlet Temp      | 35.000     | degrees C  | ok    | na        | na        | na        | 75.000    | na        | na
+CPU1 Core Rem    | 63.000     | degrees C  | ok    | na        | na        | na        | 105.000   | na        | na
+CPU2 Core Rem    | 45.000     | degrees C  | ok    | na        | na        | na        | 105.000   | na        | na
+CPU1 MEM Temp    | 35.000     | degrees C  | ok    | na        | na        | na        | 95.000    | na        | na
+CPU2 MEM Temp    | 28.000     | degrees C  | ok    | na        | na        | na        | 95.000    | na        | na
+Power            | 270.000    | Watts      | ok    | na        | na        | na        | na        | na        | na
+Power2           | 264.000    | Watts      | ok    | na        | na        | na        | na        | na        | na
+PS2 IIn          | 1.200      | Amps       | ok    | na        | na        | na        | na        | na        | na
+PS2 IOut         | 19.980     | Amps       | ok    | na        | na        | na        | na        | na        | na
+PS2 POut         | 238.000    | Watts      | ok    | na        | na        | na        | na        | na        | na
+CPU1 N_VDDAVS    | 0.910      | Volts      | ok    | na        | 0.770     | na        | na        | 0.990     | na
+CPU2 N_VDDAVS    | 0.890      | Volts      | ok    | na        | 0.770     | na        | na        | 0.990     | na
+CPU1 VDDAVS      | 0.890      | Volts      | ok    | na        | 0.730     | na        | na        | 1.150     | na
+CPU2 VDDAVS      | 0.890      | Volts      | ok    | na        | 0.730     | na        | na        | 1.150     | na
+CPU1 VDDFIX      | 0.800      | Volts      | ok    | na        | 0.720     | na        | na        | 0.880     | na
+CPU2 VDDFIX      | 0.800      | Volts      | ok    | na        | 0.720     | na        | na        | 0.880     | na
+CPU1 HVCC        | 1.200      | Volts      | ok    | na        | 1.080     | na        | na        | 1.320     | na
+CPU2 HVCC        | 1.190      | Volts      | ok    | na        | 1.080     | na        | na        | 1.320     | na

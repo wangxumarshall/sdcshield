@@ -290,3 +290,205 @@ def run_step(step, paths, thresholds, pre_secs=15.0, post_secs=15.0,
             logger.kill()                       # 记录器僵死：强杀后收割
             logger.wait()
     return step
+
+
+# ---------------- 阶段步生成 ----------------
+def steps_p0(duration=300):
+    m24 = mod_cores(24, "same")
+    return [
+        {"id": "p0_1_idle_baseline", "mod": None, "mod_cores": [],
+         "eigen_cores": [], "duration": 60, "note": "空载基线"},
+        {"id": "p0_2_eigen_full", "mod": None, "mod_cores": [],
+         "eigen_cores": eigen_cores([]), "duration": duration,
+         "note": "eigen 满载基线+热轨迹（功率护栏收紧数据）"},
+        {"id": "p0_3_pvdit_full", "mod": "power_virus_dit",
+         "mod_cores": eigen_cores([]), "eigen_cores": [],
+         "duration": duration, "note": "现有 di/dt 载荷对照（~数百kHz 点）"},
+        {"id": "p0_4_eigen_plus_pvdit", "mod": "power_virus_dit",
+         "mod_cores": m24, "eigen_cores": eigen_cores(m24),
+         "duration": duration, "note": "分核 co-run 冒烟"},
+    ]
+
+
+def steps_p1(duration=90, payloads=("dep", "ilp2")):
+    m = mod_cores(24, "same")
+    steps = []
+    for pl in payloads:      # 载荷裁决：100% duty 满载功率对比（无 eigen，隔离测量）
+        steps.append({"id": f"p1_payload_{pl}", "mod": "droop_mod",
+                      "payload": pl, "freq_hz": 1.0, "duty": 1.0,
+                      "mod_cores": m, "eigen_cores": [], "duration": 120,
+                      "note": "payload 裁决（100% duty 功率对比）"})
+    for f in (0.1, 0.25, 0.5, 1.0):
+        for duty in (0.25, 0.5, 0.75):
+            for pl in payloads:
+                steps.append({"id": f"p1_f{f:g}_d{duty}_{pl}",
+                              "mod": "droop_mod", "payload": pl,
+                              "freq_hz": f, "duty": duty, "mod_cores": m,
+                              "eigen_cores": eigen_cores(m),
+                              "duration": duration,
+                              "note": "低频标定：BMC 电平差 → ΔI"})
+    return steps
+
+
+def steps_p2(duration=120):
+    m = mod_cores(24, "same")
+    return [{"id": f"p2_f{f:g}", "mod": "droop_mod", "payload": "dep",
+             "freq_hz": f, "duty": 0.5, "mod_cores": m,
+             "eigen_cores": eigen_cores(m), "duration": duration,
+             "note": "中频过渡"} for f in (1e3, 1e4, 1e5, 1e6, 1e7)]
+
+
+def steps_p3(payload="dep", duration=120):
+    m = mod_cores(24, "same")
+    freqs = [1e6, 2e6, 5e6, 1e7, 2e7, 5e7, 7.5e7, 1e8, 1.25e8, 1.5e8,
+             1.75e8, 2e8]
+    dense = {2e7, 5e7, 1e8, 1.5e8}
+    steps = []
+    for f in freqs:
+        for d in ((0.3, 0.5, 0.7) if f in dense else (0.5,)):
+            steps.append({"id": f"p3_f{f:g}_d{d}", "mod": "droop_mod",
+                          "payload": payload, "freq_hz": f, "duty": d,
+                          "mod_cores": m, "eigen_cores": eigen_cores(m),
+                          "duration": duration, "note": "目标频段扫频"})
+    return steps
+
+
+def steps_p3b(freq, duty, payload="dep", duration=120):
+    steps = []
+    for place in ("same", "cross"):
+        for mcount in (8, 16, 32, 64):
+            m = mod_cores(mcount, place)
+            steps.append({"id": f"p3b_m{mcount}_{place}",
+                          "mod": "droop_mod", "payload": payload,
+                          "freq_hz": freq, "duty": duty,
+                          "mod_cores": m, "eigen_cores": eigen_cores(m),
+                          "duration": duration, "note": "M/放置扫描"})
+    return steps
+
+
+def steps_p4(freq, duty, payload, duration=2400, placement="same", m=24):
+    mcores = mod_cores(m, placement)
+    return [{"id": "p4_best", "mod": "droop_mod", "payload": payload,
+             "freq_hz": freq, "duty": duty, "mod_cores": mcores,
+             "eigen_cores": eigen_cores(mcores), "duration": duration,
+             "eigen_tests": EIGEN_TESTS_FULL,
+             "note": "最优配置强化驻留：全家族 eigen + 最强调制（40min）"}]
+
+
+# ---------------- 心跳 ----------------
+def start_heartbeat(data_root, phase):
+    import threading
+    state = {"phase": phase, "step": "", "n": 0}
+    stop = threading.Event()
+    hb = os.path.join(data_root, "heartbeat.json")
+
+    def loop():
+        while not stop.wait(10.0):
+            state["n"] += 1
+            state["ts"] = time.time()
+            try:
+                with open(hb, "w") as f:
+                    json.dump(state, f)
+            except OSError:
+                pass
+    th = threading.Thread(target=loop, daemon=True)
+    th.start()
+    return stop, state
+
+
+# ---------------- CLI ----------------
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--phase", required=True,
+                    choices=["p0", "p1", "p2", "p3", "p3b", "p4"])
+    ap.add_argument("--data-root", default="/home/sdc/droop-excite")
+    ap.add_argument("--repo",
+                    default="/home/sdc/wangxu/operator/sdcshield")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--step-duration", type=float, default=None)
+    ap.add_argument("--payload", default="dep",
+                    help="p3/p3b/p4 的调制载荷（P1 裁决结果）")
+    ap.add_argument("--freq", type=float, default=None,
+                    help="p3b/p4 的频率（P3/P3b 最优结果）")
+    ap.add_argument("--duty", type=float, default=None,
+                    help="p3b/p4 的占空比")
+    args = ap.parse_args(argv)
+
+    if not args.dry_run:
+        assert_topology()
+    run_id = time.strftime("%Y%m%dT%H%M%S")
+    run_dir = os.path.join(args.data_root, f"{args.phase}_{run_id}")
+    paths = {"droop_mod": os.path.join(HERE, "droop_mod"),
+             "sdcshield": os.path.join(args.repo, "builddir", "sdcshield"),
+             "run_dir": run_dir}
+
+    if args.phase == "p0":
+        steps = steps_p0()
+    elif args.phase == "p1":
+        steps = steps_p1()
+    elif args.phase == "p2":
+        steps = steps_p2()
+    elif args.phase == "p3":
+        steps = steps_p3(payload=args.payload)
+    elif args.phase == "p3b":
+        if args.freq is None or args.duty is None:
+            sys.exit("p3b 需要 --freq/--duty（来自 p3 最优）")
+        steps = steps_p3b(args.freq, args.duty, payload=args.payload)
+    else:
+        if None in (args.freq, args.duty):
+            sys.exit("p4 需要 --freq/--duty/--payload（来自 p3/p3b 最优）")
+        steps = steps_p4(args.freq, args.duty, args.payload)
+    if args.step_duration:
+        for s in steps:
+            s["duration"] = args.step_duration
+
+    if args.dry_run:
+        for s in steps:
+            s["dir"] = "(dry)"
+            print(json.dumps(
+                {"id": s["id"],
+                 "mod": build_mod_cmd(s, paths) if s.get("mod") else None,
+                 "eigen": build_eigen_cmd(s, paths)
+                 if s.get("eigen_cores") else None},
+                ensure_ascii=False))
+        return 0
+
+    if os.geteuid() != 0:
+        sys.exit("需要 root（ipmitool / SCHED_FIFO）")
+    if any(s.get("mod") == "droop_mod" for s in steps) \
+            and not os.path.exists(paths["droop_mod"]):
+        sys.exit(f"missing {paths['droop_mod']}（先编译：见 README）")
+    if any(s.get("eigen_cores") or s.get("mod") == "power_virus_dit"
+           for s in steps) \
+            and not os.path.exists(paths["sdcshield"]):
+        sys.exit(f"missing {paths['sdcshield']}（--repo 指定仓库）")
+    os.makedirs(run_dir, exist_ok=True)
+
+    thresholds = dict(DEFAULT_THRESHOLDS)
+    th_path = os.path.join(args.data_root, "thresholds.json")
+    if os.path.exists(th_path):      # P0 之后可收紧持久化
+        with open(th_path) as f:
+            thresholds.update(json.load(f))
+    hb_stop, hb_state = start_heartbeat(args.data_root, args.phase)
+    try:
+        for s in steps:
+            hb_state["step"] = s["id"]
+            print(f"=== {s['id']} ({s.get('note', '')}) ===", flush=True)
+            run_step(s, paths, thresholds)
+            if s.get("sdc_suspect"):
+                print("SDC 疑似事件 —— 停机取证（spec D4）。证据目录：",
+                      s["dir"], flush=True)
+                break
+            if s.get("aborted"):
+                print("护栏触发，中止当步：", s["aborted"], flush=True)
+    finally:
+        hb_stop.set()
+    print("run_dir:", run_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """run_sweep 单元测试。"""
+import json
 import os
 import sys
 import tempfile
@@ -104,6 +105,40 @@ class TestBuilders(unittest.TestCase):
         self.assertEqual(cmd[:3], ["taskset", "-c", "8,9"])
         self.assertIn("-e", cmd)
         self.assertIn("eigen_svd_double", cmd[cmd.index("-e") + 1])
+
+
+class TestPhases(unittest.TestCase):
+    def test_steps_p0_shape(self):
+        steps = run_sweep.steps_p0()
+        self.assertEqual(len(steps), 4)
+        self.assertIsNone(steps[0]["mod"])                    # 空载基线
+        self.assertEqual(steps[3]["mod"], "power_virus_dit")  # 零代码冒烟
+        self.assertTrue(steps[2]["eigen_cores"] or steps[2]["mod_cores"])
+
+    def test_steps_p1_count(self):
+        self.assertEqual(len(run_sweep.steps_p1()), 2 + 4 * 3 * 2)
+
+    def test_steps_p3_dense_duty(self):
+        steps = run_sweep.steps_p3(payload="dep")
+        self.assertEqual(len(steps), 12 + 8)   # 12 频点 duty .5 + 4 密集点×2 额外 duty
+
+    def test_dry_run_emits_commands(self):
+        import io
+        import contextlib
+        import unittest.mock as mock
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(run_sweep, "assert_topology", lambda: None):
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    rc = run_sweep.main(["--phase", "p2", "--dry-run",
+                                         "--data-root", td,
+                                         "--repo", "/nonexistent"])
+        self.assertEqual(rc, 0)
+        lines = [json.loads(x) for x in buf.getvalue().splitlines()
+                 if x.startswith("{")]
+        self.assertEqual(len(lines), 5)        # p2 = 5 个频点
+        # -e 值是逗号连接的单个列表元素，须用子串匹配（SDD 裁定 11 修正）
+        self.assertTrue(any("eigen_svd_double" in x for x in lines[0]["eigen"]))
 
 
 if __name__ == "__main__":

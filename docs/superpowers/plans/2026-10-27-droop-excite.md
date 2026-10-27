@@ -2067,7 +2067,7 @@ Spec: `docs/superpowers/specs/2026-10-27-droop-resonance-excitation-design.md`
 ## 组成
 | 文件 | 职责 |
 |---|---|
-| droop_mod.c | 周期级负载调制器（aarch64 NEON；指令计数门控 0.1Hz-325MHz） |
+| droop_mod.c | 周期级负载调制器（aarch64 NEON；指令计数门控，理论 0.1Hz-325MHz、0103 实测硬顶 ~228MHz[最小 iters]，高频直射欠靶由驱动 refine 闭环修正） |
 | bmc_logger.py | BMC 传感器轮询 → CSV（≥3s 节奏；in-band ipmitool，root） |
 | run_sweep.py | 战役驱动（P0-P4 阶段、护栏、心跳、SDC 停机取证） |
 | analyze.py | 分层排序表（ΔI / V_sag / 事件） |

@@ -46,6 +46,7 @@ tools/droop-excite/
 ### Task 1: bmc_logger.py（BMC 遥测记录器）
 
 **Files:**
+- Create: `tools/droop-excite/.gitignore`
 - Create: `tools/droop-excite/bmc_logger.py`
 - Create: `tools/droop-excite/tests/fixtures/sensor_list_0103.txt`
 - Test: `tools/droop-excite/tests/test_bmc_logger.py`
@@ -133,7 +134,17 @@ CPU2 HVCC        | 1.190      | Volts      | ok    | na        | 1.080     | na 
 Run: `python3 -m unittest discover -s tools/droop-excite/tests -v`
 Expected: FAIL/ERROR（`No module named 'bmc_logger'`）。
 
-- [ ] **Step 4: 实现 bmc_logger.py**
+- [ ] **Step 4: 实现 .gitignore 与 bmc_logger.py**
+
+先建 `tools/droop-excite/.gitignore`（防编译产物/字节码入库——后续任务会在本目录编译 droop_mod 二进制）：
+
+```
+/droop_mod
+__pycache__/
+*.pyc
+```
+
+再建 `tools/droop-excite/bmc_logger.py`：
 
 ```python
 #!/usr/bin/env python3
@@ -2094,7 +2105,7 @@ SDC / 调制器 exit 2 / RAS / 稳定性）。多核相位相干度不可远程�
 python3 -m unittest discover -s tools/droop-excite/tests -v   # 全 PASS
 bash tools/droop-excite/tests/test_droop_mod.sh               # ALL PASS
 ./builddir/sdcshield --list-tests | wc -l                     # 与实验前一致（484）
-./builddir/sdcshield -e zstd19 -t 2000 -n 2>&1 | tail -1      # exit: pass
+./builddir/sdcshield -e zstd19 -t 2000 -n 1 2>&1 | tail -1  # exit: pass（CLAUDE.md 基线命令）
 git status --porcelain framework/ tests/ meson.build          # 空输出=框架零改动
 ```
 Expected: 全部符合；真实输出引用到进展日志。

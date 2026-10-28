@@ -73,6 +73,7 @@ def step_metrics(step_dir):
         "psu_min_w": min(psu) if psu else None,
         "psu_max_w": max(psu) if psu else None,
         "v_sag_sock0_mv": None, "v_sag_sock1_mv": None,
+        "vddavs_sag_sock0_mv": None, "vddavs_sag_sock1_mv": None,
         "t_max_c": max(temps) if temps else None,
         "eigen_rc": s.get("eigen_rc"), "mod_rc": s.get("mod_rc"),
         "aborted": s.get("aborted"),
@@ -83,6 +84,13 @@ def step_metrics(step_dir):
         base, low = _vmean(pre, key), _vmin(dwell, key)
         if base is not None and low is not None:
             metrics[f"v_sag_sock{sock}_mv"] = round((base - low) * 1000.0, 1)
+    # P0 实测（0103，2026-10-28）：N_VDDAVS 轨在 BMC 粒度下量化平坦（满载
+    # +144W 仍恒 0.910/0.890），VDDAVS 轨响应负载（0.890→0.860，30mV）。
+    # 故双轨都算，排序按最深轨——见 rank_tables。
+    for sock, key in ((0, "CPU1 VDDAVS"), (1, "CPU2 VDDAVS")):
+        base, low = _vmean(pre, key), _vmin(dwell, key)
+        if base is not None and low is not None:
+            metrics[f"vddavs_sag_sock{sock}_mv"] = round((base - low) * 1000.0, 1)
     return metrics
 
 
@@ -117,13 +125,26 @@ def rank_tables(runs):
         lines.append(f"| {s['id']} | {s['payload']} | {_fmt(s['freq_hz'])} | "
                      f"{_fmt(s['duty'])} | {_fmt(s['i_p2p_w'])} | "
                      f"{_fmt(s['psu_max_w'])} | {_fmt(s['t_max_c'])} |")
-    by_v = sorted([s for s in allsteps if s["v_sag_sock0_mv"] is not None],
-                  key=lambda s: -(s["v_sag_sock0_mv"] or 0))
-    h, sep = hdr(["step", "v_sag_sock0_mv", "v_sag_sock1_mv", "psu_max_w"])
-    lines += ["", "## 2. V_sag（mV，socket0 降序）", "", h, sep]
+    def sag_key(s):
+        vals = [v for v in (s["v_sag_sock0_mv"], s["v_sag_sock1_mv"],
+                            s["vddavs_sag_sock0_mv"], s["vddavs_sag_sock1_mv"])
+                if v is not None]
+        return max(vals) if vals else 0
+
+    by_v = sorted([s for s in allsteps
+                   if s["v_sag_sock0_mv"] is not None
+                   or s["vddavs_sag_sock0_mv"] is not None],
+                  key=lambda s: -sag_key(s))
+    h, sep = hdr(["step", "v_sag_sock0_mv", "v_sag_sock1_mv",
+                  "vddavs_sag_sock0_mv", "vddavs_sag_sock1_mv", "psu_max_w"])
+    lines += ["", "## 2. V_sag（mV，按最深轨降序；0103 实测 N_VDDAVS 量化"
+              "平坦、VDDAVS 响应负载）", "", h, sep]
     for s in by_v:
         lines.append(f"| {s['id']} | {_fmt(s['v_sag_sock0_mv'])} | "
-                     f"{_fmt(s['v_sag_sock1_mv'])} | {_fmt(s['psu_max_w'])} |")
+                     f"{_fmt(s['v_sag_sock1_mv'])} | "
+                     f"{_fmt(s['vddavs_sag_sock0_mv'])} | "
+                     f"{_fmt(s['vddavs_sag_sock1_mv'])} | "
+                     f"{_fmt(s['psu_max_w'])} |")
     ev = [s for s in allsteps
           if s.get("sdc_suspect") or s.get("aborted")
           or (s.get("ras_delta") or 0) > 0 or (s.get("sel_delta") or 0) > 0]

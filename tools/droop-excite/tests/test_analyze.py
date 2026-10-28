@@ -44,6 +44,8 @@ class TestStepMetrics(unittest.TestCase):
             m = analyze.step_metrics(d)
         self.assertEqual(m["i_p2p_w"], 100.0)          # 500-400
         self.assertEqual(m["v_sag_sock0_mv"], 20.0)    # (0.91-0.89)*1000
+        self.assertEqual(m["vddavs_sag_sock0_mv"], 20.0)  # VDDAVS 轨同值
+        self.assertEqual(m["vddavs_sag_sock1_mv"], 20.0)
         self.assertEqual(m["n_samples"], 2)
         self.assertEqual(m["t_max_c"], 60.0)
 
@@ -93,6 +95,42 @@ class TestStepMetrics(unittest.TestCase):
             m = analyze.step_metrics(d)
         self.assertEqual(m["v_sag_sock0_mv"], 20.0)   # 尾部 0.91，非整窗 0.93
         self.assertEqual(m["v_sag_sock1_mv"], 20.0)
+        self.assertEqual(m["vddavs_sag_sock0_mv"], 20.0)
+        self.assertEqual(m["vddavs_sag_sock1_mv"], 20.0)
+
+    def test_vddavs_rail_sag_p0_evidence(self):
+        # P0 实测复刻（0103，2026-10-28）：N_VDDAVS 恒 0.910（满载 +144W
+        # 量化平坦），VDDAVS 0.890→0.860（30mV 响应）。断言双轨指标各自
+        # 正确，排序表含新列。
+        with tempfile.TemporaryDirectory() as td:
+            d = os.path.join(td, "steps", "s_p0")
+            os.makedirs(d)
+            rows = [HEADER]
+
+            def emit(ts, nv, vv, p):
+                rows.append(f"{ts},{nv},{nv},{vv},{vv},{p / 2},{p / 2},10,60,50")
+
+            emit(5.0, 0.910, 0.890, 540)    # pre
+            emit(25.0, 0.910, 0.890, 540)   # pre 尾部（基线）
+            emit(40.0, 0.910, 0.860, 684)   # dwell：N 轨不动，VDDAVS 下垂
+            emit(50.0, 0.910, 0.870, 660)
+            with open(os.path.join(d, "bmc.csv"), "w") as f:
+                f.write("\n".join(rows) + "\n")
+            summary = {"id": "s_p0", "timeline": {"pre_start": 0,
+                                                  "dwell_start": 30,
+                                                  "dwell_end": 60,
+                                                  "post_end": 90},
+                       "payload": "dep", "freq_hz": 0.5, "duty": 0.5,
+                       "mod_cores": [0], "note": "", "sdc_suspect": False,
+                       "aborted": None, "ras_delta": 0, "sel_delta": 0,
+                       "eigen_rc": 0, "mod_rc": 0}
+            with open(os.path.join(d, "summary.json"), "w") as f:
+                json.dump(summary, f)
+            m = analyze.step_metrics(d)
+            md = analyze.rank_tables([td])
+        self.assertEqual(m["v_sag_sock0_mv"], 0.0)        # N 轨量化平坦
+        self.assertEqual(m["vddavs_sag_sock0_mv"], 30.0)  # 0.890-0.860
+        self.assertIn("vddavs_sag_sock0_mv", md)          # 排序表含新列
 
 
 if __name__ == "__main__":

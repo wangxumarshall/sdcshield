@@ -41,8 +41,14 @@
  *    clears the bit of a faulting element, so the FFR is only meaningful
  *    against an all-ones starting state. (A faulting LDFF1 is not
  *    exercised — that is kernel territory; the mapped case checks the FFR
- *    datapath itself.) FMAXV tree reduction (order-independent, exactly
- *    checkable) over the whilelt-masked prefix.
+ *    datapath itself.) The RDFFR is issued back-to-back with the LDFF1,
+ *    with no function call in between: the arm64 Linux syscall ABI
+ *    discards live SVE state at syscall entry (kernel
+ *    fpsimd_syscall_enter() -> sve_flush_live() zeroes every P register
+ *    and the FFR), so an intervening call that issues a syscall would
+ *    read the FFR as 0 — a false SDC. FMAXV tree reduction
+ *    (order-independent, exactly checkable) over the whilelt-masked
+ *    prefix.
  *
  * test_init gates via the framework layer (arm64_require_sve_vl:
  * HWCAP_SVE capability + 128..1024-bit range in one call, all-VL
@@ -250,6 +256,17 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // (undefined) FFR state, not the set of successfully-loaded lanes.
         svsetffr();
         svfloat64_t v = svldff1_f64(all, mem.data());
+        // Read the FFR back-to-back with the first-fault load, with no
+        // function call in between: the arm64 Linux syscall ABI discards
+        // live SVE state at syscall entry (kernel fpsimd_syscall_enter()
+        // -> sve_flush_live() zeroes every P register and the FFR), so a
+        // call that issues a syscall between LDFF1 and RDFFR — the
+        // allocation and libc/interceptor calls below — silently zeroes
+        // the FFR and reads as a false "SDC" (Sanitizer CI run 40596064101:
+        // count=0, expected 2 on two workers). Capture the FFR and its
+        // active-lane count while no call can intervene.
+        svbool_t ffr = svrdffr();
+        const long ffr_count = svcntp_b64(all, ffr);
         std::vector<double> back(d->vl_d);
         svst1_f64(all, back.data(), v);
         if (memcmp(back.data(), mem.data(), d->vl_d * 8) != 0) {
@@ -257,11 +274,10 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
             all_passed = false;
         }
         // FFR must equal the governing predicate (all-true here)
-        svbool_t ffr = svrdffr();
-        if (svcntp_b64(all, ffr) != (long)vl) {
+        if (ffr_count != (long)vl) {
             log_warning("sve512_pred_ops: FFR not all-true after mapped "
                         "LDFF1 (count=%ld, expected %zu)",
-                        svcntp_b64(all, ffr), vl);
+                        ffr_count, vl);
             all_passed = false;
         }
         // FMAXV over the whilelt(k=vl/2) masked prefix: exact max

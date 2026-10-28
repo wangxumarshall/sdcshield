@@ -215,13 +215,16 @@ def refine_iters(step, paths):
 
 
 def is_sdc_suspect(step):
-    """SDC 疑似判定（SDD 裁定 28）：护栏强杀的进程不计为疑似——SIGTERM
-    的 rc=-15 是驱动的中止动作而非测试失败（P2 p2_f1000 误报实证：PSU
-    护栏触发→eigen -15→旧公式误报 sdc_suspect→战役误停）。"""
+    """SDC 疑似判定（SDD 裁定 28/30）：信号死亡的 rc 一律不算疑似——
+    SIGKILL(-9)/SIGTERM(-15) 是驱动/护栏/外部的强杀动作，不构成测试失败
+    证据（P2 PSU 护栏误报 + P3 疑似事件的取证结论：双 -9、调制器校验 0
+    失败、无 RAS——纯基础设施级联）。真故障证据 = 正非零退出或崩溃信号
+    （如 -11 SIGSEGV）。"""
+    driver_signals = (-9, -15)          # SIGKILL / SIGTERM
     return bool(
         step.get("mod_rc") == 2
         or ((step.get("eigen_rc") not in (0, None))
-            and step.get("aborted") is None)
+            and step.get("eigen_rc") not in driver_signals)
         or (step.get("ras_delta") or 0) > 0)
 
 

@@ -150,6 +150,15 @@ class TestSdcSuspect(unittest.TestCase):
              "aborted": "guardrail: PSU=840W >= 790W"}
         self.assertFalse(run_sweep.is_sdc_suspect(s))
 
+    def test_sigkill_eigen_not_suspect(self):
+        # SDD 裁定 30：驱动 wait-超时强杀（-9）同样不算（P3 取证结论）
+        s = {"mod_rc": -9, "eigen_rc": -9, "ras_delta": 0, "aborted": None}
+        self.assertFalse(run_sweep.is_sdc_suspect(s))
+
+    def test_eigen_segfault_is_suspect(self):
+        s = {"mod_rc": 0, "eigen_rc": -11, "ras_delta": 0, "aborted": None}
+        self.assertTrue(run_sweep.is_sdc_suspect(s))
+
     def test_eigen_own_failure_is_suspect(self):
         s = {"mod_rc": 0, "eigen_rc": 1, "ras_delta": 0, "aborted": None}
         self.assertTrue(run_sweep.is_sdc_suspect(s))

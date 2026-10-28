@@ -2138,7 +2138,8 @@ git push
 
 ### Task 7: P0 冒烟战役
 
-- [ ] 编译并 `sudo python3 tools/droop-excite/run_sweep.py --phase p0 --data-root /home/sdc/droop-excite`
+- [ ] **预检（排队接续协议，裁定 17）**：①外来频控战役已结束——`pgrep -f freq_sdc_campaign.sh` 为空且 1min load < 10（用户战役三频段×2h，2026-10-28 ~06:00 结束，勿杀勿扰）；②恢复频率确定性——4 个 policy 置回 performance 并读回确认 2.6GHz（其战役会把 governor 遗留在 userspace@2.5GHz）；③root 通路用 `sshpass -p 'SDC@2026' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@127.0.0.1 '<cmd>'`（裁定 4：本机 sudo 需密码）。会话级 cron 每 ~23min 探测一次，结束后自动开跑。
+- [ ] 编译调制器并在 root 通路下执行 `python3 tools/droop-excite/run_sweep.py --phase p0 --data-root /home/sdc/droop-excite`
 - [ ] 检查 4 步全部完成：`python3 tools/droop-excite/analyze.py /home/sdc/droop-excite/p0_*`（p0_2/p0_3/p0_4 的 psu_max_w 应显著高于 p0_1；p0_4 相对 p0_2 的 v_sag 变化记录在案）
 - [ ] 收紧功率护栏：取 p0_2/p0_3/p0_4 中最大 psu_max_w 记为 P_full，写 `/home/sdc/droop-excite/thresholds.json`：`{"psu_total_w_abort": <P_full*1.15 取整>}`（cat 引用真实值）
 - [ ] progress-log 追加 P0 结果并 commit -s + push

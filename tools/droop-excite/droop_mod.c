@@ -343,7 +343,6 @@ struct sbarrier {
     _Atomic uint32_t gen;
 };
 static struct sbarrier g_sbar;
-static int g_rt_ok = 1;
 
 /* 票据自旋 barrier（无 futex）。deadline 逃逸时置 g_stop 并返回，避免
  * 兄弟线程悬挂（count 残留一个增量，但 g_stop 已置位，全员随即退出——
@@ -368,14 +367,11 @@ static void sbarrier_wait(void)
     }
 }
 
-static void try_rt_priority(void)
-{
-    struct sched_param sp;
-    memset(&sp, 0, sizeof(sp));
-    sp.sched_priority = 1;
-    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) != 0)
-        g_rt_ok = 0;    /* EPERM 等 → 降级普通调度，摘要如实报告 */
-}
+/* SDD 裁定 21（2026-10-28 P1 实证）：SCHED_FIFO 已禁用。root 下设置成功且
+ * 100% 占核会触发内核 95% RT 带宽节流（dmesg: "sched: RT throttling
+ * activated"），全系统 TS 进程（ipmitool/bmc_logger/驱动）被挤进每秒 50ms
+ * 的节流缝隙，BMC 遥测 30s 超时致盲。门控时序由 CNTVCT 计量并在摘要如实
+ * 报告，普通调度的抢占抖动在本实验容差内。 */
 
 static void *thread_main(void *arg)
 {
@@ -389,7 +385,6 @@ static void *thread_main(void *arg)
         g_stop = 1;
         return NULL;
     }
-    try_rt_priority();
     sbarrier_wait();   /* 起始对齐（一次性；自旋内含 g_stop/deadline 逃逸，
                           部分线程创建失败时 main 置 g_stop 即可全员释放，无悬挂） */
     ctx->t_start = cntvct();
@@ -716,7 +711,7 @@ int main(int argc, char **argv)
         "\"freq_measured_hz_max\":%.9g,"
         "\"duration_s\":%.3f,\"gate_periods_total\":%llu,"
         "\"checksum\":\"%s\",\"checksum_failures\":%llu,"
-        "\"rt_priority\":\"%s\",\"stopped_by_signal\":\"%s\","
+        "\"rt_priority\":\"none\",\"stopped_by_signal\":\"%s\","
         "\"cyc_per_iter_on\":%.4f,\"cyc_per_iter_off\":%.4f}\n",
         cfg.payload == PAYLOAD_DEP ? "dep" : "ilp2",
         cfg.off_mode == OFF_STALL ? "stall" : "light",
@@ -727,7 +722,6 @@ int main(int argc, char **argv)
         cfg.duration, (unsigned long long)total_periods,
         g_checksum_on ? "on" : "off",
         (unsigned long long)total_fails,
-        g_rt_ok ? "fifo" : "degraded",
         g_signal ? "true" : "false",
         cfg.cyc_per_iter_on, cfg.cyc_per_iter_off);
     (void)m;

@@ -107,7 +107,10 @@ def build_mod_cmd(step, paths):
         return ["taskset", "-c", mc, paths["sdcshield"],
                 "-e", "power_virus_dit", "-t", f"{step['duration']}s",
                 "--strict-runtime"]
-    cmd = ["taskset", "-c", mc, paths["droop_mod"]]
+    # SDD 裁定 21：--cores 必须显式传给 droop_mod——它启动时会用自己的
+    # 默认亲和（全部在线核）sched_setaffinity，覆盖外部 taskset 限制
+    # （P1 实测 128 线程铺满全核致 RT 节流、遥测致盲）。taskset 保留作冗余。
+    cmd = ["taskset", "-c", mc, paths["droop_mod"], "--cores", mc]
     if step.get("on_iters") is not None:
         cmd += ["--on-iters", str(step["on_iters"]),
                 "--off-iters", str(step["off_iters"])]

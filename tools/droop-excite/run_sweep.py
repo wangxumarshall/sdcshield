@@ -321,12 +321,17 @@ def steps_p1(duration=90, payloads=("dep", "ilp2")):
     for f in (0.1, 0.25, 0.5, 1.0):
         for duty in (0.25, 0.5, 0.75):
             for pl in payloads:
+                # SDD 裁定 18（P0 证据）：eigen co-run 的 dwell 内 p2p 噪声
+                # 实测 156W（测试轮换/标定相位），24 核调制器摆幅 ~29W 会被
+                # 淹没——ΔI 标定必须 mod-only；co-run 行为由 P3/P4 的
+                # V_sag/功能证据覆盖。
                 steps.append({"id": f"p1_f{f:g}_d{duty}_{pl}",
                               "mod": "droop_mod", "payload": pl,
                               "freq_hz": f, "duty": duty, "mod_cores": m,
-                              "eigen_cores": eigen_cores(m),
+                              "eigen_cores": [],
                               "duration": duration,
-                              "note": "低频标定：BMC 电平差 → ΔI"})
+                              "note": "低频标定（mod-only，裁定 18）："
+                                      "BMC 电平差 → ΔI"})
     return steps
 
 

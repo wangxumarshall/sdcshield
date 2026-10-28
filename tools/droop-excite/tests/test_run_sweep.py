@@ -141,5 +141,31 @@ class TestPhases(unittest.TestCase):
         self.assertTrue(any("eigen_svd_double" in x for x in lines[0]["eigen"]))
 
 
+class TestSdcSuspect(unittest.TestCase):
+    """SDD 裁定 28：护栏强杀（SIGTERM rc=-15）不算 SDC 疑似
+    （P2 p2_f1000 误报实证）。"""
+
+    def test_guardrail_killed_eigen_not_suspect(self):
+        s = {"mod_rc": 0, "eigen_rc": -15, "ras_delta": 0,
+             "aborted": "guardrail: PSU=840W >= 790W"}
+        self.assertFalse(run_sweep.is_sdc_suspect(s))
+
+    def test_eigen_own_failure_is_suspect(self):
+        s = {"mod_rc": 0, "eigen_rc": 1, "ras_delta": 0, "aborted": None}
+        self.assertTrue(run_sweep.is_sdc_suspect(s))
+
+    def test_mod_checksum_is_suspect(self):
+        s = {"mod_rc": 2, "eigen_rc": None, "ras_delta": 0, "aborted": None}
+        self.assertTrue(run_sweep.is_sdc_suspect(s))
+
+    def test_ras_delta_is_suspect(self):
+        s = {"mod_rc": 0, "eigen_rc": 0, "ras_delta": 1, "aborted": None}
+        self.assertTrue(run_sweep.is_sdc_suspect(s))
+
+    def test_clean_not_suspect(self):
+        s = {"mod_rc": 0, "eigen_rc": 0, "ras_delta": 0, "aborted": None}
+        self.assertFalse(run_sweep.is_sdc_suspect(s))
+
+
 if __name__ == "__main__":
     unittest.main()

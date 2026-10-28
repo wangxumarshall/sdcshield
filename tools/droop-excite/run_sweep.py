@@ -214,6 +214,17 @@ def refine_iters(step, paths):
     step["on_iters"], step["off_iters"] = on, off
 
 
+def is_sdc_suspect(step):
+    """SDC 疑似判定（SDD 裁定 28）：护栏强杀的进程不计为疑似——SIGTERM
+    的 rc=-15 是驱动的中止动作而非测试失败（P2 p2_f1000 误报实证：PSU
+    护栏触发→eigen -15→旧公式误报 sdc_suspect→战役误停）。"""
+    return bool(
+        step.get("mod_rc") == 2
+        or ((step.get("eigen_rc") not in (0, None))
+            and step.get("aborted") is None)
+        or (step.get("ras_delta") or 0) > 0)
+
+
 def run_step(step, paths, thresholds, pre_secs=15.0, post_secs=15.0,
              poll_interval=3.0):
     """执行一个战役步骤。pre 15s 空载采样 → dwell（eigen+mod）→ post 15s →
@@ -279,10 +290,7 @@ def run_step(step, paths, thresholds, pre_secs=15.0, post_secs=15.0,
             f.write(dm1[-8000:])
         step["timeline"] = t
         step["aborted"] = abort_reason
-        step["sdc_suspect"] = bool(
-            step.get("mod_rc") == 2
-            or (step.get("eigen_rc") not in (0, None))
-            or step["ras_delta"] > 0)
+        step["sdc_suspect"] = is_sdc_suspect(step)
         with open(os.path.join(step["dir"], "summary.json"), "w") as f:
             json.dump(step, f, indent=1, default=str)
     finally:

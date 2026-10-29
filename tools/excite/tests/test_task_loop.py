@@ -1,5 +1,5 @@
 """task_loop 统一引擎测试(PR-1b 起): schema v2 / 状态归一 / 目录迁移。"""
-import sys, os
+import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "scripts"))
 import task_loop as tl
@@ -237,3 +237,66 @@ def test_dispatch_writes_prompt_file_and_wip_label(tmp_path, monkeypatch):
     assert "< " in captured["cmd"] and "claude -p" in captured["cmd"]
     prompt_files = list(tmp_path.glob("prompt-*"))
     assert len(prompt_files) == 1 and "Closes #33" in prompt_files[0].read_text()
+
+
+# ============ Task 8: scan 编排接入 + status ============
+
+def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatch):
+    """两个 QUEUED 任务,单飞 → 只派 FIFO 首个(issue 号小者)。"""
+    state = {"entries": [
+        dict(workflow="", run_id=0, status="QUEUED", issue_number=9,
+             fix_branch="", pr_number=None, attempts=0, rounds=0,
+             agent_pid=None, agent_started_at=None, agent_log=None,
+             last_dispatched_head=None, extra_runs=[], created_at="t",
+             updated_at="t", source="session", kind="bug", audit_hash=None),
+        dict(workflow="", run_id=0, status="QUEUED", issue_number=5,
+             fix_branch="", pr_number=None, attempts=0, rounds=0,
+             agent_pid=None, agent_started_at=None, agent_log=None,
+             last_dispatched_head=None, extra_runs=[], created_at="t",
+             updated_at="t", source="manual", kind="bug", audit_hash=None)],
+        "auth_failure_streak": 0}
+    # 编排从 StateStore 装 state(brief 的用例只构造了局部 dict,从未注入)
+    # ——先落盘进 tmp;env 重定向让 StateStore/scan.lock/落盘全在 tmp,
+    # 绝不碰真实默认目录(夹具真设置,非注释括注)。
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "state.json").write_text(json.dumps(state))
+    # 引擎缝全部离线(真实 scan 触网): 标签确保(Ruling: 非 dry 编排会真调
+    # ensure_agent_labels → 真实 gh label 写,必须打桩)/派发/对账/扫描/
+    # 自愈/车道 B。
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    dispatched = []
+    def fake_dispatch(entry, state, dry_run=False, prompt_override=None,
+                      increment_rounds=False):
+        # Ruling 5: fake 自身镜像真实单飞契约(单飞属 dispatch_agent,不属
+        # 编排层),且派成的 agent 用 os.getpid()(确定性真活 PID,探活必真;
+        # 伪 PID 如 99 探活不确定,ci_triage 用例 12 同款手法)。
+        if tl.has_running_agent(state):
+            return None
+        dispatched.append(entry.issue_number)
+        entry.status = "DISPATCHED"; entry.agent_pid = os.getpid()
+        return os.getpid()
+    monkeypatch.setattr(tl, "dispatch_agent", fake_dispatch)
+    monkeypatch.setattr(tl, "reconcile_issues", lambda s, dry_run: None)
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run: None)
+    monkeypatch.setattr(tl, "lane_b_advance", lambda s, dry_run: None)
+    rc = tl._run_scan_orchestration(dry_run=False)
+    assert rc == 0 and dispatched == [5]        # FIFO issue 号,单飞拦下第二个
+
+
+def test_cmd_status_prints_queue_and_entries(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "state.json").write_text(json.dumps({
+        "entries": [dict(workflow="Sanitizer", run_id=1, status="PR_OPEN",
+                         issue_number=9, fix_branch="fix/ci-1", pr_number=3,
+                         attempts=1, rounds=0, agent_pid=None,
+                         agent_started_at=None, agent_log=None,
+                         last_dispatched_head=None, extra_runs=[],
+                         created_at="t", updated_at="t", source="ci",
+                         kind="bug", audit_hash=None)],
+        "auth_failure_streak": 0}))
+    monkeypatch.setattr(tl, "list_open_agent_issues", lambda: [])
+    assert tl.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "PR_OPEN" in out and "#9" in out

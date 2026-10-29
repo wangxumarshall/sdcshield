@@ -323,6 +323,21 @@ class FakeGh:
         if args[:2] == ["run", "view"] and "--log-failed" in args:
             # gh run view <id> --repo <slug> --log-failed(纯文本输出)
             return self.log_failed
+        if args[:2] == ["issue", "list"]:
+            # gh issue list --label agent-task(Task 8: reconcile 的 GitHub
+            # 侧队列真源)——默认空: 无手建任务,对账零新建
+            return []
+        if args[:2] == ["issue", "view"]:
+            # gh issue view <n> --json state(Task 8: HUMAN_CLOSED 清扫的
+            # 逐条探查)——默认 open: 无人接管关闭(HUMAN_CLOSED 经
+            # test_task_loop.py 的 reconcile 用例另行覆盖)
+            return {"state": "open"}
+        if args[:2] == ["label", "list"]:
+            # gh label list(Task 8: 编排接入 ensure_agent_labels)——六个
+            # agent-* 标签全部已存在 → 零 label create(离线只读)
+            return [{"name": n} for n in (
+                "agent-task", "agent-bug", "agent-feature",
+                "agent-approved", "agent-wip", "agent-escalated")]
         raise AssertionError(f"未预期的 gh 调用: {args}")
 
 

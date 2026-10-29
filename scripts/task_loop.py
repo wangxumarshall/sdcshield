@@ -696,11 +696,19 @@ def build_issue_body(run: dict) -> str:
 
 
 def create_issue(run: dict) -> int:
-    """建跟踪 issue(正文经 stdin)→ 返回 issue 号。"""
-    url = gh_json(["issue", "create", "--repo", repo_slug(),
-                   "--title", build_issue_title(run),
-                   "--body-file", "-"],
-                  input_text=build_issue_body(run))
+    """建跟踪 issue(正文经 stdin,agent-task+agent-bug 标签)→ 返回 issue 号。
+
+    标签(spec §6 统一看板): ci 源条目同样进 agent-task 队列(reconcile 的
+    GitHub 侧真源),agent-bug 即具备自动派发资格——与 session/manual intake
+    建的 issue 同一标签协议。label 经 args 列表拼接 --label 可重复(复用
+    create_task_issue 的模式);标签须已存在(gh 对不存在的 label 直接报错),
+    由编排层的 ensure_agent_labels() 每 tick 幂等就位。
+    """
+    args = ["issue", "create", "--repo", repo_slug(),
+            "--title", build_issue_title(run),
+            "--body-file", "-",
+            "--label", AGENT_LABEL_TASK, "--label", AGENT_LABEL_BUG]
+    url = gh_json(args, input_text=build_issue_body(run))
     # gh issue create 输出 issue URL: https://…/issues/<n>
     m = re.search(r"/issues/(\d+)", str(url))
     if not m:
@@ -1758,11 +1766,15 @@ def _run_scan_orchestration(dry_run: bool) -> int:
 
     flock STATE_DIR/scan.lock(LOCK_EX|LOCK_NB,拿不到直接打印退出码 0——
     并发 scan 无意义且互相踩状态)→ 首启动迁移(仅非 dry: 旧 state 目录
-    state.json/agent.env 拷入新目录,幂等)→ PAUSED 检查(存在则跳过派发、
-    观测照常)→ heal_clone → 车道 A: scan_red_runs + triage_new_red_runs +
-    reap_or_advance + 派发扫 → 车道 B: lane_b_advance → store.save。
+    state.json/agent.env 拷入新目录,幂等)+ 标签渠道就位(仅非 dry:
+    ensure_agent_labels 幂等,失败仅告警)→ PAUSED 检查(存在则跳过派发、
+    观测照常)→ 车道 A: scan_red_runs + triage_new_red_runs(intake_ci)+
+    reap_or_advance(收割)+ reconcile_issues(队列对账: manual 入队 +
+    HUMAN_CLOSED 清扫)→ heal_clone → 重派扫(DISPATCHED 无 PID)+
+    任务派发扫(QUEUED 全部 source,FIFO issue 号)→ 车道 B:
+    lane_b_advance → store.save。
     dry_run=True: 同一编排但全程零写(零 gh 写、零 git 变更、state 不落盘、
-    零迁移——复跑无痕)。
+    零迁移、零标签就位——复跑无痕)。
 
     GhError 顶层捕获(检视 Important#2): 覆盖 scan_red_runs 起至 lane_b
     的全部推进主体——triage/reap/lane_b 的 gh 写任一抛 GhError 都会在此
@@ -1786,6 +1798,16 @@ def _run_scan_orchestration(dry_run: bool) -> int:
             # 零本地写);env 重定向的 run 也不迁(_migrate_legacy_state_dir
             # 内部守卫——测试/多实例不动真实默认目录)。
             _migrate_legacy_state_dir()
+            # 标签渠道就位(幂等,Ruling): agent-* 标签缺失会让全部标签同步
+            # (派发打 wip/终态摘 wip/升级打 escalated)持续 GhError-warn,
+            # ci intake 的 issue create --label 也会直接失败——每 tick 先
+            # 幂等补齐(已存在即跳过,只多一次 label list 读)。标签是建议性
+            # 线索(state 为权威),失败仅告警不阻断 scan;gh 真挂了,紧随其
+            # 后的 scan_red_runs 会以 GhError 顶层报出,不会被这里掩盖。
+            try:
+                ensure_agent_labels()
+            except GhError as exc:
+                print(f"[warn] agent-* 标签确保失败(建议性线索,继续): {exc}")
         paused = os.path.exists(os.path.join(state_dir, "PAUSED"))
         if paused:
             print("[paused] PAUSED 熔断生效——跳过一切派发,观测照常"
@@ -1804,23 +1826,41 @@ def _run_scan_orchestration(dry_run: bool) -> int:
                   f"回看 {LOOKBACK_DAYS} 天)")
             triage_new_red_runs(state, runs, dry_run=dry_run)
             reap_or_advance(state, dry_run=dry_run)
+            # ---- 队列对账: 手建/会话 intake 入队 + HUMAN_CLOSED 清扫 ----
+            reconcile_issues(state, dry_run=dry_run)
             # ---- 克隆自愈(派发前恢复单树基线——新 agent 须启动在干净 main 上) ----
             heal_clone(state, dry_run=dry_run)
-            # ---- 车道 A 派发扫: QUEUED/DISPATCHED 且无 agent 的条目 ----
+            # ---- 车道 A 派发扫(重派): DISPATCHED 且无 agent 的条目 ----
             # PAUSED 时编排照常跑(观测不受影响),派发请求由 dispatch_agent
             # 内的 PAUSED 闸门逐条拒绝(车道 A/B 同闸)。
             # 单飞正确性: dispatch_agent 的记账落在 Entry 对象上,而
             # has_running_agent 从 state["entries"] 的 dict 重新解析——故每次
             # 派发后立即回写 dict,同轮下一个条目的单飞判定才能看到刚派的
             # agent(否则同轮两个条目各派一个,单飞失效)。
+            # Task 8 起 QUEUED 的首次派发移交下方任务派发扫(全部 source
+            # 统一 FIFO,spec §9.1 资格队列);本扫只保留 DISPATCHED 无 PID
+            # 的重派——dead/timeout 收割重派路径(_requeue_or_escalate 保持
+            # DISPATCHED 并清引用,等这里下一轮补派,对全部 source 生效)。
             if paused:
                 print("[paused] 车道 A 派发被 PAUSED 闸门拦下")
             sweep = StateStore.entries(state)
             for entry in sweep:
-                if entry.status in ("QUEUED", "DISPATCHED") \
-                        and entry.agent_pid is None:
+                if entry.status == "DISPATCHED" and entry.agent_pid is None:
                     dispatch_agent(entry, state, dry_run=dry_run)
                     state["entries"] = [e.to_dict() for e in sweep]
+            # ---- 任务派发扫: QUEUED 条目(全部 source),FIFO issue 号 ----
+            # 单飞槽与 ci 共享(dispatch_agent 内 has_running_agent 把守);
+            # 与 ci 扫同样,每次派发后立即回写 dict,同轮后续单飞判定可见。
+            # 写回必须序列化本轮持有的全量 Entry 对象(tick_entries)——若按
+            # brief 原文重新 from_dict state["entries"],拿到的是派发前的旧
+            # dict,刚派的 agent 对同轮下一个条目的单飞判定不可见(连派)。
+            tick_entries = StateStore.entries(state)
+            task_sweep = sorted(
+                (e for e in tick_entries if e.status == "QUEUED"),
+                key=lambda e: (e.issue_number is None, e.issue_number))
+            for entry in task_sweep:
+                dispatch_agent(entry, state, dry_run=dry_run)
+                state["entries"] = [e.to_dict() for e in tick_entries]
             # ---- 车道 B: bot 意见处置循环(观测照常,派发同受 PAUSED 闸) ----
             lane_b_advance(state, dry_run=dry_run)
         except GhError as exc:
@@ -1847,8 +1887,24 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """打印当前状态总览。"""
-    raise NotImplementedError("to be implemented in Task 3")
+    """队列与条目总览: streak/PAUSED/单飞占用 + 全部条目 + 待入队任务。"""
+    store = StateStore()
+    state = store.load()
+    entries = StateStore.entries(state)
+    print(f"streak: {state.get('auth_failure_streak', 0)}  "
+          f"PAUSED: {'是' if _paused() else '否'}  "
+          f"agent 在跑: {'是' if has_running_agent(state) else '否'}")
+    tracked = {e.issue_number for e in entries}
+    for e in sorted(entries, key=lambda x: (x.issue_number is None,
+                                             x.issue_number or 0)):
+        print(f"[{e.source}/{e.kind}] issue #{e.issue_number} [{e.status}] "
+              f"pr={e.pr_number} attempts={e.attempts} rounds={e.rounds} "
+              f"branch={e.fix_branch or '-'}")
+    for it in list_open_agent_issues():
+        n = int(it["number"])
+        if n not in tracked and issue_eligible(_label_names(it)):
+            print(f"[pending] issue #{n} 待入队(下一 scan tick)")
+    return 0
 
 
 def cmd_dry_run(args: argparse.Namespace) -> int:

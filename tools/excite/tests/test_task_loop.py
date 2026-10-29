@@ -348,6 +348,47 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
     assert e["rounds"] == 1 and e["last_dispatched_head"] == "b" * 40
 
 
+# ============ PR#317 检视#11: paused 横幅与闸门同口径(双路径) ============
+
+def test_scan_paused_banner_honors_legacy_dir(tmp_path, monkeypatch, capsys):
+    """检视#11: 过渡期旧目录 PAUSED 同样生效(dispatch_agent 闸门走
+    _paused() 新旧双路径,手册 §5.1),scan 编排的全局熔断横幅不得只查新
+    目录单路径——否则旧目录 touch PAUSED 时派发全被拒却零横幅,运维遥测
+    与实际闸门状态矛盾。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    legacy = tmp_path / "legacy"; legacy.mkdir()
+    (legacy / "PAUSED").touch()
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(legacy))
+    (tmp_path / "state.json").write_text(json.dumps(
+        {"entries": [dict(workflow="", run_id=0, status="QUEUED", issue_number=5,
+                          fix_branch="", pr_number=None, attempts=0, rounds=0,
+                          agent_pid=None, agent_started_at=None, agent_log=None,
+                          last_dispatched_head=None, extra_runs=[],
+                          created_at="t", updated_at="t",
+                          source="manual", kind="bug", audit_hash=None)],
+         "auth_failure_streak": 0}))
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl, "reconcile_issues", lambda s, dry_run: None)
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run: None)
+    monkeypatch.setattr(tl, "lane_b_advance", lambda s, dry_run: None)
+    def fake_dispatch(entry, state, dry_run=False, prompt_override=None,
+                      increment_rounds=False):
+        # 镜像真实 dispatch_agent 的 PAUSED 闸门契约(闸门本体在 dispatch_agent
+        # 内,走 _paused() 双路径);本测试锚的是编排层横幅与闸门口径一致
+        if tl._paused():
+            return None
+        dispatched.append(entry.issue_number)
+        return None
+    dispatched = []
+    monkeypatch.setattr(tl, "dispatch_agent", fake_dispatch)
+    assert tl._run_scan_orchestration(dry_run=False) == 0
+    assert dispatched == []                        # PAUSED: 零派发
+    out = capsys.readouterr().out
+    assert "[paused] PAUSED 熔断生效——跳过一切派发" in out, "全局横幅未随旧目录 PAUSED 触发"
+    assert "[paused] 车道 A 派发被 PAUSED 闸门拦下" in out
+
+
 # ============ Task 8: scan 编排接入 + status ============
 
 def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatch):

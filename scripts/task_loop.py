@@ -1834,7 +1834,9 @@ def _run_scan_orchestration(dry_run: bool) -> int:
                 ensure_agent_labels()
             except GhError as exc:
                 print(f"[warn] agent-* 标签确保失败(建议性线索,继续): {exc}")
-        paused = os.path.exists(os.path.join(state_dir, "PAUSED"))
+        # _paused() 双路径(检视#11): 与 dispatch_agent 的闸门同口径——过渡期
+        # 旧目录的 PAUSED 同样生效,横幅/拦截提示不得与实际闸门状态矛盾。
+        paused = _paused()
         if paused:
             print("[paused] PAUSED 熔断生效——跳过一切派发,观测照常"
                   "(派发请求将由 dispatch_agent 的 PAUSED 闸门逐条拒绝)")

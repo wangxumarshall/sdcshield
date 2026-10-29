@@ -256,9 +256,11 @@ kill switch 与熔断共用 PAUSED 文件；过渡期旧目录
 cd /home/sdc/wangxu/operator/sdcshield-autoci
 python3 scripts/task_loop.py status            # 队列总览: streak/PAUSED/单飞占用
                                                #   + 全部条目 + 待入队任务
-python3 scripts/task_loop.py dry-run           # scan 只读演练: 零 gh 写/零 git/零派发,复跑无痕
+python3 scripts/task_loop.py dry-run           # scan 只读演练: 零 gh 写/零 git/零派发/零本地写
+                                               #   (不建状态目录/锁文件),复跑无痕
 python3 scripts/task_loop.py audit --dry-run   # audit 只读演练: 展示将审查的提交范围,
-                                               #   零 claude 调用,state 不落盘
+                                               #   零 claude 调用,state 不落盘,
+                                               #   零本地写(不建锁文件)
 ```
 
 env 重定向（测试/多实例）：`TASKLOOP_STATE_DIR`（>

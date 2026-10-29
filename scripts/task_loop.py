@@ -1838,7 +1838,7 @@ def _run_scan_orchestration(dry_run: bool) -> int:
     派发资格复查(检视#12): reconcile 返回 open+agent-task 标签快照,两个
     派发扫先过 _dispatch_gate_ok——人工补 escalated/摘 agent-task 冻结。
     dry_run=True: 同一编排但全程零写(零 gh 写、零 git 变更、state 不落盘、
-    零迁移、零标签就位——复跑无痕)。
+    零迁移、零标签就位、零本地写——不建状态目录/锁文件,复跑无痕)。
 
     GhError 顶层捕获(检视 Important#2): 覆盖 scan_red_runs 起至 lane_b
     的全部推进主体——triage/reap/lane_b 的 gh 写任一抛 GhError 都会在此
@@ -1847,15 +1847,22 @@ def _run_scan_orchestration(dry_run: bool) -> int:
     记账等)是真实成果,经 finally 落盘,不因本轮崩溃丢失。
     """
     state_dir = _resolve_state_dir()
-    os.makedirs(state_dir, exist_ok=True)
-    lock_path = os.path.join(state_dir, SCAN_LOCK_NAME)
-    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    # dry-run 零本地写(检视#14): 不建目录/不建锁文件——锁保护的是 state
+    # 写,dry-run 不写 state 无需互斥(只读并发无害);原实现先 makedirs +
+    # O_CREAT 再走流程,「复跑无痕」名不副实,且提前建目录会掩盖 cron
+    # 重定向目录缺失类部署问题在演练期暴露的机会。
+    lock_fd = None
+    if not dry_run:
+        os.makedirs(state_dir, exist_ok=True)
+        lock_path = os.path.join(state_dir, SCAN_LOCK_NAME)
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            print(f"[lock] {SCAN_LOCK_NAME} 已被占用(并发 scan?),本轮退出")
-            return 0
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                print(f"[lock] {SCAN_LOCK_NAME} 已被占用(并发 scan?),本轮退出")
+                return 0
         if not dry_run:
             # 首启动迁移(spec §10): 拿到锁后、装载 state 前做一次——新目录
             # 先就位再 load,首跑即续接旧条目。dry-run 不迁移(复跑无痕,
@@ -1959,7 +1966,8 @@ def _run_scan_orchestration(dry_run: bool) -> int:
                 print("[dry-run] state 不落盘,复跑无痕")
         return exit_code
     finally:
-        os.close(lock_fd)
+        if lock_fd is not None:      # dry-run 未开锁(零本地写,检视#14)
+            os.close(lock_fd)
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -1992,9 +2000,9 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_dry_run(args: argparse.Namespace) -> int:
     """只读演练: 与 scan 同一编排但全程 dry_run=True。
 
-    零 gh 写、零 git 变更、零 spawn、state 不落盘——复跑无痕。红 run
-    检出与幂等搜索是真实 gh 读(run list/issue 搜索),派发/自愈/车道 B
-    全部只打印意图。
+    零 gh 写、零 git 变更、零 spawn、state 不落盘、零本地写(不建状态
+    目录/锁文件)——复跑无痕。红 run 检出与幂等搜索是真实 gh 读(run
+    list/issue 搜索),派发/自愈/车道 B 全部只打印意图。
     """
     return _run_scan_orchestration(dry_run=True)
 
@@ -2186,15 +2194,19 @@ def run_audit(dry_run: bool = False) -> int:
     streak 归零(任何成功都证明凭据活着,与 reap 的 success 归零同口径)。
     """
     state_dir = _resolve_state_dir()
-    os.makedirs(state_dir, exist_ok=True)
-    lock_fd = os.open(os.path.join(state_dir, AUDIT_LOCK_NAME),
-                      os.O_CREAT | os.O_RDWR, 0o644)
+    # dry-run 零本地写(检视#14,与 scan 同口径): 不建目录/不建锁文件。
+    lock_fd = None
+    if not dry_run:
+        os.makedirs(state_dir, exist_ok=True)
+        lock_fd = os.open(os.path.join(state_dir, AUDIT_LOCK_NAME),
+                          os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            print(f"[lock] {AUDIT_LOCK_NAME} 已被占用(并发 audit?),本轮退出")
-            return 0
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                print(f"[lock] {AUDIT_LOCK_NAME} 已被占用(并发 audit?),本轮退出")
+                return 0
         if not dry_run:
             # 首启动迁移(裁定 7 续,与 scan 同口径): 仅非 dry——dry-run
             # 复跑无痕零本地写;env 重定向的 run 由内部守卫豁免(不动真实
@@ -2296,7 +2308,8 @@ def run_audit(dry_run: bool = False) -> int:
             print(f"audit 失败(GhError): {exc}", file=sys.stderr)
             return 1
     finally:
-        os.close(lock_fd)
+        if lock_fd is not None:      # dry-run 未开锁(零本地写,检视#14)
+            os.close(lock_fd)
 
 
 def cmd_audit(args: argparse.Namespace) -> int:

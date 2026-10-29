@@ -470,6 +470,38 @@ def test_reconcile_human_closed_sweep_no_nplus1(monkeypatch):
         "对账返回 open 标签快照供派发扫复用(一次 gh 调用,不加 N+1)"
 
 
+# ============ PR#317 检视#14: dry-run 零本地写(复跑无痕兑现) ============
+
+def test_dry_run_scan_zero_local_writes(tmp_path, monkeypatch):
+    """检视#14: dry-run「复跑无痕」= 零本地写——原实现在判定 dry 之前就
+    makedirs 状态目录并 O_CREAT scan.lock,与自身 docstring 及手册矛盾,
+    且在部署机上提前建目录会掩盖 cron 重定向目录缺失类问题在演练期暴露
+    的机会(检视#8 的发现路径被堵)。锁保护的是 state 写,dry-run 不写
+    state,无需互斥。"""
+    state_dir = tmp_path / "never-created"
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(state_dir))
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(tmp_path / "legacy"))
+    monkeypatch.setattr(tl, "reconcile_issues", lambda s, dry_run: None)
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run: None)
+    monkeypatch.setattr(tl, "lane_b_advance", lambda s, dry_run: None)
+    assert tl._run_scan_orchestration(dry_run=True) == 0
+    assert not state_dir.exists(), "dry-run 不得创建状态目录/锁文件"
+
+def test_dry_run_audit_zero_local_writes(tmp_path, monkeypatch):
+    """检视#14(audit 半边): run_audit 的 audit.lock/makedirs 同理只在非
+    dry 时建立。"""
+    state_dir = tmp_path / "never-created"
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(tmp_path / "legacy"))
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        "same" if args[0] in ("rev-parse", "rev-list")
+                        else "")
+    assert tl.run_audit(dry_run=True) == 0
+    assert not state_dir.exists(), "dry-run audit 不得创建状态目录/锁文件"
+
+
 # ============ Task 8: scan 编排接入 + status ============
 
 def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatch):

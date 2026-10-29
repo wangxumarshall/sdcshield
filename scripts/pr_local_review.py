@@ -12,8 +12,9 @@
 # + 意见发布(publish_review)。pr_loop 判据扩展与 wait 内触发见 pr_loop.py。
 #
 # 依赖: Python 3 标准库 + gh/claude 子进程,零第三方运行时依赖(与 pr_loop.py
-# 同策略,本脚本不管理 token;claude 凭据 source
-# ~/.local/state/sdcshield-ci-triage/agent.env,见设计文档 C1/C3)。
+# 同策略,本脚本不管理 token;claude 凭据 source agent.env——新 state 目录
+# ~/.local/state/sdcshield-task-loop/ 优先,旧 sdcshield-ci-triage/ 回退,
+# 见 agent_env_path() 与设计文档 C1/C3)。
 #
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
@@ -209,8 +210,19 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
 
 # ============ 检视引擎子进程缝(测试 monkeypatch 离线替身,不触网/不真跑 claude) ============
 
-# claude headless 认证环境(与 ci_triage 共用 agent.env,见设计文档 C1/C3)
-AGENT_ENV_PATH = os.path.expanduser("~/.local/state/sdcshield-ci-triage/agent.env")
+# claude headless 认证环境(与 task_loop 共用 agent.env,见设计文档 C1/C3):
+# 新 state 目录优先,旧目录回退(迁移过渡期)。
+def agent_env_path() -> str:
+    """claude 认证 env 文件: 新 state 目录优先,旧目录回退(迁移过渡期)。"""
+    for d in ("~/.local/state/sdcshield-task-loop",
+              "~/.local/state/sdcshield-ci-triage"):
+        p = os.path.join(os.path.expanduser(d), "agent.env")
+        if os.path.exists(p):
+            return p
+    return os.path.join(os.path.expanduser(
+        "~/.local/state/sdcshield-task-loop"), "agent.env")
+
+AGENT_ENV_PATH = agent_env_path()   # 兼容既有引用;build_claude_command 改调 agent_env_path()
 # claude 检视最长运行时间(秒,与 ci_triage.AGENT_TIMEOUT_SEC 一致)
 CLAUDE_TIMEOUT = 3600
 
@@ -321,7 +333,7 @@ def build_claude_command() -> str:
     --dangerously-skip-permissions(无头非交互)。prompt 不放在命令行——大
     diff 会超 execve ARG_MAX(Errno 7 Argument list too long),改由 _run_claude
     经 stdin 传入(真机首跑 #258 实证)。"""
-    return (f"source {shlex.quote(AGENT_ENV_PATH)} && "
+    return (f"source {shlex.quote(agent_env_path())} && "
             f"claude -p --dangerously-skip-permissions")
 
 

@@ -11,8 +11,10 @@
 #   status    打印当前状态总览(Task 3)
 #   dry-run   只读演练: 展示将执行的动作而不实际执行(Task 4)
 #
-# 状态存储: ~/.local/state/sdcshield-ci-triage/state.json(原子写: 先写
-# state.json.tmp 再 os.replace;env CITRIAGE_STATE_DIR 重定向,测试用)。
+# 状态存储: ~/.local/state/sdcshield-task-loop/state.json(原子写: 先写
+# state.json.tmp 再 os.replace;env 双轨 TASKLOOP_STATE_DIR >
+# CITRIAGE_STATE_DIR 重定向,测试用;首启动自 ~/.local/state/sdcshield-ci-triage
+# 自动迁移,见 _migrate_legacy_state_dir)。
 #
 # 依赖: Python 3.11 标准库,零第三方运行时依赖;gh CLI 凭据全权交给 gh
 # (与 pr_loop.py 同策略,本脚本不管理 token)。
@@ -75,15 +77,18 @@ GIT_TIMEOUT_SEC = 45
 # 回看窗口(天): 每轮扫描只看最近 N 天的 run,避免翻陈年历史
 LOOKBACK_DAYS = 3
 
-# 状态目录与状态文件(env CITRIAGE_STATE_DIR 重定向)。导入时快照供外部
-# 引用(状态文件名恒为 state.json);StateStore 构造时再按当前 env 解析——
-# 测试经 monkeypatch.setenv 重定向须在构造后生效,不能用导入时的快照。
+# 状态目录与状态文件(env 双轨: TASKLOOP_STATE_DIR > CITRIAGE_STATE_DIR
+# (兼容旧测试/部署)> 默认新目录)。统一经 _resolve_state_dir() 调用时解析;
+# STATE_DIR 是导入时快照,仅供外部引用(旧契约),内部一律不读它。
+DEFAULT_STATE_DIR = "~/.local/state/sdcshield-task-loop"
+LEGACY_STATE_DIR = "~/.local/state/sdcshield-ci-triage"
 STATE_DIR = os.path.expanduser(
-    os.environ.get("CITRIAGE_STATE_DIR", "~/.local/state/sdcshield-ci-triage"))
+    os.environ.get("CITRIAGE_STATE_DIR", DEFAULT_STATE_DIR))
 STATE_FILE_NAME = "state.json"
 
 # agent 专用 CI 克隆目录(cron 里派发的修复 agent 只在此目录干活,绝不
-# 触碰用户工作区)。env CITRIAGE_CLONE_DIR 可重定向(测试用)。
+# 触碰用户工作区)。env 双轨 TASKLOOP_CLONE_DIR > CITRIAGE_CLONE_DIR
+# 可重定向(测试用)。
 DEFAULT_CLONE_DIR = "/home/sdc/wangxu/operator/sdcshield-autoci"
 
 # agent 认证环境文件名(位于 STATE_DIR 下,含 ANTHROPIC_* 等 export;
@@ -232,18 +237,68 @@ class Entry:
 
 # ============ 状态存储(原子写) ============
 
+def _resolve_state_dir() -> str:
+    """当前生效的状态目录(调用时读 env——测试 monkeypatch.setenv 生效)。
+
+    env 优先级: TASKLOOP_STATE_DIR > CITRIAGE_STATE_DIR(兼容旧测试/部署)
+    > DEFAULT(新目录)。state 文件/agent 日志/PAUSED/scan.lock 全部经此
+    唯一出口解析,杜绝 state 文件与 prompt/log 路径分叉。
+    """
+    for key in ("TASKLOOP_STATE_DIR", "CITRIAGE_STATE_DIR"):
+        v = os.environ.get(key)
+        if v:
+            return os.path.expanduser(v)
+    return os.path.expanduser(DEFAULT_STATE_DIR)
+
+
+def _migrate_legacy_state_dir() -> None:
+    """首启动自动迁移(spec §10): 新目录无 state.json 且旧目录有 → 拷贝
+    state.json + agent.env(已存在则跳过该文件)。旧目录保留归档不动;
+    PAUSED 不搬——_paused() 双路径检查过渡。幂等可重跑。
+
+    仅当本 run 生效的 state 目录就是默认新目录时才迁移: env 重定向
+    (测试/多实例)的 run 不拥有默认目录,若照迁会把真实 ~/.local/state
+    的 state.json/agent.env 拷进真实新目录——而旧 cron 还在写旧目录,
+    快照落地即过期(部署切换前的提前迁移 = 陈旧状态)。
+    """
+    if _resolve_state_dir() != os.path.expanduser(DEFAULT_STATE_DIR):
+        return
+    new_dir = os.path.expanduser(DEFAULT_STATE_DIR)
+    legacy = os.path.expanduser(LEGACY_STATE_DIR)
+    if os.path.exists(os.path.join(new_dir, STATE_FILE_NAME)):
+        return
+    if not os.path.exists(os.path.join(legacy, STATE_FILE_NAME)):
+        return
+    os.makedirs(new_dir, exist_ok=True)
+    import shutil
+    for name in (STATE_FILE_NAME, AGENT_ENV_NAME):
+        src = os.path.join(legacy, name)
+        if os.path.exists(src) and not os.path.exists(os.path.join(new_dir, name)):
+            shutil.copy2(src, os.path.join(new_dir, name))
+            print(f"[migrate] {name}: {legacy} → {new_dir}")
+
+
+def _paused() -> bool:
+    """kill switch/熔断闸: 新旧两路径 PAUSED 任一存在即生效(过渡期)。"""
+    for d in (_resolve_state_dir(),
+              os.path.expanduser(LEGACY_STATE_DIR)):
+        if os.path.exists(os.path.join(d, "PAUSED")):
+            return True
+    return False
+
+
 class StateStore:
     """state.json 的读写门面。
 
-    路径在构造时按 CITRIAGE_STATE_DIR 解析(测试经 env 重定向 tmp_path)。
-    save 原子性: 写 state.json.tmp → os.replace 原子替换——中断(进程被杀/
-    磁盘满)时旧 state.json 完整可读,绝不留半份 JSON;失败路径清理 tmp,
-    复跑 load 不会被 tmp 残留污染(load 只读 state.json,不碰 tmp)。
+    路径在构造时经 _resolve_state_dir() 解析(env 双轨,测试经
+    monkeypatch.setenv 重定向 tmp_path)。save 原子性: 写 state.json.tmp →
+    os.replace 原子替换——中断(进程被杀/磁盘满)时旧 state.json 完整可读,
+    绝不留半份 JSON;失败路径清理 tmp,复跑 load 不会被 tmp 残留污染
+    (load 只读 state.json,不碰 tmp)。
     """
 
     def __init__(self, state_dir: Optional[str] = None):
-        d = state_dir if state_dir is not None else os.environ.get(
-            "CITRIAGE_STATE_DIR", STATE_DIR)
+        d = state_dir if state_dir is not None else _resolve_state_dir()
         self.state_dir = os.path.expanduser(d)
         self.state_file = os.path.join(self.state_dir, STATE_FILE_NAME)
         self.state_tmp = self.state_file + ".tmp"
@@ -318,8 +373,10 @@ def gh_json(args: list[str], input_text: Optional[str] = None):
 
 
 def repo_slug() -> str:
-    """目标仓库 owner/repo。env CITRIAGE_REPO 覆盖,否则取 origin remote。"""
-    env_slug = os.environ.get("CITRIAGE_REPO")
+    """目标仓库 owner/repo。env TASKLOOP_REPO > CITRIAGE_REPO(兼容旧部署)
+    覆盖,否则取 origin remote。"""
+    env_slug = os.environ.get("TASKLOOP_REPO") or \
+        os.environ.get("CITRIAGE_REPO")
     if env_slug:
         return env_slug.strip()
     try:
@@ -330,7 +387,8 @@ def repo_slug() -> str:
         raise GhError(f"解析 origin remote 失败: {exc}")
     if proc.returncode != 0 or not proc.stdout.strip():
         raise GhError("git remote get-url origin 无输出"
-                      "——可用 env CITRIAGE_REPO=owner/repo 指定")
+                      "——可用 env TASKLOOP_REPO(或 CITRIAGE_REPO)"
+                      "=owner/repo 指定")
     # 归一化两种形态: git@…:owner/repo.git 与 https://host/owner/repo.git
     url = proc.stdout.strip()
     m = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?$", url)
@@ -608,12 +666,6 @@ def _merge_into_active(state: dict, entries: list[Entry], active: Entry,
 
 # ============ agent 派发与生命周期(Task 3) ============
 
-def _resolve_state_dir() -> str:
-    """当前生效的状态目录(调用时读 env——测试 monkeypatch.setenv 生效)。"""
-    return os.path.expanduser(
-        os.environ.get("CITRIAGE_STATE_DIR", STATE_DIR))
-
-
 def _agent_log_path(run_id: int) -> str:
     """agent 日志文件路径: <STATE_DIR>/agent-<runid>-<时间戳>.log。
 
@@ -773,12 +825,12 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
       nohup bash -c 'source <STATE_DIR>/agent.env && timeout <T> claude
       -p <shlex 引用的 prompt> --dangerously-skip-permissions'
       >> <log> 2>&1 & echo $!
-    - cwd = agent 专用克隆目录(CITRIAGE_CLONE_DIR,默认 autoci 目录),
-      绝不在用户工作区执行;
+    - cwd = agent 专用克隆目录(TASKLOOP_CLONE_DIR > CITRIAGE_CLONE_DIR,
+      默认 autoci 目录),绝不在用户工作区执行;
     - 单飞: has_running_agent(state) 为真时拒绝派发(返回 None);
-    - PAUSED 闸门: STATE_DIR/PAUSED 存在(认证熔断写入)时拒绝派发——
-      车道 A/B 同受闸,凭据未修好前继续派发只会空转烧配额;观测
-      (scan 扫描/issue 搜索)不受影响,由调用方在派发之外承担;
+    - PAUSED 闸门: _paused()(新/旧 state 目录双路径,认证熔断写入)为真
+      时拒绝派发——车道 A/B 同受闸,凭据未修好前继续派发只会空转烧配额;
+      观测(scan 扫描/issue 搜索)不受影响,由调用方在派发之外承担;
     - prompt_override: 车道 B 传入 bot 意见处置 prompt(缺省走车道 A 的
       build_agent_prompt);
     - increment_rounds: 车道 B 传 True——记账 rounds+1 不动 attempts
@@ -788,7 +840,7 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     if has_running_agent(state):
         print(f"[single-flight] 已有 agent 在跑,拒绝为 run {entry.run_id} 派发")
         return None
-    if os.path.exists(os.path.join(_resolve_state_dir(), "PAUSED")):
+    if _paused():
         print(f"[paused] PAUSED 熔断生效,拒绝为 run {entry.run_id} 派发"
               f"(更新 agent.env 后删除 PAUSED 恢复)")
         return None
@@ -796,7 +848,8 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     prompt = prompt_override if prompt_override is not None \
         else build_agent_prompt(entry, {"workflowName": entry.workflow})
     log = _agent_log_path(entry.run_id)
-    clone_dir = os.environ.get("CITRIAGE_CLONE_DIR", DEFAULT_CLONE_DIR)
+    clone_dir = os.environ.get("TASKLOOP_CLONE_DIR") or \
+        os.environ.get("CITRIAGE_CLONE_DIR") or DEFAULT_CLONE_DIR
     env_file = os.path.join(_resolve_state_dir(), AGENT_ENV_NAME)
     inner = (f"source {shlex.quote(env_file)} && "
              f"timeout {AGENT_TIMEOUT_SEC} claude -p {shlex.quote(prompt)} "
@@ -1354,8 +1407,9 @@ def _git(args: list[str], clone_dir: Optional[str] = None) -> str:
     cwd=clone_dir, timeout=45, capture_output=True, text=True)。非零退出
     抛 RuntimeError(调用方捕获后打印错误、scan 继续)。
     """
-    cwd = clone_dir if clone_dir is not None else os.environ.get(
-        "CITRIAGE_CLONE_DIR", DEFAULT_CLONE_DIR)
+    cwd = clone_dir if clone_dir is not None else (
+        os.environ.get("TASKLOOP_CLONE_DIR")
+        or os.environ.get("CITRIAGE_CLONE_DIR") or DEFAULT_CLONE_DIR)
     try:
         proc = subprocess.run(["git", *args], cwd=cwd,
                               capture_output=True, text=True,
@@ -1384,7 +1438,8 @@ def heal_clone(state: dict, dry_run: bool = False) -> None:
     dry_run 只打印意图、零 git 调用。异常(git 失败/非零退出)→ 打印错误,
     不炸 scan——自愈失败留给下一轮重试,观测/派发照常。
     """
-    clone_dir = os.environ.get("CITRIAGE_CLONE_DIR", DEFAULT_CLONE_DIR)
+    clone_dir = os.environ.get("TASKLOOP_CLONE_DIR") or \
+        os.environ.get("CITRIAGE_CLONE_DIR") or DEFAULT_CLONE_DIR
     if has_running_agent(state):
         print(f"[heal] 有 agent 在跑,跳过克隆自愈(不踩工作区: {clone_dir})")
         return
@@ -1424,10 +1479,12 @@ def _run_scan_orchestration(dry_run: bool) -> int:
     """scan/dry-run 共用的完整编排(车道 A + 车道 B)。
 
     flock STATE_DIR/scan.lock(LOCK_EX|LOCK_NB,拿不到直接打印退出码 0——
-    并发 scan 无意义且互相踩状态)→ PAUSED 检查(存在则跳过派发、观测照常)
-    → heal_clone → 车道 A: scan_red_runs + triage_new_red_runs +
+    并发 scan 无意义且互相踩状态)→ 首启动迁移(仅非 dry: 旧 state 目录
+    state.json/agent.env 拷入新目录,幂等)→ PAUSED 检查(存在则跳过派发、
+    观测照常)→ heal_clone → 车道 A: scan_red_runs + triage_new_red_runs +
     reap_or_advance + 派发扫 → 车道 B: lane_b_advance → store.save。
-    dry_run=True: 同一编排但全程零写(零 gh 写、零 git 变更、state 不落盘)。
+    dry_run=True: 同一编排但全程零写(零 gh 写、零 git 变更、state 不落盘、
+    零迁移——复跑无痕)。
 
     GhError 顶层捕获(检视 Important#2): 覆盖 scan_red_runs 起至 lane_b
     的全部推进主体——triage/reap/lane_b 的 gh 写任一抛 GhError 都会在此
@@ -1445,6 +1502,12 @@ def _run_scan_orchestration(dry_run: bool) -> int:
         except OSError:
             print(f"[lock] {SCAN_LOCK_NAME} 已被占用(并发 scan?),本轮退出")
             return 0
+        if not dry_run:
+            # 首启动迁移(spec §10): 拿到锁后、装载 state 前做一次——新目录
+            # 先就位再 load,首跑即续接旧条目。dry-run 不迁移(复跑无痕,
+            # 零本地写);env 重定向的 run 也不迁(_migrate_legacy_state_dir
+            # 内部守卫——测试/多实例不动真实默认目录)。
+            _migrate_legacy_state_dir()
         paused = os.path.exists(os.path.join(state_dir, "PAUSED"))
         if paused:
             print("[paused] PAUSED 熔断生效——跳过一切派发,观测照常"

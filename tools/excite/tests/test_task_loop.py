@@ -25,3 +25,39 @@ def test_entry_roundtrip_keeps_v2_fields():
                  updated_at="t", source="session", kind="feature",
                  audit_hash=None)
     assert tl.Entry.from_dict(e.to_dict()) == e
+
+
+# ============ Task 3: state 目录迁移 + env 双轨 ============
+
+def test_state_dir_env_priority_and_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(tmp_path / "new"))
+    assert tl._resolve_state_dir() == str(tmp_path / "new")
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path / "old"))
+    assert tl._resolve_state_dir() == str(tmp_path / "old")
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "win"))
+    assert tl._resolve_state_dir() == str(tmp_path / "win")
+
+
+def test_migrate_legacy_state_dir_idempotent(tmp_path, monkeypatch):
+    legacy = tmp_path / "legacy"; new = tmp_path / "new"
+    legacy.mkdir(); new.mkdir()
+    (legacy / "state.json").write_text('{"entries": [], "auth_failure_streak": 0}')
+    (legacy / "agent.env").write_text("# env\n")
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(legacy))
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(new))
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    tl._migrate_legacy_state_dir()
+    assert (new / "state.json").exists() and (new / "agent.env").exists()
+    assert (legacy / "state.json").exists()          # 旧目录保留归档
+    tl._migrate_legacy_state_dir()                    # 复跑零副作用
+    assert (new / "state.json").read_text() == '{"entries": [], "auth_failure_streak": 0}'
+
+
+def test_paused_checks_both_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(tmp_path / "l"))
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(tmp_path / "n"))
+    (tmp_path / "l").mkdir(); (tmp_path / "l" / "PAUSED").touch()
+    assert tl._paused() is True                       # 过渡期旧 PAUSED 也生效

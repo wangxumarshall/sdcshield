@@ -205,8 +205,10 @@ touch ~/.local/state/sdcshield-task-loop/PAUSED   # 保险:已在跑的 tick 不
 - **认证熔断**：`auth_failure_streak` 跨条目/跨车道/含 audit 累计（任何
   一次 success 归零——防「连续 ≥3」退化成「累计 ≥3」）；连续 ≥3 → 写
   `PAUSED` + 升级评论。
-- **同根因收敛**：同 workflow 有活跃条目（非 DONE/ESCALATED）时新红 run
-  不开新 issue，只挂 `extra_runs` + 追加评论。
+- **同根因收敛**：同 workflow 有活跃条目（非 DONE/ESCALATED/HUMAN_CLOSED
+  三终态，与上表一致）时新红 run 不开新 issue，只挂 `extra_runs` + 追加评论；
+  HUMAN_CLOSED 是终态——人工已接管的死条目不参与收敛，新红 run 照常开新
+  issue（不在已关闭 issue 上评论、不吞失败）。
 
 ## 5. 运维
 

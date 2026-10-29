@@ -444,3 +444,30 @@ def test_audit_auth_fail_increments_fresh_disk_streak(tmp_path, monkeypatch):
     s3 = store.load()
     assert s3["auth_failure_streak"] == 3      # 再次 fresh 2+1
     assert (tmp_path / "PAUSED").exists()
+
+
+# ============ 终审修复: HUMAN_CLOSED 是终态(同根因收敛不得误判活跃) ============
+
+def test_human_closed_ci_entry_not_active_for_convergence(tmp_path, monkeypatch):
+    """终审 Important#1: HUMAN_CLOSED 是终态——同 workflow 新红 run 不得收敛
+    进它(不在已关闭 issue 上评论、吞失败),而应建新 issue 开新条目。"""
+    state = {"entries": [dict(
+        workflow="Sanitizer", run_id=1, status="HUMAN_CLOSED", issue_number=7,
+        fix_branch="", pr_number=None, attempts=0, rounds=0, agent_pid=None,
+        agent_started_at=None, agent_log=None, last_dispatched_head=None,
+        extra_runs=[], created_at="t", updated_at="t", source="ci",
+        kind="bug", audit_hash=None)], "auth_failure_streak": 0}
+    created, comments = [], []
+    monkeypatch.setattr(tl, "create_issue", lambda run: created.append(run) or 9)
+    monkeypatch.setattr(tl, "comment_on_issue",
+                        lambda n, body: comments.append((n, body)))
+    monkeypatch.setattr(tl, "find_issue_by_run", lambda run_id: None)
+    monkeypatch.setattr(tl, "find_closed_marker_issue", lambda run_id: None)
+    run2 = {"databaseId": 2, "workflowName": "Sanitizer", "event": "schedule",
+            "conclusion": "failure", "headBranch": "main", "headSha": "x",
+            "createdAt": "2026-10-29T00:00:00Z", "url": "u"}
+    tl.triage_new_red_runs(state, [run2], dry_run=False)
+    assert len(created) == 1            # 新红 run 开新 issue(未被死条目吞掉)
+    assert comments == []               # 零评论——不在已关闭 issue 上碰
+    assert state["entries"][0]["extra_runs"] == []   # 死条目未被挂 extra_runs
+    assert state["entries"][1]["run_id"] == 2 and state["entries"][1]["status"] == "QUEUED"

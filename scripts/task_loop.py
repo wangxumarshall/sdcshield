@@ -6,11 +6,14 @@
 # 「已存在 PR 的检视-修复循环」,本工具管「CI 失败 → 修复 PR 的自动产生」。
 # 设计规格见 docs/superpowers/specs/2026-10-29-task-loop-design.md。
 #
-# 子命令(本任务仅注册骨架,行为在后续任务实现):
-#   scan      扫描受监控分支的 CI 失败并更新状态(Task 2)
-#   status    打印当前状态总览(Task 3)
-#   dry-run   只读演练: 展示将执行的动作而不实际执行(Task 4)
-#   audit     main 增量对抗审查: cursor 推进 + findings 查重入队(Task 9)
+# 子命令:
+#   scan         扫描受监控分支 CI 失败并推进双车道状态机(派发/收割/对账)
+#   audit        main 增量对抗审查: cursor 推进 + findings 查重入队
+#   enqueue-bug  会话 intake: 建 bug issue(自动派发资格)
+#   enqueue-task 会话 intake: 建 feature issue(需 approve 才派发)
+#   approve      给 issue 打 agent-approved(feature 派发门)
+#   status       打印当前状态总览
+#   dry-run      只读演练: 展示将执行的动作而不实际执行
 #
 # 状态存储: ~/.local/state/sdcshield-task-loop/state.json(原子写: 先写
 # state.json.tmp 再 os.replace;env 双轨 TASKLOOP_STATE_DIR >
@@ -140,8 +143,12 @@ MAX_AGENT_ATTEMPTS = 2
 # auth_failure_streak 是 gh 认证失败的熔断计数,跨条目累计(spec §7)
 DEFAULT_STATE = {"entries": [], "auth_failure_streak": 0}
 
-# 条目状态机中「活跃」的判定: 非 DONE/ESCALATED 即活跃(spec §5 同根因收敛)
-TERMINAL_STATUSES = {"DONE", "ESCALATED"}
+# 条目状态机中「活跃」的判定: 非 DONE/ESCALATED/HUMAN_CLOSED 即活跃
+# (spec §5 同根因收敛)。HUMAN_CLOSED 必须算终态: reconcile 置 HUMAN_CLOSED
+# 后若同 workflow 又来新红 run,收敛判定 `e.status not in TERMINAL_STATUSES`
+# 会把它误判为活跃 → 在人工已关闭的 issue 上追加评论(违反「人工接管后
+# 工具永不再碰」)且新失败被吞进死条目 extra_runs 永不开新 issue(CI 红失明)。
+TERMINAL_STATUSES = {"DONE", "ESCALATED", "HUMAN_CLOSED"}
 
 # gh 子进程超时(秒),与 pr_loop.GH_TIMEOUT 一致
 GH_TIMEOUT_SEC = 45
@@ -725,9 +732,12 @@ def create_issue(run: dict) -> int:
 
 
 def comment_on_issue(issue_number: int, body: str) -> None:
-    """在既有 issue 追加一条评论(同根因收敛时挂新 run 链接)。"""
-    gh_json(["issue", "comment", str(issue_number),
-             "--repo", repo_slug(), "--body", body])
+    """在既有 issue 追加一条评论(同根因收敛时挂新 run 链接)。
+
+    幂等写走 gh_json_idem(spec §10 ≤3 重试,瞬态错误才重试)。
+    """
+    gh_json_idem(["issue", "comment", str(issue_number),
+                  "--repo", repo_slug(), "--body", body])
 
 
 def _now_iso() -> str:
@@ -743,7 +753,7 @@ def triage_new_red_runs(state: dict, runs: list[dict],
     与 gh 解耦(gh 调用由 scan_red_runs/find_issue_by_run 等承担,本函数只
     经模块级助手,测试可整体替换):
       - run 已有条目(run_id 主键) → 跳过(幂等);
-      - 同 workflow 已有活跃条目(status 非 DONE/ESCALATED) → 同根因收敛:
+      - 同 workflow 已有活跃条目(status 非 DONE/ESCALATED/HUMAN_CLOSED) → 同根因收敛:
         挂 extra_runs + 在既有 issue 上追加一条评论,不开新 issue、不派发;
       - 否则: 找既有 open issue(标记匹配,含 state 外人工已开的)→ 复用;
         open 无命中但 CLOSED issue 携带标记 → 人工接管信号,跳过不重建;
@@ -1588,8 +1598,8 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             else:
                 if entry.issue_number is not None:
                     comment_on_issue(entry.issue_number, body)
-                    gh_json(["issue", "close", str(entry.issue_number),
-                             "--repo", slug])
+                    gh_json_idem(["issue", "close", str(entry.issue_number),
+                                  "--repo", slug])
                     # 终态摘 wip(spec §7.2,建议性线索——state 为权威)
                     try:
                         gh_label_remove(entry.issue_number, AGENT_LABEL_WIP)
@@ -1613,8 +1623,8 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             else:
                 if entry.issue_number is not None:
                     comment_on_issue(entry.issue_number, body)
-                    gh_json(["issue", "close", str(entry.issue_number),
-                             "--repo", slug])
+                    gh_json_idem(["issue", "close", str(entry.issue_number),
+                                  "--repo", slug])
                     # 终态摘 wip(spec §7.2,建议性线索——state 为权威)
                     try:
                         gh_label_remove(entry.issue_number, AGENT_LABEL_WIP)

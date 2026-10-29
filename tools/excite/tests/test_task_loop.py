@@ -300,3 +300,58 @@ def test_cmd_status_prints_queue_and_entries(tmp_path, monkeypatch, capsys):
     assert tl.main(["status"]) == 0
     out = capsys.readouterr().out
     assert "PR_OPEN" in out and "#9" in out
+
+
+# ============ Task 9: audit 无人值守 main 增量对抗审查 ============
+
+def test_audit_hash_stable_and_normalized():
+    a = {"path": "a.c", "line": 1, "category": "正确性",
+         "message": " x ", "evidence": "e1"}
+    b = {"path": "a.c", "line": 1, "category": "正确性",
+         "message": "x", "evidence": "DIFFERENT"}     # evidence 不进 hash
+    assert tl._audit_hash(a) == tl._audit_hash(b)
+    c = dict(a, line=2)
+    assert tl._audit_hash(a) != tl._audit_hash(c)
+
+def test_run_audit_dedups_and_advances_cursor(tmp_path, monkeypatch):
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    state = {"entries": [], "auth_failure_streak": 0,
+             "audit_cursor": {"sha": "base0000000000000000000000000000000000000000",
+                              "at": "2026-10-29T00:00:00Z"}}
+    store = tl.StateStore(str(tmp_path)); store.save(state)
+    git_out = {"fetch": "", "rev-parse": "head1111111111111111111111111111111111111111",
+               "log": "abc1234 commit one\ndef5678 commit two"}
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        git_out.get(args[0], ""))
+    monkeypatch.setattr(tl, "_git_diff", lambda base, head: "+diff body")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_add", lambda sha: "/tmp/wt")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_remove", lambda p: None)
+    monkeypatch.setattr(tl.pr_local_review, "_run_claude",
+                        lambda cmd, cwd, prompt: json.dumps([
+                            {"path": "a.c", "line": 3, "severity": "Important",
+                             "category": "正确性", "message": "m",
+                             "evidence": "e"},
+                            {"path": "a.c", "line": 3, "severity": "Important",
+                             "category": "正确性", "message": "m",
+                             "evidence": "e"}]))          # 同 finding ×2 → 去重为 1
+    created = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels:
+                        created.append(body) or 42)
+    monkeypatch.setattr(tl, "_search_audit_issue", lambda h: None)
+    rc = tl.run_audit(dry_run=False)
+    assert rc == 0 and len(created) == 1
+    assert tl.AUDIT_MARKER_FMT.format(hash=tl._audit_hash(
+        {"path": "a.c", "line": 3, "category": "正确性", "message": "m"})) in created[0]
+    s2 = store.load()
+    assert s2["audit_cursor"]["sha"].startswith("head1111")   # cursor 推进
+    assert len(s2["audit_seen"]) == 1
+
+def test_run_audit_no_new_commits_early_exit(tmp_path, monkeypatch):
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    state = {"entries": [], "auth_failure_streak": 0,
+             "audit_cursor": {"sha": "same", "at": "t"}}
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        "same" if args[0] == "rev-parse" else "")
+    assert tl.run_audit(dry_run=False) == 0    # 无新提交,零 claude 调用

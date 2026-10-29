@@ -10,6 +10,7 @@
 #   scan      扫描受监控分支的 CI 失败并更新状态(Task 2)
 #   status    打印当前状态总览(Task 3)
 #   dry-run   只读演练: 展示将执行的动作而不实际执行(Task 4)
+#   audit     main 增量对抗审查: cursor 推进 + findings 查重入队(Task 9)
 #
 # 状态存储: ~/.local/state/sdcshield-task-loop/state.json(原子写: 先写
 # state.json.tmp 再 os.replace;env 双轨 TASKLOOP_STATE_DIR >
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -49,7 +51,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # `pr_loop.fetch_pr(...)` 命名空间引用调用——测试 monkeypatch ct.pr_loop.*
 # 即可整体替换,零触网。import 失败即进程失败(诚实报错,不吞错静默跳过
 # 车道 B——scan 会顶层崩溃退出而非半盲运行)。
+# audit(Task 9)复用 pr_local_review 的对抗审查引擎(prompt 组装/claude
+# 运行/findings 解析/隔离 worktree);同样按命名空间引用
+# `pr_local_review._run_claude(...)`——测试 monkeypatch
+# tl.pr_local_review.* 即可整体替换,零触网零真跑 claude。pr_loop 顶层
+# 已 import pr_local_review(单向依赖),此处再 import 无循环。
 import pr_loop  # noqa: E402
+import pr_local_review  # noqa: E402
 from pr_loop import GhError, UNTRUSTED_BANNER  # noqa: E402
 
 # ============ 常量(监控范围与节奏,spec §2/§14) ============
@@ -1988,6 +1996,190 @@ def cmd_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+# ============ audit: main 增量对抗审查(Task 9,spec §8.2) ============
+# 周期对 origin/main 的增量(自上次 cursor)跑本地无头 claude 对抗审查,
+# findings 查重(state audit_seen + gh body marker 双源)后 enqueue-bug
+# 进任务队列。独立 audit.lock(与 scan.lock 分离——不占修复单飞槽,scan
+# 与 audit 可并发),PAUSED 同闸;cursor 落 state,异常前推进的成果照常落盘。
+
+AUDIT_LOCK_NAME = "audit.lock"
+AUDIT_MARKER_FMT = "<!-- task-loop:audit:{hash} -->"
+AUDIT_FIRST_RUN_HOURS = 24      # 无 cursor 首跑回看窗口
+
+
+def _audit_hash(finding: dict) -> str:
+    """finding 查重键: path+line+category+message 归一化(去首尾空白)的
+    sha256 前 16 hex。evidence 不进键——同一问题的两次表述证据可能不同。"""
+    key = ":".join(str(finding.get(k, "")).strip()
+                   for k in ("path", "line", "category", "message"))
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _search_audit_issue(h: str) -> Optional[int]:
+    """gh search issues 按 body marker 查 audit 幂等(双源之一,另一源 state
+    audit_seen)。"""
+    res = gh_json(["search", "issues", "--repo", repo_slug(),
+                   "--state", "open", "--json", "number,body",
+                   "--limit", "20", f"task-loop:audit:{h}"])
+    marker = AUDIT_MARKER_FMT.format(hash=h)
+    for it in (res if isinstance(res, list) else []):
+        if marker in (it.get("body") or ""):
+            return int(it["number"])
+    return None
+
+
+def _git_diff(base: str, head: str) -> str:
+    """audit 专用 diff(三点: 自 merge-base;独立函数便于测试替身)。"""
+    return _git(["diff", f"{base}...{head}"])
+
+
+def run_audit(dry_run: bool = False) -> int:
+    """main 增量对抗审查(spec §8.2): 独立 audit.lock(不占修复单飞槽),
+    PAUSED 同闸;cursor 推进;findings 查重后 enqueue-bug。
+
+    cwd 约定(裁定 8): 本函数不 chdir——cmd_audit 先 chdir 到克隆目录,
+    使 pr_local_review._worktree_add 的继承式 git 调用落在克隆而非用户
+    工作区;测试直接调本函数时 git/claude 缝均已打桩,不受 cwd 影响
+    (_git 内部另经 env 双轨解析克隆 cwd,双保险)。
+
+    claude 认证失效计入全局熔断(裁定 10): streak+1,达阈值写 PAUSED +
+    stderr 熔断线,cursor 不推进;审查全流程跑通则 streak 归零(任何成功
+    都证明凭据活着,与 reap 的 success 归零同口径)。
+    """
+    state_dir = _resolve_state_dir()
+    os.makedirs(state_dir, exist_ok=True)
+    lock_fd = os.open(os.path.join(state_dir, AUDIT_LOCK_NAME),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print(f"[lock] {AUDIT_LOCK_NAME} 已被占用(并发 audit?),本轮退出")
+            return 0
+        if not dry_run:
+            # 首启动迁移(裁定 7 续,与 scan 同口径): 仅非 dry——dry-run
+            # 复跑无痕零本地写;env 重定向的 run 由内部守卫豁免(不动真实
+            # 默认目录)。
+            _migrate_legacy_state_dir()
+        if _paused():
+            print("[paused] PAUSED 生效,audit 跳过 claude 调用(观测照常)")
+            return 0
+        store = StateStore()
+        state = store.load()
+        try:
+            _git(["fetch", "--all", "--prune"])
+            head = _git(["rev-parse", f"origin/{MONITORED_BRANCH}"])
+            cursor = state.get("audit_cursor") or {}
+            base = cursor.get("sha")
+            if not base:      # 首跑: 回看 24h 内最后一个 commit
+                cutoff = (datetime.now(timezone.utc)
+                          - timedelta(hours=AUDIT_FIRST_RUN_HOURS)
+                          ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                base = _git(["rev-list", "-1", f"--before={cutoff}",
+                             f"origin/{MONITORED_BRANCH}"]) or head
+            if base == head:
+                print("[audit] main 无新提交,本轮退出")
+                return 0
+            commits = _git(["log", "--oneline", f"{base}..{head}"])
+            diff = _git_diff(base, head)
+            if not dry_run:
+                prompt = pr_local_review.build_adversarial_prompt(
+                    diff, {"title": f"main 增量审查 {base[:8]}..{head[:8]}"
+                           f"({len(commits.splitlines())} commits)",
+                           "body": commits, "issue": None})
+                worktree = pr_local_review._worktree_add(head)
+                try:
+                    try:
+                        output = pr_local_review._run_claude(
+                            pr_local_review.build_claude_command(),
+                            cwd=worktree, prompt=prompt)
+                    except GhError as exc:
+                        if not AUTH_FAIL_PATTERN.search(str(exc)):
+                            raise    # 非 auth 失败: 交外层统一报错返回 1
+                        # 裁定 10: claude 认证失效计入全局熔断 streak;
+                        # 达阈值写 PAUSED + stderr 熔断线。cursor 不推进
+                        # (streak 经 finally 落盘),凭据未修好前下轮由
+                        # PAUSED 闸直接拦住,不空转烧配额。
+                        state["auth_failure_streak"] = \
+                            state.get("auth_failure_streak", 0) + 1
+                        if state["auth_failure_streak"] >= \
+                                AUTH_FAILURE_STREAK_LIMIT:
+                            Path(_resolve_state_dir(), "PAUSED").touch()
+                            print(f"[audit] claude 认证失效连续 "
+                                  f"{state['auth_failure_streak']} 次——已写 "
+                                  f"PAUSED 全局熔断,更新 agent.env 后删除 "
+                                  f"PAUSED 恢复", file=sys.stderr)
+                        else:
+                            print(f"[audit] claude 认证失效(streak "
+                                  f"{state['auth_failure_streak']}/"
+                                  f"{AUTH_FAILURE_STREAK_LIMIT}),本轮放弃",
+                                  file=sys.stderr)
+                        return 1
+                finally:
+                    pr_local_review._worktree_remove(worktree)
+                findings = pr_local_review._parse_findings(output)
+            else:
+                findings = []
+                print(f"[dry-run] 将审查 {base[:8]}..{head[:8]} "
+                      f"({len(commits.splitlines())} commits,约 "
+                      f"{diff.count(chr(10))} 行 diff)")
+            seen = set(state.get("audit_seen", []))
+            for fd in findings:
+                h = _audit_hash(fd)
+                if h in seen or _search_audit_issue(h) is not None:
+                    print(f"[audit] finding 已见过(hash {h}),跳过")
+                    continue
+                if dry_run:
+                    print(f"[dry-run] 将建 bug issue: {fd.get('message', '')[:60]}")
+                    continue
+                n = create_task_issue(
+                    f"[audit] {str(fd.get('message', ''))[:60]}",
+                    build_finding_issue_body(fd, AUDIT_MARKER_FMT.format(hash=h)),
+                    [AGENT_LABEL_TASK, AGENT_LABEL_BUG, "bug"])
+                seen.add(h)
+                print(f"[audit] finding → bug issue #{n}")
+            if not dry_run:
+                # 裁定 10: 审查全流程跑通即证明 claude 凭据活着——streak
+                # 归零,防「连续 ≥3」退化成「累计 ≥3」。
+                state["auth_failure_streak"] = 0
+            state["audit_seen"] = sorted(seen)
+            state["audit_cursor"] = {"sha": head, "at": _now_iso()}
+            if not dry_run:
+                store.save(state)
+            else:
+                print("[dry-run] state 不落盘,复跑无痕")
+            return 0
+        except GhError as exc:
+            print(f"audit 失败(GhError): {exc}", file=sys.stderr)
+            return 1
+        finally:
+            if not dry_run:
+                store.save(state)     # 异常前推进的 cursor/seen 也是成果
+    finally:
+        os.close(lock_fd)
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    """audit 子命令入口: 先 chdir 到克隆目录再委托 run_audit(裁定 8)。
+
+    chdir 是必须的: pr_local_review._worktree_add 的 git 调用继承 cwd
+    (不带 cwd 参数)——不 chdir 的话隔离 worktree 会建在用户主工作区里,
+    踩用户未提交的改动。dry-run 无 claude/无 worktree,但 git 只读操作
+    同样应落在克隆里,chdir 一并前置。克隆目录缺失时如实报错返回 2,
+    绝不静默留在用户工作区跑审查。
+    """
+    clone_dir = os.path.expanduser(
+        os.environ.get("TASKLOOP_CLONE_DIR",
+                       os.environ.get("CITRIAGE_CLONE_DIR",
+                                      DEFAULT_CLONE_DIR)))
+    if not os.path.isdir(clone_dir):
+        print(f"[audit] 克隆目录不存在: {clone_dir}——先 clone 或设 "
+              f"TASKLOOP_CLONE_DIR 指向 CI 专用克隆", file=sys.stderr)
+        return 2
+    os.chdir(clone_dir)
+    return run_audit(dry_run=bool(getattr(args, "dry_run", False)))
+
+
 # ============ 入口 ============
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2019,6 +2211,13 @@ def build_parser() -> argparse.ArgumentParser:
     pa = sub.add_parser("approve", help="给 issue 打 agent-approved(feature 派发门)")
     pa.add_argument("issue", type=int)
     pa.set_defaults(func=cmd_approve)
+
+    pu = sub.add_parser(
+        "audit", help="main 增量对抗审查: cursor 推进 + findings 查重入队")
+    pu.add_argument("--dry-run", action="store_true",
+                    help="只读演练: 展示将审查的提交范围,零 claude 调用,"
+                         "state 不落盘")
+    pu.set_defaults(func=cmd_audit)
     return p
 
 

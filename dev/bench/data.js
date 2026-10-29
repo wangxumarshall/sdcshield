@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793185571473,
+  "lastUpdate": 1793273374217,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -2684,6 +2684,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 22.307,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "29da76ef63eedaa32c4a8b42cc28eee34bb48d62",
+          "message": "Merge pull request #316 from wangxumarshall/fix/sve-oob-audit-2026-10-29\n\nfix(sve): #309 同型越界四连修——谓词钳制/尾块 slack/索引纠偏 (#312-#315)",
+          "timestamp": "2026-10-29T08:42:00Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/29da76ef63eedaa32c4a8b42cc28eee34bb48d62"
+        },
+        "date": 1793273372542,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 94792.852,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 43776.259,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.399,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 30.207,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.679,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.753,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.343,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.378,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 28417.246,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.734,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 10.343,
             "unit": "s"
           }
         ]

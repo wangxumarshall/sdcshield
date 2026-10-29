@@ -104,9 +104,14 @@ AUTH_FAIL_PATTERN = re.compile(r"API Error|403|Not logged in")
 AUTH_FAILURE_STREAK_LIMIT = 3
 
 # 条目状态机中需要「收割」agent 结局的两个状态:
-#   DIAGNOSING = 已派 agent、正在修(本工具的派发目标态)
+#   DISPATCHED = 已派 agent、正在修(本工具的派发目标态)
 #   BOT_FIX    = 修复 PR 已开、pr_loop 接管(agent 结局只记录不推进)
-AGENT_STATES = {"DIAGNOSING", "BOT_FIX"}
+AGENT_STATES = {"DISPATCHED", "BOT_FIX"}
+
+# v1→v2 状态归一(加载时): 旧 ci_triage 状态名 → 统一任务状态名。
+# DETECTED/ISSUED 都是"issue 就绪待派发"→ QUEUED;DIAGNOSING → DISPATCHED。
+STATUS_V1_TO_V2 = {"DETECTED": "QUEUED", "ISSUED": "QUEUED",
+                   "DIAGNOSING": "DISPATCHED"}
 
 # 重派上限: 同一条目 agent 尝试超过 2 次(即第 3 次)→ 升级人工
 MAX_AGENT_ATTEMPTS = 2
@@ -151,7 +156,7 @@ class Entry:
     """
     workflow: str                       # workflow 名(如 "Multi-OS Verify")
     run_id: int                         # GitHub Actions run id
-    status: str                         # 条目状态机(open/fixing/fixed/abandoned…)
+    status: str                         # 条目状态机(QUEUED/DISPATCHED/PR_OPEN/BOT_FIX/DONE/ESCALATED)
     issue_number: Optional[int]         # 跟踪 issue 编号(未开 = None)
     fix_branch: str                     # 修复分支名(未建 = 空串)
     pr_number: Optional[int]            # 修复 PR 编号(未开 = None)
@@ -164,8 +169,13 @@ class Entry:
     extra_runs: list[int]               # 同 workflow 后续失败 run id
     created_at: str                     # 条目创建时间(ISO8601)
     updated_at: str                     # 最近更新时间(ISO8601)
+    source: str                     # 任务来路: ci | audit | session | manual
+    kind: str                       # bug | feature(决定 fix/ feat/ 分支前缀)
+    audit_hash: Optional[str]       # audit 源查重键(其余源为 None)
 
-    # 注: 全部字段显式必填(含 extra_runs)——不做隐式默认,构造方须给全 16 字段。
+    # 注: 全部字段显式必填(含 extra_runs)——不做隐式默认,构造方须给全 19 字段
+    # (source/kind/audit_hash 三个 v2 字段仅 from_dict 容错给默认,直接构造
+    # 仍须显式给全)。
 
     def to_dict(self) -> dict:
         """state.json 序列化形态。"""
@@ -185,15 +195,23 @@ class Entry:
             "extra_runs": list(self.extra_runs),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "source": self.source,
+            "kind": self.kind,
+            "audit_hash": self.audit_hash,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Entry":
-        """从 state.json 还原类型化 Entry。"""
+        """从 state.json 还原类型化 Entry。
+
+        容错加载 v1 条目(旧 ci_triage 状态名经 STATUS_V1_TO_V2 归一;
+        source/kind/audit_hash 三键缺省回落 ci/bug/None——v1 state.json
+        现存条目无此三键,加载即升格 v2)。
+        """
         return cls(
             workflow=d["workflow"],
             run_id=d["run_id"],
-            status=d["status"],
+            status=STATUS_V1_TO_V2.get(d["status"], d["status"]),
             issue_number=d["issue_number"],
             fix_branch=d["fix_branch"],
             pr_number=d["pr_number"],
@@ -206,6 +224,9 @@ class Entry:
             extra_runs=list(d["extra_runs"]),
             created_at=d["created_at"],
             updated_at=d["updated_at"],
+            source=d.get("source", "ci"),
+            kind=d.get("kind", "bug"),
+            audit_hash=d.get("audit_hash"),
         )
 
 
@@ -480,7 +501,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# ============ 分诊: 新红 run → DETECTED →(建 issue)→ ISSUED ============
+# ============ 分诊: 新红 run → 建条目(QUEUED,issue 就绪待派发) ============
 
 def triage_new_red_runs(state: dict, runs: list[dict],
                         dry_run: bool = False) -> list[Entry]:
@@ -493,7 +514,7 @@ def triage_new_red_runs(state: dict, runs: list[dict],
         挂 extra_runs + 在既有 issue 上追加一条评论,不开新 issue、不派发;
       - 否则: 找既有 open issue(标记匹配,含 state 外人工已开的)→ 复用;
         open 无命中但 CLOSED issue 携带标记 → 人工接管信号,跳过不重建;
-        全无 → 建 issue → DETECTED → ISSUED。
+        全无 → 建 issue → QUEUED(issue 就绪待派发)。
 
     dry_run=True: 只打印将执行的动作,零 gh 写、零 state 变更。
     """
@@ -520,13 +541,14 @@ def triage_new_red_runs(state: dict, runs: list[dict],
             _merge_into_active(state, entries, active, run, dry_run)
             continue
 
-        # 新根因: 建条目(DETECTED)→ 复用或创建 issue → ISSUED
+        # 新根因: 建条目 → 复用或创建 issue → QUEUED(issue 就绪待派发)
         entry = Entry(
-            workflow=workflow, run_id=run_id, status="DETECTED",
+            workflow=workflow, run_id=run_id, status="QUEUED",
             issue_number=None, fix_branch="", pr_number=None,
             attempts=0, rounds=0, agent_pid=None, agent_started_at=None,
             agent_log=None, last_dispatched_head=None, extra_runs=[],
             created_at=_now_iso(), updated_at=_now_iso(),
+            source="ci", kind="bug", audit_hash=None,
         )
         if dry_run:
             print(f"[dry-run] 将为 {workflow} run {run_id} 开 issue: "
@@ -551,7 +573,7 @@ def triage_new_red_runs(state: dict, runs: list[dict],
         else:
             print(f"[reuse] run {run_id} 复用既有 issue #{issue_no}")
         entry.issue_number = issue_no
-        entry.status = "ISSUED"
+        entry.status = "QUEUED"    # v2: 旧 DETECTED→ISSUED 两步在此归并
         entry.updated_at = _now_iso()
         entries.append(entry)
         state["entries"] = [e.to_dict() for e in entries]
@@ -705,7 +727,7 @@ def agent_alive(pid: Optional[int]) -> bool:
 
 
 def has_running_agent(state: dict) -> bool:
-    """单飞判定: 任一条目持有活 PID 且状态 ∈ {DIAGNOSING, BOT_FIX}。"""
+    """单飞判定: 任一条目持有活 PID 且状态 ∈ {DISPATCHED, BOT_FIX}。"""
     for e in StateStore.entries(state):
         if e.status in AGENT_STATES and agent_alive(e.agent_pid):
             return True
@@ -741,8 +763,8 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     """派修复 agent(nohup 后台)→ 返回 PID;单飞冲突/PAUSED 返回 None。
 
     派发成功即置状态(单一权威,调用方无需再赋值): 车道 A
-    (increment_rounds=False)→ DIAGNOSING;车道 B(increment_rounds=True)
-    → BOT_FIX。否则条目停在 ISSUED,而单飞/收割/heal 全以
+    (increment_rounds=False)→ DISPATCHED;车道 B(increment_rounds=True)
+    → BOT_FIX。否则条目停在 QUEUED,而单飞/收割/heal 全以
     status ∈ AGENT_STATES 为前提——单飞失明(同轮连派多个 agent)、收割
     失明(死 agent 永不重派)、heal 踩活 agent 工作区(生产首跑实证)。
     dry_run 不置状态(预演零变更语义)。
@@ -790,10 +812,10 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     entry.agent_log = log
     entry.agent_started_at = _now_iso()
     entry.fix_branch = fix_branch
-    # 派发成功即置状态(单一权威): 车道 A → DIAGNOSING、车道 B → BOT_FIX。
-    # 不置状态时条目停在 ISSUED,单飞/收割/heal 全部失明(Task 4 R2 检视
+    # 派发成功即置状态(单一权威): 车道 A → DISPATCHED、车道 B → BOT_FIX。
+    # 不置状态时条目停在 QUEUED,单飞/收割/heal 全部失明(Task 4 R2 检视
     # Critical——生产首跑同轮连派 4 个 agent 的根因)。
-    entry.status = "BOT_FIX" if increment_rounds else "DIAGNOSING"
+    entry.status = "BOT_FIX" if increment_rounds else "DISPATCHED"
     if increment_rounds:
         entry.rounds += 1
     else:
@@ -908,7 +930,7 @@ def _escalate(entry: Entry, state: dict, reason: str,
 def reap_or_advance(state: dict, dry_run: bool = False) -> None:
     """收割 agent 结局并推进状态机(就地更新 state dict)。
 
-    - DIAGNOSING 条目按 check_agent_outcome 推进:
+    - DISPATCHED 条目按 check_agent_outcome 推进:
         success → gh pr list 查 fix 分支 PR → 命中: pr_number + PR_OPEN
                   (auth_failure_streak 归零——证明凭据活着);未命中(谎报
                   done): attempts+1 后走重派/升级(与 dead 同口径计数,
@@ -919,31 +941,33 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
         auth_fail → streak+1;达 3 → 写 PAUSED 文件 + 升级评论(全局熔断,
                   连续认证失效说明凭据过期,继续派发只会空转);清引用前
                   先击杀仍存活的 agent(单飞不漏无主活进程);
-        dead/timeout → attempts+1;≤2 重派(回到 DIAGNOSING 由调用方
+        dead/timeout → attempts+1;≤2 重派(保持 DISPATCHED 由调用方
                   dispatch);>2 升级人工。
     - BOT_FIX 条目: 结局只记录在条目上,状态不变(pr_loop 已接管);
       例外1 auth_fail 计入熔断(裁定 7);例外2 success 把
       auth_failure_streak 归零(成功即证明凭据活着)。
     - 单飞语义: 处理中的 agent 未退场(PID 活)不影响本函数——只收割
       已结束的结局。
-    - 历史 state 兼容(Task 4 R2 前): 「ISSUED + agent_pid 非 None」是旧
-      缺陷形态(dispatch 成功但不置状态,生产 state.json 现存)——先归一为
-      DIAGNOSING 再走既有收割逻辑,结局分支全部复用;归一不落盘,只在
+    - 历史 state 兼容(Task 4 R2 前): 「QUEUED + agent_pid 非 None」是旧
+      缺陷形态(dispatch 成功但不置状态;v1 state.json 现存的 ISSUED+PID
+      经 from_dict 的 STATUS_V1_TO_V2 归一后即此形态)——先归一为
+      DISPATCHED 再走既有收割逻辑,结局分支全部复用;归一不落盘,只在
       本轮内存推进(收割本身照常序列化回 state)。
     """
     entries = StateStore.entries(state)
     for entry in entries:
         if entry.status not in AGENT_STATES:
-            # 历史 state 兼容(Task 4 R2 前 ISSUED 条目): 派发成功但状态
-            # 没推进,PID 已死也无人收割 → 永久卡死。归一为 DIAGNOSING
+            # 历史 state 兼容(Task 4 R2 前条目,v1 的 ISSUED 经加载层
+            # STATUS_V1_TO_V2 归一为 QUEUED): 派发成功但状态没推进,
+            # PID 已死也无人收割 → 永久卡死。归一为 DISPATCHED
             # 后复用全部结局分支(success/escalated/auth_fail/dead/timeout)。
-            if entry.status == "ISSUED" and entry.agent_pid is not None:
-                print(f"[reap] run {entry.run_id}: ISSUED+PID(历史 state "
-                      f"形态,Task 4 R2 前条目)归一为 DIAGNOSING 收割")
-                entry.status = "DIAGNOSING"
+            if entry.status == "QUEUED" and entry.agent_pid is not None:
+                print(f"[reap] run {entry.run_id}: QUEUED+PID(历史 state "
+                      f"形态,Task 4 R2 前条目)归一为 DISPATCHED 收割")
+                entry.status = "DISPATCHED"
             else:
                 continue
-        if entry.agent_pid is None and entry.status == "DIAGNOSING":
+        if entry.agent_pid is None and entry.status == "DISPATCHED":
             continue          # 尚未派发,无结局可收割
         outcome = check_agent_outcome(entry)
         if outcome == "running":
@@ -1037,7 +1061,7 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
             else:
                 # 未达阈值: 先击杀仍存活的 agent 再清引用(误判/竞态下单飞
                 # 不漏无主活进程),该结局只计一次;条目保持
-                # DIAGNOSING——但 agent.env 未修好前重派必再
+                # DISPATCHED——但 agent.env 未修好前重派必再
                 # auth_fail,继续烧凭据配额,故不立即重派,等下一轮/熔断
                 _kill_agent_if_alive(entry)
                 print(f"[reap] run {entry.run_id}: agent 认证失效"
@@ -1056,7 +1080,7 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
 
 def _requeue_or_escalate(entry: Entry, state: dict, reason: str,
                          next_step: str, dry_run: bool) -> None:
-    """attempts 路径: ≤MAX_AGENT_ATTEMPTS 保持 DIAGNOSING 待重派;
+    """attempts 路径: ≤MAX_AGENT_ATTEMPTS 保持 DISPATCHED 待重派;
     超限升级人工。"""
     if entry.attempts <= MAX_AGENT_ATTEMPTS:
         entry.agent_pid = None
@@ -1441,7 +1465,7 @@ def _run_scan_orchestration(dry_run: bool) -> int:
             reap_or_advance(state, dry_run=dry_run)
             # ---- 克隆自愈(派发前恢复单树基线——新 agent 须启动在干净 main 上) ----
             heal_clone(state, dry_run=dry_run)
-            # ---- 车道 A 派发扫: ISSUED/DIAGNOSING 且无 agent 的条目 ----
+            # ---- 车道 A 派发扫: QUEUED/DISPATCHED 且无 agent 的条目 ----
             # PAUSED 时编排照常跑(观测不受影响),派发请求由 dispatch_agent
             # 内的 PAUSED 闸门逐条拒绝(车道 A/B 同闸)。
             # 单飞正确性: dispatch_agent 的记账落在 Entry 对象上,而
@@ -1452,7 +1476,7 @@ def _run_scan_orchestration(dry_run: bool) -> int:
                 print("[paused] 车道 A 派发被 PAUSED 闸门拦下")
             sweep = StateStore.entries(state)
             for entry in sweep:
-                if entry.status in ("ISSUED", "DIAGNOSING") \
+                if entry.status in ("QUEUED", "DISPATCHED") \
                         and entry.agent_pid is None:
                     dispatch_agent(entry, state, dry_run=dry_run)
                     state["entries"] = [e.to_dict() for e in sweep]

@@ -143,6 +143,52 @@ def test_enqueue_bug_findings_file_does_not_read_stdin(tmp_path, monkeypatch,
     bodies = [c[1] for c in created]
     assert any("m1" in b for b in bodies) and tl.UNTRUSTED_BANNER in bodies[0]
 
+def test_enqueue_bug_findings_dedup_via_marker(tmp_path, monkeypatch, capsys):
+    """PR#317 检视#16(轮2): session findings 批量路径幂等——每条 finding
+    以 _audit_hash 归一化 hash 嵌 body marker(<!-- task-loop:finding:h -->),
+    gh search 命中 open issue 即跳过;中途瞬态失败后重跑不重复建 issue
+    (对照: ci 源有 RUN_MARKER_FMT、audit 源有双源查重,session 源原为裸奔)。"""
+    class _Boom:
+        def read(self, *a):
+            raise AssertionError("findings 路径不得读 stdin")
+    monkeypatch.setattr(tl.sys, "stdin", _Boom())
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    f1 = {"path": "a.c", "line": 1, "severity": "Minor", "category": "正确性",
+          "message": "m1", "evidence": "e1"}
+    f2 = {"path": "b.c", "line": 2, "severity": "Minor", "category": "性能",
+          "message": "m2", "evidence": "e2"}
+    h1, h2 = tl._audit_hash(f1), tl._audit_hash(f2)
+    # 重跑场景: f2 的 marker 已命中既有 open issue(上一轮已建)
+    hit_bodies = {h2: tl.FINDING_MARKER_FMT.format(hash=h2)}
+    created = []
+    def fake_gh(args, input_text=None):
+        if args[:2] == ["search", "issues"]:
+            q = args[-1]
+            for h, marker in hit_bodies.items():
+                if q == f"task-loop:finding:{h}":
+                    return [{"number": 4242, "title": "t", "body": marker}]
+            return []
+        if args[:2] == ["issue", "create"]:
+            created.append((args, input_text))
+            return "https://github.com/x/y/issues/42"
+        return None
+    monkeypatch.setattr(tl, "gh_json", fake_gh)
+    ff = tmp_path / "f.json"; ff.write_text(json.dumps([f1, f2]))
+    assert tl.main(["enqueue-bug", "--findings-file", str(ff)]) == 0
+    assert len(created) == 1, "marker 命中的 finding 不得重复建 issue"
+    args, body = created[0]
+    assert tl.FINDING_MARKER_FMT.format(hash=h1) in body, \
+        "新建 issue 正文须嵌 finding marker(供重跑查重)"
+    assert tl.UNTRUSTED_BANNER in body
+    out = capsys.readouterr().out
+    assert "已见过" in out
+    # 完整重跑: 两条全部命中 → 零建
+    hit_bodies[h1] = tl.FINDING_MARKER_FMT.format(hash=h1)
+    created.clear()
+    ff2 = tmp_path / "f2.json"; ff2.write_text(json.dumps([f1, f2]))
+    assert tl.main(["enqueue-bug", "--findings-file", str(ff2)]) == 0
+    assert created == []
+
 def test_enqueue_bug_empty_findings_file_is_noop(tmp_path, monkeypatch, capsys):
     """PR#317 检视#9 附: 空 findings 数组 = 零问题待入队——零 issue、零
     stdin 读取(旧实现会落入单条路径读 stdin 挂起/建占位 issue)。"""

@@ -360,7 +360,11 @@ issue 生命周期 + agent 派发收割）。
 - `/dev-loop enqueue bug`：把本会话 review findings 整理为 JSON 数组
   （path/line/severity/category/message/evidence，schema 同第 5 bot），
   `python3 scripts/task_loop.py enqueue-bug --findings-file <f>`（一条
-  finding 一个 issue，对齐一补丁一单元）；或单条 `--title --body-file`。
+  finding 一个 issue，对齐一补丁一单元；每条以 `_audit_hash` 归一化键嵌
+  `<!-- task-loop:finding:<hash> -->` marker 并经 `gh search` 查重——
+  中途瞬态失败后重跑，已建条目逐条跳过不重复建；跨源与 audit 各自独立；
+  单条路径按 spec §8.3「会话源不做自动查重（人发起）」）；或单条
+  `--title --body-file`。
 - `/dev-loop enqueue task`：用户口述的功能需求——起草 issue 正文（对齐
   `.github/ISSUE_TEMPLATE/feature_request.md`）**给用户过目确认后**
   `enqueue-task --title … --body-file …`；提示 `approve` 后自动进派发

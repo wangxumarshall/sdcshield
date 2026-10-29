@@ -2059,9 +2059,16 @@ def cmd_enqueue_bug(args: argparse.Namespace) -> int:
             print("[enqueue] findings 为空——零 issue,零动作")
             return 0
         for fd in findings:
+            # 幂等查重(PR#317 检视#16 轮2): 与 audit 同一 _audit_hash 键 +
+            # body marker——中途瞬态 GhError 后重跑,已建 issue 逐条跳过,
+            # 不重复建(对照 ci 源 RUN_MARKER_FMT / audit 源双源查重)。
+            h = _audit_hash(fd)
+            if _search_finding_issue(h) is not None:
+                print(f"[enqueue] finding 已见过(hash {h},marker 命中),跳过")
+                continue
             n = create_task_issue(
                 f"[review] {str(fd.get('message', ''))[:60]}",
-                build_finding_issue_body(fd),
+                build_finding_issue_body(fd, FINDING_MARKER_FMT.format(hash=h)),
                 [AGENT_LABEL_TASK, AGENT_LABEL_BUG, "bug"])
             print(f"[enqueue] finding → bug issue #{n}(agent-task agent-bug,自动派发资格)")
         return 0
@@ -2098,6 +2105,12 @@ def cmd_approve(args: argparse.Namespace) -> int:
 
 AUDIT_LOCK_NAME = "audit.lock"
 AUDIT_MARKER_FMT = "<!-- task-loop:audit:{hash} -->"
+# session findings(--findings-file)的幂等 marker(PR#317 检视#16 轮2): 与
+# audit 同一 _audit_hash 归一化键,但独立命名空间——批量路径因「中途瞬态
+# 失败后重跑整批」需要 marker 查重(对照: 单条路径按 spec §8.3「会话源
+# 不做自动查重(人发起)」);跨源(audit 已建同内容 finding)不在此查重,两源
+# 各自独立(如实声明的边界)。
+FINDING_MARKER_FMT = "<!-- task-loop:finding:{hash} -->"
 AUDIT_FIRST_RUN_HOURS = 24      # 无 cursor 首跑回看窗口
 
 
@@ -2107,6 +2120,21 @@ def _audit_hash(finding: dict) -> str:
     key = ":".join(str(finding.get(k, "")).strip()
                    for k in ("path", "line", "category", "message"))
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _search_finding_issue(h: str) -> Optional[int]:
+    """gh search issues 按 body marker 查 session findings 幂等(PR#317
+    检视#16 轮2): 命中 open issue 号,无匹配返回 None——重跑 enqueue-bug
+    --findings-file 时已建条目据此跳过(与 _search_audit_issue 同款形态,
+    独立命名空间)。"""
+    res = gh_json(["search", "issues", "--repo", repo_slug(),
+                   "--state", "open", "--json", "number,body",
+                   "--limit", "20", f"task-loop:finding:{h}"])
+    marker = FINDING_MARKER_FMT.format(hash=h)
+    for it in (res if isinstance(res, list) else []):
+        if marker in (it.get("body") or ""):
+            return int(it["number"])
+    return None
 
 
 def _search_audit_issue(h: str) -> Optional[int]:

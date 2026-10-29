@@ -1986,26 +1986,35 @@ def _read_body(args) -> str:
 
 
 def cmd_enqueue_bug(args: argparse.Namespace) -> int:
+    """会话 intake: bug issue(自动派发资格)。
+
+    两条互斥路径(PR#317 检视#9): --findings-file 走批量(一条 finding 一个
+    issue,正文由 finding 字段构造),**不读 --body-file/stdin**——规范用法
+    (dev-loop.md)就是不带 --body-file 的裸调用,先读 stdin 会让人工终端
+    执行永久挂起;单条路径(--title --body-file / stdin)照旧经 _read_body。
+    空 findings 数组 = 零问题待入队,零 issue 零动作退出。
+    """
     ensure_agent_labels()
-    body = _read_body(args)
-    findings = None
     if getattr(args, "findings_file", None):
         with open(args.findings_file, "r", encoding="utf-8") as f:
             findings = json.load(f)
         if not isinstance(findings, list):
             print("findings 文件不是 JSON 数组", file=sys.stderr)
             return 2
-    if findings:
+        if not findings:
+            print("[enqueue] findings 为空——零 issue,零动作")
+            return 0
         for fd in findings:
             n = create_task_issue(
                 f"[review] {str(fd.get('message', ''))[:60]}",
                 build_finding_issue_body(fd),
                 [AGENT_LABEL_TASK, AGENT_LABEL_BUG, "bug"])
             print(f"[enqueue] finding → bug issue #{n}(agent-task agent-bug,自动派发资格)")
-    else:
-        n = create_task_issue(args.title, body,
-                              [AGENT_LABEL_TASK, AGENT_LABEL_BUG, "bug"])
-        print(f"[enqueue] bug issue #{n}(agent-task agent-bug,自动派发资格)")
+        return 0
+    body = _read_body(args)      # 仅单条路径读正文(--body-file 优先,缺省 stdin)
+    n = create_task_issue(args.title, body,
+                          [AGENT_LABEL_TASK, AGENT_LABEL_BUG, "bug"])
+    print(f"[enqueue] bug issue #{n}(agent-task agent-bug,自动派发资格)")
     return 0
 
 

@@ -117,6 +117,47 @@ def test_enqueue_bug_creates_labeled_issue(tmp_path, monkeypatch, capsys):
     assert "agent-task" in args and "agent-bug" in args and "bug" in args
     assert tl.UNTRUSTED_BANNER in body
 
+def test_enqueue_bug_findings_file_does_not_read_stdin(tmp_path, monkeypatch,
+                                                       capsys):
+    """PR#317 检视#9: --findings-file 路径正文完全不用,不得先读 stdin——
+    规范用法(dev-loop.md)恰是不带 --body-file 的裸调用,人工在终端执行
+    会永久挂起等 stdin。"""
+    class _Boom:
+        def read(self, *a):
+            raise AssertionError(
+                "enqueue-bug --findings-file 不得读 stdin(人工终端会挂起)")
+    monkeypatch.setattr(tl.sys, "stdin", _Boom())
+    fake = FakeGh()
+    monkeypatch.setattr(tl, "gh_json", fake.gh_json)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    ff = tmp_path / "f.json"
+    ff.write_text(json.dumps([
+        {"path": "a.c", "line": 1, "severity": "Minor", "category": "正确性",
+         "message": "m1", "evidence": "e1"},
+        {"path": "b.c", "line": 2, "severity": "Minor", "category": "性能",
+         "message": "m2", "evidence": "e2"}]))
+    rc = tl.main(["enqueue-bug", "--findings-file", str(ff)])
+    assert rc == 0
+    created = [c for c in fake.calls if c[0][:2] == ("issue", "create")]
+    assert len(created) == 2                       # 一条 finding 一个 issue
+    bodies = [c[1] for c in created]
+    assert any("m1" in b for b in bodies) and tl.UNTRUSTED_BANNER in bodies[0]
+
+def test_enqueue_bug_empty_findings_file_is_noop(tmp_path, monkeypatch, capsys):
+    """PR#317 检视#9 附: 空 findings 数组 = 零问题待入队——零 issue、零
+    stdin 读取(旧实现会落入单条路径读 stdin 挂起/建占位 issue)。"""
+    class _Boom:
+        def read(self, *a):
+            raise AssertionError("空 findings 也不得读 stdin")
+    monkeypatch.setattr(tl.sys, "stdin", _Boom())
+    fake = FakeGh()
+    monkeypatch.setattr(tl, "gh_json", fake.gh_json)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    ff = tmp_path / "empty.json"; ff.write_text("[]")
+    assert tl.main(["enqueue-bug", "--findings-file", str(ff)]) == 0
+    assert [c for c in fake.calls if c[0][:2] == ("issue", "create")] == []
+
+
 def test_enqueue_task_requires_approval_hint(capsys, tmp_path, monkeypatch):
     fake = FakeGh()
     monkeypatch.setattr(tl, "gh_json", fake.gh_json)

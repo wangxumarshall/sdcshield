@@ -1,14 +1,12 @@
-# dev-loop：issue 驱动开发闭环（Claude Code /dev-loop 命令）
+# dev-loop：issue 驱动开发闭环（Trae 项目规则）
 
 目标：会话内完成「发现问题/需求 → 建 issue → 队列 → agent 自动实现 → PR →
 五 bot 检视 → 人工 merge」。引擎 `scripts/task_loop.py`；PR 开出后走
 `/pr-loop` 阶段 2–6，零重复。
 
-本文件与 `.trae/rules/dev-loop.md` 内容同源，双份维护——修改任一处须同步另一处。
+本文件与 `.claude/commands/dev-loop.md` 内容同源，双份维护——修改任一处须同步另一处。
 
-## 参数
-
-用户输入：$ARGUMENTS
+## 用法
 
 - `status`（缺省）：`python3 scripts/task_loop.py status` 队列总览。
 - `enqueue bug`：对本会话 review 发现的问题——把 findings 整理为 JSON 数组

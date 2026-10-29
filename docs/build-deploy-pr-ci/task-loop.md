@@ -1,0 +1,364 @@
+# task-loop：统一任务编排（issue 驱动开发闭环）
+
+**定位**：统一任务编排引擎——**GitHub issues（`agent-task` 标签）是唯一任务队列**。
+四类触发源（CI 红 run / main 定期对抗审查 audit / 会话 enqueue / GitHub 手建
+issue）统一入队 → scan tick 按标签资格 FIFO 出队 → **单飞** headless claude
+agent 在独立克隆里修复/实现/验证/push → `fix|feat/issue-<N>` 分支 → agent
+自开 PR（`Closes #N`）→ 复用 [pr-loop](pr-loop.md) 五 bot 检视闭环 →
+READY_TO_MERGE 时 @人工 merge。取代 `ci_triage.py` 的编排职责（经模块别名
+薄壳过渡，PR-5 删除）；CI 红从唯一触发源降级为四分之一。**人工点仅两类：
+merge 永远人工；feature 类需求确认（`agent-approved`）**。
+
+- 引擎：[`scripts/task_loop.py`](../../scripts/task_loop.py)（Python 3.11
+  标准库 + `gh` CLI，零第三方运行时依赖；`import pr_loop` 复用 PR 判定，
+  `import pr_local_review` 复用对抗审查引擎）
+- 前代手册（历史保留）：[ci-triage.md](ci-triage.md)——cron 编排/双车道/
+  熔断语义的搬移来源，本文是其泛化后继
+- 测试：`tools/excite/tests/test_task_loop.py` +
+  `tools/excite/tests/test_ci_triage.py`（经薄壳，锚定搬移零语义变化），
+  共 65 用例离线锚定全部关键语义；全套 `tools/excite/tests/` 189 passed
+- 设计规格（会话产物，不入库）：主仓
+  `docs/superpowers/specs/2026-10-29-task-loop-design.md`
+
+| # | 触发源 | 自动/手动 | 触发机制 | 人工点 |
+|---|---|---|---|---|
+| 1 | CI 红 run | 自动 | cron 每 30min `scan` → `gh run list` 扫 main 红 run（回看 3 天） | 0（除 merge） |
+| 2 | main 定期对抗审查 | 自动 | cron 每 6h `audit` → main 增量 commit → 对抗审查 → findings 建 bug issue | 0（除 merge） |
+| 3 | 会话内 review 发现 | 手动发起，入队后全自动 | 会话 findings JSON → `enqueue-bug`（`/dev-loop`） | 0（除 merge） |
+| 4 | 用户新功能需求 | 手动发起 | 会话起草 issue 正文给用户过目 → `enqueue-task` → `approve` | 1：需求确认 |
+| 5 | GitHub 手建 issue | 手动 | 模板建 issue + 打 `agent-task`（bug 即入队；feature 再打 `agent-approved`） | 1（feature） |
+
+## 1. 架构一览
+
+```
+cron */30                          cron 每 6h(17 分)
+  └─ task_loop.py scan               └─ task_loop.py audit(audit.lock 独立)
+       ├─ flock scan.lock(单实例;          ├─ cursor(上次审到的 SHA;首跑回看 24h)
+       │  拿不到锁本轮退出)                ├─ git fetch + log cursor..origin/main
+       ├─ 首启动迁移(旧 state 目录→新,§3)   │  无新 commit → 退出
+       ├─ 标签渠道就位(幂等补 agent-*)      ├─ 复用 pr_local_review 对抗审查引擎
+       ├─ PAUSED 检查(存在→派发全停)        │  (即用即弃 worktree,不占单飞槽)
+       ├─ intake_ci: main 红 run →         ├─ findings hash 双源查重
+       │  幂等建 issue → QUEUED             │  (state audit_seen + gh body marker)
+       ├─ 收割 reap_or_advance             └─ 未见过 → 建 bug issue(入队)
+       ├─ reconcile(队列对账): GitHub open
+       │  +agent-task 且资格达成 ∖ state → QUEUED;
+       │  条目 issue 被人工关闭 → HUMAN_CLOSED
+       ├─ heal: 恢复干净的 main(单树基线)
+       ├─ ci 重派扫(DISPATCHED 无 PID)
+       ├─ 任务 FIFO 派发扫(QUEUED 全部 source,按 issue 号)
+       │    → 单飞派发 headless claude(60 min 预算,prompt 经 stdin)
+       │    → fix/ci-<runid> 或 fix|feat/issue-<N> 分支
+       └─ 车道 B: PR_OPEN/BOT_FIX → pr_loop.classify_state(五 bot 判据)
+            WAITING_BOTS/QUIET_WINDOW → 不动;READY_TO_FIX → collect 导出+派
+            bot 处置 agent(rounds≤4,同 head 只派一次);判定前补第 5 bot 信号;
+            READY_TO_MERGE/CLOSED → @人工 merge + 关 issue + DONE
+```
+
+**scan tick 顺序**（实码序，`_run_scan_orchestration`）：flock `scan.lock`
+（LOCK_EX|LOCK_NB，拿不到打印退出码 0）→ 首启动迁移（仅非 dry）→ 标签渠道
+就位（仅非 dry，失败仅告警）→ PAUSED 检查（派发全停、观测照常）→
+intake_ci（`scan_red_runs` 回看 3 天 → `triage_new_red_runs`：幂等建/复用
+issue → QUEUED；同 workflow 活跃条目 → 挂 `extra_runs` 追加评论不开新
+issue，同根因收敛）→ 收割 `reap_or_advance` → 队列对账
+`reconcile_issues`（资格达成的 manual issue 入队 + HUMAN_CLOSED 清扫）→
+`heal_clone` →
+ci 重派扫（DISPATCHED 且无 PID）→ 任务 FIFO 派发扫（QUEUED 全部
+source，按 issue 号排序）→ 车道 B `lane_b_advance` → state 原子落盘
+（finally：GhError 中途崩溃也落盘已推进部分；dry-run 不落盘）。
+
+**audit 独立线**（`run_audit`，与 scan 并行不互斥）：
+
+- 独立 `audit.lock`（flock）——**不占修复单飞槽**（read-only 审查与第 5 bot
+  `pr_local_review --all-open` 同级定位）；PAUSED 同闸（熔断闸同样管 audit
+  的 claude 调用）。
+- cursor：state 的 `audit_cursor`（上次审到的 SHA + 时间）；无 cursor 首跑
+  回看 24h。`git fetch` 后 `cursor..origin/main` 无新 commit → 本轮退出。
+- 审查复用 `pr_local_review` 对抗审查引擎（prompt 泛化：diff + commit
+  messages 替代 PR context），在即用即弃 worktree 里跑，绝不碰用户工作区。
+- findings 逐条 hash 查重（`path+line+category+message` 归一化的 sha256
+  前 16 hex；evidence 不进键）：**双源**——state `audit_seen` 集合 +
+  `gh search issues` body marker `<!-- task-loop:audit:<hash> -->`。未见过
+  才建 bug issue（labels `agent-task agent-bug bug`，正文含 marker）。
+  findings 入库中途 GhError → 本轮零落盘，下轮靠 gh body marker 查重兜底
+  （双源设计的意义）。
+- **state 写入纪律（Ruling 11）——为什么走 `_audit_state_merge_write`**：
+  audit 只持 audit.lock，而 claude 运行数分钟期间并发 scan tick（持
+  scan.lock）会推进 entries（派发记账/收割/对账）——若把 audit 启动时
+  load 的整份快照 save 回去，会把 scan 的推进整体回滚：丢 agent_pid/状态
+  → 单飞失明 → 同一克隆重复派 agent（生产事故 9d6ba452 同类根因）。故
+  audit 的一切持久化都经 `_audit_state_merge_write`：拿 scan.lock（阻塞式
+  flock——临界区只有一次 load+save，亚秒级；scan 从不碰 audit.lock，锁序
+  单向无死锁）后 load 磁盘**最新** state，只 update audit 自有键
+  （`audit_cursor`/`audit_seen`/`auth_failure_streak`），再原子 save。
+  **entries 的权威属于 scan，audit 永不写它**。认证失效计数
+  `_audit_streak_add` 同一纪律（scan.lock 内对磁盘最新值读-改-写）。
+
+**关键约束**（全部由单测锚定）：全局同时最多 **1 个修复 agent**（跨全部
+source 共槽；audit 不占槽）；attempts ≤2、rounds ≤4、认证连续 ≥3 →
+PAUSED 熔断；第 5 bot（local-claude）连续 3 tick 缺位仅告警不降门槛。
+
+## 2. 标签协议（Copilot assignment 模式）
+
+六个 `agent-*` 标签，由 `ensure_agent_labels()` 每 tick 幂等创建缺失项
+（颜色统一 `d4c5f9`；创建失败仅告警不阻断）：
+
+| 标签 | 语义 |
+|---|---|
+| `agent-task` | 任务资格（intake 自动打 / 手动打即入队） |
+| `agent-bug` | bug 类 → 自动派发 |
+| `agent-feature` | feature 类 → 需 `agent-approved` 才派发 |
+| `agent-approved` | 人工确认（`approve` 子命令或 GitHub 手动） |
+| `agent-wip` | agent 已认领（派发时打，重派/升级/终态时摘） |
+| `agent-escalated` | 升级（attempts/rounds 超限） |
+
+- **资格判定公式**：open ∧ `agent-task` ∧ (`agent-bug` ∨ `agent-approved`)
+  ∧ ¬`agent-wip` ∧ ¬`agent-escalated`，FIFO 按 issue 号。
+- intake 自动打的标签：ci 源 `agent-task agent-bug`；audit 源
+  `agent-task agent-bug bug`；会话 bug `agent-task agent-bug bug`；会话
+  feature `agent-task agent-feature enhancement`。现有 bug/enhancement
+  模板标签保留不冲突。
+- **agent-wip 同步时机**：派发成功即打、重派等待期/升级/终态时摘。标签是
+  跨 tick 与 state 丢失场景的**建议性恢复线索，state 为权威**——同步失败
+  只告警，绝不阻断派发/收割记账。
+
+## 3. 部署
+
+### 3.1 终态 crontab（两行）
+
+```cron
+*/30 * * * * cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py scan >> ~/.local/state/sdcshield-task-loop/cron.log 2>&1
+17 */6 * * * cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py audit >> ~/.local/state/sdcshield-task-loop/audit.log 2>&1
+```
+
+（audit 取 17 分——避开整点扎堆；scan 行沿用 */30 既有节奏仅换入口。）
+安装：`crontab -e` 把既有 `ci_triage.py scan` 行替换为上行 scan、新增
+audit 行。**cron PATH 注意**——cron 环境只有 `/usr/bin:/bin` 量级裸
+PATH，故用显式 `/usr/bin/python3`；agent 派发所需的 `claude`/`gh` 由
+agent.env 内的 `PATH` 提供（dispatch 命令先 `source agent.env` 再起
+claude）。
+
+**部署时序依赖（如实声明）**：autoci 克隆跟踪 main——本 PR 合入**前**，
+crontab 的 `ci_triage.py scan` 走 main 上的旧文件，不受影响；合入
+**后**，main 的 `ci_triage.py` 已是模块别名薄壳（`import task_loop`），
+旧 cron 行自动经壳切到新引擎（首个非 dry scan 触发下述 state 目录迁移，
+输出仍重定向到旧目录 cron.log，无害）；**cron 行换成 `task_loop.py` +
+新增 audit 行是人工步骤**——audit 线在人工添加前不启动。第 5 bot 时间
+触发线（`pr_local_review.py --all-open`，主工作区）不属于本引擎 cron，
+见 [ci-triage.md](ci-triage.md) §2.2，切换不受影响。
+
+### 3.2 首启动自动迁移（state 目录）
+
+`~/.local/state/sdcshield-ci-triage/` → `~/.local/state/sdcshield-task-loop/`，
+`_migrate_legacy_state_dir()` 在 scan/audit 拿到锁后执行（仅非 dry）：
+
+- 触发条件：生效 state 目录为默认新目录（env 重定向的测试 run 不迁——
+  不动真实目录）∧ 新目录无 `state.json` ∧ 旧目录有；
+- 动作：拷贝 `state.json` + `agent.env`（目标已存在则跳过该文件）；
+  `state.json` v1→v2 在**加载时**归一——旧状态名 DETECTED/ISSUED→QUEUED、
+  DIAGNOSING→DISPATCHED，`source`/`kind`/`audit_hash` 缺省回落
+  ci/bug/None；
+- 旧目录**保留归档不动**；`PAUSED` 不搬——`_paused()` 对新旧两目录双路径
+  检查（过渡期任一存在即生效）；
+- 幂等可重跑（单测锚定）。
+
+### 3.3 agent.env（凭据文件，不入库）
+
+`~/.local/state/sdcshield-task-loop/agent.env`（由 §3.2 迁移就位）：agent
+派发前 `source` 的环境快照——`ANTHROPIC_AUTH_TOKEN` /
+`ANTHROPIC_BASE_URL` / 模型映射 / `PATH`。权限**必须 600**；内容绝不进
+日志/issue/state.json。第 5 bot（`pr_local_review.py`）经 `agent_env_path()`
+与本引擎**共用**此文件（新目录优先、旧目录回退）。失效症状 = agent 日志
+全体 `API Error`/`403`/`Not logged in`，连续 ≥3 次自动熔断（§5.2）。
+
+### 3.4 完全停用
+
+```console
+crontab -e    # 删两行部署行(停调度)
+touch ~/.local/state/sdcshield-task-loop/PAUSED   # 保险:已在跑的 tick 不再派发
+```
+
+## 4. 状态机速查
+
+条目主键 `issue_number`（ci 源条目 `run_id` 降为普通字段、`extra_runs`
+同根因收敛语义保留）。状态存于 `state.json` 的 `entries[]`：
+
+| 状态 | 含义 | 进入条件 | issue 上发生什么 |
+| --- | --- | --- | --- |
+| `QUEUED` | issue 就绪待派发 | intake 建好（ci/audit/session）或 reconcile 入队（manual） | 正文含任务上下文 + 幂等标记 + 防注入横幅 |
+| `DISPATCHED` | 修复/实现 agent 在跑 | 派发成功（打 `agent-wip`，attempts+1） | （prompt 要求 agent 最终把报告贴 issue） |
+| `PR_OPEN` | agent 自开 PR 已核实 | 收割核实 `gh pr list --head` 命中 open PR | 贴 PR 简报评论（车道 A→B 的唯一铰链） |
+| `BOT_FIX` | bot 意见处置 agent 在跑 | 车道 B READY_TO_FIX → collect 导出 + 派 agent（rounds+1，**同 head 只派一次**） | 处置报告贴 issue |
+| `DONE` | 结案 | 车道 B 判定 READY_TO_MERGE/CLOSED | @wangxumarshall 请人工 merge（或合并/关闭总结）+ 关 issue + 摘 wip |
+| `ESCALATED` | 升级人工，冻结 | attempts>2 / rounds≥4 / agent 自报 escalated / 熔断 | @wangxumarshall 评论附日志尾证据与建议 + `agent-escalated` 标签 + 摘 wip |
+| `HUMAN_CLOSED` | 人工接管，工具永不再碰 | QUEUED/DISPATCHED 条目 issue 已被人工关闭（无 PR 路径；有 PR 路径的由车道 B 收尾） | 不 @ 不评论（DISPATCHED 先击杀在跑 agent、摘 wip） |
+
+**全局机制**：
+
+- **单飞**：全局同时最多 1 个修复 agent，跨全部 source 共槽——派发前
+  `has_running_agent` 检查（PID 探活），冲突拒绝派发下一轮再试；audit
+  不占槽。
+- **attempts ≤ 2**：dead/timeout/谎报 done（日志称 done 但 `gh pr list`
+  查无 PR）各 +1，超限升级；agent 诚实自报 escalated **不计** attempts
+  （诚实上报不是失败重试）。
+- **rounds ≤ 4**：车道 B bot 意见处置轮数，`rounds ≥ 4` → ESCALATED。
+- **认证熔断**：`auth_failure_streak` 跨条目/跨车道/含 audit 累计（任何
+  一次 success 归零——防「连续 ≥3」退化成「累计 ≥3」）；连续 ≥3 → 写
+  `PAUSED` + 升级评论。
+- **同根因收敛**：同 workflow 有活跃条目（非 DONE/ESCALATED）时新红 run
+  不开新 issue，只挂 `extra_runs` + 追加评论。
+
+## 5. 运维
+
+### 5.1 kill switch（一键停派发）
+
+```console
+touch ~/.local/state/sdcshield-task-loop/PAUSED   # 停:派发全停,观测照常
+rm    ~/.local/state/sdcshield-task-loop/PAUSED   # 恢复
+```
+
+PAUSED 语义：`dispatch_agent` 内部闸门——存在即拒绝一切派发（车道 A/B
+同闸），audit 的 claude 调用同样被拦；扫描/issue 搜索/收割观测照常。
+kill switch 与熔断共用 PAUSED 文件；过渡期旧目录
+（`sdcshield-ci-triage`）的 PAUSED 同样生效（双路径检查）。
+
+### 5.2 熔断恢复
+
+熔断触发（连续 ≥3 次认证失败）会写 PAUSED 并在 issue 上发升级评论。
+恢复步骤：**先**更新 `~/.local/state/sdcshield-task-loop/agent.env` 里的
+凭据（ANTHROPIC_AUTH_TOKEN 等），**再** `rm PAUSED`——顺序颠倒会在旧
+凭据上继续空转烧配额。
+
+### 5.3 手动重跑 / 观测
+
+```console
+cd /home/sdc/wangxu/operator/sdcshield-autoci
+python3 scripts/task_loop.py status            # 队列总览: streak/PAUSED/单飞占用
+                                               #   + 全部条目 + 待入队任务
+python3 scripts/task_loop.py dry-run           # scan 只读演练: 零 gh 写/零 git/零派发,复跑无痕
+python3 scripts/task_loop.py audit --dry-run   # audit 只读演练: 展示将审查的提交范围,
+                                               #   零 claude 调用,state 不落盘
+```
+
+env 重定向（测试/多实例）：`TASKLOOP_STATE_DIR`（>
+`CITRIAGE_STATE_DIR` 兼容旧测试/部署）、`TASKLOOP_CLONE_DIR`（>
+`CITRIAGE_CLONE_DIR`）、`TASKLOOP_REPO`（> `CITRIAGE_REPO`）；
+`CITRIAGE_WORKFLOWS` 逗号分隔覆盖监控名单（空串视同未设置）。
+
+### 5.4 日志与状态文件
+
+`~/.local/state/sdcshield-task-loop/` 下：
+
+| 文件 | 内容 |
+| --- | --- |
+| `state.json` | 全部条目 + 熔断计数 + audit cursor/seen（原子写：tmp → os.replace） |
+| `PAUSED` | 存在即 kill switch/熔断生效 |
+| `scan.lock` | scan 互斥锁（flock） |
+| `audit.lock` | audit 互斥锁（与 scan 分离，不占修复单飞槽） |
+| `agent.env` | 凭据环境快照（600，§3.3） |
+| `agent-<runid 或 issue-N>-<UTC 时间戳>.log` | 每次派发的 agent 完整 stdout/stderr（ci 源按 run_id、其余源按 issue 号命名；重派不覆盖上一轮现场） |
+| `prompt-<issue 号>-<UTC 时间戳>.txt` | 派发 prompt 落盘（0600，经 stdin 喂给 claude——修 argv 传 prompt 的 ARG_MAX 隐患；issue 号缺省时用 run_id） |
+| `collect-pr<N>.md` | 车道 B 派发前导出的 bot 检视意见（不可信检视数据） |
+| `cron.log` / `audit.log` | crontab 重定向的 scan / audit 输出 |
+
+旧目录 `~/.local/state/sdcshield-ci-triage/` 迁移后保留归档（含历史
+agent 日志与 cron.log）。
+
+## 6. FAQ
+
+**Q：认证失效怎么办？**
+看 agent 日志尾部（`API Error`/`403`/`Not logged in`）。更新 `agent.env`
+凭据后删 PAUSED（§5.2）。连续 ≥3 次会自动熔断，不会无限烧配额。
+
+**Q：为什么我的 PR 没被接管？**
+车道 B 只接管引擎**自己派生**分支的 PR——`fix/ci-<runid>` 与
+`fix|feat/issue-<N>`（`pr_number` 唯一来源是收割 success 路径的
+`gh pr list --head <fix_branch>` 查询，车道 B 从不扫描存量 open PR）。
+用户在研 PR 完全不碰——继续用交互式 `/pr-loop`（D6 决策，根除同一 PR
+并发 actor 冲突）。
+
+**Q：feature issue 为什么一直不派发？**
+缺 `agent-approved`（feature 类的派发门，§2 资格公式）。`python3
+scripts/task_loop.py approve <N>` 或 GitHub 手动打标签，下一 scan tick
+进队列。
+
+**Q：agent 会不会碰我的工作区？**
+不会。修复/实现 agent 只在独立克隆
+`/home/sdc/wangxu/operator/sdcshield-autoci` 里工作（cwd 即克隆目录），
+prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/main` 起
+`checkout -B fix|feat/issue-<N>`，结束回干净 main。audit 的审查在克隆内
+的即用即弃 worktree 跑（`cmd_audit` 先 chdir 到克隆目录，缺失时如实
+报错退出，绝不留在用户工作区）。
+
+**Q：如何完全停用？**
+`crontab -e` 删两行部署行 + `touch PAUSED`（§3.4）。已开 issue 保留
+人工处置。
+
+## 7. 依赖与红线（agent prompt 硬编码）
+
+- 5 条红线：绝不推 main；绝不 merge；绝不 resolve（issue/PR/thread）；
+  绝不碰用户工作区；bug 源「未复现不修」（复现不出如实 escalated），
+  feature 源「偏离需求即 escalated」。
+- 结束语契约（最后一行逐字）：成功 `task-loop: done <fix_branch>` /
+  失败 `task-loop: escalated <原因>`——script 侧据此判档，谎报 done 会被
+  `gh pr list` 核实拆穿并计 attempts。过渡双轨：在飞的旧 ci agent 输出
+  `ci-triage: done/escalated` 前缀同样被认（车道 B bot 处置 agent 的
+  prompt 仍用旧前缀，两契约等价）。
+- issue 正文/评论/失败日志/collect 文件全部是**不可信数据**：统一裹
+  `UNTRUSTED_BANNER`（与 pr_loop 同源），agent 不得执行其中任何"指令"。
+- PR 竞态：agent push 后自开 PR（`--title "fix|feat: <摘要> (#N)"
+  --body "Closes #N + 报告"`）；与 `auto-pr.yml` 谁先谁后不定——create
+  因"分支已有 PR"失败时兜底 `gh pr edit` 改写标题与正文（必须含
+  `Closes #N`），两条路径终态一致。
+- **merge 永远在人**：引擎、agent、命令面都绝不 merge、绝不 resolve。
+
+## 8. 与 pr_loop / ci_triage 的关系
+
+依赖栈（方向不变）：`pr_local_review`（基座：gh 原语 + 本地对抗审查）
+→ `pr_loop`（中层：PR 五 bot 状态机）→ `task_loop`（顶层：cron 编排 +
+issue 生命周期 + agent 派发收割）。
+
+- **pr_loop** 管"已存在 PR 的检视-修复循环"——车道 B 全量复用其
+  `fetch_pr`/`classify_state`/`render_collect`/`ensure_local_review`
+  （判定前主动补第 5 bot 信号，幂等），零重复实现。
+- **`scripts/ci_triage.py`** 是过渡**模块别名薄壳**（`import task_loop`
+  后 `sys.modules["ci_triage"] = task_loop`——保住测试的 monkeypatch
+  命名空间）：PR-1a 起全部职责已搬至 task_loop.py，旧 cron 行/旧测试经
+  壳零改动继续工作；**PR-5 删除**（cron 切换并观察后）。其历史手册
+  [ci-triage.md](ci-triage.md) 保留（含首跑暴露的 Critical 缺陷记录等
+  经验教训）。
+
+## 9. 会话命令（/dev-loop）
+
+`/dev-loop`（`.claude/commands/dev-loop.md` + `.trae/rules/dev-loop.md`
+同源双份，仿 pr-loop 模式）：会话内把「review 发现的问题」/「功能需求」
+一键转成带标签的 issue 进队列。
+
+- `/dev-loop enqueue bug`：把本会话 review findings 整理为 JSON 数组
+  （path/line/severity/category/message/evidence，schema 同第 5 bot），
+  `python3 scripts/task_loop.py enqueue-bug --findings-file <f>`（一条
+  finding 一个 issue，对齐一补丁一单元）；或单条 `--title --body-file`。
+- `/dev-loop enqueue task`：用户口述的功能需求——起草 issue 正文（对齐
+  `.github/ISSUE_TEMPLATE/feature_request.md`）**给用户过目确认后**
+  `enqueue-task --title … --body-file …`；提示 `approve` 后自动进派发
+  队列。
+- `/dev-loop approve <N>`：`python3 scripts/task_loop.py approve <N>`。
+- `/dev-loop status`（缺省）：队列总览。
+- **PR 开出后路由到 `/pr-loop` 阶段 2–6**（wait → collect → 批判性处置
+  → 循环 → merge 提醒），零重复实现。
+
+## 10. 验收记录（待填）
+
+TODO（PR 合入并切换 cron 后记录）：首个真实任务全周期时间线——issue →
+agent 派发 → PR → bot 循环 → merge 提醒；异常结局（如 ESCALATED/
+HUMAN_CLOSED 路径）如实记录。切换后观察首个 tick：
+`tail -5 ~/.local/state/sdcshield-task-loop/cron.log`。
+
+## 11. 延伸阅读
+
+- [pr-loop：会话内 PR 检视-修复闭环](pr-loop.md) — 车道 B 复用的检视闭环
+- [PR 代码检视机器人](pr-review-bots.md) — 五 bot 判据与 auto-pr
+- [ci-triage：CI 无人值守分诊（历史手册）](ci-triage.md) — 前代引擎，
+  本引擎的搬移来源与生产经验（含首跑缺陷教训）
+- 设计规格（会话产物，主仓 docs/superpowers/specs/，不入库）：
+  `2026-10-29-task-loop-design.md`

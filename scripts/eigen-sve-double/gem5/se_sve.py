@@ -6,6 +6,14 @@
 # the -msve-vector-bits the binary was compiled with (size-specific SVE code
 # requires a matching runtime VL). Structure follows gem5's canonical
 # learning_gem5/part1/simple-arm.py with the ArmISA VL parameter added.
+#
+# The config provisions several CPUs (all carrying the same VL). Only the
+# first thread context is activated at startup (Process::initState activates
+# contextIds[0]); the rest stay Halted and serve as the free thread contexts
+# that clone(2)/pthread_create consumes — the upstream single-process-SMP
+# pattern of configs/deprecated/example/se.py ("workload = multiprocesses[0]"
+# for every CPU). Without them, gem5 SE clone returns EAGAIN once the main
+# thread occupies the only context (System::Threads::findFree finds nothing).
 import sys
 
 import m5
@@ -16,6 +24,7 @@ from m5.objects import (
     Process,
     Root,
     System,
+    SystemXBar,
     SrcClockDomain,
     VoltageDomain,
 )
@@ -36,6 +45,11 @@ while i < len(args):
 assert pos, "usage: gem5.opt se_sve.py <binary> [args] --vl <quadwords>"
 binary = pos[0]
 
+# free thread contexts for the workload's clone(2) calls: sdcshield forks a
+# child per test and each child spawns per-CPU worker threads, so provision
+# headroom (main + child + workers) without paying for idle Halted contexts.
+cpu_count = 4
+
 system = System()
 system.clk_domain = SrcClockDomain(clock="1GHz", voltage_domain=VoltageDomain(voltage="1V"))
 system.mem_mode = "atomic"
@@ -43,21 +57,25 @@ system.mem_ranges = [m5.objects.AddrRange("2GiB")]
 
 from m5.objects import AtomicSimpleCPU
 
-cpu = AtomicSimpleCPU()
-# Size-specific SVE code: runtime VL must equal the compile-time
-# -msve-vector-bits value (in quadwords).
-cpu.isa = ArmISA(sve_vl_se=vl_qw)
-
-system.cpu = cpu
-
-# canonical SE plumbing (simple-arm.py): workload from the binary's ELF,
-# process with the command line, thread on the cpu, memory via membus.
-from m5.objects import SystemXBar, SimpleMemory
+system.cpu = [
+    AtomicSimpleCPU() for _ in range(cpu_count)
+]
+for cpu in system.cpu:
+    # Size-specific SVE code: runtime VL must equal the compile-time
+    # -msve-vector-bits value (in quadwords), on EVERY cpu a thread may land.
+    cpu.isa = ArmISA(sve_vl_se=vl_qw)
 
 system.membus = SystemXBar()
 system.system_port = system.membus.cpu_side_ports
-cpu.icache_port = system.membus.cpu_side_ports
-cpu.dcache_port = system.membus.cpu_side_ports
+
+from m5.objects import ArmInterrupts, SimpleMemory
+
+for cpu in system.cpu:
+    cpu.icache_port = system.membus.cpu_side_ports
+    cpu.dcache_port = system.membus.cpu_side_ports
+    # The CPU needs one interrupt controller per thread.
+    cpu.interrupts = [ArmInterrupts()]
+    cpu.interrupts[0].cpu = cpu
 
 # Backing memory on the membus.
 system.physmem = SimpleMemory(range=system.mem_ranges[0])
@@ -67,12 +85,12 @@ system.workload = SEWorkload.init_compatible(binary)
 
 process = Process()
 process.cmd = [binary] + pos[1:]
-system.cpu.workload = process
-system.cpu.createThreads()
-
-# The CPU needs one interrupt controller per thread.
-system.cpu.interrupts = [m5.objects.ArmInterrupts()]
-system.cpu.interrupts[0].cpu = system.cpu
+for cpu in system.cpu:
+    # same Process on every CPU: only contextIds[0] starts ticking, the
+    # others are the free pool clone(2) draws from (se.py SMP pattern)
+    cpu.workload = process
+for cpu in system.cpu:
+    cpu.createThreads()
 
 root = Root(full_system=False, system=system)
 m5.instantiate()

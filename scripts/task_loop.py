@@ -1652,6 +1652,77 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
     return _run_scan_orchestration(dry_run=True)
 
 
+# ============ 会话 intake(spec §13: enqueue-bug/enqueue-task/approve) ============
+# 会话里由人(或 agent)把「发现的 bug」/「要做的 feature」一键转成带
+# agent-* 标签的 issue: bug 自动具备派发资格,feature 须人工 approve 后才进
+# 派发队列(agent-approved 门)。正文经 --body-file 或 stdin 读入,统一补
+# 不可信数据横幅(issue 正文可能来自日志/外部输入,agent 不得当指令执行)。
+
+def build_finding_issue_body(finding: dict, marker: Optional[str] = None) -> str:
+    """finding → issue 正文(结构化字段 + 横幅 + 可选幂等 marker)。"""
+    marker_line = f"{marker}\n\n" if marker else ""
+    return (f"{marker_line}"
+            f"**{finding.get('severity', '?')} / {finding.get('category', '?')}"
+            f"@ {finding.get('path', '?')}:{finding.get('line', '?')}**\n\n"
+            f"{finding.get('message', '')}\n\n"
+            f"**证据**\n\n{finding.get('evidence', '')}\n\n"
+            f"---\n{UNTRUSTED_BANNER}\n")
+
+
+def _read_body(args) -> str:
+    """读 issue 正文(--body-file 优先,缺省 stdin),并保证携带不可信横幅。
+
+    所有本引擎创建的 issue 正文统一带 UNTRUSTED_BANNER(正文可能来自
+    日志/外部输入);已含横幅的不重复追加,避免双层横幅。
+    """
+    if getattr(args, "body_file", None):
+        with open(args.body_file, "r", encoding="utf-8") as f:
+            body = f.read()
+    else:
+        body = sys.stdin.read()
+    return body if UNTRUSTED_BANNER in body else \
+        body.rstrip() + "\n\n---\n" + UNTRUSTED_BANNER + "\n"
+
+
+def cmd_enqueue_bug(args: argparse.Namespace) -> int:
+    ensure_agent_labels()
+    body = _read_body(args)
+    findings = None
+    if getattr(args, "findings_file", None):
+        with open(args.findings_file, "r", encoding="utf-8") as f:
+            findings = json.load(f)
+        if not isinstance(findings, list):
+            print("findings 文件不是 JSON 数组", file=sys.stderr)
+            return 2
+    if findings:
+        for fd in findings:
+            n = create_task_issue(
+                f"[review] {str(fd.get('message', ''))[:60]}",
+                build_finding_issue_body(fd),
+                [AGENT_LABEL_TASK, AGENT_LABEL_BUG, "bug"])
+            print(f"[enqueue] finding → bug issue #{n}(agent-task agent-bug,自动派发资格)")
+    else:
+        n = create_task_issue(args.title, body,
+                              [AGENT_LABEL_TASK, AGENT_LABEL_BUG, "bug"])
+        print(f"[enqueue] bug issue #{n}(agent-task agent-bug,自动派发资格)")
+    return 0
+
+
+def cmd_enqueue_task(args: argparse.Namespace) -> int:
+    ensure_agent_labels()
+    body = _read_body(args)
+    n = create_task_issue(args.title, body,
+                          [AGENT_LABEL_TASK, AGENT_LABEL_FEATURE, "enhancement"])
+    print(f"[enqueue] task issue #{n}——打 agent-approved(或 task_loop.py approve {n})后进派发队列")
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    gh_label_add(args.issue, AGENT_LABEL_APPROVED)
+    print(f"[approve] issue #{args.issue} +agent-approved(下一 scan tick 进队列)")
+    return 0
+
+
 # ============ 入口 ============
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1668,6 +1739,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     pd = sub.add_parser("dry-run", help="只读演练: 展示将执行的动作而不实际执行")
     pd.set_defaults(func=cmd_dry_run)
+
+    pb = sub.add_parser("enqueue-bug", help="会话 intake: 建 bug issue(自动派发资格)")
+    pb.add_argument("--title", required=False, default="(review finding)")
+    pb.add_argument("--body-file")
+    pb.add_argument("--findings-file", help="findings JSON 数组,一条一个 issue")
+    pb.set_defaults(func=cmd_enqueue_bug)
+
+    pt = sub.add_parser("enqueue-task", help="会话 intake: 建 feature issue(需 approve)")
+    pt.add_argument("--title", required=True)
+    pt.add_argument("--body-file")
+    pt.set_defaults(func=cmd_enqueue_task)
+
+    pa = sub.add_parser("approve", help="给 issue 打 agent-approved(feature 派发门)")
+    pa.add_argument("issue", type=int)
+    pa.set_defaults(func=cmd_approve)
     return p
 
 

@@ -102,3 +102,33 @@ def test_create_task_issue_labels_and_marker(monkeypatch):
     assert n == 42
     args, body = fake.calls[0]
     assert "--label" in args and "agent-task" in args
+
+
+# ============ Task 5: intake_session CLI ============
+
+def test_enqueue_bug_creates_labeled_issue(tmp_path, monkeypatch, capsys):
+    fake = FakeGh()
+    monkeypatch.setattr(tl, "gh_json", fake.gh_json)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    bf = tmp_path / "b.md"; bf.write_text("正文")
+    rc = tl.main(["enqueue-bug", "--title", "t", "--body-file", str(bf)])
+    assert rc == 0
+    args, body = fake.calls[0]
+    assert "agent-task" in args and "agent-bug" in args and "bug" in args
+    assert tl.UNTRUSTED_BANNER in body
+
+def test_enqueue_task_requires_approval_hint(capsys, tmp_path, monkeypatch):
+    fake = FakeGh()
+    monkeypatch.setattr(tl, "gh_json", fake.gh_json)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    bf = tmp_path / "b.md"; bf.write_text("正文")
+    rc = tl.main(["enqueue-task", "--title", "t", "--body-file", str(bf)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "agent-approved" in out          # 提示人工确认门
+
+def test_approve_adds_label(monkeypatch):
+    fake = FakeGh()
+    monkeypatch.setattr(tl, "gh_json", fake.gh_json)
+    assert tl.main(["approve", "42"]) == 0
+    assert fake.calls[0][0][:4] == ("issue", "edit", "42", "--repo")

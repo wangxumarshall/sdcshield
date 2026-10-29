@@ -2198,7 +2198,10 @@ def run_audit(dry_run: bool = False) -> int:
                         return 1
                 finally:
                     pr_local_review._worktree_remove(worktree)
-                findings = pr_local_review._parse_findings(output)
+                # strict(PR#317 检视#7): 空输出/全畸形(schema 漂移)抛 GhError
+                # → 外层捕获返回 1,cursor 不推进、streak 不清零——它们不是
+                # 「零 findings 的成功审查」,把区间永久跳过 = 覆盖面静默归零。
+                findings = pr_local_review._parse_findings(output, strict=True)
             else:
                 findings = []
                 print(f"[dry-run] 将审查 {base[:8]}..{head[:8]} "

@@ -446,6 +446,35 @@ def test_parse_findings_skips_malformed():
     assert findings[0]["message"] == "近似比对是 SDC 盲区"
 
 
+def test_parse_findings_strict_rejects_empty_and_all_drift():
+    """PR#317 检视#7: strict 模式(task_loop audit 用)下,空输出/全畸形
+    (schema 漂移,零条有效 finding)必须报错而非静默归零——否则无人值守
+    审查覆盖面退化为零仍被当成功。非 strict(第 5 bot 发布路径)保持旧
+    契约(空/全畸形 → []),行为不变。"""
+    # 空输出 → strict 报错
+    try:
+        plr._parse_findings("", strict=True)
+        assert False, "空输出在 strict 下必须报错"
+    except plr.GhError:
+        pass
+    # 全畸形(全部缺 message)→ strict 报错
+    drifted = json.dumps([{"summary": "x"}, {"note": "y"}])
+    try:
+        plr._parse_findings(drifted, strict=True)
+        assert False, "全畸形输出在 strict 下必须报错"
+    except plr.GhError:
+        pass
+    # 非 strict 旧契约不变: 第 5 bot 发布路径零行为变化
+    assert plr._parse_findings("") == []
+    assert plr._parse_findings(drifted) == []
+    # 真·零 findings(空 JSON 数组)与正常输出在 strict 下照常通过
+    assert plr._parse_findings("[]", strict=True) == []
+    assert plr._parse_findings(json.dumps(
+        [{"path": "a.c", "line": 1, "message": "m"}]), strict=True) == [
+        {"path": "a.c", "line": 1, "severity": None, "category": None,
+         "message": "m", "evidence": None}]
+
+
 # ---------------------------------------------------------------------------
 # Task 5: CLI 入口(--all-open 枚举 open PR,只审查未审 head,已审跳过;
 # 幂等: 同 head 已审不重审、不重发)

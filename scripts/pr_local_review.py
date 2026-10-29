@@ -358,12 +358,23 @@ def _run_claude(cmd: str, cwd: str, prompt: str) -> str:
     return proc.stdout
 
 
-def _parse_findings(output: str) -> list[dict]:
+def _parse_findings(output: str, strict: bool = False) -> list[dict]:
     """把 claude 输出解析为结构化 findings 列表,每条 {path, line, severity,
     category, message, evidence}。输出契约是 JSON 数组;容忍 claude 把它包在
-    markdown 代码围栏里的情形(取首个 [ ... ] 段)。"""
+    markdown 代码围栏里的情形(取首个 [ ... ] 段)。
+
+    strict=False(缺省,第 5 bot 发布路径,行为不变): 空输出 → []、畸形
+    dict 逐条跳过——发布侧把「无有效 finding」当零意见处理。
+    strict=True(task_loop audit 用,PR#317 检视#7): 空输出、以及「顶层是
+    JSON 数组但零条有效 finding」(schema 漂移,如 message 字段被改名后
+    全部被跳过)都抛 GhError——audit 把这两种情形当「零 findings 的成功
+    审查」会让无人值守对抗审查覆盖面静默退化为零且 cursor 照样推进,
+    该 commit 区间从此永不再审;宁可失败重审也不假成功。真·零 findings
+    (claude 输出空 JSON 数组 [])两种模式都返回 []。"""
     text = (output or "").strip()
     if not text:
+        if strict:
+            raise GhError("claude 检视输出为空——无法确认审查结论(audit 不推进 cursor)")
         return []
     data = None
     try:
@@ -394,6 +405,10 @@ def _parse_findings(output: str) -> list[dict]:
             "message": item.get("message"),
             "evidence": item.get("evidence"),
         })
+    if strict and data and not findings:
+        raise GhError(
+            f"claude 检视输出含 {len(data)} 条但零条有效(schema 漂移?)——"
+            "无法确认审查结论(audit 不推进 cursor)")
     return findings
 
 

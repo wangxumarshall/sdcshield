@@ -425,6 +425,65 @@ def test_run_audit_no_new_commits_early_exit(tmp_path, monkeypatch):
     assert tl.run_audit(dry_run=False) == 0    # 无新提交,零 claude 调用
 
 
+# ============ PR#317 检视#7: 空输出/schema 漂移 ≠ 零 findings 成功审查 ============
+
+def _audit_env(tmp_path, monkeypatch, claude_output):
+    """run_audit 离线环境: git/claude/worktree 缝全 fake,claude 输出可注入。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    state = {"entries": [], "auth_failure_streak": 2,
+             "audit_cursor": {"sha": "base0000000000000000000000000000000000000000",
+                              "at": "2026-10-29T00:00:00Z"}}
+    store = tl.StateStore(str(tmp_path)); store.save(state)
+    git_out = {"fetch": "", "rev-parse": "head1111111111111111111111111111111111111111",
+               "log": "abc1234 commit one"}
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        git_out.get(args[0], ""))
+    monkeypatch.setattr(tl, "_git_diff", lambda base, head: "+diff body")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_add", lambda sha: "/tmp/wt")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_remove", lambda p: None)
+    monkeypatch.setattr(tl.pr_local_review, "_run_claude",
+                        lambda cmd, cwd, prompt: claude_output)
+    created = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels: created.append(body) or 42)
+    monkeypatch.setattr(tl, "_search_audit_issue", lambda h: None)
+    return store, created
+
+def test_audit_empty_output_does_not_advance_cursor(tmp_path, monkeypatch):
+    """检视#7: claude 空输出被当「零 findings 成功」→ cursor 永久推进 +
+    streak 被空跑清零。修复后: 空输出 = 审查失败(rc 1),cursor 不动、
+    streak 不清零、零 issue,下轮重审同区间。"""
+    store, created = _audit_env(tmp_path, monkeypatch, claude_output="")
+    assert tl.run_audit(dry_run=False) == 1
+    s2 = store.load()
+    assert s2["audit_cursor"]["sha"].startswith("base0000")   # cursor 未推进
+    assert s2["auth_failure_streak"] == 2                     # 未被空跑清零
+    assert created == [] and s2.get("audit_seen") is None     # 零入库
+
+def test_audit_all_malformed_output_does_not_advance_cursor(tmp_path, monkeypatch):
+    """检视#7(schema 漂移半边): 输出是 JSON 数组但每条都缺 message——
+    _parse_findings 逐条静默跳过后同样不得被当零 findings 成功。"""
+    store, created = _audit_env(
+        tmp_path, monkeypatch,
+        claude_output=json.dumps([{"summary": "x"}, {"note": "y"}]))
+    assert tl.run_audit(dry_run=False) == 1
+    s2 = store.load()
+    assert s2["audit_cursor"]["sha"].startswith("base0000")
+    assert s2["auth_failure_streak"] == 2
+    assert created == []
+
+def test_audit_genuine_zero_findings_advances_cursor(tmp_path, monkeypatch):
+    """检视#7 反向锚: 真·零 findings(claude 输出空 JSON 数组)仍是成功
+    审查——cursor 推进、streak 归零不被误伤。"""
+    store, created = _audit_env(tmp_path, monkeypatch, claude_output="[]")
+    assert tl.run_audit(dry_run=False) == 0
+    s2 = store.load()
+    assert s2["audit_cursor"]["sha"].startswith("head1111")
+    assert s2["auth_failure_streak"] == 0
+    assert created == []
+
+
 # ============ Task 9 fix round 1: Ruling 11 跨锁覆写 ============
 
 def test_audit_does_not_clobber_concurrent_scan_state(tmp_path, monkeypatch):

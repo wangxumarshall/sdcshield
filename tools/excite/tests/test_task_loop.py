@@ -180,3 +180,60 @@ def test_reconcile_human_closed_sweep(monkeypatch):
     tl.reconcile_issues(state, dry_run=False)
     e = tl.StateStore.entries(state)[0]
     assert e.status == "HUMAN_CLOSED" and e.agent_pid is None
+
+
+# ============ Task 7: 任务派发契约(分支命名/prompt/stdin runner/wip 标签) ============
+
+def _task_entry(**kw):
+    base = dict(workflow="", run_id=0, status="QUEUED", issue_number=33,
+                fix_branch="", pr_number=None, attempts=0, rounds=0,
+                agent_pid=None, agent_started_at=None, agent_log=None,
+                last_dispatched_head=None, extra_runs=[], created_at="t",
+                updated_at="t", source="session", kind="bug", audit_hash=None)
+    base.update(kw)
+    return tl.Entry(**base)
+
+def test_default_fix_branch():
+    assert tl._default_fix_branch(_task_entry(source="ci", run_id=123,
+                                              issue_number=9)) == "fix/ci-123"
+    assert tl._default_fix_branch(_task_entry()) == "fix/issue-33"
+    assert tl._default_fix_branch(_task_entry(kind="feature")) == "feat/issue-33"
+
+def test_task_prompt_contract():
+    p = tl.build_task_prompt(_task_entry())
+    assert "issue #33" in p or "#33" in p
+    assert "fix/issue-33" in p
+    assert "Closes #33" in p                       # PR body 契约
+    assert tl.TASK_DONE_MARK in p and tl.TASK_ESCALATED_MARK in p
+    assert tl.UNTRUSTED_BANNER in p
+    assert "未复现不修" in p                       # bug 红线
+    f = tl.build_task_prompt(_task_entry(kind="feature"))
+    assert "偏离需求即 escalated" in f             # feature 红线
+
+def test_check_agent_outcome_accepts_both_marks(tmp_path):
+    log = tmp_path / "a.log"; log.write_text("x\ntask-loop: done fix/issue-1\n")
+    e = _task_entry(status="DISPATCHED", agent_log=str(log))
+    assert tl.check_agent_outcome(e) == "success"
+    log.write_text("ci-triage: escalated 复现不出\n")
+    assert tl.check_agent_outcome(e) == "escalated_reported"
+
+def test_dispatch_writes_prompt_file_and_wip_label(tmp_path, monkeypatch):
+    state = {"entries": [], "auth_failure_streak": 0}
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    labels = []
+    monkeypatch.setattr(tl, "gh_label_add",
+                        lambda n, lb: labels.append((n, lb)))
+    captured = {}
+    def fake_run_background(cmd, cwd, log):
+        captured["cmd"] = cmd
+        return 4321
+    monkeypatch.setattr(tl, "run_background", fake_run_background)
+    e = _task_entry()
+    pid = tl.dispatch_agent(e, state)
+    assert pid == 4321 and e.status == "DISPATCHED" and e.fix_branch == "fix/issue-33"
+    assert labels == [(33, "agent-wip")]
+    # stdin 化: 命令里不再出现被引用的超长 prompt,而是 < prompt 文件
+    assert "< " in captured["cmd"] and "claude -p" in captured["cmd"]
+    prompt_files = list(tmp_path.glob("prompt-*"))
+    assert len(prompt_files) == 1 and "Closes #33" in prompt_files[0].read_text()

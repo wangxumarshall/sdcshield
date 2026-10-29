@@ -279,6 +279,8 @@ class FakeGh:
         self.created_issues = []                   # (title, body)
         self.comments = []                         # (issue_number, body)
         self.closed_issues = []                    # Task 4: issue_number 列表
+        self.labels_added = []                     # Task 7: (n, label) wip/escalated
+        self.labels_removed = []                   # Task 7: (n, label) 终态摘 wip
 
     def gh_json(self, args, input_text=None):
         """模块级 gh_json 的替身: 按 gh 子命令分派。
@@ -306,6 +308,17 @@ class FakeGh:
         if args[:2] == ["issue", "close"] and args[2].isdigit():
             # gh issue close <n> --repo <slug>(Task 4: 车道 B 条目收尾)
             self.closed_issues.append(int(args[2]))
+            return None
+        if args[:2] == ["issue", "edit"] and args[2].isdigit():
+            # gh issue edit <n> --add-label/--remove-label(Task 7: 派发打
+            # agent-wip、终态/重派/升级摘 wip 打 escalated——建议性标签同步,
+            # 离线记录后即成功,绝不触网)
+            if "--add-label" in args:
+                self.labels_added.append(
+                    (int(args[2]), args[args.index("--add-label") + 1]))
+            if "--remove-label" in args:
+                self.labels_removed.append(
+                    (int(args[2]), args[args.index("--remove-label") + 1]))
             return None
         if args[:2] == ["run", "view"] and "--log-failed" in args:
             # gh run view <id> --repo <slug> --log-failed(纯文本输出)
@@ -1395,6 +1408,10 @@ def test_dispatch_sets_dispatched_and_single_flight_within_round(
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
+    # Task 7: 条目带 issue_number 且本用例未 fake gh_json——派发成功的
+    # wip 标签同步必须打桩,否则会真跑 gh(触网);标签语义另由
+    # test_dispatch_writes_prompt_file_and_wip_label 离线锚定。
+    monkeypatch.setattr(ct, "gh_label_add", lambda n, lb: None)
 
     # 两个待派 QUEUED 条目(不同 workflow,attempts=0)
     a = _sample_entry(workflow="Sanitizer", run_id=61, status="QUEUED",
@@ -1508,6 +1525,9 @@ def test_lane_b_dispatch_keeps_bot_fix(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
+    # Task 7: 同 test_dispatch_sets_dispatched…——未 fake gh_json 的用例,
+    # wip 标签同步打桩,杜绝真实 gh 触网。
+    monkeypatch.setattr(ct, "gh_label_add", lambda n, lb: None)
 
     entry = _sample_entry(workflow="Sanitizer", run_id=64,
                           status="PR_OPEN", issue_number=77, pr_number=88,

@@ -127,16 +127,23 @@ PAUSED 熔断；第 5 bot（local-claude）连续 3 tick 缺位仅告警不降�
 ### 3.1 终态 crontab（两行）
 
 ```cron
-*/30 * * * * cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py scan >> ~/.local/state/sdcshield-task-loop/cron.log 2>&1
-17 */6 * * * cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py audit >> ~/.local/state/sdcshield-task-loop/audit.log 2>&1
+*/30 * * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py scan >> ~/.local/state/sdcshield-task-loop/cron.log 2>&1
+17 */6 * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py audit >> ~/.local/state/sdcshield-task-loop/audit.log 2>&1
 ```
 
-（audit 取 17 分——避开整点扎堆；scan 行沿用 */30 既有节奏仅换入口。）
+（audit 取 17 分——避开整点扎堆；scan 行沿用 */30 既有节奏仅换入口。
+**`mkdir -p` 前缀是硬要求**：shell 在命令启动前打开重定向目标，父目录
+缺失时 `>>` 直接失败、命令体根本不执行——而创建该目录的又恰是这个
+python 进程本身（`_run_scan_orchestration`/`run_audit` 启动时的
+makedirs 与首启动迁移）。没有此前缀，换行即鸡生蛋死锁：首个 tick 静默
+死亡，`tail cron.log` 只会看到文件不存在。`~` 由 cron 的 `/bin/sh -c`
+作波浪线展开，与既有行同机制。）
 安装：`crontab -e` 把既有 `ci_triage.py scan` 行替换为上行 scan、新增
-audit 行。**cron PATH 注意**——cron 环境只有 `/usr/bin:/bin` 量级裸
-PATH，故用显式 `/usr/bin/python3`；agent 派发所需的 `claude`/`gh` 由
-agent.env 内的 `PATH` 提供（dispatch 命令先 `source agent.env` 再起
-claude）。
+audit 行——`mkdir -p` 前缀使换行**无时序依赖**（不必等首个经薄壳的
+scan 建好新目录）。**cron PATH 注意**——cron 环境只有 `/usr/bin:/bin`
+量级裸 PATH，故用显式 `/usr/bin/python3`；agent 派发所需的
+`claude`/`gh` 由 agent.env 内的 `PATH` 提供（dispatch 命令先
+`source agent.env` 再起 claude）。
 
 **部署时序依赖（如实声明）**：autoci 克隆跟踪 main——本 PR 合入**前**，
 crontab 的 `ci_triage.py scan` 走 main 上的旧文件，不受影响；合入

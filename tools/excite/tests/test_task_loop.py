@@ -239,6 +239,74 @@ def test_dispatch_writes_prompt_file_and_wip_label(tmp_path, monkeypatch):
     assert len(prompt_files) == 1 and "Closes #33" in prompt_files[0].read_text()
 
 
+# ============ PR#317 检视#6: 派发记账即时落盘(跨进程崩溃窗口) ============
+
+def test_scan_persists_dispatch_accounting_before_lane_b(tmp_path, monkeypatch):
+    """检视#6(Critical): 任务派发扫派成 agent 后,state 须在进入车道 B 之前
+    就落盘——原实现唯一落盘点在 finally,其间隔着整条车道 B(ensure_local_review
+    的本地 claude 审查可达 CLAUDE_TIMEOUT=3600s);进程一旦死亡,nohup 孤儿
+    agent 仍在克隆里干活而磁盘 state 无 PID → 下一 tick 单飞失明 + heal_clone
+    reset --hard 踩活 agent 工作区(生产事故 9d6ba452 同类根因)。"""
+    from types import SimpleNamespace
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "state.json").write_text(json.dumps(
+        {"entries": [dict(workflow="", run_id=0, status="QUEUED", issue_number=5,
+                          fix_branch="", pr_number=None, attempts=0, rounds=0,
+                          agent_pid=None, agent_started_at=None, agent_log=None,
+                          last_dispatched_head=None, extra_runs=[],
+                          created_at="t", updated_at="t",
+                          source="manual", kind="bug", audit_hash=None)],
+         "auth_failure_streak": 0}))
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    monkeypatch.setattr(tl, "reconcile_issues", lambda s, dry_run: None)
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run: None)
+    # 车道 B 入口 = 崩溃窗口探针: 此刻磁盘上有什么,进程死亡后下一 tick
+    # 就只能看到什么(finally 的 save 在崩溃场景不会执行)。
+    disk_at_lane_b = {}
+    def fake_lane_b(state, dry_run):
+        disk_at_lane_b["state"] = tl.StateStore(str(tmp_path)).load()
+    monkeypatch.setattr(tl, "lane_b_advance", fake_lane_b)
+    def fake_dispatch(entry, state, dry_run=False, prompt_override=None,
+                      increment_rounds=False):
+        entry.status = "DISPATCHED"; entry.agent_pid = os.getpid()
+        return os.getpid()                      # 确定性真活 PID(探活必真)
+    monkeypatch.setattr(tl, "dispatch_agent", fake_dispatch)
+    assert tl._run_scan_orchestration(dry_run=False) == 0
+    e = disk_at_lane_b["state"]["entries"][0]
+    assert e["status"] == "DISPATCHED", "派发状态未在车道 B 前落盘"
+    assert e["agent_pid"] == os.getpid(), "agent_pid 未在车道 B 前落盘(单飞失明窗口)"
+
+
+def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
+    """检视#6(车道 B 半边): bot 处置 agent 派成后即时落盘——本函数返回后
+    编排层还要跑其余条目才到 finally,期间崩溃同样丢 PID。"""
+    from types import SimpleNamespace
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_REPO", "selftest/local")
+    pr = SimpleNamespace(number=88, head_sha="b" * 40, url="https://x/88",
+                         bot_done={"local-claude": "t"})
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr", lambda slug, num: pr)
+    monkeypatch.setattr(tl.pr_loop, "classify_state",
+                        lambda p, quiet, now: "READY_TO_FIX")
+    monkeypatch.setattr(tl.pr_loop, "render_collect",
+                        lambda p, slug, quiet: "# collect 导出(fake)\n")
+    monkeypatch.setattr(tl.pr_loop, "ensure_local_review",
+                        lambda num, sha: None)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: os.getpid())
+    entry = _task_entry(status="PR_OPEN", pr_number=88, rounds=0,
+                        last_dispatched_head=None)
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+    tl.lane_b_advance(state, dry_run=False)     # 调用方不 save,直接看磁盘
+    e = tl.StateStore(str(tmp_path)).load()["entries"][0]
+    assert e["status"] == "BOT_FIX" and e["agent_pid"] == os.getpid(), \
+        "车道 B 派发记账未即时落盘"
+    assert e["rounds"] == 1 and e["last_dispatched_head"] == "b" * 40
+
+
 # ============ Task 8: scan 编排接入 + status ============
 
 def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatch):

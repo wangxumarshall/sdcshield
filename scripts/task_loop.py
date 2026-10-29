@@ -1683,6 +1683,11 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         # entry.status 已由 dispatch_agent 统一置 BOT_FIX(单一权威,Task 4 R2)
         entry.updated_at = _now_iso()
         state["entries"] = [e.to_dict() for e in entries]
+        # 派发记账即时落盘(PR#317 检视#6): 本函数返回后编排层还要跑完其余
+        # 条目才到 finally save——期间进程死亡(机器随时可能死)则磁盘无 PID,
+        # 孤儿 agent 仍在克隆里干活而下一 tick 单飞失明 + heal 踩活工作区。
+        # dry_run 在上方已 continue,此处必为非 dry。
+        StateStore().save(state)
     # 与 reap_or_advance 同模式: 序列化回 state(持有同一批 Entry 对象)
     state["entries"] = [e.to_dict() for e in entries]
 
@@ -1791,6 +1796,9 @@ def _run_scan_orchestration(dry_run: bool) -> int:
     HUMAN_CLOSED 清扫)→ heal_clone → 重派扫(DISPATCHED 无 PID)+
     任务派发扫(QUEUED 全部 source,FIFO issue 号)→ 车道 B:
     lane_b_advance → store.save。
+    派发记账即时落盘(检视#6): 两个派发扫与车道 B 的每次成功派发都立即
+    store.save——不等 finally;派发到收尾之间隔着可达 1h 的本地 claude 审查,
+    进程死亡时磁盘必须有 agent_pid,否则孤儿 agent 在跑而下一 tick 单飞失明。
     dry_run=True: 同一编排但全程零写(零 gh 写、零 git 变更、state 不落盘、
     零迁移、零标签就位——复跑无痕)。
 
@@ -1864,8 +1872,14 @@ def _run_scan_orchestration(dry_run: bool) -> int:
             sweep = StateStore.entries(state)
             for entry in sweep:
                 if entry.status == "DISPATCHED" and entry.agent_pid is None:
-                    dispatch_agent(entry, state, dry_run=dry_run)
+                    pid = dispatch_agent(entry, state, dry_run=dry_run)
                     state["entries"] = [e.to_dict() for e in sweep]
+                    if pid is not None and not dry_run:
+                        # 派发记账即时落盘(PR#317 检视#6): 原实现唯一落盘点在
+                        # finally,其间隔着整条车道 B(本地 claude 审查可达 1h)
+                        # ——进程一旦死亡,孤儿 agent 仍在克隆里干活而磁盘无
+                        # PID,下一 tick 单飞失明 + heal_clone 踩活工作区。
+                        store.save(state)
             # ---- 任务派发扫: QUEUED 条目(全部 source),FIFO issue 号 ----
             # 单飞槽与 ci 共享(dispatch_agent 内 has_running_agent 把守);
             # 与 ci 扫同样,每次派发后立即回写 dict,同轮后续单飞判定可见。
@@ -1877,8 +1891,12 @@ def _run_scan_orchestration(dry_run: bool) -> int:
                 (e for e in tick_entries if e.status == "QUEUED"),
                 key=lambda e: (e.issue_number is None, e.issue_number))
             for entry in task_sweep:
-                dispatch_agent(entry, state, dry_run=dry_run)
+                pid = dispatch_agent(entry, state, dry_run=dry_run)
                 state["entries"] = [e.to_dict() for e in tick_entries]
+                if pid is not None and not dry_run:
+                    # 检视#6 同上: 任务派发扫同样即时落盘——派发与 finally 之间
+                    # 隔着整条车道 B,崩溃窗口内磁盘必须有 agent_pid。
+                    store.save(state)
             # ---- 车道 B: bot 意见处置循环(观测照常,派发同受 PAUSED 闸) ----
             lane_b_advance(state, dry_run=dry_run)
         except GhError as exc:

@@ -132,3 +132,51 @@ def test_approve_adds_label(monkeypatch):
     monkeypatch.setattr(tl, "gh_json", fake.gh_json)
     assert tl.main(["approve", "42"]) == 0
     assert fake.calls[0][0][:4] == ("issue", "edit", "42", "--repo")
+
+
+# ============ Task 6: 队列对账 reconcile_issues + HUMAN_CLOSED ============
+
+def _labels(*names):
+    return [{"name": n} for n in names]
+
+def test_issue_eligible_matrix():
+    f = tl.issue_eligible
+    assert f(["agent-task", "agent-bug"]) is True
+    assert f(["agent-task", "agent-approved"]) is True
+    assert f(["agent-task", "agent-bug", "agent-approved"]) is True
+    assert f(["agent-task"]) is False                    # 既非 bug 也未确认
+    assert f(["agent-task", "agent-feature"]) is False   # feature 未确认
+    assert f(["agent-task", "agent-bug", "agent-wip"]) is False
+    assert f(["agent-task", "agent-bug", "agent-escalated"]) is False
+
+def test_reconcile_creates_manual_entry_and_respects_state(monkeypatch):
+    state = {"entries": [], "auth_failure_streak": 0}
+    monkeypatch.setattr(tl, "gh_json", lambda args, input_text=None: [
+        {"number": 3, "title": "t", "labels": _labels("agent-task", "agent-feature", "agent-approved")},
+        {"number": 5, "title": "t", "labels": _labels("agent-task", "agent-bug")},
+    ] if args[0] == "issue" and args[1] == "list" else None)
+    tl.reconcile_issues(state, dry_run=False)
+    es = tl.StateStore.entries(state)
+    assert [(e.issue_number, e.source, e.kind) for e in es] == [(3, "manual", "feature"), (5, "manual", "bug")]
+    assert all(e.status == "QUEUED" for e in es)
+    # 复跑: state 已跟踪 → 零新建
+    tl.reconcile_issues(state, dry_run=False)
+    assert len(tl.StateStore.entries(state)) == 2
+
+def test_reconcile_human_closed_sweep(monkeypatch):
+    state = {"entries": [dict(
+        workflow="", run_id=0, status="QUEUED", issue_number=7, fix_branch="",
+        pr_number=None, attempts=0, rounds=0, agent_pid=None,
+        agent_started_at=None, agent_log=None, last_dispatched_head=None,
+        extra_runs=[], created_at="t", updated_at="t",
+        source="manual", kind="bug", audit_hash=None)], "auth_failure_streak": 0}
+    def fake_gh(args, input_text=None):
+        if args[:2] == ["issue", "list"]:
+            return []                       # open 列表已无 #7(被人工关闭)
+        if args[:2] == ["issue", "view"]:
+            return {"state": "closed"}
+        return None
+    monkeypatch.setattr(tl, "gh_json", fake_gh)
+    tl.reconcile_issues(state, dry_run=False)
+    e = tl.StateStore.entries(state)[0]
+    assert e.status == "HUMAN_CLOSED" and e.agent_pid is None

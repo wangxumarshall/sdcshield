@@ -466,6 +466,86 @@ def create_task_issue(title: str, body: str, labels: list[str]) -> int:
     return int(m.group(1))
 
 
+# ============ 队列对账(Task 6: manual intake + HUMAN_CLOSED 清扫) ============
+
+def _label_names(issue_json: dict) -> list[str]:
+    return [l["name"] if isinstance(l, dict) else str(l)
+            for l in (issue_json.get("labels") or [])]
+
+
+def list_open_agent_issues() -> list[dict]:
+    """agent-task 标签的 open issues(队列的 GitHub 侧真源,双源对账之一)。"""
+    res = gh_json(["issue", "list", "--repo", repo_slug(),
+                   "--label", AGENT_LABEL_TASK, "--state", "open",
+                   "--json", "number,title,labels", "--limit", "100"])
+    return res if isinstance(res, list) else []
+
+
+def issue_eligible(label_names: list[str]) -> bool:
+    """派发资格(spec §6): (bug ∨ approved) ∧ ¬wip ∧ ¬escalated。
+    (open ∧ agent-task 已由 list_open_agent_issues 过滤。)"""
+    s = set(label_names)
+    return ((AGENT_LABEL_BUG in s or AGENT_LABEL_APPROVED in s)
+            and AGENT_LABEL_WIP not in s and AGENT_LABEL_ESCALATED not in s)
+
+
+def issue_state(issue_number: int) -> str:
+    res = gh_json(["issue", "view", str(issue_number), "--repo",
+                   repo_slug(), "--json", "state"])
+    return (res or {}).get("state", "open")
+
+
+def reconcile_issues(state: dict, dry_run: bool = False) -> None:
+    """scan tick 的队列对账(spec §8.4/§7.2):
+    1. GitHub open+agent-task issues ∖ state 已跟踪 → manual QUEUED 条目;
+    2. state 中 QUEUED/DISPATCHED 条目 issue 已被人工关闭(无 PR 路径)
+       → HUMAN_CLOSED(人工接管,不 @ 不评论,DISPATCHED 先击杀在跑 agent)。
+
+    dry_run 全只读: 入队/清扫均只打印将发生的变更,不 append、不击杀、
+    不摘标签、不改 status(state 不落盘由编排层保证)。
+    """
+    entries = StateStore.entries(state)
+    tracked = {e.issue_number for e in entries}
+    for it in list_open_agent_issues():
+        n = int(it["number"])
+        if n in tracked:
+            continue
+        names = _label_names(it)
+        if not issue_eligible(names):
+            continue
+        if dry_run:
+            print(f"[dry-run] 将入队 manual issue #{n}(labels: {sorted(names)})")
+            continue
+        entries.append(Entry(
+            workflow="", run_id=0, status="QUEUED", issue_number=n,
+            fix_branch="", pr_number=None, attempts=0, rounds=0,
+            agent_pid=None, agent_started_at=None, agent_log=None,
+            last_dispatched_head=None, extra_runs=[],
+            created_at=_now_iso(), updated_at=_now_iso(),
+            source="manual",
+            kind="bug" if AGENT_LABEL_BUG in names else "feature",
+            audit_hash=None))
+        print(f"[queue] manual issue #{n} → QUEUED")
+    # HUMAN_CLOSED 清扫: 只查 QUEUED/DISPATCHED(有 PR 路径的条目由车道 B 收尾)
+    for e in entries:
+        if e.status not in ("QUEUED", "DISPATCHED"):
+            continue
+        if e.issue_number is None or issue_state(e.issue_number) != "closed":
+            continue
+        if dry_run:
+            print(f"[dry-run] 将标记 HUMAN_CLOSED: issue #{e.issue_number}"
+                  f"(status {e.status}, 人工接管)")
+            continue
+        if e.status == "DISPATCHED":
+            _kill_agent_if_alive(e)     # 人工接管 = 终局,不留无主活 agent
+            gh_label_remove(e.issue_number, AGENT_LABEL_WIP)
+        e.status = "HUMAN_CLOSED"
+        e.updated_at = _now_iso()
+        print(f"[human] issue #{e.issue_number} 已被人工关闭 → HUMAN_CLOSED"
+              f"(工具永不再碰)")
+    state["entries"] = [e.to_dict() for e in entries]
+
+
 # ============ 红扫描(gh run list → 四维过滤) ============
 
 def _parse_created_at(s: str) -> Optional[datetime]:

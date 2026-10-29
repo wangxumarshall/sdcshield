@@ -61,3 +61,44 @@ def test_paused_checks_both_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(tmp_path / "n"))
     (tmp_path / "l").mkdir(); (tmp_path / "l" / "PAUSED").touch()
     assert tl._paused() is True                       # 过渡期旧 PAUSED 也生效
+
+
+# ============ Task 4: gh label 原语 + 幂等写重试 ============
+
+class FakeGh:
+    def __init__(self, fail_transient=0):
+        self.calls = []; self._fail = fail_transient
+    def gh_json(self, args, input_text=None):
+        self.calls.append((tuple(args), input_text))
+        if self._fail > 0:
+            self._fail -= 1
+            raise tl.GhError("gh api … 失败(exit 1): HTTP 500")
+        if args[0] == "issue" and args[1] == "create":
+            return "https://github.com/x/y/issues/42"
+        return None
+
+def test_gh_json_idem_retries_transient(tmp_path, monkeypatch):
+    fake = FakeGh(fail_transient=2)
+    monkeypatch.setattr(tl, "gh_json", fake.gh_json)
+    tl.gh_json_idem(["issue", "comment", "1", "--body", "x"])   # 3 次尝试内成功
+    assert len(fake.calls) == 3
+
+def test_gh_json_idem_no_retry_on_4xx(monkeypatch):
+    fake = FakeGh(fail_transient=0)
+    def always_4xx(args, input_text=None):
+        fake.calls.append(tuple(args))
+        raise tl.GhError("gh api … 失败(exit 1): HTTP 404")
+    monkeypatch.setattr(tl, "gh_json", always_4xx)
+    try:
+        tl.gh_json_idem(["issue", "comment", "1", "--body", "x"])
+        assert False, "4xx 必须首次即抛"
+    except tl.GhError:
+        assert len(fake.calls) == 1
+
+def test_create_task_issue_labels_and_marker(monkeypatch):
+    fake = FakeGh()
+    monkeypatch.setattr(tl, "gh_json", fake.gh_json)
+    n = tl.create_task_issue("t", "body", ["agent-task", "agent-bug"])
+    assert n == 42
+    args, body = fake.calls[0]
+    assert "--label" in args and "agent-task" in args

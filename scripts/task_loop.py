@@ -31,6 +31,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -395,6 +396,74 @@ def repo_slug() -> str:
     if not m:
         raise GhError(f"无法从 origin URL 解析 owner/repo: {url}")
     return m.group(1)
+
+
+# ============ 标签原语与幂等写重试(Task 4) ============
+# 所有 agent-* 标签统一由 ensure_agent_labels() 幂等创建;幂等写(comment/
+# label/close/pr edit)统一走 gh_json_idem,非幂等写(issue create)不走。
+
+AGENT_LABEL_TASK = "agent-task"
+AGENT_LABEL_BUG = "agent-bug"
+AGENT_LABEL_FEATURE = "agent-feature"
+AGENT_LABEL_APPROVED = "agent-approved"
+AGENT_LABEL_WIP = "agent-wip"
+AGENT_LABEL_ESCALATED = "agent-escalated"
+
+# 瞬态错误特征(与 pr_loop 的重试口径一致): 超时/HTTP 5xx。4xx 是确定性
+# 错误,重试无意义且拖慢失败路径。
+_TRANSIENT_RE = re.compile(r"超时|HTTP 5\d\d")
+
+def gh_json_idem(args, input_text=None):
+    """幂等写(comment/label/close/pr edit)的重试封装: 总尝试 ≤3(退避 1s/2s)。
+    仅瞬态错误(超时/5xx)重试;4xx 首次即抛。issue create 等**非幂等写不得
+    用本函数**(重试会重复建 issue)——失败留给下轮,幂等由 marker 查重保证。"""
+    last: Optional[GhError] = None
+    for attempt in range(3):
+        try:
+            return gh_json(args, input_text=input_text)
+        except GhError as exc:
+            if not _TRANSIENT_RE.search(str(exc)):
+                raise
+            last = exc
+            if attempt < 2:
+                time.sleep(1 if attempt == 0 else 2)
+    raise last
+
+def ensure_agent_labels() -> None:
+    """幂等创建缺失的 agent-* 标签(gh label create 已存在会失败 → 先 list)。"""
+    existing = {l["name"] for l in gh_json(
+        ["label", "list", "--repo", repo_slug(), "--limit", "100"]) or []}
+    for name, desc in (
+        (AGENT_LABEL_TASK, "task-loop 任务资格(intake 自动/人工打即入队)"),
+        (AGENT_LABEL_BUG, "bug 类,自动派发"),
+        (AGENT_LABEL_FEATURE, "feature 类,需 agent-approved 才派发"),
+        (AGENT_LABEL_APPROVED, "人工确认,feature 的派发门"),
+        (AGENT_LABEL_WIP, "agent 已认领(派发时打,终态/重派时摘)"),
+        (AGENT_LABEL_ESCALATED, "升级人工(attempts/rounds 超限)"),
+    ):
+        if name not in existing:
+            gh_json(["label", "create", name, "--repo", repo_slug(),
+                     "--description", desc, "--color", "d4c5f9"])
+
+def gh_label_add(issue_number: int, label: str) -> None:
+    gh_json_idem(["issue", "edit", str(issue_number), "--repo",
+                  repo_slug(), "--add-label", label])
+
+def gh_label_remove(issue_number: int, label: str) -> None:
+    gh_json_idem(["issue", "edit", str(issue_number), "--repo",
+                  repo_slug(), "--remove-label", label])
+
+def create_task_issue(title: str, body: str, labels: list[str]) -> int:
+    """建任务 issue(正文经 stdin,label 经 --label 可重复)→ issue 号。"""
+    args = ["issue", "create", "--repo", repo_slug(), "--title", title,
+            "--body-file", "-"]
+    for lb in labels:
+        args += ["--label", lb]
+    url = gh_json(args, input_text=body)
+    m = re.search(r"/issues/(\d+)", str(url))
+    if not m:
+        raise GhError(f"gh issue create 输出无 issue 号: {url}")
+    return int(m.group(1))
 
 
 # ============ 红扫描(gh run list → 四维过滤) ============

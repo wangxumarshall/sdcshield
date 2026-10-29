@@ -2000,7 +2000,10 @@ def cmd_approve(args: argparse.Namespace) -> int:
 # 周期对 origin/main 的增量(自上次 cursor)跑本地无头 claude 对抗审查,
 # findings 查重(state audit_seen + gh body marker 双源)后 enqueue-bug
 # 进任务队列。独立 audit.lock(与 scan.lock 分离——不占修复单飞槽,scan
-# 与 audit 可并发),PAUSED 同闸;cursor 落 state,异常前推进的成果照常落盘。
+# 与 audit 可并发);但 state 写入一律经 scan.lock 内读-合-写(裁定 11,
+# _audit_state_merge_write/_audit_streak_add)——audit 只写自有键,entries
+# 的权威属于 scan。findings 入库中途 GhError → 本轮零落盘,下轮靠 gh
+# body marker 查重兜底(双源设计的意义)。
 
 AUDIT_LOCK_NAME = "audit.lock"
 AUDIT_MARKER_FMT = "<!-- task-loop:audit:{hash} -->"
@@ -2033,6 +2036,52 @@ def _git_diff(base: str, head: str) -> str:
     return _git(["diff", f"{base}...{head}"])
 
 
+def _audit_state_merge_write(keys: dict) -> None:
+    """audit 的 state 写入唯一通道(裁定 11): scan.lock 内读-合-写。
+
+    audit 只持 audit.lock,若把启动时 load 的整份快照 save 回去,会把
+    claude 运行(数分钟)期间并发 scan tick(持 scan.lock)写入的 entries
+    推进——派发记账/收割/对账——整体回滚: 丢 agent_pid/状态推进 → 单飞
+    失明 → 同一克隆重复派 agent(生产事故 9d6ba452 同类根因)。故 audit 的
+    一切持久化都经本函数: 拿 scan.lock(阻塞式 flock——本函数的临界区只有
+    一次 load+save,亚秒级;scan 从不碰 audit.lock,锁序单向无死锁,最坏
+    只是与一个 scan tick 串行)后 load 磁盘最新 state,只 update audit
+    自有键(audit_cursor/audit_seen/auth_failure_streak),再原子 save。
+    entries 的权威属于 scan,audit 永不写它。
+    """
+    state_dir = _resolve_state_dir()
+    os.makedirs(state_dir, exist_ok=True)
+    lock_fd = os.open(os.path.join(state_dir, SCAN_LOCK_NAME),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)    # 阻塞等在跑的 scan tick 放锁
+        fresh = StateStore(state_dir).load()
+        fresh.update(keys)
+        StateStore(state_dir).save(fresh)
+    finally:
+        os.close(lock_fd)
+
+
+def _audit_streak_add(delta: int) -> int:
+    """auth_failure_streak 的锁内读-改-写(裁定 10+11): 增量对磁盘最新值做,
+    不吃 audit 启动时快照——并发 scan 的 success 归零/收割计数才不会被快照
+    算术回滚或重复计。与 _audit_state_merge_write 同纪律(scan.lock 内
+    load-改-save),返回更新后的 streak 供熔断判定与日志。"""
+    state_dir = _resolve_state_dir()
+    os.makedirs(state_dir, exist_ok=True)
+    lock_fd = os.open(os.path.join(state_dir, SCAN_LOCK_NAME),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        fresh = StateStore(state_dir).load()
+        fresh["auth_failure_streak"] = \
+            fresh.get("auth_failure_streak", 0) + delta
+        StateStore(state_dir).save(fresh)
+        return fresh["auth_failure_streak"]
+    finally:
+        os.close(lock_fd)
+
+
 def run_audit(dry_run: bool = False) -> int:
     """main 增量对抗审查(spec §8.2): 独立 audit.lock(不占修复单飞槽),
     PAUSED 同闸;cursor 推进;findings 查重后 enqueue-bug。
@@ -2042,9 +2091,16 @@ def run_audit(dry_run: bool = False) -> int:
     工作区;测试直接调本函数时 git/claude 缝均已打桩,不受 cwd 影响
     (_git 内部另经 env 双轨解析克隆 cwd,双保险)。
 
-    claude 认证失效计入全局熔断(裁定 10): streak+1,达阈值写 PAUSED +
-    stderr 熔断线,cursor 不推进;审查全流程跑通则 streak 归零(任何成功
-    都证明凭据活着,与 reap 的 success 归零同口径)。
+    state 写入纪律(裁定 11): 启动时 load 的 state 只是只读上下文
+    (cursor/seen 起点)——claude 运行数分钟期间并发 scan tick 会推进
+    entries(派发记账/收割/对账),audit 绝不整份覆写快照(会回滚 scan 的
+    推进 → 丢派发记录 → 单飞失明 → 重复派发,生产事故 9d6ba452 同类)。
+    唯一的收尾持久化 = 一次 _audit_state_merge_write(scan.lock 内读-合-写,
+    只写 audit 自有键);早退路径(PAUSED/无新提交/锁忙)与 dry-run 零写。
+
+    claude 认证失效计入全局熔断(裁定 10): 锁内对磁盘最新 streak +1,
+    达阈值写 PAUSED + stderr 熔断线,cursor 不推进;审查全流程跑通则
+    streak 归零(任何成功都证明凭据活着,与 reap 的 success 归零同口径)。
     """
     state_dir = _resolve_state_dir()
     os.makedirs(state_dir, exist_ok=True)
@@ -2064,8 +2120,9 @@ def run_audit(dry_run: bool = False) -> int:
         if _paused():
             print("[paused] PAUSED 生效,audit 跳过 claude 调用(观测照常)")
             return 0
-        store = StateStore()
-        state = store.load()
+        # 只读上下文(裁定 11): cursor/seen 起点;本 dict 绝不再被写回磁盘
+        # ——一切持久化走 _audit_state_merge_write/_audit_streak_add。
+        state = StateStore(state_dir).load()
         try:
             _git(["fetch", "--all", "--prune"])
             head = _git(["rev-parse", f"origin/{MONITORED_BRANCH}"])
@@ -2096,24 +2153,20 @@ def run_audit(dry_run: bool = False) -> int:
                     except GhError as exc:
                         if not AUTH_FAIL_PATTERN.search(str(exc)):
                             raise    # 非 auth 失败: 交外层统一报错返回 1
-                        # 裁定 10: claude 认证失效计入全局熔断 streak;
-                        # 达阈值写 PAUSED + stderr 熔断线。cursor 不推进
-                        # (streak 经 finally 落盘),凭据未修好前下轮由
-                        # PAUSED 闸直接拦住,不空转烧配额。
-                        state["auth_failure_streak"] = \
-                            state.get("auth_failure_streak", 0) + 1
-                        if state["auth_failure_streak"] >= \
-                                AUTH_FAILURE_STREAK_LIMIT:
+                        # 裁定 10+11: streak 增量在 scan.lock 内对磁盘最新值
+                        # 做(并发 scan 的归零/计数不被快照算术回滚);达阈值
+                        # 写 PAUSED + stderr 熔断线。cursor 不推进,凭据未
+                        # 修好前下轮由 PAUSED 闸直接拦住,不空转烧配额。
+                        streak = _audit_streak_add(1)
+                        if streak >= AUTH_FAILURE_STREAK_LIMIT:
                             Path(_resolve_state_dir(), "PAUSED").touch()
-                            print(f"[audit] claude 认证失效连续 "
-                                  f"{state['auth_failure_streak']} 次——已写 "
-                                  f"PAUSED 全局熔断,更新 agent.env 后删除 "
-                                  f"PAUSED 恢复", file=sys.stderr)
+                            print(f"[audit] claude 认证失效连续 {streak} 次"
+                                  f"——已写 PAUSED 全局熔断,更新 agent.env "
+                                  f"后删除 PAUSED 恢复", file=sys.stderr)
                         else:
                             print(f"[audit] claude 认证失效(streak "
-                                  f"{state['auth_failure_streak']}/"
-                                  f"{AUTH_FAILURE_STREAK_LIMIT}),本轮放弃",
-                                  file=sys.stderr)
+                                  f"{streak}/{AUTH_FAILURE_STREAK_LIMIT}),"
+                                  f"本轮放弃", file=sys.stderr)
                         return 1
                 finally:
                     pr_local_review._worktree_remove(worktree)
@@ -2139,22 +2192,23 @@ def run_audit(dry_run: bool = False) -> int:
                 seen.add(h)
                 print(f"[audit] finding → bug issue #{n}")
             if not dry_run:
-                # 裁定 10: 审查全流程跑通即证明 claude 凭据活着——streak
-                # 归零,防「连续 ≥3」退化成「累计 ≥3」。
-                state["auth_failure_streak"] = 0
-            state["audit_seen"] = sorted(seen)
-            state["audit_cursor"] = {"sha": head, "at": _now_iso()}
-            if not dry_run:
-                store.save(state)
+                # 裁定 11: 唯一的收尾持久化——scan.lock 内读-合-写,只写
+                # audit 自有键;entries 的权威属于 scan,绝无第二处整份
+                # 快照 save。streak 归零(裁定 10)同窗合并: 审查全流程跑通
+                # 即证明 claude 凭据活着,防「连续 ≥3」退化成「累计 ≥3」。
+                # (findings 入库中途 GhError 则零落盘——cursor 不前进,已建
+                # issue 由下轮 gh body marker 查重兜底,双源设计的意义。)
+                _audit_state_merge_write({
+                    "auth_failure_streak": 0,
+                    "audit_seen": sorted(seen),
+                    "audit_cursor": {"sha": head, "at": _now_iso()},
+                })
             else:
                 print("[dry-run] state 不落盘,复跑无痕")
             return 0
         except GhError as exc:
             print(f"audit 失败(GhError): {exc}", file=sys.stderr)
             return 1
-        finally:
-            if not dry_run:
-                store.save(state)     # 异常前推进的 cursor/seen 也是成果
     finally:
         os.close(lock_fd)
 

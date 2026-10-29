@@ -355,3 +355,92 @@ def test_run_audit_no_new_commits_early_exit(tmp_path, monkeypatch):
     monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
                         "same" if args[0] == "rev-parse" else "")
     assert tl.run_audit(dry_run=False) == 0    # 无新提交,零 claude 调用
+
+
+# ============ Task 9 fix round 1: Ruling 11 跨锁覆写 ============
+
+def test_audit_does_not_clobber_concurrent_scan_state(tmp_path, monkeypatch):
+    """Ruling 11: audit 不得覆写并发 scan 写入的 entries——state 写入只合
+    并 audit 自有键(audit_cursor/audit_seen)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    state = {"entries": [], "auth_failure_streak": 0,
+             "audit_cursor": {"sha": "base0000000000000000000000000000000000000000",
+                              "at": "2026-10-29T00:00:00Z"}}
+    store = tl.StateStore(str(tmp_path)); store.save(state)
+    # scan 在 audit load 之后写入的推进(派发记账: run 1 → DISPATCHED + 活 PID)
+    scan_entry = dict(workflow="Sanitizer", run_id=1, status="DISPATCHED",
+                      issue_number=9, fix_branch="fix/ci-1", pr_number=None,
+                      attempts=1, rounds=0, agent_pid=123,
+                      agent_started_at=None, agent_log=None,
+                      last_dispatched_head=None, extra_runs=[],
+                      created_at="t", updated_at="t", source="ci",
+                      kind="bug", audit_hash=None)
+    git_out = {"fetch": "", "rev-parse": "head1111111111111111111111111111111111111111",
+               "log": "abc1234 commit one"}
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        git_out.get(args[0], ""))
+    monkeypatch.setattr(tl, "_git_diff", lambda base, head: "+diff body")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_add", lambda sha: "/tmp/wt")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_remove", lambda p: None)
+    def fake_run_claude(cmd, cwd, prompt):
+        # claude 运行(分钟级)期间,并发 scan tick(持 scan.lock)落盘了
+        # 派发记账——audit 收尾若整份覆写启动时快照,这条 entries 会丢
+        disk = tl.StateStore(str(tmp_path)).load()
+        disk["entries"] = [scan_entry]
+        tl.StateStore(str(tmp_path)).save(disk)
+        return json.dumps([
+            {"path": "a.c", "line": 3, "severity": "Important",
+             "category": "正确性", "message": "m", "evidence": "e"}])
+    monkeypatch.setattr(tl.pr_local_review, "_run_claude", fake_run_claude)
+    created = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels:
+                        created.append(body) or 42)
+    monkeypatch.setattr(tl, "_search_audit_issue", lambda h: None)
+    rc = tl.run_audit(dry_run=False)
+    assert rc == 0 and len(created) == 1
+    s2 = store.load()
+    # 并发 scan 的派发记账幸存(entries 不被 audit 启动时的空快照回滚)
+    assert any(e["run_id"] == 1 and e["status"] == "DISPATCHED"
+               and e["agent_pid"] == 123 for e in s2["entries"])
+    # audit 自有键照常推进
+    assert s2["audit_cursor"]["sha"].startswith("head1111")
+    assert len(s2["audit_seen"]) == 1
+
+def test_audit_auth_fail_increments_fresh_disk_streak(tmp_path, monkeypatch):
+    """Ruling 11: streak 增量对锁内 fresh 磁盘值做,不吃启动时快照。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    state = {"entries": [], "auth_failure_streak": 0,
+             "audit_cursor": {"sha": "base0000000000000000000000000000000000000000",
+                              "at": "2026-10-29T00:00:00Z"}}
+    store = tl.StateStore(str(tmp_path)); store.save(state)
+    git_out = {"fetch": "", "rev-parse": "head1111111111111111111111111111111111111111",
+               "log": "abc1234 commit one"}
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        git_out.get(args[0], ""))
+    monkeypatch.setattr(tl, "_git_diff", lambda base, head: "+diff body")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_add", lambda sha: "/tmp/wt")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_remove", lambda p: None)
+    def fake_run_claude_auth_fail(cmd, cwd, prompt):
+        # claude 运行期间并发 scan 把磁盘 streak 推到 2(如另车道 auth_fail
+        # 计数)——audit 的 +1 必须对这个 fresh 值做,而非启动时快照的 0
+        disk = tl.StateStore(str(tmp_path)).load()
+        disk["auth_failure_streak"] = 2
+        tl.StateStore(str(tmp_path)).save(disk)
+        raise tl.GhError("claude 检视失败(exit 1): API Error 403")
+    monkeypatch.setattr(tl.pr_local_review, "_run_claude",
+                        fake_run_claude_auth_fail)
+    # 子阈值分支: limit 抬到 5 使 3 < 5(实际常量 3 的边界行为见下半段)
+    monkeypatch.setattr(tl, "AUTH_FAILURE_STREAK_LIMIT", 5)
+    assert tl.run_audit(dry_run=False) == 1
+    s2 = store.load()
+    assert s2["auth_failure_streak"] == 3      # fresh 2+1,而非快照 0+1
+    assert not (tmp_path / "PAUSED").exists()  # 3 < 5: 未达熔断
+    # 真实常量边界: limit=3 时同样的 fresh 2+1=3 >= 3 → PAUSED 熔断落地
+    monkeypatch.setattr(tl, "AUTH_FAILURE_STREAK_LIMIT", 3)
+    assert tl.run_audit(dry_run=False) == 1
+    s3 = store.load()
+    assert s3["auth_failure_streak"] == 3      # 再次 fresh 2+1
+    assert (tmp_path / "PAUSED").exists()

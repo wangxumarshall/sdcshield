@@ -516,22 +516,31 @@ def issue_state(issue_number: int) -> str:
     return (res or {}).get("state", "open")
 
 
-def reconcile_issues(state: dict, dry_run: bool = False) -> None:
+def reconcile_issues(state: dict, dry_run: bool = False) -> dict:
     """scan tick 的队列对账(spec §8.4/§7.2):
     1. GitHub open+agent-task issues ∖ state 已跟踪 → manual QUEUED 条目;
     2. state 中 QUEUED/DISPATCHED 条目 issue 已被人工关闭(无 PR 路径)
        → HUMAN_CLOSED(人工接管,不 @ 不评论,DISPATCHED 先击杀在跑 agent)。
 
+    返回 {issue_number: label_names}(本次拉取的 open+agent-task 快照)——
+    派发扫的资格复查复用它(PR#317 检视#12,一次 gh 调用不加 N+1)。
+    HUMAN_CLOSED 清扫同用此列表预筛(检视#13): 仍在列表的条目必然 open,
+    零 gh issue view;只有离开列表的(关闭/摘标签)才逐条复核一次——旧实现
+    对每个 QUEUED/DISPATCHED 条目每 tick 一次 issue view(N+1,各带 45s
+    超时)且全程持 scan.lock,深积压叠加 gh 降速会拖长临界区、卡住 audit 的
+    merge-write。边界: 离开列表但复核仍 open(人工摘 agent-task)→ 不是
+    接管,不标 HUMAN_CLOSED,交派发闸冻结。
+
     dry_run 全只读: 入队/清扫均只打印将发生的变更,不 append、不击杀、
     不摘标签、不改 status(state 不落盘由编排层保证)。
     """
     entries = StateStore.entries(state)
+    open_labels = {int(it["number"]): _label_names(it)
+                   for it in list_open_agent_issues()}
     tracked = {e.issue_number for e in entries}
-    for it in list_open_agent_issues():
-        n = int(it["number"])
+    for n, names in open_labels.items():
         if n in tracked:
             continue
-        names = _label_names(it)
         if not issue_eligible(names):
             continue
         if dry_run:
@@ -547,11 +556,14 @@ def reconcile_issues(state: dict, dry_run: bool = False) -> None:
             kind="bug" if AGENT_LABEL_BUG in names else "feature",
             audit_hash=None))
         print(f"[queue] manual issue #{n} → QUEUED")
-    # HUMAN_CLOSED 清扫: 只查 QUEUED/DISPATCHED(有 PR 路径的条目由车道 B 收尾)
+    # HUMAN_CLOSED 清扫: 只查 QUEUED/DISPATCHED(有 PR 路径的条目由车道 B 收尾);
+    # open 列表预筛(检视#13)——列表内零 gh 调用,离列表才复核。
     for e in entries:
         if e.status not in ("QUEUED", "DISPATCHED"):
             continue
-        if e.issue_number is None or issue_state(e.issue_number) != "closed":
+        if e.issue_number is None or e.issue_number in open_labels:
+            continue
+        if issue_state(e.issue_number) != "closed":
             continue
         if dry_run:
             print(f"[dry-run] 将标记 HUMAN_CLOSED: issue #{e.issue_number}"
@@ -569,6 +581,30 @@ def reconcile_issues(state: dict, dry_run: bool = False) -> None:
         print(f"[human] issue #{e.issue_number} 已被人工关闭 → HUMAN_CLOSED"
               f"(工具永不再碰)")
     state["entries"] = [e.to_dict() for e in entries]
+    return open_labels
+
+
+def _dispatch_gate_ok(entry: Entry, open_labels: Optional[dict]) -> bool:
+    """派发前标签资格复查(PR#317 检视#12): 标签协议是队列的控制面,不能只
+    是入队时刻的一次性闸门——人工对已入队 issue 补 agent-escalated(冻结)、
+    摘 agent-task/agent-approved 必须对派发(含重派)生效,恢复标签自动续派。
+
+    open_labels = reconcile_issues 返回的 open+agent-task 快照。None = 对账
+    被替换/不可用(生产路径 reconcile 必返映射;gh 读失败在对账内即已让
+    整个 tick 失败重试)→ 不拦,交 dispatch_agent 自身的单飞/PAUSED 闸。
+    条目无 issue_number 无从复查,不拦。"""
+    if open_labels is None or entry.issue_number is None:
+        return True
+    names = open_labels.get(entry.issue_number)
+    if names is None:
+        print(f"[gate] issue #{entry.issue_number} 不在 open+agent-task 列表"
+              f"(人工摘标签/关闭),冻结待标签恢复")
+        return False
+    if not issue_eligible(names):
+        print(f"[gate] issue #{entry.issue_number} 当前标签不具派发资格"
+              f"(人工冻结/未确认),本轮跳过: {sorted(names)}")
+        return False
+    return True
 
 
 # ============ 红扫描(gh run list → 四维过滤) ============
@@ -1799,6 +1835,8 @@ def _run_scan_orchestration(dry_run: bool) -> int:
     派发记账即时落盘(检视#6): 两个派发扫与车道 B 的每次成功派发都立即
     store.save——不等 finally;派发到收尾之间隔着可达 1h 的本地 claude 审查,
     进程死亡时磁盘必须有 agent_pid,否则孤儿 agent 在跑而下一 tick 单飞失明。
+    派发资格复查(检视#12): reconcile 返回 open+agent-task 标签快照,两个
+    派发扫先过 _dispatch_gate_ok——人工补 escalated/摘 agent-task 冻结。
     dry_run=True: 同一编排但全程零写(零 gh 写、零 git 变更、state 不落盘、
     零迁移、零标签就位——复跑无痕)。
 
@@ -1855,7 +1893,9 @@ def _run_scan_orchestration(dry_run: bool) -> int:
             triage_new_red_runs(state, runs, dry_run=dry_run)
             reap_or_advance(state, dry_run=dry_run)
             # ---- 队列对账: 手建/会话 intake 入队 + HUMAN_CLOSED 清扫 ----
-            reconcile_issues(state, dry_run=dry_run)
+            # open_labels(open+agent-task 快照)回传给两个派发扫做资格复查
+            # (检视#12: 标签协议是派发时控制面,复用对账拉取,零额外 gh 调用)。
+            open_labels = reconcile_issues(state, dry_run=dry_run)
             # ---- 克隆自愈(派发前恢复单树基线——新 agent 须启动在干净 main 上) ----
             heal_clone(state, dry_run=dry_run)
             # ---- 车道 A 派发扫(重派): DISPATCHED 且无 agent 的条目 ----
@@ -1874,6 +1914,8 @@ def _run_scan_orchestration(dry_run: bool) -> int:
             sweep = StateStore.entries(state)
             for entry in sweep:
                 if entry.status == "DISPATCHED" and entry.agent_pid is None:
+                    if not _dispatch_gate_ok(entry, open_labels):
+                        continue
                     pid = dispatch_agent(entry, state, dry_run=dry_run)
                     state["entries"] = [e.to_dict() for e in sweep]
                     if pid is not None and not dry_run:
@@ -1893,6 +1935,8 @@ def _run_scan_orchestration(dry_run: bool) -> int:
                 (e for e in tick_entries if e.status == "QUEUED"),
                 key=lambda e: (e.issue_number is None, e.issue_number))
             for entry in task_sweep:
+                if not _dispatch_gate_ok(entry, open_labels):
+                    continue
                 pid = dispatch_agent(entry, state, dry_run=dry_run)
                 state["entries"] = [e.to_dict() for e in tick_entries]
                 if pid is not None and not dry_run:

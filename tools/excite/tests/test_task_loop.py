@@ -389,6 +389,87 @@ def test_scan_paused_banner_honors_legacy_dir(tmp_path, monkeypatch, capsys):
     assert "[paused] 车道 A 派发被 PAUSED 闸门拦下" in out
 
 
+# ============ PR#317 检视#12+#13: 标签协议=派发时控制面 + 清扫去 N+1 ============
+
+def test_scan_dispatch_gate_freezes_ineligible(tmp_path, monkeypatch, capsys):
+    """检视#12: 资格判定不能只是入队时刻的一次性闸门——人工对已入队 issue
+    补 agent-escalated(冻结)/摘 agent-task(离开 open 列表)后,任务派发扫
+    与重派扫都必须复查当前标签;资格正常的照常派发。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    def _e(n, status):
+        return dict(workflow="", run_id=0, status=status, issue_number=n,
+                    fix_branch="", pr_number=None, attempts=0, rounds=0,
+                    agent_pid=None, agent_started_at=None, agent_log=None,
+                    last_dispatched_head=None, extra_runs=[],
+                    created_at="t", updated_at="t",
+                    source="manual", kind="bug", audit_hash=None)
+    (tmp_path / "state.json").write_text(json.dumps(
+        {"entries": [_e(5, "QUEUED"), _e(6, "QUEUED"), _e(7, "DISPATCHED")],
+         "auth_failure_streak": 0}))
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    # 对账返回当前 open+agent-task 标签快照: #5 人工补 escalated;#6 资格
+    # 正常;#7 被人工摘 agent-task(不在 open 列表)——re派扫同受闸。
+    monkeypatch.setattr(tl, "reconcile_issues", lambda s, dry_run: {
+        5: ["agent-task", "agent-bug", "agent-escalated"],
+        6: ["agent-task", "agent-bug"]})
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run: None)
+    monkeypatch.setattr(tl, "lane_b_advance", lambda s, dry_run: None)
+    dispatched = []
+    def fake_dispatch(entry, state, dry_run=False, prompt_override=None,
+                      increment_rounds=False):
+        dispatched.append(entry.issue_number)
+        entry.status = "DISPATCHED"; entry.agent_pid = os.getpid()
+        return os.getpid()
+    monkeypatch.setattr(tl, "dispatch_agent", fake_dispatch)
+    assert tl._run_scan_orchestration(dry_run=False) == 0
+    assert dispatched == [6], "冻结条目不得派发,资格正常条目照常派发"
+    out = capsys.readouterr().out
+    assert "[gate] issue #5" in out and "[gate] issue #7" in out
+    saved = tl.StateStore(str(tmp_path)).load()
+    by_n = {e["issue_number"]: e for e in saved["entries"]}
+    assert by_n[5]["status"] == "QUEUED" and by_n[5]["agent_pid"] is None
+    assert by_n[7]["status"] == "DISPATCHED" and by_n[7]["agent_pid"] is None
+
+def test_reconcile_human_closed_sweep_no_nplus1(monkeypatch):
+    """检视#13: HUMAN_CLOSED 清扫复用对账拉取的 open 列表——仍在列表的
+    QUEUED/DISPATCHED 条目零 gh issue view(旧实现每条每 tick 一次、各带
+    45s 超时且全程持 scan.lock);只有离开列表的才复核一次。"""
+    def _e(n, status):
+        return dict(workflow="", run_id=0, status=status, issue_number=n,
+                    fix_branch="", pr_number=None, attempts=0, rounds=0,
+                    agent_pid=None, agent_started_at=None, agent_log=None,
+                    last_dispatched_head=None, extra_runs=[],
+                    created_at="t", updated_at="t",
+                    source="manual", kind="bug", audit_hash=None)
+    state = {"entries": [_e(3, "QUEUED"), _e(4, "QUEUED"), _e(5, "QUEUED"),
+                         _e(9, "DISPATCHED")],
+             "auth_failure_streak": 0}
+    views = []
+    def fake_gh(args, input_text=None):
+        if args[:2] == ["issue", "list"]:
+            # open+agent-task 列表: #3/#4/#5 仍在;#9 已关闭不在
+            return [{"number": n, "title": "t",
+                     "labels": [{"name": "agent-task"},
+                                {"name": "agent-bug"}]}
+                    for n in (3, 4, 5)]
+        if args[:2] == ["issue", "view"]:
+            views.append(args[2])
+            return {"state": "closed"}
+        return None
+    monkeypatch.setattr(tl, "gh_json", fake_gh)
+    open_labels = tl.reconcile_issues(state, dry_run=False)
+    assert views == ["9"], "open 列表内的条目零 issue view(去 N+1)"
+    by_n = {e.issue_number: e for e in tl.StateStore.entries(state)}
+    assert by_n[9].status == "HUMAN_CLOSED"      # 离开列表 → 复核一次 → 接管
+    assert all(by_n[n].status == "QUEUED" for n in (3, 4, 5))
+    assert open_labels == {3: ["agent-task", "agent-bug"],
+                           4: ["agent-task", "agent-bug"],
+                           5: ["agent-task", "agent-bug"]}, \
+        "对账返回 open 标签快照供派发扫复用(一次 gh 调用,不加 N+1)"
+
+
 # ============ Task 8: scan 编排接入 + status ============
 
 def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatch):

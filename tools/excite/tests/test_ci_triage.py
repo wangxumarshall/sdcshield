@@ -269,12 +269,15 @@ class FakeGh:
     """
 
     def __init__(self, runs=None, search_result=None, closed_search=None,
-                 log_failed="job x failed", prs=None):
+                 log_failed="job x failed", prs=None, open_issues=None):
         self.runs = runs or []
         self.open_search = search_result or []   # gh search issues --state open
         self.closed_search = closed_search or [] # gh search issues --state closed
         self.log_failed = log_failed
         self.prs = prs or []                     # gh pr list(success 结局核实)
+        # gh issue list --label agent-task(PR#317 检视#12: 派发资格复查的
+        # GitHub 侧真源)——[{"number", "title", "labels"}]
+        self.open_issues = open_issues or []
         self.calls = []                            # 全部 gh_json 调用参数
         self.created_issues = []                   # (title, body)
         self.comments = []                         # (issue_number, body)
@@ -325,8 +328,9 @@ class FakeGh:
             return self.log_failed
         if args[:2] == ["issue", "list"]:
             # gh issue list --label agent-task(Task 8: reconcile 的 GitHub
-            # 侧队列真源)——默认空: 无手建任务,对账零新建
-            return []
+            # 侧队列真源;PR#317 检视#12 起兼作派发资格复查的输入)——默认
+            # 空: 无手建任务,对账零新建
+            return self.open_issues
         if args[:2] == ["issue", "view"]:
             # gh issue view <n> --json state(Task 8: HUMAN_CLOSED 清扫的
             # 逐条探查)——默认 open: 无人接管关闭(HUMAN_CLOSED 经
@@ -1281,7 +1285,12 @@ def test_cmd_scan_toplevel_gherror_returns_1_and_saves_state(
     pr = _fake_pr()
     _fake_pr_loop(monkeypatch, pr, "READY_TO_MERGE")
 
-    fake = FakeGh(runs=[])
+    fake = FakeGh(runs=[], open_issues=[
+        # 检视#12 起,重派扫资格复查以 open+agent-task 列表为准: #151 仍
+        # open 且带资格标签 → 允许重派(本用例锚 GhError 顶层捕获与落盘)
+        {"number": 151, "title": "t",
+         "labels": [{"name": "agent-task"}, {"name": "agent-bug"}]},
+    ])
     # READY_TO_MERGE 分支的 gh issue close 抛 GhError(非 fetch 路径——
     # 那条已被单条目 except 消化,构不成顶层验证)
     def gh_boom(args, input_text=None):
@@ -1486,7 +1495,12 @@ def test_cmd_scan_lane_a_sweep_single_flight(monkeypatch, tmp_path):
         _run(38482214201, "Sanitizer", "schedule", "failure"),
         _run(38243398052, "CodeQL", "schedule", "failure"),
     ]
-    fake = FakeGh(runs=runs)
+    fake = FakeGh(runs=runs, open_issues=[
+        # 检视#12 起派发扫复查资格: 两个条目的 issue(FakeGh 建号恒 77)仍
+        # open 且带资格标签——单飞只派 1 个的原断言口径不变
+        {"number": 77, "title": "t",
+         "labels": [{"name": "agent-task"}, {"name": "agent-bug"}]},
+    ])
     monkeypatch.setattr(ct, "gh_json", fake.gh_json)
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)

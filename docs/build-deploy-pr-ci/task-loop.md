@@ -61,11 +61,15 @@ cron */30                          cron 每 6h(17 分)
 intake_ci（`scan_red_runs` 回看 3 天 → `triage_new_red_runs`：幂等建/复用
 issue → QUEUED；同 workflow 活跃条目 → 挂 `extra_runs` 追加评论不开新
 issue，同根因收敛）→ 收割 `reap_or_advance` → 队列对账
-`reconcile_issues`（资格达成的 manual issue 入队 + HUMAN_CLOSED 清扫）→
+`reconcile_issues`（资格达成的 manual issue 入队 + HUMAN_CLOSED 清扫——
+清扫以对账拉取的 open 列表预筛，列表内条目零 `gh issue view`，离列表才
+逐条复核一次，PR#317 检视#13 去掉了每条每 tick 的 N+1 探查）→
 `heal_clone` →
 ci 重派扫（DISPATCHED 且无 PID）→ 任务 FIFO 派发扫（QUEUED 全部
-source，按 issue 号排序）→ 车道 B `lane_b_advance` → state 原子落盘
-（finally：GhError 中途崩溃也落盘已推进部分；dry-run 不落盘）。
+source，按 issue 号排序；两扫先经 `_dispatch_gate_ok` 标签资格复查，
+见 §2）→ 车道 B `lane_b_advance` → state 原子落盘
+（每次成功派发即时落盘，检视#6；finally：GhError 中途崩溃也落盘已推进
+部分；dry-run 不落盘）。
 
 **audit 独立线**（`run_audit`，与 scan 并行不互斥）：
 
@@ -114,6 +118,14 @@ PAUSED 熔断；第 5 bot（local-claude）连续 3 tick 缺位仅告警不降�
 
 - **资格判定公式**：open ∧ `agent-task` ∧ (`agent-bug` ∨ `agent-approved`)
   ∧ ¬`agent-wip` ∧ ¬`agent-escalated`，FIFO 按 issue 号。
+  公式在**入队与每次派发**双时刻生效（PR#317 检视#12）：派发扫（任务首派
+  与死 agent 重派）以对账 tick 拉取的 open+agent-task 列表复查当前标签
+  （复用对账的那一次 `gh issue list`，零额外调用）——人工对已入队 issue 补
+  `agent-escalated`、摘 `agent-task`/`agent-approved` 即冻结（保持
+  QUEUED/DISPATCHED，不派发、不改状态），恢复标签后自动续派；摘
+  `agent-task` 但仍 open 的条目同样冻结（不误判 HUMAN_CLOSED）。边界：
+  open 列表 `--limit 100`（与 manual 入队同限），超限的 open issue 不在
+  快照内会被冻结——设计队列规模（单仓库同时活跃任务数）远小于此。
 - intake 自动打的标签：ci 源 `agent-task agent-bug`；audit 源
   `agent-task agent-bug bug`；会话 bug `agent-task agent-bug bug`；会话
   feature `agent-task agent-feature enhancement`。现有 bug/enhancement

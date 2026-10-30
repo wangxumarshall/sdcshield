@@ -124,7 +124,16 @@ AGENT_ESCALATED_MARKS = (TASK_ESCALATED_MARK, AGENT_ESCALATED_MARK)
 # 尾部 4000 字符,避免远古噪音)。裸 '403' 不入模式(检视#23 轮2)——
 # GhError 消息内嵌 stderr 前 300 字符,行号/URL 片段里的 403 会被误判
 # 入熔断 streak;只认 API Error/Not logged in/HTTP 403|401。
-AUTH_FAIL_PATTERN = re.compile(r"API Error|Not logged in|HTTP 40[13]")
+AUTH_FAIL_PATTERN = re.compile(r"API Error[: ]+40[13]|Not logged in|HTTP 40[13]")
+# 轮5 B43: auth_fail 只认「死进程的临终错误」——agent 日志是引擎自喂的
+# 不可信文本下游(issue 正文内嵌 CI 失败日志摘录,agent 复述进 stdout),
+# 复述的认证字样出现在转写中部、其后通常还有后续输出;claude 自身认证
+# 失败必以错误收尾且进程立即退出。故判定双条件: PID 已死 + 匹配限制在
+# 日志尾部 AUTH_FAIL_TAIL_CHARS 字符内;正则同时收紧 API Error 须邻接
+# 40x 状态码(瞬时 5xx/超时不再计入熔断)。残余面如实声明: 被 timeout
+# 击杀的 agent 若临终窗口恰在引用含认证字样的 CI 文本仍可能误判——
+# 已从「不可信文本任意位置」收缩到该窄窗,残余风险接受并记录。
+AUTH_FAIL_TAIL_CHARS = 500
 
 # 认证熔断阈值: 连续 N 次 auth_fail → 全局暂停(PAUSED 文件)
 AUTH_FAILURE_STREAK_LIMIT = 3
@@ -1327,7 +1336,9 @@ def check_agent_outcome(entry: Entry) -> str:
                            契约自报升级;须在 PID 判死之前——诚实升级的
                            agent 输出结束语后可能仍短暂存活,不能当成
                            dead/running 重派);
-      auth_fail          — 日志尾部 4000 字符匹配 API Error|403|Not logged in;
+      auth_fail          — 进程已死 且 日志末尾 AUTH_FAIL_TAIL_CHARS(500)
+                           字符内匹配收紧后的认证特征(轮5 B43: 活 agent
+                           复述 CI 日志中的认证字样不再触发熔断);
       timeout            — started_at + AGENT_TIMEOUT_SEC 已过;
       dead               — PID 已死且无上述特征;
       running            — 其余(PID 活着、尚无结论特征)。
@@ -1353,7 +1364,11 @@ def check_agent_outcome(entry: Entry) -> str:
         return "success"
     if any(m in tail for m in AGENT_ESCALATED_MARKS):
         return "escalated_reported"
-    if AUTH_FAIL_PATTERN.search(tail):
+    # 轮5 B43: auth_fail 双条件——PID 已死(真认证失败必致进程退出,活着
+    # 的 agent 尾部复述 CI 日志不算)+ 限制到末尾 AUTH_FAIL_TAIL_CHARS
+    # 字符(claude 自身错误必是临终输出;转写中部复述被排除)。
+    if not agent_alive(entry.agent_pid) and \
+            AUTH_FAIL_PATTERN.search(tail[-AUTH_FAIL_TAIL_CHARS:]):
         return "auth_fail"
     started = _parse_created_at(entry.agent_started_at or "")
     if started is not None and \

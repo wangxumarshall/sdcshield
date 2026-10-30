@@ -707,9 +707,10 @@ def test_check_agent_outcome_classes(monkeypatch, tmp_path):
     success = _sample_entry(
         status="DISPATCHED", agent_pid=os.getpid(),
         agent_started_at=_iso(now), agent_log=_log("b.log", "修复完成\nci-triage: done fix/ci-9\n"))
-    # auth_fail: 日志尾部含认证失效特征(优先于 success 判定)
+    # auth_fail: 死 PID + 日志临终窗含认证失效特征(轮5 B43 双条件:
+    # 进程已死 + 末尾 500 字符命中;活 agent 复述 CI 文本不再触发)
     auth_fail = _sample_entry(
-        status="DISPATCHED", agent_pid=os.getpid(),
+        status="DISPATCHED", agent_pid=999999998,
         agent_started_at=_iso(now),
         agent_log=_log("c.log", "API Error: 403 Not logged in\n"))
     # dead: 死 PID + 无特征日志

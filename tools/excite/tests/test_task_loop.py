@@ -957,12 +957,52 @@ def test_paused_env_redirect_ignores_legacy_dir(tmp_path, monkeypatch):
 
 def test_auth_fail_pattern_no_false_positive_on_bare_403():
     """PR#317 检视#23(轮2): 认证判定收紧——裸 '403'(行号/URL 片段)不再
-    误判入熔断 streak;API Error/Not logged in/HTTP 403|401 照常命中。"""
+    误判入熔断 streak;API Error/Not logged in/HTTP 403|401 照常命中。
+    轮5 B43 追加: API Error 须邻接 40x 状态码——瞬时 5xx/超时形
+    'API Error (Request timed out)' 不再计入熔断。"""
     assert tl.AUTH_FAIL_PATTERN.search("API Error: 403 Not logged in")
+    assert tl.AUTH_FAIL_PATTERN.search("API Error 401")
     assert tl.AUTH_FAIL_PATTERN.search("HTTP 403 Forbidden")
     assert tl.AUTH_FAIL_PATTERN.search("HTTP 401")
     assert not tl.AUTH_FAIL_PATTERN.search("  at foo.c:403 in bar()")
     assert not tl.AUTH_FAIL_PATTERN.search("see line 403 of the config")
+    assert not tl.AUTH_FAIL_PATTERN.search("API Error (Request timed out)")
+    assert not tl.AUTH_FAIL_PATTERN.search('API Error: 500 {"type":"error"}')
+
+
+def test_check_agent_outcome_auth_fail_requires_dead_and_tail(tmp_path):
+    """轮5 B43: auth_fail 双条件——活 PID 复述认证字样=running(不熔断);
+    死 PID + 认证字样在转写中部(非临终窗)=dead;死 PID + 临终窗命中=
+    auth_fail;超窗活 PID + 临终窗命中=timeout(击杀归 attempts 路径)。"""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    dead_pid, live_pid = 999999998, os.getpid()
+
+    def _entry(pid, started, text):
+        p = tmp_path / f"log-{abs(hash(text)) % 99999}.log"
+        p.write_text(text, encoding="utf-8")
+        return tl.Entry(workflow="W", run_id=1, status="DISPATCHED",
+                        issue_number=9, fix_branch="fix/ci-1", pr_number=None,
+                        attempts=0, rounds=0, agent_pid=pid,
+                        agent_started_at=started.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"),
+                        agent_log=str(p), last_dispatched_head=None,
+                        extra_runs=[], created_at="t", updated_at="t",
+                        source="ci", kind="bug", audit_hash=None)
+
+    # ① 活 agent 尾部复述 CI 日志认证字样 → running(核心防误熔断)
+    assert tl.check_agent_outcome(_entry(
+        live_pid, now, "复述 CI 日志: API Error: 403 Forbidden\n")) == "running"
+    # ② 死 PID + 认证字样被 600 字符后续输出推出临终窗 → dead
+    assert tl.check_agent_outcome(_entry(
+        dead_pid, now, "API Error: 403 Forbidden\n" + "x" * 600)) == "dead"
+    # ③ 死 PID + 临终窗命中 → auth_fail
+    assert tl.check_agent_outcome(_entry(
+        dead_pid, now, "工作被中断\nAPI Error: 403 Forbidden\n")) == "auth_fail"
+    # ④ 超窗活 PID + 临终窗命中 → timeout(auth_fail 让位于死条件)
+    assert tl.check_agent_outcome(_entry(
+        live_pid, now - timedelta(seconds=tl.AGENT_TIMEOUT_SEC + 60),
+        "API Error: 403 Forbidden\n")) == "timeout"
 
 
 def test_agent_env_path_dead_constant_removed():

@@ -26,15 +26,19 @@
 #
 # 产物（不入库，.gitignore 覆盖）：gem5-512/<t>.log（原始输出）、
 #   gem5-512/<t>.d/（m5out 工作目录）、gem5-512/batch.tsv（每测试一行
-#   rc/墙钟/exit 行——gem5-512-extract.sh 的机械提取输入）。
+#   rc/墙钟/exit 行——gem5-512-extract.sh 的机械提取输入）、
+#   gem5-512/identity.txt（批量时二进制身份：gem5 md5 + sdcshield 版本，
+#   PR #307 #7——提取器头部以此为准，杜绝「提取时重算 md5 盖旧数据」）。
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-LIST="$HERE/sve-test-list.txt"
-OVR="$HERE/gem5-overrides.txt"   # 测试|额外参数（baked 26 之外的降容，标定产物）
-OUT="$HERE/gem5-512"
-G5=/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt
-RUN=/home/sdc/wangxu/sdcshield-main/scripts/eigen-sve-double/gem5/run_sve.sh
-BIN=/home/sdc/wangxu/sdcshield-main/builddir/sdcshield
+# Env-overridable for hermetic/off-host reuse (PR #307 #7): defaults are the
+# 2026-10-29 campaign locations on the recording host.
+LIST=${LIST:-"$HERE/sve-test-list.txt"}
+OVR=${OVR:-"$HERE/gem5-overrides.txt"}   # 测试|额外参数（baked 26 之外的降容，标定产物）
+OUT=${OUT:-"$HERE/gem5-512"}
+G5=${G5:-/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt}
+RUN=${RUN:-/home/sdc/wangxu/sdcshield-main/scripts/eigen-sve-double/gem5/run_sve.sh}
+BIN=${BIN:-/home/sdc/wangxu/sdcshield-main/builddir/sdcshield}
 P=${1:-20}
 
 # 26 项 baked -O（= native-256-LCG1002.stdout.txt 命令行逐项拷贝，勿手改；
@@ -69,9 +73,24 @@ BAKED=(-O acl_gemm_sve.dim=512
 
 mkdir -p "$OUT"
 
+# Binary identity record (PR #307 #7): written at BATCH TIME so that
+# gem5-512-extract.sh stamps the verdicts header with the binary that
+# PRODUCED the batch.tsv rows — never with whatever is on disk at extract
+# time (a gem5 rebuild would silently mis-attribute old rows to a new md5).
+# --one only creates the record when absent (standalone re-verification);
+# a full batch also checks it and warns loudly on binary change — archive
+# $OUT before mixing rows from different binaries.
+write_identity() {
+    printf 'gem5_md5\t%s\nsdcshield_version\t%s\nrecorded_at\t%s\n' \
+        "$(md5sum "$G5" | cut -d' ' -f1)" \
+        "$("$BIN" --version 2>/dev/null || echo unknown)" \
+        "$(date '+%F %T')" > "$OUT/identity.txt"
+}
+
 if [ "${1:-}" = "--one" ]; then
     t="$2"
     [ -f "$OUT/$t.done" ] && exit 0          # 断点续跑：已完成即跳过
+    [ -f "$OUT/identity.txt" ] || write_identity
     extra=""
     extra=$(grep -m1 "^$t|" "$OVR" 2>/dev/null | cut -d'|' -f2- || true)
     mkdir -p "$OUT/$t.d"
@@ -93,8 +112,19 @@ if [ "${1:-}" = "--one" ]; then
 fi
 
 echo "batch start: $(date '+%F %T')  P=$P  list=$(wc -l < "$LIST") tests"
-echo "gem5: $G5  md5=$(md5sum "$G5" | cut -d' ' -f1)"
+new_md5=$(md5sum "$G5" | cut -d' ' -f1)
+echo "gem5: $G5  md5=$new_md5"
 echo "bin:  $BIN  $($BIN --version 2>/dev/null || echo version-unknown)"
+if [ -f "$OUT/identity.txt" ]; then
+    old_md5=$(awk -F'\t' '$1 == "gem5_md5" {print $2}' "$OUT/identity.txt")
+    if [ "$old_md5" != "$new_md5" ]; then
+        echo "WARNING: gem5 binary changed since the recorded batch identity" >&2
+        echo "         (recorded md5 $old_md5, current $new_md5): batch.tsv would" >&2
+        echo "         mix rows from different binaries — archive $OUT first." >&2
+    fi
+else
+    write_identity
+fi
 xargs -a "$LIST" -P "$P" -I{} "$0" --one {}
 echo "batch end:   $(date '+%F %T')"
 echo "cells with 'exit: pass': $(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null || echo 0) / $(wc -l < "$LIST")"

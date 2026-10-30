@@ -45,18 +45,40 @@ DIR="${1:-.}"
 LIST="$DIR/sve-test-list.txt"
 BATCH="$DIR/gem5-512/batch.tsv"
 OUT="$DIR/gem5-512-verdicts.txt"
+IDY="$DIR/gem5-512/identity.txt"
+# Env-overridable for off-host reuse (PR #307 #7): defaults are the
+# 2026-10-29 campaign locations on the recording host.
+G5=${G5:-/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt}
+BIN=${BIN:-/home/sdc/wangxu/sdcshield-main/builddir/sdcshield}
 
 [ -f "$LIST" ]  || { echo "ERROR: list not found: $LIST" >&2; exit 2; }
 [ -f "$BATCH" ] || { echo "ERROR: batch.tsv not found: $BATCH (batch not run?)" >&2; exit 2; }
 
-md5=$(md5sum /home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt | cut -d' ' -f1)
-ver=$(/home/sdc/wangxu/sdcshield-main/builddir/sdcshield --version 2>/dev/null || echo unknown)
+# Identity source (PR #307 #7): the data rows come from batch.tsv, produced
+# by the binary that RAN the batch — not by whatever is on disk at extract
+# time. Prefer the batch-time record written by gem5-512-batch.sh; only when
+# it is absent (batches predating that record) recompute from the CURRENT
+# disk binaries AND label the header as such, so a post-rebuild re-extraction
+# can never silently stamp a new md5 over old data rows. Missing binaries no
+# longer kill the script (set -euo pipefail used to make any off-host rerun
+# die at the md5sum) — they degrade to "unavailable"/"unknown" plus the label.
+if [ -f "$IDY" ]; then
+    md5=$(awk -F'\t' '$1 == "gem5_md5" {print $2; exit}' "$IDY")
+    ver=$(awk -F'\t' '$1 == "sdcshield_version" {print $2; exit}' "$IDY")
+    idysrc="batch-time record gem5-512/identity.txt (written by gem5-512-batch.sh)"
+else
+    md5=$(md5sum "$G5" 2>/dev/null | cut -d' ' -f1 || true)
+    ver=$("$BIN" --version 2>/dev/null || true)
+    idysrc="RECOMPUTED AT EXTRACT TIME from the current disk binaries — no batch-time identity record exists; after a gem5 rebuild these values may NOT describe the binary that produced batch.tsv (verify before trusting)"
+fi
+: "${md5:=unavailable}" "${ver:=unknown}"
 
 {
     echo "# gem5 SE 512-bit leg — per-test verdict summary (mechanical extraction)"
-    echo "# gem5 binary: /home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt  md5=$md5"
+    echo "# gem5 binary: $G5  md5=$md5"
     echo "#              (Task 5 final 9-stub build)"
     echo "# sdcshield:   $ver (12ccda540fd4 tree)"
+    echo "# identity source: $idysrc"
     echo "# command:     run_sve.sh sdcshield -e <test> -t 500 -n 1 -f no --ignore-timeout"
     echo "#              <26 baked -O> [gem5-overrides.txt extras] --vl 4"
     echo "# verdict rule: process exit code is authoritative (nofork; per-test yaml"

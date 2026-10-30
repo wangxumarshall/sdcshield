@@ -2,6 +2,7 @@
 # gem5 binary: /home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt  md5=3f9011f40dbe80ec1df478c62ddb0b06
 #              (Task 5 final 9-stub build)
 # sdcshield:   sdcshield-12ccda540fd4 (12ccda540fd4 tree)
+# identity source: RECOMPUTED AT EXTRACT TIME from the current disk binaries — no batch-time identity record exists; after a gem5 rebuild these values may NOT describe the binary that produced batch.tsv (verify before trusting)
 # command:     run_sve.sh sdcshield -e <test> -t 500 -n 1 -f no --ignore-timeout
 #              <26 baked -O> [gem5-overrides.txt extras] --vl 4
 # verdict rule: process exit code is authoritative (nofork; per-test yaml

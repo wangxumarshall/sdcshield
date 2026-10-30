@@ -94,6 +94,24 @@ static constexpr size_t FADDA_STEPS = 256;
 // untouched lane keeps these exact bits).
 static constexpr uint64_t SENTINEL = 0x7FF8DEADBEEF0000ULL;
 
+struct PredOpsData {
+    size_t vl_d;
+    std::vector<double> src;            // exact operands: src[j] = (j%4)-1.5
+    /* Page pair for the faulting-LDFF1 face: [base, base+ps) mapped and
+       filled with src at its tail, [base+ps, base+2*ps) punched out
+       (munmap) so element 1 of ffr_fault_k1 lands on an unmapped page.
+       The hole is made with munmap, not mprotect(PROT_NONE): gem5 SE
+       maps mprotect to a no-op (ignoreFunc in the ArmLinux64 syscall
+       table), and the fault source must behave identically on hardware
+       and in the gem5-fi dual-kernel validation. */
+    void *ffr_pages = nullptr;          // mmap base (2 pages)
+    size_t ffr_pages_bytes = 0;         // full original mapping (cleanup)
+    double *ffr_mapped = nullptr;       // src at the page-1 tail (mapped)
+    const double *ffr_fault_k1 = nullptr; // elem0 = last mapped double
+};
+
+#ifdef __aarch64__
+
 /* The whole LDFF1/FFR capture window as ONE always-inline unit — the
  * mechanical guard for the zero-call invariant this test depends on.
  *
@@ -133,7 +151,21 @@ static constexpr uint64_t SENTINEL = 0x7FF8DEADBEEF0000ULL;
  * predicate bits, so count == 8*vl is precisely a bit-for-bit comparison.
  *
  * PrimeFFR=true re-primes the FFR (SETFFR) before the load; PrimeFFR=false
- * leaves the FFR as-is so back-to-back captures observe accumulation. */
+ * leaves the FFR as-is so back-to-back captures observe accumulation.
+ *
+ * Lives inside the #ifdef __aarch64__ self-guard, like every other
+ * arm64-only definition in this file and its siblings (sve512_fcmla_arm
+ * et al.): the template body names (svsetffr, svfloat64_t, ...) are
+ * non-dependent, so even a never-instantiated template is a HARD ERROR on
+ * a compiler without arm_sve.h (measured: g++ -std=c++20 rejects it in
+ * the definition itself — two-phase lookup does not wait for an
+ * instantiation that never comes). The file's single-file x86 compile is
+ * prevented at DECLARE_TEST by design (the registration references
+ * guard-hidden functions, same as every test in this directory); the
+ * load-bearing x86 defense for the directory is the meson host guard —
+ * but this template was the one piece of arm64-only code sitting OUTSIDE
+ * the file's own guard, so any future restructure that lifts the
+ * DECLARE_TEST pattern would have tripped on it first. */
 template <bool PrimeFFR>
 static inline __attribute__((always_inline)) long
 ffr_ldff1_capture(const double *from, double *to)
@@ -146,24 +178,6 @@ ffr_ldff1_capture(const double *from, double *to)
     svst1_f64(svptrue_b64(), to, v);
     return bits;
 }
-
-struct PredOpsData {
-    size_t vl_d;
-    std::vector<double> src;            // exact operands: src[j] = (j%4)-1.5
-    /* Page pair for the faulting-LDFF1 face: [base, base+ps) mapped and
-       filled with src at its tail, [base+ps, base+2*ps) punched out
-       (munmap) so element 1 of ffr_fault_k1 lands on an unmapped page.
-       The hole is made with munmap, not mprotect(PROT_NONE): gem5 SE
-       maps mprotect to a no-op (ignoreFunc in the ArmLinux64 syscall
-       table), and the fault source must behave identically on hardware
-       and in the gem5-fi dual-kernel validation. */
-    void *ffr_pages = nullptr;          // mmap base (2 pages)
-    size_t ffr_pages_bytes = 0;         // full original mapping (cleanup)
-    double *ffr_mapped = nullptr;       // src at the page-1 tail (mapped)
-    const double *ffr_fault_k1 = nullptr; // elem0 = last mapped double
-};
-
-#ifdef __aarch64__
 
 static int sve512_pred_ops_arm_init(struct test *test)
 {

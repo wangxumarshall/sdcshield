@@ -146,7 +146,9 @@ static int mesh_upi_sve_asymm_int_run(struct test *test, int cpu) {
             // （本轮状态已由上一轮 sense-reversal 屏障的最后到达线程重置；
             //   第一轮的状态由 init 重置）
             for (uint32_t block = 0; block < td->num_blocks; ++block) {
-                size_t offset = block * BLOCK_ELEMENTS;
+                // 必须 64 位相乘:block 是 uint32_t,block * BLOCK_ELEMENTS 是 32 位
+                // 运算,块数超过 2^29(缓冲 > 16 GiB)时偏移回绕,上半段永不写入。
+                size_t offset = (size_t)block * BLOCK_ELEMENTS;
                 int32_t vals[BLOCK_ELEMENTS];
                 uint64_t local_sum = 0;
                 for (int j = 0; j < BLOCK_ELEMENTS; ++j) {

@@ -134,7 +134,7 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 34 | fsu_byteexact_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 35 | gmp_bigadd_sve | pass(bounded: limbs=256) | pass(bounded: limbs=256) | pass(bounded: limbs=256) | pass,pass · to,pass · rc=0 |
 | 36 | gmp_bignum_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 37 | iex_operand_combo_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
+| 37 | iex_operand_combo_sve† | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 38 | insert_extract_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 39 | ipsec_3des_docsis_aes_cmac_sve_wide | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
 | 40 | ipsec_3des_docsis_aes_xcbc_sve_wide | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
@@ -184,8 +184,8 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 84 | mesh_upi_sve_wide_asymm_distrib_int | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
 | 85 | mesh_upi_sve_wide_asymm_distrib_write_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 86 | mesh_upi_sve_wide_asymm_int | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
-| 87 | mesh_upi_sve_wide_asymm_read_L3_int | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
-| 88 | mesh_upi_sve_wide_asymm_read_only_int | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
+| 87 | mesh_upi_sve_wide_asymm_read_L3_int† | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
+| 88 | mesh_upi_sve_wide_asymm_read_only_int† | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
 | 89 | mesh_upi_sve_wide_asymm_write_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 90 | mesh_upi_sve_wide_asymm_write_only_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 91 | mesh_upi_sve_wide_sym | pass | pass | pass | pass,pass · pass,pass · rc=0 |
@@ -217,7 +217,7 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 117 | mrn_nuke_2src_alu_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 118 | mrn_nuke_3src_alu_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 119 | mrn_nuke_4src_alu_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 120 | mrn_nuke_dense_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
+| 120 | mrn_nuke_dense_sve† | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 121 | mrn_nuke_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 122 | mrn_pairs_2src_alu_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 123 | mrn_pairs_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
@@ -259,7 +259,7 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 159 | neon_rot_u8x16_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 160 | ooo_dep_chain_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 161 | operand_space_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 162 | partial_store_forwarding_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
+| 162 | partial_store_forwarding_sve† | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 163 | power_virus_dit_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 164 | power_virus_dit_sve_arm | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 165 | sleef_sve | pass | pass | pass(bounded: nelems=1048576) | pass,pass · pass,pass · rc=0 |
@@ -288,6 +288,11 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 188 | sve_rot_ldr_at_top_rowmajor_k7p_rand | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
 | 189 | sve_rot_ldr_at_top_rowmajor_k7p_zero | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
 | 190 | swizzle_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
+
+† = 该测试在冻结基线上含 PR #316（#312-#315）已修复的越界缺陷：本行
+pass 仅构成「同条件可跑绿」证据，**不构成基线洁净性证据**（缺陷由
+#316 的检视发现，非本运动检出；见 §0.1 delta 表）。
+
 
 ## 5. 汇总算术（生成脚本机械统计，与 §4 表体同一数据源）
 

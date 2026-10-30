@@ -16,10 +16,12 @@
 #                                        T3 minor fix：triage-128 曾意译丢句，此处补逐字）
 #
 # 纪律（brief Step 1）：每一格的值都由本脚本从上述工件机械推导，**不许手填**。
-# 脚本内嵌的字面量只有三类，均为对已入库文档的引用而非数据编造：
+# 脚本内嵌的字面量只有四类，均为对已入库文档的引用而非数据编造：
 #   (a) triage 分节号引用（triage-256 §1+§5 / triage-128 §1+§2 / triage-512 §0+§5.1+§5.2）；
 #   (b) 9 个 512 边界格的机制性理由短标签（内容归类引自 triage-512 §5.1/§5.2）；
-#   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :193-196）。
+#   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :193-196）；
+#   (d) §4 表体的 † 弱证据行标记集合 = 5 个 PR #316 已修复越界缺陷测试
+#       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）。
 #
 # 一致性断言（任一失败 → 非零退出、不产出 matrix.md）：
 #   清单 190 行；4 份 native summary + 1 份 verdicts 各覆盖全部 190 名；
@@ -28,7 +30,7 @@
 #   128 列双 seed skip 仅限钉死集合 {sve512_fmmla_arm}（PR #307 #8——
 #   其余测试双 skip 或单 seed 分歧 skip 均 FATAL，防「合法 SKIP」标签
 #   张冠李戴 / seed 依赖型 skip 被 pass 掩蔽）；512 列 crash/timeout 格
-#   必有机制理由标签。
+#   必有机制理由标签；† 标记行恰 5 行（PR #307 #22）。
 #
 # locale：全链 LC_ALL=C（enumeration.md §6 的 comm/sort 教训）。
 
@@ -134,6 +136,16 @@ END {
     # 都不许静默套用该标签——FATAL 交人工分诊。
     legal_skip["sve512_fmmla_arm"] = "F64MM UNDEFINED <VL=256"
 
+    # PR #316 已修复越界缺陷测试（#312-#315；冻结基线上含缺陷——弱证据
+    # 行标记，PR #307 #22）。名单 = §0.1 delta 表 #316 行；oob_marked==5
+    # 断言守卫（清单漂移丢名即 FATAL，防标记静默失配）。
+    oob316["iex_operand_combo_sve"] = 1
+    oob316["partial_store_forwarding_sve"] = 1
+    oob316["mrn_nuke_dense_sve"] = 1
+    oob316["mesh_upi_sve_wide_asymm_read_L3_int"] = 1
+    oob316["mesh_upi_sve_wide_asymm_read_only_int"] = 1
+    oob_marked = 0
+
     # 9 个 512 边界格机制标签（归类出处 = triage-512 §5.1 PMULL64/DC-CIVAC、§5.2 SIM-SPEED）
     breason["ipsec_aes192_gcm_sve"]      = "PMULL64"
     breason["ipsec_aes192_gcm_sve_wide"] = "PMULL64"
@@ -194,7 +206,9 @@ END {
         # ---- 证据列：128s1,128s2 · 256s1,256s2 · rc（to = timed out → §5 重跑）
         s = a1 "," a2 " · " (b1 == "timed out" ? "to" : b1) "," b2 " · rc=" rc[t]
 
-        printf "| %d | %s | %s | %s | %s | %s |\n", i, t, c128, c256, c512, s > (OUT "/table.md")
+        tdisp = t ((t in oob316) ? "†" : "")
+        if (t in oob316) oob_marked++
+        printf "| %d | %s | %s | %s | %s | %s |\n", i, tdisp, c128, c256, c512, s > (OUT "/table.md")
 
         # ---- 有界格分解统计（§5 对账行用，全部机械计数）
         if (b1 == "timed out") n_to++                       # 256 列 §5 重跑格
@@ -208,6 +222,7 @@ END {
     }
 
     if (rows != 190 || cells != 570) { printf "FATAL: %d rows / %d cells (expected 190 / 570)\n", rows, cells > "/dev/stderr"; fatal = 1 }
+    if (oob_marked != 5) { printf "FATAL: expected 5 #316-OOB-marked rows, marked %d (list/marker drift)\n", oob_marked > "/dev/stderr"; fatal = 1 }
     if (cnt128["fail"] || cnt256["fail"] || cnt512["fail"]) { printf "FATAL: FAIL cells present\n" > "/dev/stderr"; fatal = 1 }
     if (cnt512["bounded"] != bg + eg - bo) { printf "FATAL: 512 bounded %d != %d + %d - %d\n", cnt512["bounded"], bg, eg, bo > "/dev/stderr"; fatal = 1 }
     if (cnt256["bounded"] < n_to) { printf "FATAL: 256 bounded %d < timeout-rerun %d\n", cnt256["bounded"], n_to > "/dev/stderr"; fatal = 1 }
@@ -330,6 +345,13 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 |---|---|---|---|---|---|
 HDR3
 cat "$TMP/table.md"
+cat <<'FTNR'
+
+† = 该测试在冻结基线上含 PR #316（#312-#315）已修复的越界缺陷：本行
+pass 仅构成「同条件可跑绿」证据，**不构成基线洁净性证据**（缺陷由
+#316 的检视发现，非本运动检出；见 §0.1 delta 表）。
+
+FTNR
 cat <<'HDR4'
 
 ## 5. 汇总算术（生成脚本机械统计，与 §4 表体同一数据源）

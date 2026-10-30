@@ -43,7 +43,9 @@
  *    exercised — that is kernel territory; the mapped case checks the FFR
  *    datapath itself.) The RDFFR is issued back-to-back with the LDFF1,
  *    and the LDFF1 back-to-back with the SETFFR, with no function call
- *    anywhere in that window: the arm64 Linux syscall ABI discards live
+ *    anywhere in that window — the whole capture is encapsulated in the
+ *    single always-inline unit ffr_ldff1_capture (see there): the arm64
+ *    Linux syscall ABI discards live
  *    SVE state at syscall entry (kernel fpsimd_syscall_enter() ->
  *    sve_flush_live() zeroes every P register and the FFR), and a
  *    first-fault load from mapped memory only ever CLEARS FFR bits —
@@ -78,6 +80,54 @@ static constexpr size_t FADDA_STEPS = 256;
 // Sentinel for untouched-lane detection (a quiet NaN payload; any
 // untouched lane keeps these exact bits).
 static constexpr uint64_t SENTINEL = 0x7FF8DEADBEEF0000ULL;
+
+/* The whole LDFF1/FFR capture window as ONE always-inline unit — the
+ * mechanical guard for the zero-call invariant this test depends on.
+ *
+ * Everything from the SETFFR to the FFR bit count landing in a GPR (and
+ * the loaded data in memory) lives in this single template body, which
+ * contains no function call and inlines into the caller even at -O0, so
+ * the window can never silently grow one: any future call has to be
+ * inserted into this one small body, right under this comment, where the
+ * constraint is stated. The window must stay call-free end to end:
+ *
+ *  - the arm64 Linux syscall ABI discards live FFR state at syscall entry
+ *    (measured on a 6.6 kernel: FFR reads 0 after a syscall while Z/P are
+ *    preserved; kernels carrying the newer fpsimd syscall-flush rework may
+ *    flush P as well — the sve_flush_{z,p,ffr} macros all exist), and
+ *  - any callee may itself use SVE and clobber caller-saved Z/P/FFR per
+ *    the AAPCS64 SVE rules (an SVE-optimized memcpy in libc is enough),
+ *
+ * so a call anywhere between the SETFFR and the RDFFR zeroes/clobbers the
+ * FFR just the same as the Sanitizer CI run 40596064101 it fixed (count=0,
+ * expected 2 on two workers; the guilty calls there sat after the LDFF1,
+ * but any call landing in the window reproduces it). Closing the window
+ * only at the scalar count would still leave the loaded Z data exposed on
+ * a Z-flushing kernel, so the svst1 is inside the unit too.
+ *
+ * Count EVERY predicate bit, not just the per-element first bit: CNTP with
+ * a b64 pattern tests only bit 0 of each 8-bit slice, so a stuck bit
+ * anywhere in bits 1..7 of a slice kept the old count at vl and passed —
+ * an SDC blind spot. The governing predicate must be b8 all-true as well:
+ * CNTP activates an element only where BOTH predicates have their first
+ * slice bit set, so a b64 governing predicate would mask bytes 1..7 and
+ * keep the blind spot. Against an all-ones golden there are exactly 8*vl
+ * predicate bits, so count == 8*vl is precisely a bit-for-bit comparison.
+ *
+ * PrimeFFR=true re-primes the FFR (SETFFR) before the load; PrimeFFR=false
+ * leaves the FFR as-is so back-to-back captures observe accumulation. */
+template <bool PrimeFFR>
+static inline __attribute__((always_inline)) long
+ffr_ldff1_capture(const double *from, double *to)
+{
+    if constexpr (PrimeFFR)
+        svsetffr();
+    svfloat64_t v = svldff1_f64(svptrue_b64(), from);
+    svbool_t ffr = svrdffr();
+    const long bits = svcntp_b8(svptrue_b8(), ffr);
+    svst1_f64(svptrue_b64(), to, v);
+    return bits;
+}
 
 struct PredOpsData {
     size_t vl_d;
@@ -253,39 +303,18 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         std::vector<double> mem(d->vl_d);
         for (size_t i = 0; i < d->vl_d; ++i)
             mem[i] = d->src[i];
-        // Prime FFR to all-ones before the first-fault load. LDFF1 only
+        // Prime FFR to all-ones before the first-fault load (LDFF1 only
         // *clears* the FFR bit of each faulting element — it never sets a
-        // bit — so without SETFFR the readback below is the previous
-        // (undefined) FFR state, not the set of successfully-loaded lanes.
-        svsetffr();
-        svfloat64_t v = svldff1_f64(all, mem.data());
-        // Read the FFR back-to-back with the first-fault load, and keep
-        // the whole [SETFFR, RDFFR] window free of function calls — not
-        // just the LDFF1-to-RDFFR half: the arm64 Linux syscall ABI
-        // discards live SVE state at syscall entry (kernel
-        // fpsimd_syscall_enter() -> sve_flush_live() zeroes every P
-        // register and the FFR), and an LDFF1 from mapped memory only
-        // ever clears an FFR bit — it never sets one — so a syscall
-        // after the SETFFR but before the LDFFR zeroes the FFR just the
-        // same, and the readback below reports a false "SDC" (Sanitizer
-        // CI run 40596064101: count=0, expected 2 on two workers; the
-        // guilty calls there sat after the LDFF1, but any call landing
-        // in the window reproduces it). Capture the FFR and its bit
-        // count while no call can intervene.
-        svbool_t ffr = svrdffr();
-        // Count EVERY predicate bit, not just the per-element first bit:
-        // CNTP with a b64 pattern tests only bit 0 of each 8-bit slice, so
-        // a stuck bit anywhere in bits 1..7 of a slice kept the old count
-        // at vl and passed — an SDC blind spot the header's bit-for-bit
-        // claim did not cover. The governing predicate must be b8 all-true
-        // as well: CNTP activates an element only where BOTH predicates
-        // have their first slice bit set, so a b64 governing predicate
-        // would mask bytes 1..7 and keep the blind spot. The golden is
-        // all-ones and there are exactly 8*vl predicate bits, so
-        // count == 8*vl is precisely a bit-for-bit comparison.
-        const long ffr_bits = svcntp_b8(svptrue_b8(), ffr);
+        // bit — so without SETFFR the readback is the previous,
+        // undefined FFR state, not the set of successfully-loaded lanes),
+        // then capture through the single always-inline window unit: the
+        // call-free [SETFFR, count-in-GPR, data-in-memory] discipline and
+        // the b8 full-bit count live in ffr_ldff1_capture's one body.
+        // The readback buffer is allocated BEFORE the window so no call
+        // can land between the capture and the store even on a
+        // Z-flushing kernel.
         std::vector<double> back(d->vl_d);
-        svst1_f64(all, back.data(), v);
+        const long ffr_bits = ffr_ldff1_capture<true>(mem.data(), back.data());
         if (memcmp(back.data(), mem.data(), d->vl_d * 8) != 0) {
             log_warning("sve512_pred_ops: LDFF1 readback mismatch");
             all_passed = false;
@@ -359,15 +388,13 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // the LDFF1/FFR path gets a single sampling opportunity and a
         // marginal SDC that only shows under sustained stress escapes
         // (AGENTS.md: timed continuous stress, short-run pass proves
-        // nothing). The [SETFFR, RDFFR] window here must stay free of
-        // function calls exactly as in Section 4: test_time_condition()
-        // above, the FMA-part allocations, and the memcmp below all sit
-        // outside it.
-        svsetffr();
-        svfloat64_t v = svldff1_f64(all, ffr_mem.data());
-        svbool_t ffr = svrdffr();
-        const long ffr_bits = svcntp_b8(svptrue_b8(), ffr);
-        svst1_f64(all, ffr_back.data(), v);
+        // nothing). The capture goes through the same single
+        // always-inline window unit as Section 4 — the zero-call
+        // invariant is enforced in ffr_ldff1_capture's one body, not
+        // re-maintained by hand here: test_time_condition() above, the
+        // FMA-part allocations, and the memcmp below all sit outside it.
+        const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
+                                                     ffr_back.data());
         if (ffr_bits != (long)(8 * vl) ||
             memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
             report_fail_msg("sve512_pred_ops_arm: FFR/LDFF1 SDC detected "

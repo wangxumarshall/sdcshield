@@ -239,6 +239,28 @@ def test_enqueue_bug_findings_file_does_not_read_stdin(tmp_path, monkeypatch,
     bodies = [c[1] for c in created]
     assert any("m1" in b for b in bodies) and tl.UNTRUSTED_BANNER in bodies[0]
 
+def test_enqueue_bug_skips_non_dict_findings(tmp_path, monkeypatch, capsys):
+    """轮5(近miss A5): findings 文件混入非字典元素——跳过并告警,不
+    AttributeError 裸 traceback 中途崩;合法条目照常建。"""
+    class _Boom:
+        def read(self, *a):
+            raise AssertionError("findings 路径不得读 stdin")
+    monkeypatch.setattr(tl.sys, "stdin", _Boom())
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl, "_search_finding_issue", lambda h: None)
+    created = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels:
+                        created.append(title) or 42)
+    good = {"path": "a.c", "line": 1, "severity": "Minor",
+            "category": "正确性", "message": "m1", "evidence": "e1"}
+    ff = tmp_path / "bad.json"
+    ff.write_text(json.dumps([good, "oops", 42]), encoding="utf-8")
+    assert tl.main(["enqueue-bug", "--findings-file", str(ff)]) == 0
+    assert created == ["[review] m1"]        # 只有合法条目建了 issue
+    assert "跳过非对象 finding" in capsys.readouterr().err
+
+
 def test_enqueue_bug_findings_dedup_via_marker(tmp_path, monkeypatch, capsys):
     """PR#317 检视#16(轮2): session findings 批量路径幂等——每条 finding
     以 _audit_hash 归一化 hash 嵌 body marker(<!-- task-loop:finding:h -->),
@@ -1269,6 +1291,19 @@ def test_check_agent_outcome_auth_fail_requires_dead_and_tail(tmp_path):
     assert tl.check_agent_outcome(_entry(
         live_pid, now - timedelta(seconds=tl.AGENT_TIMEOUT_SEC + 60),
         "API Error: 403 Forbidden\n")) == "timeout"
+
+
+def test_approve_ensures_labels_before_add(monkeypatch):
+    """轮5(近miss B5): approve 先幂等确保 agent-* 标签在位——全新部署
+    (任何 scan tick 未跑过)时 agent-approved 不存在,裸 gh issue edit
+    会 label-not-found 裸 traceback。"""
+    calls = []
+    monkeypatch.setattr(tl, "ensure_agent_labels",
+                        lambda: calls.append("ensure"))
+    monkeypatch.setattr(tl, "gh_label_add",
+                        lambda n, lb: calls.append((n, lb)))
+    assert tl.main(["approve", "77"]) == 0
+    assert calls == ["ensure", (77, "agent-approved")]
 
 
 def test_agent_env_path_dead_constant_removed():

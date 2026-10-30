@@ -2297,6 +2297,14 @@ def cmd_enqueue_bug(args: argparse.Namespace) -> int:
             print("[enqueue] findings 为空——零 issue,零动作")
             return 0
         for fd in findings:
+            # 轮5(近miss A5): 逐条 isinstance 守卫(与 pr_local_review.
+            # _parse_findings 同标准)——手编/agent 产出的 findings 文件混入
+            # 非字典元素时跳过并告警,不再 AttributeError 裸 traceback 中途
+            # 崩(此前半批已建 issue,失败形态无干净报错)。
+            if not isinstance(fd, dict):
+                print(f"[enqueue] 跳过非对象 finding({type(fd).__name__}): "
+                      f"{str(fd)[:80]}", file=sys.stderr)
+                continue
             # 幂等查重(PR#317 检视#16 轮2): 与 audit 同一 _audit_hash 键 +
             # body marker——中途瞬态 GhError 后重跑,已建 issue 逐条跳过,
             # 不重复建(对照 ci 源 RUN_MARKER_FMT / audit 源双源查重)。
@@ -2327,6 +2335,11 @@ def cmd_enqueue_task(args: argparse.Namespace) -> int:
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
+    # 轮5(近miss B5): 与 enqueue-bug/task 同款前置——全新部署(任何 scan
+    # tick 尚未跑过)时 agent-approved 标签还不存在,gh issue edit 会以
+    # 'label not found' 的未捕获 GhError 裸 traceback 退出;先幂等确保
+    # 标签在位,失败走干净报错。
+    ensure_agent_labels()
     gh_label_add(args.issue, AGENT_LABEL_APPROVED)
     print(f"[approve] issue #{args.issue} +agent-approved(下一 scan tick 进队列)")
     return 0

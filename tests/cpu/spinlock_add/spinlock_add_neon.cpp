@@ -24,7 +24,8 @@
  *                        现场录像格式；magic 字段对账爆炸半径）
  *
  * 三通道自检（部署到新机器后必跑，coherence_probe SELFTEST_W 同款纪律——
- * 阳性通过后阴性结果才有意义）：
+ * 阳性通过后阴性结果才有意义；错值 fail loudly 而非静默 off，防 typo 无声
+ * 击穿部署纪律）：
  *   -O spinlock_add_neon.selftest=stall  首个进临界区线程持锁 11s →
  *                                        通道C 应触发（需 ≥2 线程、-t ≥ 25000）
  *   -O spinlock_add_neon.selftest=data   init 毒化各 slot golden →
@@ -275,12 +276,26 @@ static int spinlock_add_neon_init(struct test *test)
      * 的键按测试 id 定域，NULL-test 裸键查不到 */
     d->logverif = get_testspecific_knob_value_int(test, "logverif", 0) != 0;
     const char *st = get_testspecific_knob_value_string(test, "selftest", "off");
-    if (strcmp(st, "stall") == 0 || strcmp(st, "1") == 0)
+    /* 未知取值 fail loudly 而非静默映射 0（igzip level knob 先例：静默钳
+     * 0 会让部署自检纪律被一个 typo 无声击穿——selftest=Stall 之类错值
+     * 跑满 -t 时长绿 pass，与阳性自检是否真正执行在时耗上无法区分，
+     * PR#328 二轮检视 :266） */
+    if (strcmp(st, "off") == 0 || strcmp(st, "0") == 0)
+        d->selftest = 0;
+    else if (strcmp(st, "stall") == 0 || strcmp(st, "1") == 0)
         d->selftest = 1;
     else if (strcmp(st, "data") == 0 || strcmp(st, "2") == 0)
         d->selftest = 2;
-    else
-        d->selftest = 0;
+    else {
+        log_error("spinlock_add_neon: invalid selftest knob value \"%s\" "
+                  "(valid: off|stall|data or 0|1|2, default off) — failing "
+                  "loudly so a typo cannot silently skip the deployment "
+                  "self-test", st);
+        /* 此处仅 d 本身已分配（memset 后各指针为 NULL），就地释放返回；
+         * 不能 goto fail——会跨越下方 floats_total 的初始化（C++ 禁止） */
+        free(d);
+        return EXIT_FAILURE;
+    }
     d->stall_armed = 0;
     d->log_fd = -1;
 

@@ -38,7 +38,7 @@ LOG="$1"; LIST="$2"; OUT="$3"
 
 cmdline=$(grep -a -m1 "^command-line: " "$LOG" || true)
 version=$(grep -a -m1 "^version: " "$LOG" || true)
-exitline=$(grep -a "^exit: " "$LOG" | tail -1)
+exitline=$(grep -a "^exit: " "$LOG" | tail -1 || true)
 if [ -z "$exitline" ]; then
     echo "ERROR: no 'exit:' line in $LOG — partial corpse, refusing to summarize" >&2
     exit 2

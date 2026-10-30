@@ -290,7 +290,10 @@ static int spinlock_add_neon_init(struct test *test)
     d->inputs = static_cast<float *>(aligned_alloc(64, floats_total * sizeof(float)));
     d->golden = static_cast<float *>(aligned_alloc(64, floats_total * sizeof(float)));
     d->line = static_cast<SpinlockAddNeonLockLine *>(aligned_alloc(64, sizeof(SpinlockAddNeonLockLine)));
-    d->shared_counter = static_cast<uint64_t *>(aligned_alloc(64, sizeof(uint64_t)));
+    /* C11 7.22.3.1：aligned_alloc 的 size 须为 alignment 整数倍——
+     * sizeof(uint64_t)=8 违反（glibc 不检查故可跑，属潜伏 UB，严格分配器
+     * 将返回 NULL 触发假 FAIL）；本行 cacheline 对齐故取 64 */
+    d->shared_counter = static_cast<uint64_t *>(aligned_alloc(64, 64));
     d->local_counts = static_cast<uint64_t *>(calloc(SPINLOCK_ADD_NEON_SLOTS, sizeof(uint64_t)));
     if (!d->inputs || !d->golden || !d->line || !d->shared_counter || !d->local_counts) {
         log_error("spinlock_add_neon: allocation failure");

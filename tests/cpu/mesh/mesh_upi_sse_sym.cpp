@@ -124,7 +124,9 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
         while (true) {
             uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block >= td->num_blocks) break;
-            size_t offset = block * BLOCK_ELEMENTS;
+            // 64 位乘法：uint32 块号 × 块大小在 32 位内会回绕（每 16 GiB
+            // 一次；169 GB 缓冲 550 万块 → 覆盖写，假 sum mismatch）
+            size_t offset = (size_t)block * BLOCK_ELEMENTS;
             float vals[BLOCK_ELEMENTS];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_ELEMENTS; ++j) {

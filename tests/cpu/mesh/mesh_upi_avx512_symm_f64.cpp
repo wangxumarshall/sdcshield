@@ -158,7 +158,9 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
             uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block >= td->num_blocks) break;
 
-            size_t offset = block * BLOCK_SIZE;
+            // 64 位乘法：uint32 块号 × 块大小在 32 位内会回绕（BLOCK_SIZE=4096
+            // → 每 32 GiB 一次；169 GB 缓冲 → 覆盖写，假 sum mismatch）
+            size_t offset = (size_t)block * BLOCK_SIZE;
             double vals[BLOCK_SIZE];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_SIZE; ++j) {

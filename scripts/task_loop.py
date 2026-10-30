@@ -310,17 +310,48 @@ def _migrate_legacy_state_dir() -> None:
         return
     new_dir = os.path.expanduser(DEFAULT_STATE_DIR)
     legacy = os.path.expanduser(LEGACY_STATE_DIR)
+    os.makedirs(new_dir, exist_ok=True)
+    # agent.env 独立补齐(轮5 B42/会话#2): 早退条件只看 state.json 时,
+    # 「state.json 已拷、agent.env 未拷」的半迁移(两次拷贝间被杀)与
+    # 「legacy 有凭据、无 state.json」(凭据先就位,旧工具从未落盘)都会
+    # 让 agent.env 永久缺失——dispatch 侧的 source 会假派发。任何路径下
+    # 目标缺失且源存在即原子补一份(幂等,已存在不动)。
+    env_src = os.path.join(legacy, AGENT_ENV_NAME)
+    env_dst = os.path.join(new_dir, AGENT_ENV_NAME)
+    if os.path.exists(env_src) and not os.path.exists(env_dst):
+        _copy_atomic(env_src, env_dst)
+        print(f"[migrate] {AGENT_ENV_NAME}: {legacy} → {new_dir}")
     if os.path.exists(os.path.join(new_dir, STATE_FILE_NAME)):
         return
     if not os.path.exists(os.path.join(legacy, STATE_FILE_NAME)):
         return
-    os.makedirs(new_dir, exist_ok=True)
+    try:
+        _copy_atomic(os.path.join(legacy, STATE_FILE_NAME),
+                     os.path.join(new_dir, STATE_FILE_NAME))
+    except OSError as exc:
+        # 转 RuntimeError(scan/audit 顶层 except 认它): 不带 state 继续
+        # 跑会在空状态上为已跟踪 run 重复建 issue——宁可本 tick 干净退出,
+        # 旧目录原样保留,下轮重试(幂等)。
+        raise RuntimeError(
+            f"state.json 迁移失败(旧目录保留,复跑幂等重试): {exc}") from exc
+    print(f"[migrate] {STATE_FILE_NAME}: {legacy} → {new_dir}")
+
+
+def _copy_atomic(src: str, dst: str) -> None:
+    """原子拷贝(与 StateStore.save 同纪律): 先写 tmp 再 os.replace,
+    中途失败(磁盘满/被杀)不留半份目标——半份 state.json 会让下 tick 的
+    迁移早退失效且 load 读到坏 JSON(轮5 B42)。"""
     import shutil
-    for name in (STATE_FILE_NAME, AGENT_ENV_NAME):
-        src = os.path.join(legacy, name)
-        if os.path.exists(src) and not os.path.exists(os.path.join(new_dir, name)):
-            shutil.copy2(src, os.path.join(new_dir, name))
-            print(f"[migrate] {name}: {legacy} → {new_dir}")
+    tmp = dst + ".tmp-migrate"
+    try:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _paused() -> bool:
@@ -360,12 +391,40 @@ class StateStore:
         """读 state.json;不存在时返回初始空状态(首跑语义)。
 
         只读 state.json——tmp 是 save 的中间产物,绝不在 load 路径出现。
+        损坏容错(轮5 B41): JSON 坏/非对象不再裸崩——except 只认
+        FileNotFoundError 时,一次手编逗号错/位翻转就是每 tick 一次
+        traceback 的永久死循环(无自愈无告警)。隔离现场后从空状态起步:
+        entries 本就可经 reconcile 从 GitHub(open+agent-task issue 与
+        marker)重建(与 state 丢失恢复同路径,单测锚定),活着比完好
+        更重要;PAUSED 是文件态,熔断/kill switch 不受影响。代价如实
+        声明: 在跑 agent 的 PID 记账丢失 → 单飞短暂失明(clone 单树
+        纪律兜底),严格优于引擎永久停摆。
         """
         try:
             with open(self.state_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except FileNotFoundError:
             return {"entries": [], "auth_failure_streak": 0}
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._quarantine(f"损坏({exc!r})")
+            return {"entries": [], "auth_failure_streak": 0}
+        if not isinstance(data, dict):
+            # 有效 JSON 但非对象(手编成数组/字符串)——同一损坏类,同处置
+            self._quarantine(f"非对象({type(data).__name__})")
+            return {"entries": [], "auth_failure_streak": 0}
+        return data
+
+    def _quarantine(self, reason: str) -> None:
+        """把损坏的 state.json 改名隔离(<名>.corrupt-<UTC 戳>),留现场
+        供事后分析;隔离失败(权限等)不拦——空状态起步本身已是恢复路径。"""
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        quarantine = f"{self.state_file}.corrupt-{stamp}"
+        try:
+            os.replace(self.state_file, quarantine)
+        except OSError:
+            pass
+        print(f"[state] state.json {reason},已隔离为 {quarantine},从空状态"
+              f"起步(entries 经 reconcile 从 GitHub 重建)", file=sys.stderr)
 
     def save(self, state: dict) -> None:
         """原子写: tmp → os.replace。替换失败时清理 tmp,旧文件不动。"""
@@ -387,8 +446,19 @@ class StateStore:
 
     @staticmethod
     def entries(state: dict) -> list[Entry]:
-        """state["entries"] → 类型化 Entry 列表。"""
-        return [Entry.from_dict(d) for d in state.get("entries", [])]
+        """state["entries"] → 类型化 Entry 列表。
+
+        单条目损坏(缺硬键/类型错)跳过并告警,不掀翻整个 load——与
+        load 的损坏容错(轮5 B41)同口径: 一条手编辑目的 KeyError 不
+        该让引擎每 tick 裸崩;被跳过的条目随下次 save 落盘时移除。"""
+        out: list[Entry] = []
+        for d in state.get("entries", []):
+            try:
+                out.append(Entry.from_dict(d))
+            except (KeyError, TypeError, AttributeError) as exc:
+                print(f"[state] 跳过无法解析的条目({exc}): {str(d)[:120]}",
+                      file=sys.stderr)
+        return out
 
 
 # ============ gh CLI 封装(凭据全权交给 gh,与 pr_loop 同策略) ============

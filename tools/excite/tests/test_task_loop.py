@@ -56,6 +56,102 @@ def test_migrate_legacy_state_dir_idempotent(tmp_path, monkeypatch):
     assert (new / "state.json").read_text() == '{"entries": [], "auth_failure_streak": 0}'
 
 
+def test_state_store_load_quarantines_corrupt_json(tmp_path, monkeypatch):
+    """轮5 B41: 损坏 state.json 不裸崩——隔离现场 + 空状态起步。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "state.json").write_text('{"entries": [',)   # 截断 JSON
+    store = tl.StateStore()
+    state = store.load()
+    assert state == {"entries": [], "auth_failure_streak": 0}
+    quarantined = list(tmp_path.glob("state.json.corrupt-*"))
+    assert len(quarantined) == 1 and not (tmp_path / "state.json").exists()
+    # 复跑: 隔离后 load 走首跑语义,不再崩溃
+    assert store.load() == {"entries": [], "auth_failure_streak": 0}
+
+
+def test_state_store_load_non_dict_json(tmp_path, monkeypatch):
+    """轮5 B41: 有效 JSON 但非对象(手编成数组)同处置。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "state.json").write_text('[]')
+    state = tl.StateStore().load()
+    assert state == {"entries": [], "auth_failure_streak": 0}
+    assert len(list(tmp_path.glob("state.json.corrupt-*"))) == 1
+
+
+def test_state_entries_skip_malformed_entry(tmp_path, monkeypatch):
+    """轮5 B41: 单条目缺硬键跳过并告警,不掀翻整个 entries 解析。"""
+    good = {"workflow": "Sanitizer", "run_id": 1, "status": "QUEUED",
+            "issue_number": 9, "fix_branch": "fix/ci-1", "pr_number": None,
+            "attempts": 0, "rounds": 0, "agent_pid": None,
+            "agent_started_at": None, "agent_log": None,
+            "last_dispatched_head": None, "extra_runs": [],
+            "created_at": "t", "updated_at": "t"}
+    bad = dict(good); del bad["run_id"]                 # 手编漏键
+    entries = tl.StateStore.entries({"entries": [good, bad, "oops"]})
+    assert len(entries) == 1 and entries[0].run_id == 1
+
+
+def test_migrate_heals_missing_agent_env(tmp_path, monkeypatch):
+    """轮5 B42/会话#2: 半迁移自愈——state.json 已就位但 agent.env 缺失
+    (两次拷贝间被杀),下 tick 补齐而不被早退条件漏掉。"""
+    legacy = tmp_path / "legacy"; new = tmp_path / "new"
+    legacy.mkdir(); new.mkdir()
+    (legacy / "state.json").write_text('{"entries": [], "auth_failure_streak": 0}')
+    (legacy / "agent.env").write_text("# env\n")
+    (new / "state.json").write_text('{"entries": [], "auth_failure_streak": 0}')
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(legacy))
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(new))
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    tl._migrate_legacy_state_dir()
+    assert (new / "agent.env").exists()
+    assert (new / "state.json").read_text() == \
+        '{"entries": [], "auth_failure_streak": 0}'   # 状态不被旧目录覆写
+
+
+def test_migrate_agent_env_without_legacy_state(tmp_path, monkeypatch):
+    """轮5 会话#2 场景(a): legacy 有凭据无 state.json(凭据先就位、旧
+    工具从未落盘)——agent.env 仍补齐,不建 state.json。"""
+    legacy = tmp_path / "legacy"; new = tmp_path / "new"
+    legacy.mkdir(); new.mkdir()
+    (legacy / "agent.env").write_text("# env\n")
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(legacy))
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(new))
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    tl._migrate_legacy_state_dir()
+    assert (new / "agent.env").exists()
+    assert not (new / "state.json").exists()           # 无状态可迁不凭空造
+
+
+def test_migrate_failure_no_partial_and_runtime_error(tmp_path, monkeypatch):
+    """轮5 B42: 拷贝中途失败不留半份 state.json,转 RuntimeError(顶层
+    except 认它干净退出),旧目录原样保留。"""
+    legacy = tmp_path / "legacy"; new = tmp_path / "new"
+    legacy.mkdir(); new.mkdir()
+    (legacy / "state.json").write_text('{"entries": [], "auth_failure_streak": 0}')
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(legacy))
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(new))
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+
+    real_replace = os.replace
+    def boom(src, dst):
+        if str(dst).endswith("state.json"):
+            raise OSError("disk full (simulated)")
+        return real_replace(src, dst)
+    monkeypatch.setattr(tl.os, "replace", boom)
+    try:
+        tl._migrate_legacy_state_dir()
+        raised = False
+    except RuntimeError as exc:
+        raised = "迁移失败" in str(exc)
+    assert raised
+    assert not (new / "state.json").exists()           # 无半份
+    assert (legacy / "state.json").exists()            # 旧目录保留
+    assert not list(new.glob("state.json.tmp-migrate"))  # tmp 现场已清理
+
+
 def test_paused_checks_both_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(tmp_path / "l"))
     monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(tmp_path / "n"))

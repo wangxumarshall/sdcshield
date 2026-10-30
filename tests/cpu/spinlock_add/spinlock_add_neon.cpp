@@ -15,6 +15,9 @@
  *   通道A（数据SDC）  ：NEON vfma 计算结果 vs init 同源 golden（逐字节 memcmp）
  *   通道B（数据行W丢）：全局锁保护下的共享计数器，cleanup 时
  *                        Σ 逐线程获锁数 == 共享计数器（add-only，无抵消方向）
+ *                        + 锁行元数据对账：epoch==共享计数器（同临界区构造
+ *                        等值）、magic/pad==init 指纹——锁行元数据写丢失而
+ *                        lock_word 完好（非挂死形态）时通道A/C 全盲，此处补检
  *   通道C（锁字挂死，核心增量）：获锁等待 >10s（对齐 sbsa-gwdt）→
  *                        report_fail + dump 锁所在 64B cacheline 全部 8 个 u64
  *                        （对齐五案"8 字节窗口撕裂、同行其余字段完好"的
@@ -366,6 +369,42 @@ static int spinlock_add_neon_cleanup(struct test *test)
              * free 与 finish 收尾路径将不可达（memcpy_rewr 先例同样是
              * 先释放后报告；这里直接以返回值收尾，退出码路径完整）。 */
             ret = EXIT_FAILURE;
+        }
+
+        /* 通道B 补充：锁行元数据主动对账（PR#328 二轮检视 :357）。epoch 与
+         * shared_counter 构造上相等——同一临界区内各增一、持锁单写者、
+         * cleanup 前框架已 join 全部 worker（run_threads_in_parallel），
+         * quiescent 无撕裂窗口，零假阳性。magic/pad init 后恒定。瞬态一致
+         * 性故障只丢锁行元数据写而 lock_word 完好时（非挂死形态：无挂死
+         * →通道C 盲、计数对在数据行→通道B 平衡、NEON 数据完好→通道A
+         * 通过）此前三通道全绿漏检——本对账闭合该盲区。holder 为最后
+         * 持锁者 cpu（值不确定），仍仅作 dump 现场字段。 */
+        if (d->line->epoch != d->shared_counter[0]) {
+            log_error("spinlock_add_neon: lock-line epoch %lu != shared counter "
+                      "%lu (diff %ld) — lost update on the lock cacheline "
+                      "metadata (8-byte window, lock_word intact)",
+                      (unsigned long)d->line->epoch,
+                      (unsigned long)d->shared_counter[0],
+                      (long)d->line->epoch - (long)d->shared_counter[0]);
+            ret = EXIT_FAILURE;
+        }
+        if (d->line->magic != SPINLOCK_ADD_NEON_MAGIC) {
+            log_error("spinlock_add_neon: lock-line magic 0x%016lX != expected "
+                      "0x%016lX — lock cacheline fingerprint corrupted",
+                      (unsigned long)d->line->magic,
+                      (unsigned long)SPINLOCK_ADD_NEON_MAGIC);
+            ret = EXIT_FAILURE;
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (d->line->pad[i] !=
+                    (SPINLOCK_ADD_NEON_MAGIC ^ (uint64_t)(i + 1))) {
+                log_error("spinlock_add_neon: lock-line pad[%d] 0x%016lX != "
+                          "expected 0x%016lX — lock cacheline fingerprint "
+                          "corrupted",
+                          i, (unsigned long)d->line->pad[i],
+                          (unsigned long)(SPINLOCK_ADD_NEON_MAGIC ^ (uint64_t)(i + 1)));
+                ret = EXIT_FAILURE;
+            }
         }
         if (d->log_fd >= 0)
             close(d->log_fd);

@@ -1153,3 +1153,38 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   实际恒走 case 0（eq）, "rotating" 语义退化; logic 兄弟已改
   (base+sub)/4, mask 未跟。golden/run 同源自洽, 无 SDC 检出损失,
   非本轮意见范围; 修复需独立单元 + 独立 gem5 验证, 留待后续轮次。
+
+## 2026-10-30（全量压测复现 SDC：历史 mesh 事件定性为测试缺陷，非硬件 SDC）
+
+- **触发**: 用户目标"编译构建 sdcshield，所有用例压测本机直到复现 SDC"。
+  连续战役（sdc-excite-reproduce full，cycle 4）日志中已有 6 条事件，
+  全部为 `mesh_upi_sse_sym` / `mesh_upi_avx_sym`。
+- **定性（已实证，非硬件 SDC）**:
+  - **uint32 块偏移回绕**（4 个运行时块数用例）:
+    `size_t offset = block * BLOCK_ELEMENTS` 中 block 为 uint32_t，
+    乘法按 32 位提升 → 每 2^32 元素回绕（sse/avx 16 GiB，f64 32 GiB）。
+    169 GB 默认缓冲（550 万块）→ 高位块覆盖低地址 → 确定性假
+    sum mismatch。边界对照（-n 8）: 16 GiB+32 KiB（524289 块）
+    回退版 FAIL / 修复版 PASS；f64 32 GiB+32 KiB（1048577 块）
+    回退版 FAIL（差值 0x1.08p+15 = 33792）/ 修复版 PASS（312 s 多轮）。
+    commit c381d30c（分支 fix/mesh-block-offset-wrap）。
+  - **OOM SIGKILL**: `161830-l3_fixed_c4.yaml` 中 mesh 用例
+    `result-details: { code: 9, reason: 'Killed' }`；两个 test plan 各
+    ~169 GB RSS 并发（maxrss ~148 GB×2+），非数据故障。内存预算修正
+    留待独立单元（本案未改）。
+  - **复测链路失效**: 战役定向复测硬编码 `-n 0`，框架拒绝后按 1 线程
+    运行 → 多线程用例 SKIP，事件却记 `retest rc=0 fail/crash=0`
+    （retest1.out 实证）。已修（commit 12d5c7a5，复测沿用原命令
+    `-n/--threads`，未指定则框架默认全核）。
+  - 另证：战役二进制为 dirty 树构建（version f9046e4b22d2-dirty），
+    f64 偏移已被临时 64 位化（反汇编 `lsl x3,x5,#15`），sse 仍 32 位
+    （`lsl w0,w0,#13`）——历史"旧二进制 f64 通过"的对照因此无效，
+    改由 HEAD 回退版重测。
+- **当前状态**: 战役以修复版二进制重启（20:01，cycle 5 L1 冷机轮），
+  复测链路已修复；事件监视器在线，等待真实 SDC 事件后按流水线取证。
+- **遗留悬案（如实记录）**:
+  - `tests/cpu/sve/mesh/*` 12 个文件同款 `block * BLOCK_ELEMENTS`
+    且块数为运行时计算——本机无 SVE 不可达，按 rule 2 须 gem5-fi
+    分档验证，未在本轮处置。
+  - mesh 用例在 `-t 60s`（L3 轮转）时相位 2 未开始即 PASS（空过）；
+    与核心缺陷正交，未在本轮改。

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Run a binary in gem5 SE mode with a specific SVE vector length.
 # Usage: ./run_sve.sh <binary> [args...] --vl <quadwords>
-#   1 quadword = 128-bit, 2 = 256-bit, 4 = 512-bit.
+#   1 quadword = 128-bit, 2 = 256-bit, 4 = 512-bit. REQUIRED: se_sve.py
+#   refuses to run without it (the VL tier is the verification's identity).
 #
 # The runtime VL must match the -msve-vector-bits the binary was compiled
 # with: size-specific SVE code (arm_sve_vector_bits(N) types) is only

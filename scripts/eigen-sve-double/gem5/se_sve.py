@@ -1,6 +1,8 @@
 # gem5 SE-mode config for SVE vector-length-specific binaries.
 # Usage: gem5.opt se_sve.py <binary> [args...] --vl <quadwords>
 #   --vl: SVE vector length in 128-bit quadwords (1=128, 2=256, 4=512).
+#   REQUIRED: the VL tier is the identity of the verification this config
+#   exists for — a missing --vl is an error, never a silent 128-bit default.
 #
 # Sets ArmISA.sve_vl_se so the emulated CPU's runtime vector length matches
 # the -msve-vector-bits the binary was compiled with (size-specific SVE code
@@ -31,18 +33,28 @@ from m5.objects import (
 
 # parse --vl out of argv
 args = sys.argv[1:]
-vl_qw = 1
+vl_qw = 0
+vl_given = False
 pos = []
 i = 0
 while i < len(args):
     if args[i] == "--vl":
         vl_qw = int(args[i + 1])
+        vl_given = True
         i += 2
     else:
         pos.append(args[i])
         i += 1
 
 assert pos, "usage: gem5.opt se_sve.py <binary> [args] --vl <quadwords>"
+# --vl is REQUIRED (PR #307 #5b): this config is a CLAUDE.md rule-2
+# verification vehicle and the tier IS the evidence's identity. The old
+# silent 128-bit default let a dropped flag produce a mislabeled-tier run
+# that still printed "Simulated exit code: 0".
+assert vl_given, (
+    "--vl <quadwords> is REQUIRED (1=128, 2=256, 4=512 bit): the VL tier is "
+    "the identity of the verification; refusing to silently default to 128-bit"
+)
 binary = pos[0]
 
 # free thread contexts for the workload's clone(2) calls: sdcshield forks a

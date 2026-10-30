@@ -127,21 +127,33 @@ static void spinlock_add_neon_kernel(const float *in, float *out)
     }
 }
 
-/* CAS-acquire 自旋（qspinlock 同谱系）；等待超阈值返回 false（看门狗触发） */
+/* CAS-acquire 自旋（qspinlock 同谱系）；等待超阈值返回 false（看门狗触发）。
+ * 时钟每 1024 次重试采样一次（PR#328 二轮检视 :136）：逐次 clock_gettime
+ * 走 vDSO、触碰 vvar 页另一共享行，深争用下约半数自旋预算为非锁流量，
+ * 稀释锁行争用激发形态；1024 次自旋（CAS+yield，量级 ~0.1ms）<< 10s
+ * 看门狗阈值，检出延迟增量可忽略 */
+#define SPINLOCK_ADD_NEON_SPIN_CLOCK_PERIOD 1024
+static_assert((SPINLOCK_ADD_NEON_SPIN_CLOCK_PERIOD &
+               (SPINLOCK_ADD_NEON_SPIN_CLOCK_PERIOD - 1)) == 0,
+              "spin clock sampling period must be a power of two");
+
 static bool spinlock_add_neon_acquire(struct SpinlockAddNeonData *d, uint64_t *stall_ns_out)
 {
     const uint64_t limit = (uint64_t)(SPINLOCK_ADD_NEON_STALL_SECONDS * 1e9);
     const uint64_t t0 = spinlock_add_neon_now_ns();
     uint64_t expected = 0;
+    uint32_t spins = 0;
     for (;;) {
         if (__atomic_compare_exchange_n(&d->line->lock_word, &expected, 1,
                                         false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
             return true;
         expected = 0;
-        const uint64_t waited = spinlock_add_neon_now_ns() - t0;
-        if (waited > limit) {
-            *stall_ns_out = waited;
-            return false;
+        if ((++spins & (SPINLOCK_ADD_NEON_SPIN_CLOCK_PERIOD - 1)) == 0) {
+            const uint64_t waited = spinlock_add_neon_now_ns() - t0;
+            if (waited > limit) {
+                *stall_ns_out = waited;
+                return false;
+            }
         }
         __asm__ volatile("yield");
     }

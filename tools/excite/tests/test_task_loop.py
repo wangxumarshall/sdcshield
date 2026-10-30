@@ -373,6 +373,30 @@ def test_reconcile_human_closed_sweep(monkeypatch):
     assert e.status == "HUMAN_CLOSED" and e.agent_pid is None
 
 
+def test_reconcile_offlist_view_failure_skips_entry_not_tick(monkeypatch, capsys):
+    """轮5(会话#3): 离列表复核的 gh 失败只跳过本条目——不掀翻整个
+    reconcile(否则 v1 迁移 ci 条目每 tick 走此路径,一次 5xx/4xx 就跳过
+    本 tick 的 heal/派发扫/lane_b,并推迟人工接管的 agent 击杀)。"""
+    state = {"entries": [dict(
+        workflow="", run_id=0, status="QUEUED", issue_number=7, fix_branch="",
+        pr_number=None, attempts=0, rounds=0, agent_pid=None,
+        agent_started_at=None, agent_log=None, last_dispatched_head=None,
+        extra_runs=[], created_at="t", updated_at="t",
+        source="manual", kind="bug", audit_hash=None)], "auth_failure_streak": 0}
+    def fake_gh(args, input_text=None):
+        if args[:2] == ["issue", "list"]:
+            return []
+        if args[:2] == ["issue", "view"]:
+            # 4xx 确定性错误: gh_json_idem 首次即抛(测试不等退避)
+            raise tl.GhError("gh issue view … 失败(exit 1): HTTP 404")
+        return None
+    monkeypatch.setattr(tl, "gh_json", fake_gh)
+    tl.reconcile_issues(state, dry_run=False)      # 不抛 = tick 存活
+    e = tl.StateStore.entries(state)[0]
+    assert e.status == "QUEUED"      # 条目原样,下 tick 幂等重试
+    assert "状态复核失败" in capsys.readouterr().err
+
+
 # ============ Task 7: 任务派发契约(分支命名/prompt/stdin runner/wip 标签) ============
 
 def _task_entry(**kw):

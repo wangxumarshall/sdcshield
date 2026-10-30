@@ -622,8 +622,11 @@ def issue_eligible(label_names: list[str]) -> bool:
 
 
 def issue_state(issue_number: int) -> str:
-    res = gh_json(["issue", "view", str(issue_number), "--repo",
-                   repo_slug(), "--json", "state"])
+    # 轮5(会话#3): 读路径走 gh_json_idem 瞬态重试(issue view 是幂等读,
+    # 重试无副作用)——离列表复核每 tick 都会打到 v1 迁移条目,5xx/超时
+    # 直接抛会靠调用方的单条目降级跳过,能重试掉的就别跳。
+    res = gh_json_idem(["issue", "view", str(issue_number), "--repo",
+                        repo_slug(), "--json", "state"])
     return (res or {}).get("state", "open")
 
 
@@ -669,12 +672,23 @@ def reconcile_issues(state: dict, dry_run: bool = False) -> dict:
         print(f"[queue] manual issue #{n} → QUEUED")
     # HUMAN_CLOSED 清扫: 只查 QUEUED/DISPATCHED(有 PR 路径的条目由车道 B 收尾);
     # open 列表预筛(检视#13)——列表内零 gh 调用,离列表才复核。
+    # 轮5(会话#3): 离列表复核的瞬时 gh 失败只跳过本条目——v1 迁移的 ci
+    # 条目(旧 create_issue 无标签)永不在 open+agent-task 快照内,每 tick
+    # 都走此路径,一次 5xx/限流掀翻整个 reconcile 会跳过本 tick 的
+    # heal/派发扫/lane_b,并推迟人工关闭条目的在跑 agent 击杀;下 tick
+    # 幂等重试即可,单条目降级不掀船(与 status 总览的容错同口径)。
     for e in entries:
         if e.status not in ("QUEUED", "DISPATCHED"):
             continue
         if e.issue_number is None or e.issue_number in open_labels:
             continue
-        if issue_state(e.issue_number) != "closed":
+        try:
+            st = issue_state(e.issue_number)
+        except GhError as exc:
+            print(f"[warn] issue #{e.issue_number} 状态复核失败(跳过,"
+                  f"下 tick 重试): {exc}", file=sys.stderr)
+            continue
+        if st != "closed":
             continue
         if dry_run:
             print(f"[dry-run] 将标记 HUMAN_CLOSED: issue #{e.issue_number}"

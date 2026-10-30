@@ -209,12 +209,19 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         /* E: 逐次验证日志（绿 PASS / 红 FAIL；每线程上限，失败行永不受限） */
         if (d->log_fd >= 0 && (ok ? logged < SPINLOCK_ADD_NEON_LOG_MAX : true)) {
             char buf[256];
-            const int n = snprintf(buf, sizeof buf,
+            int n = snprintf(buf, sizeof buf,
                     "iter=%lu cpu=%d in=[%+.6f,%+.6f,%+.6f,%+.6f] "
                     "out=[%+.6f,%+.6f,%+.6f,%+.6f] result=\033[%dm%s\033[0m\n",
                     (unsigned long)iter, cpu,
                     in[0], in[1], in[2], in[3], out[0], out[1], out[2], out[3],
                     ok ? 32 : 31, ok ? "PASS" : "FAIL");
+            /* snprintf 截断时返回完整写入所需长度（可 > sizeof buf）——钳制
+             * 到 buf 内实际内容，防 write 越界读栈缓冲（当前格式理论上界
+             * ~230B < 256 不可达；护栏防御未来调大字段/格式串） */
+            if (n < 0)
+                n = 0;
+            else if (n > (int)sizeof buf - 1)
+                n = (int)sizeof buf - 1;
             if (n > 0 && write(d->log_fd, buf, (size_t)n) < 0) { /* best effort */ }
             if (ok)
                 logged++;
@@ -325,7 +332,9 @@ static int spinlock_add_neon_init(struct test *test)
     if (d->logverif) {
         char path[128];
         snprintf(path, sizeof(path), "/var/tmp/spinlock_add_neon_%d.log", (int)getpid());
-        d->log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        /* O_NOFOLLOW：/var/tmp 为 1777 粘滞目录，防预植同名符号链接把追加
+         * 写引导到任意文件（命中时 ELOOP 走下方失败路径，诚实 FAIL） */
+        d->log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0644);
         if (d->log_fd < 0) {
             log_error("spinlock_add_neon: cannot open %s (errno %d)", path, errno);
             goto fail;

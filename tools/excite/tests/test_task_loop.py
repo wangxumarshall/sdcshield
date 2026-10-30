@@ -717,6 +717,45 @@ def test_dry_run_scan_zero_local_writes(tmp_path, monkeypatch):
     assert tl._run_scan_orchestration(dry_run=True) == 0
     assert not state_dir.exists(), "dry-run 不得创建状态目录/锁文件"
 
+def test_dry_run_before_migration_previews_from_legacy_state(
+        tmp_path, monkeypatch, capsys):
+    """轮5(会话#5): dry-run 预演保真——迁移前的机器(新目录无 state.json、
+    legacy 有)上,dry-run 只读回退加载 legacy 状态预演,与真实首 tick(先
+    迁移再 skip)对齐;不再从空状态预演「将为已跟踪的 run 开 issue」。"""
+    new = tmp_path / "new"; legacy = tmp_path / "legacy"
+    new.mkdir(); legacy.mkdir()
+    entry = dict(workflow="Sanitizer", run_id=40596064101, status="PR_OPEN",
+                 issue_number=304, fix_branch="fix/ci-40596064101",
+                 pr_number=305, attempts=3, rounds=0, agent_pid=None,
+                 agent_started_at=None, agent_log=None,
+                 last_dispatched_head=None, extra_runs=[],
+                 created_at="t", updated_at="t", source="ci", kind="bug",
+                 audit_hash=None)
+    (legacy / "state.json").write_text(json.dumps(
+        {"entries": [entry], "auth_failure_streak": 0}), encoding="utf-8")
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(new))
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(legacy))
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [
+        {"databaseId": 40596064101, "workflowName": "Sanitizer"}])
+    monkeypatch.setattr(tl, "reconcile_issues", lambda s, dry_run: {})
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run: None)
+    lane_b_state = {}
+    def spy_lane_b(s, dry_run):
+        lane_b_state["entries"] = list(s.get("entries", []))
+    monkeypatch.setattr(tl, "lane_b_advance", spy_lane_b)
+    assert tl._run_scan_orchestration(dry_run=True) == 0
+    out = capsys.readouterr().out
+    assert "只读预演 legacy 状态" in out
+    assert "[skip] run 40596064101 已在跟踪(state 命中)" in out
+    assert "将为 Sanitizer run 40596064101 开 issue" not in out
+    # 车道 B 预演看得见 legacy 的 PR_OPEN 条目(真实首 tick 语义)
+    assert any(e["run_id"] == 40596064101 and e["status"] == "PR_OPEN"
+               for e in lane_b_state.get("entries", []))
+    assert not (new / "state.json").exists()   # 零写不变
+
+
 def test_dry_run_audit_zero_local_writes(tmp_path, monkeypatch):
     """检视#14(audit 半边): run_audit 的 audit.lock/makedirs 同理只在非
     dry 时建立。"""

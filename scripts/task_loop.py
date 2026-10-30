@@ -2108,6 +2108,20 @@ def _run_scan_orchestration(dry_run: bool) -> int:
                   "(派发请求将由 dispatch_agent 的 PAUSED 闸门逐条拒绝)")
         store = StateStore()
         state = store.load()
+        if dry_run and not os.path.exists(store.state_file) and \
+                _resolve_state_dir() == os.path.expanduser(DEFAULT_STATE_DIR):
+            # 轮5(会话#5) dry-run 预演保真: 迁移前的机器上 dry-run 若从
+            # 空状态预演,会「将为已跟踪的 run 开 issue/派 agent/车道 B 空」
+            # ——与真实首 tick(先迁移再 [skip] 已在跟踪)三处失真,预演
+            # 工具恰恰在它存在的窗口(部署后、首个非 dry tick 前)给出
+            # 错误答案。只读回退加载 legacy state.json(零拷贝零写,复跑
+            # 无痕不变),预演与真实首 tick 对齐。
+            legacy_state = os.path.join(os.path.expanduser(LEGACY_STATE_DIR),
+                                        STATE_FILE_NAME)
+            if os.path.exists(legacy_state):
+                state = StateStore(os.path.expanduser(LEGACY_STATE_DIR)).load()
+                print(f"[dry-run] 新目录尚无 state——按真实首 tick 语义"
+                      f"只读预演 legacy 状态({legacy_state})")
         exit_code = 0
         try:
             # ---- 车道 A: 观测 + 分诊 + 收割 ----

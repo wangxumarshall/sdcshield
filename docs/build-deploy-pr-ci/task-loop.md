@@ -274,7 +274,11 @@ cd /home/sdc/wangxu/operator/sdcshield-autoci
 python3 scripts/task_loop.py status            # 队列总览: streak/PAUSED/单飞占用
                                                #   + 全部条目 + 待入队任务
 python3 scripts/task_loop.py dry-run           # scan 只读演练: 零 gh 写/零 git/零派发/零本地写
-                                               #   (不建状态目录/锁文件),复跑无痕
+                                               #   (不建状态目录/锁文件),复跑无痕;
+                                               #   迁移前(新目录无 state、legacy 有)只读
+                                               #   回退加载 legacy 状态预演——与真实首 tick
+                                               #   (先迁移再 skip)对齐,不为已跟踪 run
+                                               #   虚假预告开 issue/派 agent
 python3 scripts/task_loop.py audit --dry-run   # audit 演练: 展示将审查的提交范围,
                                                #   零 claude 调用,state 不落盘,
                                                #   零本地写(不建锁文件)——但

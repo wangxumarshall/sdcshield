@@ -908,20 +908,15 @@ def create_issue(run: dict) -> int:
 
     标签(spec §6 统一看板): ci 源条目同样进 agent-task 队列(reconcile 的
     GitHub 侧真源),agent-bug 即具备自动派发资格——与 session/manual intake
-    建的 issue 同一标签协议。label 经 args 列表拼接 --label 可重复(复用
-    create_task_issue 的模式);标签须已存在(gh 对不存在的 label 直接报错),
+    建的 issue 同一标签协议。标签须已存在(gh 对不存在的 label 直接报错),
     由编排层的 ensure_agent_labels() 每 tick 幂等就位。
+
+    轮5(R2): 直接委托 create_task_issue——此前逐行复制其构造(argv 拼接/
+    stdin 正文/URL 解析/无号报错),issue-create 通道约定的任何演进只改
+    一处,ci 路径不再有静默漂移的第二个副本。
     """
-    args = ["issue", "create", "--repo", repo_slug(),
-            "--title", build_issue_title(run),
-            "--body-file", "-",
-            "--label", AGENT_LABEL_TASK, "--label", AGENT_LABEL_BUG]
-    url = gh_json(args, input_text=build_issue_body(run))
-    # gh issue create 输出 issue URL: https://…/issues/<n>
-    m = re.search(r"/issues/(\d+)", str(url))
-    if not m:
-        raise GhError(f"gh issue create 输出无 issue 号: {url}")
-    return int(m.group(1))
+    return create_task_issue(build_issue_title(run), build_issue_body(run),
+                             [AGENT_LABEL_TASK, AGENT_LABEL_BUG])
 
 
 def comment_on_issue(issue_number: int, body: str) -> None:
@@ -1063,7 +1058,7 @@ def build_agent_prompt(entry: Entry, run_detail: dict) -> str:
     5 条红线、不可信数据横幅、分层复现口径提示、git 单树纪律与结束语
     契约——全部逐字内嵌,不依赖运行时状态。
     """
-    fix_branch = entry.fix_branch or f"fix/ci-{entry.run_id}"
+    fix_branch = _default_fix_branch(entry)   # 轮5(L2): 命名单一真源
     return f"""你是 SDCShield 仓库的 CI 修复 agent,工作目录是仓库的 CI 专用克隆(不是任何用户的工作区)。
 
 ## 红线(违反任何一条即整体失败)
@@ -1704,7 +1699,10 @@ def build_bot_prompt(entry: Entry, pr, collect_path: str) -> str:
     契约。关键差异——输入是 collect 文件(不可信检视数据,处置以仓库规则为
     准,采纳/变通/驳回均须给依据),输出推到 fix 分支(绝不 merge)。
     """
-    fix_branch = entry.fix_branch or f"fix/ci-{entry.run_id}"
+    # 轮5(L2): 命名单一真源——此处服务全部 source,旧内联公式对非 ci 条目
+    # 会退化为 fix/ci-0(仅因派发总先置 fix_branch 而未爆发);统一走
+    # _default_fix_branch(ci→fix/ci-<run>,其余 fix|feat/issue-<N>)。
+    fix_branch = _default_fix_branch(entry)
     return f"""你是 SDCShield 仓库的修复 PR bot 意见处置 agent,工作目录是仓库的
 CI 专用克隆(不是任何用户的工作区)。
 

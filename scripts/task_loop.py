@@ -55,10 +55,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 即可整体替换,零触网。import 失败即进程失败(诚实报错,不吞错静默跳过
 # 车道 B——scan 会顶层崩溃退出而非半盲运行)。
 # audit(Task 9)复用 pr_local_review 的对抗审查引擎(prompt 组装/claude
-# 运行/findings 解析/隔离 worktree);同样按命名空间引用
-# `pr_local_review._run_claude(...)`——测试 monkeypatch
-# tl.pr_local_review.* 即可整体替换,零触网零真跑 claude。pr_loop 顶层
-# 已 import pr_local_review(单向依赖),此处再 import 无循环。
+# 运行/findings 解析/隔离 worktree);同样按命名空间引用,且只经其**公开
+# 接缝**(`pr_local_review.run_claude/worktree_add/worktree_remove/
+# parse_findings`,检视#17 轮2——不得伸手进下划线私有 API)——测试
+# monkeypatch tl.pr_local_review.* 即可整体替换,零触网零真跑 claude。
+# pr_loop 顶层已 import pr_local_review(单向依赖),此处再 import 无循环。
 import pr_loop  # noqa: E402
 import pr_local_review  # noqa: E402
 from pr_loop import GhError, UNTRUSTED_BANNER  # noqa: E402
@@ -2267,10 +2268,10 @@ def run_audit(dry_run: bool = False) -> int:
                     diff, {"title": f"main 增量审查 {base[:8]}..{head[:8]}"
                            f"({len(commits.splitlines())} commits)",
                            "body": commits, "issue": None})
-                worktree = pr_local_review._worktree_add(head)
+                worktree = pr_local_review.worktree_add(head)
                 try:
                     try:
-                        output = pr_local_review._run_claude(
+                        output = pr_local_review.run_claude(
                             pr_local_review.build_claude_command(),
                             cwd=worktree, prompt=prompt)
                     except GhError as exc:
@@ -2292,11 +2293,13 @@ def run_audit(dry_run: bool = False) -> int:
                                   f"本轮放弃", file=sys.stderr)
                         return 1
                 finally:
-                    pr_local_review._worktree_remove(worktree)
+                    pr_local_review.worktree_remove(worktree)
                 # strict(PR#317 检视#7): 空输出/全畸形(schema 漂移)抛 GhError
                 # → 外层捕获返回 1,cursor 不推进、streak 不清零——它们不是
                 # 「零 findings 的成功审查」,把区间永久跳过 = 覆盖面静默归零。
-                findings = pr_local_review._parse_findings(output, strict=True)
+                # (检视#17 轮2: 经公开接缝 parse_findings 调用,不再伸手进
+                # 基座私有 API。)
+                findings = pr_local_review.parse_findings(output, strict=True)
             else:
                 findings = []
                 print(f"[dry-run] 将审查 {base[:8]}..{head[:8]} "

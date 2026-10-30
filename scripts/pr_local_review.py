@@ -412,6 +412,42 @@ def _parse_findings(output: str, strict: bool = False) -> list[dict]:
     return findings
 
 
+# ============ 公开接缝(受支持的外部契约,PR#317 检视#17 轮2) ============
+# task_loop 等外部模块只允许经这四个公开包装调用审查引擎——下划线私有
+# 实现保留(本模块内部使用),签名/返回契约以本节 docstring 为准;基座
+# 内部重构不得静默破坏公开接缝(私有函数签名变更不被任何 lint/类型检查
+# 捕获,只有运行时爆炸)。
+
+def worktree_add(head_sha: str) -> str:
+    """隔离 worktree: 在临时目录 checkout head_sha(即用即弃),返回路径。
+
+    继承式 git 调用落在调用方 cwd——task_loop 的 audit 须先 chdir 到
+    克隆目录再调用(裁定 8)。"""
+    return _worktree_add(head_sha)
+
+
+def worktree_remove(path: str) -> None:
+    """删除隔离 worktree(审查结束的清理,幂等容忍已不存在)。"""
+    return _worktree_remove(path)
+
+
+def run_claude(cmd: str, cwd: str, prompt: str) -> str:
+    """跑 claude 子进程(bash -c cmd,cwd=隔离 worktree),返回 stdout。
+
+    失败/超时抛 GhError(消息内嵌 stderr 前 300 字符)。"""
+    return _run_claude(cmd, cwd, prompt)
+
+
+def parse_findings(output: str, strict: bool = False) -> list[dict]:
+    """claude 输出 → 结构化 findings 列表({path,line,severity,category,
+    message,evidence});非 JSON 数组抛 GhError。
+
+    strict=False(缺省,发布路径): 空输出/全畸形 → [](零意见)。
+    strict=True(audit 用): 空输出、以及「JSON 数组但零条有效」均抛
+    GhError——不当零 findings 成功,cursor 不推进。"""
+    return _parse_findings(output, strict=strict)
+
+
 # ============ 意见发布(第 5 bot 身份 = wangxumarshall + 唯一标记) ============
 
 class GhError(RuntimeError):

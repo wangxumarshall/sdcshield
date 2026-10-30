@@ -441,7 +441,7 @@ def test_parse_findings_skips_malformed():
          "severity": "Minor", "category": "性能", "message": ""},
         "not-a-dict",
     ])
-    findings = plr._parse_findings(out)
+    findings = plr.parse_findings(out)
     assert len(findings) == 1
     assert findings[0]["message"] == "近似比对是 SDC 盲区"
 
@@ -453,26 +453,53 @@ def test_parse_findings_strict_rejects_empty_and_all_drift():
     契约(空/全畸形 → []),行为不变。"""
     # 空输出 → strict 报错
     try:
-        plr._parse_findings("", strict=True)
+        plr.parse_findings("", strict=True)
         assert False, "空输出在 strict 下必须报错"
     except plr.GhError:
         pass
     # 全畸形(全部缺 message)→ strict 报错
     drifted = json.dumps([{"summary": "x"}, {"note": "y"}])
     try:
-        plr._parse_findings(drifted, strict=True)
+        plr.parse_findings(drifted, strict=True)
         assert False, "全畸形输出在 strict 下必须报错"
     except plr.GhError:
         pass
     # 非 strict 旧契约不变: 第 5 bot 发布路径零行为变化
-    assert plr._parse_findings("") == []
-    assert plr._parse_findings(drifted) == []
+    assert plr.parse_findings("") == []
+    assert plr.parse_findings(drifted) == []
     # 真·零 findings(空 JSON 数组)与正常输出在 strict 下照常通过
-    assert plr._parse_findings("[]", strict=True) == []
-    assert plr._parse_findings(json.dumps(
+    assert plr.parse_findings("[]", strict=True) == []
+    assert plr.parse_findings(json.dumps(
         [{"path": "a.c", "line": 1, "message": "m"}]), strict=True) == [
         {"path": "a.c", "line": 1, "severity": None, "category": None,
          "message": "m", "evidence": None}]
+
+
+def test_public_seam_wrappers_delegate_to_impls(monkeypatch):
+    """PR#317 检视#17(轮2): 外部模块(task_loop)只经公开包装调用本模块,
+    不得伸手进下划线私有 API——四个公开接缝逐一委托私有实现,签名/返回
+    契约以包装 docstring 为准(基座内部重构不得静默破坏顶层)。"""
+    seen = {}
+    monkeypatch.setattr(plr, "_worktree_add",
+                        lambda sha: (seen.setdefault("add", sha), "/wt")[1])
+    monkeypatch.setattr(plr, "_worktree_remove",
+                        lambda p: seen.setdefault("rm", p))
+    monkeypatch.setattr(plr, "_run_claude",
+                        lambda cmd, cwd, prompt:
+                        (seen.setdefault("run", (cmd, cwd, prompt)), "OUT")[1])
+    assert plr.worktree_add("sha1") == "/wt"
+    assert seen["add"] == "sha1"
+    plr.worktree_remove("/wt")
+    assert seen["rm"] == "/wt"
+    assert plr.run_claude("cmd", "cwd", "p") == "OUT"
+    assert seen["run"] == ("cmd", "cwd", "p")
+    # parse_findings 直通真实实现(strict 语义经公开接缝同样生效)
+    assert plr.parse_findings("[]") == []
+    try:
+        plr.parse_findings("", strict=True)
+        assert False, "strict 语义须经公开接缝同样生效"
+    except plr.GhError:
+        pass
 
 
 # ---------------------------------------------------------------------------

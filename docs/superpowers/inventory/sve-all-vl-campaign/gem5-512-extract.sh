@@ -170,6 +170,26 @@ fi
             t = $5; sub(/^.*@ tick /, "", t); sub(/ .*/, "", t)
             print t, $1
         }' "$BATCH" | sort -n | head -10 | sed 's/^/#   /'
+    # provenance audit (PR #307 #18): rows whose wall-clock exceeds the batch
+    # script's outer timeout (3600 s + 60 s slack) were NOT produced by
+    # gem5-512-batch.sh — they are triage-time direct runs manually appended
+    # to batch.tsv. Flag them in-artifact so "mechanical extraction" never
+    # silently launders a hand-merged row.
+    prov=$(awk -F'\t' '{
+            wall = $3; sub(/^wall=/, "", wall); sub(/s$/, "", wall)
+            if (wall + 0 > 3660)
+                print "#   " $1 " (wall=" wall " s, " $2 ") — not a gem5-512-batch.sh product (outer timeout 3600)"
+        }' "$BATCH")
+    if [ -n "$prov" ]; then
+        echo "#"
+        echo "# provenance audit (PR #307 #18): the rows below exceed the batch"
+        echo "# script's outer timeout — evidence from triage-time direct runs"
+        echo "# manually appended to batch.tsv (triage-512 §5.2 records the"
+        echo "# eigen_svd_cdouble 9000 s long-timeout re-run: command shape"
+        echo "# identical, only the outer timeout differed). Valid evidence, but"
+        echo "# not script-reproducible:"
+        echo "$prov"
+    fi
 } > "$OUT"
 
 rows=$(grep -c -v "^#" "$OUT"); rows=$((rows - 1))

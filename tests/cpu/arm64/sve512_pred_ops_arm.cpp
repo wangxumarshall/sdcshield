@@ -89,6 +89,7 @@
 #include <device/cpu/arm64/arm64_vl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <errno.h>
 #endif
 
 static constexpr size_t FADDA_STEPS = 256;
@@ -106,7 +107,26 @@ struct PredOpsData {
        The hole is made with munmap, not mprotect(PROT_NONE): gem5 SE
        maps mprotect to a no-op (ignoreFunc in the ArmLinux64 syscall
        table), and the fault source must behave identically on hardware
-       and in the gem5-fi dual-kernel validation. */
+       and in the gem5-fi dual-kernel validation.
+       Honest residual risk (round-3 review #18): munmap keeps no
+       reservation, so the kernel may legally hand [base+ps, base+2*ps)
+       to a LATER <=1-page mmap request — with the default top-down
+       allocator this hole sits directly below the mapping that preceded
+       ours, i.e. exactly at the allocation frontier, so it IS the first
+       candidate. If that happens mid-run the fault never occurs, the
+       fault/acc goldens both break, and a naive check would cry SDC.
+       Probability is low (in-process anonymous mmaps during a test run
+       are glibc thread stacks at 8MB and malloc arenas far above the
+       128KB mmap threshold — a 1-page anonymous mmap has no ordinary
+       producer), and even a landed mapper only breaks the goldens if
+       its page is RESIDENT: LDFF1 suppresses the demand-paging minor
+       fault of a freshly-mapped anonymous page too (measured: a
+       MAP_FIXED refilled-but-untouched hole still fault-clears the FFR
+       tail exactly like the punched hole), so the interference needs a
+       pre-faulted page. Not zero either way, so the fault/acc failure
+       paths carry the ffr_hole_intact() discriminator: a re-mapped hole
+       is reported as environment interference (TestResourceIssue SKIP),
+       never as SDC. */
     void *ffr_pages = nullptr;          // mmap base (2 pages)
     size_t ffr_pages_bytes = 0;         // full original mapping (cleanup)
     double *ffr_mapped = nullptr;       // src at the page-1 tail (mapped)
@@ -243,6 +263,24 @@ static ptrdiff_t ffr_first_diff(const uint8_t *image, const uint8_t *golden,
         if (image[i] != golden[i])
             return (ptrdiff_t)i;
     return -1;
+}
+
+/* Failure-path-only discriminator for the munmap hole (see PredOpsData):
+ * is the punched-out page STILL unmapped? msync(MS_ASYNC) on an anonymous
+ * mapping is a no-op flush, so success vs ENOMEM is exactly "mapped vs
+ * unmapped" (measured on this host: hole -> -1/ENOMEM, mapped -> 0).
+ * Runs only AFTER a fault/acc check has already tripped, long after the
+ * capture completed — a syscall here cannot touch the captured state.
+ * gem5 boundary: the repo test never runs under gem5 SE (whose syscall
+ * table maps msync to unimplementedFunc, i.e. fatal); the dual kernel
+ * mirrors only the healthy-path goldens and does not exercise this. */
+static bool ffr_hole_intact(const PredOpsData *d)
+{
+    const size_t half = d->ffr_pages_bytes / 2;   // the hole: 1 page
+    errno = 0;
+    if (msync((char *)d->ffr_pages + half, half, MS_ASYNC) == 0)
+        return false;                    // someone re-mapped the hole
+    return errno == ENOMEM;              // ENOMEM == still unmapped
 }
 
 static int sve512_pred_ops_arm_init(struct test *test)
@@ -532,6 +570,21 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         long fault_bits, acc_bits;
         ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
                               ffr_back.data(), a_img, fault_bits, acc_bits);
+        /* Environment-interference gate (round-3 review #18): before any
+           fault/acc face verdict, discriminate the re-mapped-hole case —
+           if the unmapped hole got mapped by an external mapper, the
+           fault never happened, ALL THREE fault/acc goldens break at
+           once, and reporting SDC would be false. Skip honestly. */
+        if ((memcmp(f_img, f_gold, 8 * vl) != 0 ||
+             memcmp(f_back, f_exp, vl * 8) != 0 ||
+             memcmp(a_img, f_gold, 8 * vl) != 0) && !ffr_hole_intact(d)) {
+            log_skip(TestResourceIssueSkipCategory,
+                     "sve512_pred_ops_arm: the unmapped hole for the "
+                     "faulting-LDFF1 face was re-mapped by an external "
+                     "mapper — fault source invalidated by the "
+                     "environment, not an SDC");
+            return EXIT_SKIP;
+        }
         if (memcmp(f_img, f_gold, 8 * vl) != 0) {
             log_warning("sve512_pred_ops: FFR partial-clear wrong after "
                         "faulting LDFF1 (count=%ld, expected 8, first "
@@ -651,6 +704,18 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         long fault_bits, acc_bits;
         ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
                               ffr_back.data(), a_img, fault_bits, acc_bits);
+        /* re-mapped-hole discrimination as in Section 4: interference
+           skips honestly, only an intact hole earns an SDC verdict */
+        if ((memcmp(f_img, f_gold, 8 * vl) != 0 ||
+             memcmp(f_back, f_exp, vl * 8) != 0 ||
+             memcmp(a_img, f_gold, 8 * vl) != 0) && !ffr_hole_intact(d)) {
+            log_skip(TestResourceIssueSkipCategory,
+                     "sve512_pred_ops_arm: the unmapped hole for the "
+                     "faulting-LDFF1 face was re-mapped by an external "
+                     "mapper (re-loop) — fault source invalidated by the "
+                     "environment, not an SDC");
+            return EXIT_SKIP;
+        }
         if (memcmp(f_img, f_gold, 8 * vl) != 0) {
             report_fail_msg("sve512_pred_ops_arm: FFR partial-clear SDC "
                             "detected (re-loop: first wrong bit %ld, "

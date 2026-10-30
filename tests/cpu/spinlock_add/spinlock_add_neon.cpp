@@ -56,6 +56,9 @@
  */
 
 #include "sandstone.h"
+#include <cerrno>   /* errno：logverif 打开失败降级路径使用；不依赖框架头链
+                     * 传递包含（PR#328 三轮检视 :368——上游 include 整理时
+                     * 偶然可见性会静默破碎） */
 #include <cstdint>
 #include <cstdio>
 #include <cstring>

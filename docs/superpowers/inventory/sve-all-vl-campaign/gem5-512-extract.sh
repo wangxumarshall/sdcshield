@@ -20,14 +20,16 @@
 #   verdict classification (mechanical; process exit code is authoritative —
 #   the overlay can suppress the exit: line and mislabel skips, so the line
 #   is only corroboration):
-#       pass     rc=0 with the exit line present as "exit: pass" AND tick
-#                >= the init-skip floor (tick_floor in the awk below)
+#       pass     rc=0 with the exit line present as "exit: pass" AND a
+#                parseable tick >= the init-skip floor (tick_floor below)
 #       timeout  rc=124 (outer 3600s timeout)
 #       fail     "exit: fail" or rc!=0 with an exit line
 #       crash    rc!=0 without an exit line (gem5 fatal / signal)
 #       ANOMALY  anything else (flagged for manual triage) — including rc=0
 #                with the exit line SUPPRESSED, and rc=0+"exit: pass" whose
-#                tick is BELOW the init-skip floor. Never auto-pass such
+#                tick is MISSING (fail-closed, PR #307 #24: format drift or
+#                a polluted log must not silently bypass the floor) or BELOW
+#                the init-skip floor. Never auto-pass such
 #                cells: without --fatal-skips an honest init-skip ALSO exits
 #                0 (framework/sandstone.cpp: exit_code = EXIT_FAILURE only
 #                on total_failures || (total_skips && fatal_skips)) and
@@ -139,7 +141,13 @@ fi
                 v = "ANOMALY"
                 if (rc[t] == 0 && e == "pass") {
                     v = "pass"
-                    if (tick[t] != "" && tick[t] + 0 < tick_floor)
+                    # fail-closed (PR #307 #24): an EMPTY tick (sim line lost
+                    # its "@ tick " anchor to format drift or a polluted log)
+                    # must NOT bypass the floor — cells at the highest
+                    # false-green risk get triage, not unconditional pass.
+                    if (tick[t] == "")
+                        v = "ANOMALY(missing-tick)"
+                    else if (tick[t] + 0 < tick_floor)
                         v = "ANOMALY(init-skip)"
                 }
                 else if (rc[t] == "124") v = "timeout"
@@ -158,8 +166,10 @@ fi
     echo "# vocabulary is pass/fail/interrupted/invalid only; native 128 leg"
     echo "# sve512_fmmla_arm), and per-test yaml blocks are suppressed by the overlay"
     echo "# (0 of 190 campaign logs carry a \"result:\" line). Rows whose rc=0 tick"
-    echo "# falls below the floor are classified ANOMALY(init-skip) above and stop"
-    echo "# matrix generation (matrix-gen.sh FATALs on unknown verdicts)."
+    echo "# is MISSING (fail-closed, PR #307 #24 — format drift / polluted log)"
+    echo "# or falls below the floor are classified ANOMALY(missing-tick) /"
+    echo "# ANOMALY(init-skip) above and stop matrix generation (matrix-gen.sh"
+    echo "# FATALs on unknown verdicts)."
     echo "# Floor basis (measured 2026-10-30, batch command shape, gem5 md5"
     echo "# 3f9011f4...): honest skip sve2_cross_precision_arm @512 = 5.786e9;"
     echo "# lightest clean-batch real run fma_sve = 5.942e9; floor = 5.9e9."

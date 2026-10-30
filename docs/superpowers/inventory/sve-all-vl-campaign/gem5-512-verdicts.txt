@@ -208,8 +208,10 @@ swizzle_sve	0	9	exit: pass	5960680000	pass
 # vocabulary is pass/fail/interrupted/invalid only; native 128 leg
 # sve512_fmmla_arm), and per-test yaml blocks are suppressed by the overlay
 # (0 of 190 campaign logs carry a "result:" line). Rows whose rc=0 tick
-# falls below the floor are classified ANOMALY(init-skip) above and stop
-# matrix generation (matrix-gen.sh FATALs on unknown verdicts).
+# is MISSING (fail-closed, PR #307 #24 — format drift / polluted log)
+# or falls below the floor are classified ANOMALY(missing-tick) /
+# ANOMALY(init-skip) above and stop matrix generation (matrix-gen.sh
+# FATALs on unknown verdicts).
 # Floor basis (measured 2026-10-30, batch command shape, gem5 md5
 # 3f9011f4...): honest skip sve2_cross_precision_arm @512 = 5.786e9;
 # lightest clean-batch real run fma_sve = 5.942e9; floor = 5.9e9.

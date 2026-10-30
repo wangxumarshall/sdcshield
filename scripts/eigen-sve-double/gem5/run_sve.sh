@@ -7,7 +7,10 @@
 # with: size-specific SVE code (arm_sve_vector_bits(N) types) is only
 # guaranteed correct when the process vector length equals N.
 set -euo pipefail
-G5=${G5:-/home/sdc/wangxu/gem5-fi-fuzz/build/ARM/gem5.opt}
+# Default: the verified CHAOS gem5.opt on this host (md5
+# 3f9011f40dbe80ec1df478c62ddb0b06 — the binary the SVE 全 VL campaign
+# gem5 legs ran with); override with G5=/path/to/gem5.opt.
+G5=${G5:-/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CFG="$SCRIPT_DIR/se_sve.py"
 

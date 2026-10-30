@@ -108,13 +108,21 @@ if [ "${1:-}" = "--one" ]; then
         rm -f "$OUT/$t.done"
     fi
     [ -f "$OUT/identity.txt" ] || write_identity
-    extra=""
-    extra=$(grep -m1 "^$t|" "$OVR" 2>/dev/null | cut -d'|' -f2- || true)
+    # overrides lookup: exact prefix match on "$t|" (PR #307 #13 — $t used to
+    # be interpolated into a grep REGEX; a test name containing a regex
+    # metacharacter could silently match a DECOY line first). awk index() is a
+    # plain string comparison, no regex.
+    extra=$(awk -v t="$t" 'index($0, t "|") == 1 { print substr($0, length(t) + 2); exit }' \
+            "$OVR" 2>/dev/null || true)
+    # extra args: intentional word-splitting WITHOUT glob expansion (PR #307
+    # #13 — the old unquoted $extra also globbed against the cwd $OUT/$t.d,
+    # so a "*" in an override value expanded to the files in that directory).
+    read -r -a extra_args <<< "${extra:-}"
     mkdir -p "$OUT/$t.d"
     start=$(date +%s)
     ( cd "$OUT/$t.d" && timeout 3600 env G5="$G5" "$RUN" "$BIN" \
         -e "$t" -t 500 -n 1 -f no --ignore-timeout \
-        "${BAKED[@]}" $extra --vl 4 ) > "$OUT/$t.log" 2>&1
+        "${BAKED[@]}" "${extra_args[@]}" --vl 4 ) > "$OUT/$t.log" 2>&1
     rc=$?
     end=$(date +%s)
     exitline=$(grep -a -m1 "^exit: " "$OUT/$t.log" || true)

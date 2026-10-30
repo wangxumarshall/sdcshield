@@ -228,7 +228,7 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
 
         /* E: 逐次验证日志（绿 PASS / 红 FAIL；每线程上限，失败行永不受限） */
         if (d->log_fd >= 0 && (ok ? logged < SPINLOCK_ADD_NEON_LOG_MAX : true)) {
-            char buf[256];
+            char buf[512];
             int n = snprintf(buf, sizeof buf,
                     "iter=%lu cpu=%d in=[%+.6f,%+.6f,%+.6f,%+.6f] "
                     "out=[%+.6f,%+.6f,%+.6f,%+.6f] result=\033[%dm%s\033[0m\n",
@@ -236,8 +236,14 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
                     in[0], in[1], in[2], in[3], out[0], out[1], out[2], out[3],
                     ok ? 32 : 31, ok ? "PASS" : "FAIL");
             /* snprintf 截断时返回完整写入所需长度（可 > sizeof buf）——钳制
-             * 到 buf 内实际内容，防 write 越界读栈缓冲（当前格式理论上界
-             * ~230B < 256 不可达；护栏防御未来调大字段/格式串） */
+             * 到 buf 内实际内容，防 write 越界读栈缓冲（护栏防御未来调大
+             * 字段/格式串）。buf=512 的依据（PR#328 三轮检视 :237）：健康
+             * 输出 |out|≤~3e20 → %+.6f 每元素 ≈29 字符、行长 ~230B；但
+             * FAIL 行正是 SDC 场景——位型可落 FLT_MAX 级（%+.6f ≈45 字符/
+             * 元素），out 4 元素全落该域行长 ~300B、in+out 8 元素全落（共
+             * 享输入行被同击）绝对最坏 457B（本机探针 2026-10-30 实测）。
+             * 256 会截断砍掉尾部 result=FAIL 标记、破「绿 PASS 红 FAIL」日
+             * 志契约；512 覆盖绝对最坏并留余量——调整格式串时须重算此界 */
             if (n < 0)
                 n = 0;
             else if (n > (int)sizeof buf - 1)

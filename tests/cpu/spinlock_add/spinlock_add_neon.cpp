@@ -284,8 +284,8 @@ static int spinlock_add_neon_init(struct test *test)
     d->shared_counter = static_cast<uint64_t *>(aligned_alloc(64, sizeof(uint64_t)));
     d->local_counts = static_cast<uint64_t *>(calloc(SPINLOCK_ADD_NEON_SLOTS, sizeof(uint64_t)));
     if (!d->inputs || !d->golden || !d->line || !d->shared_counter || !d->local_counts) {
-        report_fail_msg("spinlock_add_neon: allocation failure");
-        return EXIT_FAILURE;
+        log_error("spinlock_add_neon: allocation failure");
+        goto fail;
     }
 
     /* 输入：init 一次生成，所有线程共享只读（框架 RNG，-s 可复现） */
@@ -318,19 +318,32 @@ static int spinlock_add_neon_init(struct test *test)
         d->log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (d->log_fd < 0) {
             log_error("spinlock_add_neon: cannot open %s (errno %d)", path, errno);
-            report_fail_msg("spinlock_add_neon: logverif=1 requested but log file unavailable");
-            return EXIT_FAILURE;
+            goto fail;
         }
     }
 
     test->data = d;
     return EXIT_SUCCESS;
+
+fail:
+    /* init 失败时框架不调用 test_cleanup（sandstone_run.cpp 的 init 失败
+     * 分支提前 return）——此处自行释放，失败经返回值传播（ret > 0 →
+     * Failed）。不用 report_fail_msg：它经 report_fail_common 异步取消
+     * 调用线程且 noreturn，而 test_init/cleanup 都在控制线程执行。 */
+    free(d->inputs);
+    free(d->golden);
+    free(d->line);
+    free(d->shared_counter);
+    free(d->local_counts);
+    free(d);
+    return EXIT_FAILURE;
 #endif
 }
 
 static int spinlock_add_neon_cleanup(struct test *test)
 {
     auto *d = static_cast<SpinlockAddNeonData *>(test->data);
+    int ret = EXIT_SUCCESS;
     if (d) {
 #if defined(__aarch64__)
         /* 通道B：Σ 逐线程获锁数 == 共享计数器（数据行写丢失检测；
@@ -344,8 +357,12 @@ static int spinlock_add_neon_cleanup(struct test *test)
                       "lock-protected data line",
                       (unsigned long)d->shared_counter[0], (unsigned long)total,
                       (long)d->shared_counter[0] - (long)total);
-            report_fail_msg("spinlock_add_neon: shared counter != sum of per-thread counts");
-            return EXIT_FAILURE;
+            /* 失败经返回值传播（框架: cleanup 返回 > EXIT_SUCCESS → Failed）。
+             * 不用 report_fail_msg：它经 report_fail_common 异步取消调用
+             * 线程且 noreturn，而 cleanup 在控制线程执行——其后的 close/
+             * free 与 finish 收尾路径将不可达（memcpy_rewr 先例同样是
+             * 先释放后报告；这里直接以返回值收尾，退出码路径完整）。 */
+            ret = EXIT_FAILURE;
         }
 #endif
         if (d->log_fd >= 0)
@@ -356,8 +373,9 @@ static int spinlock_add_neon_cleanup(struct test *test)
         free(d->shared_counter);
         free(d->local_counts);
         free(d);
+        test->data = nullptr;
     }
-    return EXIT_SUCCESS;
+    return ret;
 }
 
 DECLARE_TEST(spinlock_add_neon, "Spinlock liveness + coherence SDC probe: NEON vfma compute "

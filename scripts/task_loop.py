@@ -1548,6 +1548,9 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                 # 单派规则把守)。只豁免车道 A 的 success 查 PR / dead 重派推进。
                 state["auth_failure_streak"] = \
                     state.get("auth_failure_streak", 0) + 1
+                # 轮5(会话#8): 记最后一次认证失败时间——audit 成功归零的
+                # 时间线守卫判据(用审查完成时间比它新才归零)。
+                state["auth_failure_at"] = _now_iso()
                 if state["auth_failure_streak"] >= AUTH_FAILURE_STREAK_LIMIT:
                     if not dry_run:
                         Path(_resolve_state_dir(), "PAUSED").touch()
@@ -1630,6 +1633,7 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
         elif outcome == "auth_fail":
             state["auth_failure_streak"] = \
                 state.get("auth_failure_streak", 0) + 1
+            state["auth_failure_at"] = _now_iso()   # 轮5(会话#8) 时间线守卫判据
             if state["auth_failure_streak"] >= AUTH_FAILURE_STREAK_LIMIT:
                 if not dry_run:
                     Path(_resolve_state_dir(), "PAUSED").touch()
@@ -2454,8 +2458,33 @@ def _audit_streak_add(delta: int) -> int:
         fresh = StateStore(state_dir).load()
         fresh["auth_failure_streak"] = \
             fresh.get("auth_failure_streak", 0) + delta
+        if delta > 0:
+            fresh["auth_failure_at"] = _now_iso()   # 轮5(会话#8) 守卫判据
         StateStore(state_dir).save(fresh)
         return fresh["auth_failure_streak"]
+    finally:
+        os.close(lock_fd)
+
+
+def _audit_streak_reset_if_fresh(success_at: str) -> None:
+    """轮5(会话#8): audit 成功的 streak 归零带时间线守卫——仅当本次审查
+    完成时间(success_at,ISO8601 字典序即时序)不早于磁盘上最后一次认证
+    失败(auth_failure_at)时归零。无守卫的无条件盲盖会把「审查运行期间
+    凭据失效、并发 scan 已在 scan.lock 内记入 streak」的更新事实,用审查
+    开始前的陈旧成功证据抹掉——事件序与写入序倒置,熔断延迟一拍。守卫下:
+    陈旧成功不归零,凭据持续坏则 audit 下轮自身失败走增量路径,streak
+    照常累积。scan.lock 内读-判-写(与 _audit_state_merge_write 同纪律)。"""
+    state_dir = _resolve_state_dir()
+    os.makedirs(state_dir, exist_ok=True)
+    lock_fd = os.open(os.path.join(state_dir, SCAN_LOCK_NAME),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        fresh = StateStore(state_dir).load()
+        last_fail = fresh.get("auth_failure_at")
+        if not last_fail or success_at >= last_fail:
+            fresh["auth_failure_streak"] = 0
+        StateStore(state_dir).save(fresh)
     finally:
         os.close(lock_fd)
 
@@ -2546,6 +2575,7 @@ def run_audit(dry_run: bool = False) -> int:
                 return 0
             commits = _git(["log", "--oneline", f"{base}..{head}"])
             diff = _git_diff(base, head)
+            review_done_at = ""     # 审查完成时刻(轮5 会话#8 守卫判据;dry 不置)
             if diff.count("\n") > AUDIT_MAX_DIFF_LINES:
                 # 轮5 B48: 区间超限 → 最旧侧切块,本轮有效终点回退到块基,
                 # cursor 随之只推进到块基——(块基,head] 余量下一轮(6h)
@@ -2567,6 +2597,9 @@ def run_audit(dry_run: bool = False) -> int:
                         output = pr_local_review.run_claude(
                             pr_local_review.build_claude_command(),
                             cwd=worktree, prompt=prompt)
+                        # 轮5(会话#8): 审查完成时刻——成功归零的时间线守卫
+                        # 判据(归零只认「不早于最后一次认证失败」的成功)。
+                        review_done_at = _now_iso()
                     except GhError as exc:
                         if not AUTH_FAIL_PATTERN.search(str(exc)):
                             raise    # 非 auth 失败: 交外层统一报错返回 1
@@ -2617,11 +2650,14 @@ def run_audit(dry_run: bool = False) -> int:
                 # 裁定 11: 唯一的收尾持久化——scan.lock 内读-合-写,只写
                 # audit 自有键;entries 的权威属于 scan,绝无第二处整份
                 # 快照 save。streak 归零(裁定 10)同窗合并: 审查全流程跑通
-                # 即证明 claude 凭据活着,防「连续 ≥3」退化成「累计 ≥3」。
+                # 即证明 claude 凭据活着,防「连续 ≥3」退化成「累计 ≥3」;
+                # 轮5(会话#8)起归零带时间线守卫(审查完成不早于最后一次
+                # 认证失败才归零——无守卫的盲盖会用审查前的陈旧成功抹掉
+                # 并发 scan 在审查期间记入的真实失败,熔断延迟一拍)。
                 # (findings 入库中途 GhError 则零落盘——cursor 不前进,已建
                 # issue 由下轮 gh body marker 查重兜底,双源设计的意义。)
+                _audit_streak_reset_if_fresh(review_done_at)
                 _audit_state_merge_write({
-                    "auth_failure_streak": 0,
                     "audit_seen": sorted(seen),
                     "audit_cursor": {"sha": head, "at": _now_iso()},
                 })

@@ -1049,6 +1049,45 @@ def test_audit_oversized_range_reviews_chunk_and_cursor_advances_to_it(
     assert tl.StateStore(str(tmp_path)).load()["audit_cursor"]["sha"] == head
 
 
+def test_audit_success_streak_reset_respects_timeline(tmp_path, monkeypatch):
+    """轮5(会话#8): audit 成功归零带时间线守卫——审查完成时间早于磁盘上
+    最后一次认证失败(auth_failure_at)时**不**归零(陈旧成功不抹掉并发
+    scan 在审查期间记入的真实失败);不早于则归零(裁定 10 防累计仍成立)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    base = "base0000000000000000000000000000000000000000"
+    head = "head1111111111111111111111111111111111111111"
+    git_out = {"fetch": "", "rev-parse": head, "log": "abc1234 commit one"}
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        git_out.get(args[0], ""))
+    monkeypatch.setattr(tl, "_git_diff", lambda b, h: "+diff")
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_add", lambda sha: "/tmp/wt")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_remove", lambda p: None)
+    monkeypatch.setattr(tl.pr_local_review, "_run_claude",
+                        lambda cmd, cwd, prompt: "[]")
+    # ① 陈旧成功: 最后一次失败在审查完成之后(模拟审查运行期间凭据失效、
+    #    并发 scan 已锁内记入) → 不归零
+    st = {"entries": [], "auth_failure_streak": 2,
+          "auth_failure_at": "2999-01-01T00:00:00Z",
+          "audit_cursor": {"sha": base, "at": "t"}}
+    tl.StateStore(str(tmp_path)).save(st)
+    assert tl.run_audit(dry_run=False) == 0
+    assert tl.StateStore(str(tmp_path)).load()["auth_failure_streak"] == 2
+    # ② 新鲜成功: 最后一次失败在远古 → 归零(cursor 重置回 base 再跑)
+    st2 = tl.StateStore(str(tmp_path)).load()
+    st2["auth_failure_streak"] = 2
+    st2["auth_failure_at"] = "2000-01-01T00:00:00Z"
+    st2["audit_cursor"] = {"sha": base, "at": "t"}
+    tl.StateStore(str(tmp_path)).save(st2)
+    assert tl.run_audit(dry_run=False) == 0
+    assert tl.StateStore(str(tmp_path)).load()["auth_failure_streak"] == 0
+    # ③ 增量路径记时间戳(_audit_streak_add 与 scan 侧 reap 同款判据)
+    tl._audit_streak_add(1)
+    s3 = tl.StateStore(str(tmp_path)).load()
+    assert s3["auth_failure_streak"] == 1 and s3.get("auth_failure_at")
+
+
 def test_audit_auth_fail_increments_fresh_disk_streak(tmp_path, monkeypatch):
     """Ruling 11: streak 增量对锁内 fresh 磁盘值做,不吃启动时快照。"""
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))

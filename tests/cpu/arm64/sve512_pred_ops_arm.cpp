@@ -395,11 +395,21 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // FMA-part allocations, and the memcmp below all sit outside it.
         const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
                                                      ffr_back.data());
-        if (ffr_bits != (long)(8 * vl) ||
-            memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: FFR/LDFF1 SDC detected "
-                            "(re-loop: ffr_bits=%ld, expected %zu)",
-                            ffr_bits, 8 * vl);
+        // Two DISTINCT failure faces, reported separately so the message
+        // never contradicts itself (a combined `||` printed
+        // "ffr_bits=16, expected 16" — equal numbers in an SDC claim —
+        // whenever only the data half tripped): the FFR count faces the
+        // predicate datapath, the memcmp faces the load datapath.
+        if (ffr_bits != (long)(8 * vl)) {
+            report_fail_msg("sve512_pred_ops_arm: FFR SDC detected "
+                            "(re-loop: ffr_bits=%ld, expected %zu after "
+                            "mapped LDFF1)", ffr_bits, 8 * vl);
+            return EXIT_FAILURE;
+        }
+        if (memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
+            report_fail_msg("sve512_pred_ops_arm: LDFF1 data SDC detected "
+                            "(re-loop: FFR intact at %ld bits, readback "
+                            "mismatch)", ffr_bits);
             return EXIT_FAILURE;
         }
     }

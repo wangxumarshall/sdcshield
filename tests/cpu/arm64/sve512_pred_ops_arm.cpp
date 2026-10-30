@@ -53,8 +53,10 @@
  *    the partially-cleared FFR untouched (accumulation). The RDFFR is
  *    issued back-to-back with the LDFF1,
  *    and the LDFF1 back-to-back with the SETFFR, with no function call
- *    anywhere in that window — the whole capture is encapsulated in the
- *    single always-inline unit ffr_ldff1_capture (see there): the arm64
+ *    anywhere in that window — each capture is encapsulated in the
+ *    single always-inline unit ffr_ldff1_capture, and the (b)+(c) pair
+ *    (whose between-captures gap must equally stay call-free) in the
+ *    combined always-inline unit ffr_fault_acc_capture (see there): the arm64
  *    Linux syscall ABI discards live
  *    SVE state at syscall entry (measured on a 6.6 kernel: FFR is
  *    zeroed, Z/P preserved; kernel sve_flush_{z,p,ffr} macros exist and
@@ -139,7 +141,9 @@ struct PredOpsData {
  * a Z-flushing kernel, so the svst1 is inside the unit too. PrimeFFR=false
  * (accumulation face) additionally requires its capture to follow the
  * previous one with NO call in between: the partially-cleared FFR it
- * observes is live state that memcpy would already have destroyed.
+ * observes is live state that memcpy would already have destroyed — that
+ * cross-capture discipline is mechanized by the ffr_fault_acc_capture
+ * wrapper right below, which inlines both captures into one unit.
  *
  * Count EVERY predicate bit, not just the per-element first bit: CNTP with
  * a b64 pattern tests only bit 0 of each 8-bit slice, so a stuck bit
@@ -177,6 +181,26 @@ ffr_ldff1_capture(const double *from, double *to)
     const long bits = svcntp_b8(svptrue_b8(), ffr);
     svst1_f64(svptrue_b64(), to, v);
     return bits;
+}
+
+/* The CROSS-capture discipline as one unit. The accumulation face
+ * observes the partially-cleared FFR the faulting capture just left —
+ * live state that any call in between would destroy (measured: this
+ * host's glibc memcpy zeroes the FFR). ffr_ldff1_capture's own
+ * always-inline body only closes the window WITHIN one capture; this
+ * wrapper closes the gap BETWEEN the two captures the same mechanical
+ * way: both bodies inline into one contiguous instruction run, so a
+ * future call can only enter by editing this small body, right under
+ * this comment, where the constraint is stated — before round 3 the
+ * between-captures gap was comment-only discipline, structurally the
+ * same unprotected shape as the Sanitizer-CI bug this PR fixed. */
+static inline __attribute__((always_inline)) void
+ffr_fault_acc_capture(const double *fault_from, double *fault_to,
+                      const double *acc_from, double *acc_to,
+                      long &fault_bits, long &acc_bits)
+{
+    fault_bits = ffr_ldff1_capture<true>(fault_from, fault_to);
+    acc_bits = ffr_ldff1_capture<false>(acc_from, acc_to);
 }
 
 static int sve512_pred_ops_arm_init(struct test *test)
@@ -425,17 +449,19 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            in exactly those bits is untestable by LDFF1 (hardware and
            gem5 agree on this rule). */
         double fback[16];   // vl <= 16 (init gate): 8*16 = sizeof
-        const long fault_bits = ffr_ldff1_capture<true>(d->ffr_fault_k1,
-                                                        fback);
         /* Accumulation face: a mapped LDFF1 WITHOUT a SETFFR must leave
            the partially-cleared FFR untouched — LDFF1 never sets a bit
            and clears one only on a fault, so the count must still be 8
            and not snap back to all-ones (or to 0). Catches an FFR
            write-on-success defect the all-true face cannot see. Its
-           capture MUST follow the faulting one with no call in between:
-           the partially-cleared FFR is live state, and a libc call
-           (memcpy, measured) would clobber it. */
-        const long acc_bits = ffr_ldff1_capture<false>(mem.data(), back.data());
+           capture follows the faulting one INSIDE the combined
+           always-inline unit ffr_fault_acc_capture — the between-captures
+           zero-call discipline is mechanical, not comment-only (the
+           partially-cleared FFR is live state, and a libc call — memcpy,
+           measured — would clobber it). */
+        long fault_bits, acc_bits;
+        ffr_fault_acc_capture(d->ffr_fault_k1, fback, mem.data(),
+                              back.data(), fault_bits, acc_bits);
         if (fault_bits != 8) {
             log_warning("sve512_pred_ops: FFR partial-clear wrong after "
                         "faulting LDFF1 (bits=%ld, expected 8 — clear must "
@@ -555,12 +581,13 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                             "mismatch)", ffr_bits);
             return EXIT_FAILURE;
         }
-        const long fault_bits = ffr_ldff1_capture<true>(d->ffr_fault_k1,
-                                                        f_back);
-        /* accumulation capture back-to-back with the faulting one — the
-           partially-cleared FFR is live state a libc call would clobber */
-        const long acc_bits = ffr_ldff1_capture<false>(ffr_mem.data(),
-                                                       ffr_back.data());
+        /* faulting + accumulation captures as the combined always-inline
+           unit — the between-captures zero-call discipline is mechanical
+           (the partially-cleared FFR is live state a libc call, memcpy
+           measured, would clobber) */
+        long fault_bits, acc_bits;
+        ffr_fault_acc_capture(d->ffr_fault_k1, f_back, ffr_mem.data(),
+                              ffr_back.data(), fault_bits, acc_bits);
         if (fault_bits != 8) {
             report_fail_msg("sve512_pred_ops_arm: FFR partial-clear SDC "
                             "detected (re-loop: ffr_bits=%ld, expected 8 "

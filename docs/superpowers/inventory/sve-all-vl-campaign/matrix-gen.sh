@@ -80,7 +80,15 @@ awk -F'|' '$0 ~ /^[A-Za-z0-9_]+\|/ {
 sed -n '/^## 0\./,/^## 1\./p' "$TRI512" | sed '1d;$d' | sed '/^$/d' > "$TMP/sec0.quote"
 
 # ---- fmmla@128 源码逐字引文（tests/cpu/arm64/sve512_fmmla_arm.cpp:193-196）。
+# 内容断言（PR #307 #11）：行号是活源码上的脆弱锚——上游漂移一行即静默
+# 错引；断言引文恰 4 行且含门调用与实测 SIGILL 句，漂移即 FATAL。
 sed -n '193,196p' "$FMMLA_SRC" > "$TMP/fmmla.quote"
+quote_ok=1
+grep -q 'arm64_require_sve_vl(test, 256, 1024)' "$TMP/fmmla.quote" || quote_ok=0
+grep -q 'raises SIGILL (measured 2026-10-27 on silicon' "$TMP/fmmla.quote" || quote_ok=0
+[ "$(wc -l < "$TMP/fmmla.quote")" -eq 4 ] || quote_ok=0
+[ "$quote_ok" -eq 1 ] \
+    || { echo "ERROR: fmmla quote drift: $FMMLA_SRC:193-196 no longer holds the expected 4 lines (gate call 'arm64_require_sve_vl(test, 256, 1024)' + measured-SIGILL sentence) — re-anchor the sed range" >&2; exit 2; }
 
 # ---- 主生成：awk 依次加载 8 个输入；END 段产 (a) 表体 (b) §5 汇总算术块。
 #      任一断言失败 → exit 1，不写产物。

@@ -28,7 +28,7 @@
 - Modify: `tests/cpu/meson.build`（spinlock_unaligned aarch64 块之后追加新块，~753 行后）
 
 **Interfaces:**
-- Consumes: sandstone.h（DECLARE_TEST/test_time_condition/random32/log_skip/report_fail_msg/log_error/CpuNotSupportedSkipCategory）、test_knobs.h（get_test_knob_value_int）、arm_neon.h（vld1q_f32/vfmaq_f32）
+- Consumes: sandstone.h（DECLARE_TEST/test_time_condition/random32/report_fail_msg/log_error）、test_knobs.h（get_testspecific_knob_value_int/string——`-O testid.key=value` 键按测试 id 定域，须用 testspecific 变体，裸键查不到；PR#328 三轮检视 :31 修正：原稿误写 get_test_knob_value_int，且 log_skip/CpuNotSupportedSkipCategory 在首轮检视 :760 处置中随 arch 死分支删除——非 aarch64 靠 meson 门控不编译，无 SKIP 消费）、arm_neon.h（vld1q_f32/vfmaq_f32）
 - Produces: 注册测试 `spinlock_add_neon`；knobs：`logverif`（0/1，默认 0）、`selftest`（0=off/1=stall/2=data）；日志 `/var/tmp/spinlock_add_neon_<pid>.log`（仅 logverif=1 时创建）
 
 **设计定案（实现者须逐条遵守）：**

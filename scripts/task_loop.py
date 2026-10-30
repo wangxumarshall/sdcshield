@@ -121,8 +121,10 @@ AGENT_DONE_MARKS = (TASK_DONE_MARK, AGENT_DONE_MARK)
 AGENT_ESCALATED_MARKS = (TASK_ESCALATED_MARK, AGENT_ESCALATED_MARK)
 
 # 认证失效日志特征(claude CLI 未登录/API 拒绝的典型输出;只匹配日志
-# 尾部 4000 字符,避免远古噪音)
-AUTH_FAIL_PATTERN = re.compile(r"API Error|403|Not logged in")
+# 尾部 4000 字符,避免远古噪音)。裸 '403' 不入模式(检视#23 轮2)——
+# GhError 消息内嵌 stderr 前 300 字符,行号/URL 片段里的 403 会被误判
+# 入熔断 streak;只认 API Error/Not logged in/HTTP 403|401。
+AUTH_FAIL_PATTERN = re.compile(r"API Error|Not logged in|HTTP 40[13]")
 
 # 认证熔断阈值: 连续 N 次 auth_fail → 全局暂停(PAUSED 文件)
 AUTH_FAILURE_STREAK_LIMIT = 3
@@ -302,9 +304,17 @@ def _migrate_legacy_state_dir() -> None:
 
 
 def _paused() -> bool:
-    """kill switch/熔断闸: 新旧两路径 PAUSED 任一存在即生效(过渡期)。"""
-    for d in (_resolve_state_dir(),
-              os.path.expanduser(LEGACY_STATE_DIR)):
+    """kill switch/熔断闸: 新旧两路径 PAUSED 任一存在即生效(过渡期)。
+
+    env 重定向的 run(≠ 默认目录)不检查真实 legacy 目录——与
+    _migrate_legacy_state_dir 的 env 守卫同口径(检视#19 轮2): 重定向
+    实例不拥有真实默认/旧目录,被无关实例遗留的 PAUSED 误拦时无从分辨
+    熔断来源。"""
+    resolved = _resolve_state_dir()
+    for d in (resolved, os.path.expanduser(LEGACY_STATE_DIR)):
+        if resolved != os.path.expanduser(DEFAULT_STATE_DIR) and \
+                d != resolved:
+            continue          # env 重定向: 只查自己,跳过 legacy
         if os.path.exists(os.path.join(d, "PAUSED")):
             return True
     return False

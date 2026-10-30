@@ -222,7 +222,6 @@ def agent_env_path() -> str:
     return os.path.join(os.path.expanduser(
         "~/.local/state/sdcshield-task-loop"), "agent.env")
 
-AGENT_ENV_PATH = agent_env_path()   # 兼容既有引用;build_claude_command 改调 agent_env_path()
 # claude 检视最长运行时间(秒,与 ci_triage.AGENT_TIMEOUT_SEC 一致)
 CLAUDE_TIMEOUT = 3600
 

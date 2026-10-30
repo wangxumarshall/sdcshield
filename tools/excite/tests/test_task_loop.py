@@ -402,6 +402,10 @@ def test_scan_paused_banner_honors_legacy_dir(tmp_path, monkeypatch, capsys):
     目录单路径——否则旧目录 touch PAUSED 时派发全被拒却零横幅,运维遥测
     与实际闸门状态矛盾。"""
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    # 检视#19(轮2)后 _paused() 的 env 守卫: 重定向 run 不查 legacy——
+    # 本用例锚"默认目录 run 尊重 legacy 双路径",故把 DEFAULT 也指到
+    # tmp(非重定向场景),夹具对齐新契约而非放松断言。
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(tmp_path))
     legacy = tmp_path / "legacy"; legacy.mkdir()
     (legacy / "PAUSED").touch()
     monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(legacy))
@@ -839,3 +843,34 @@ def test_human_closed_ci_entry_not_active_for_convergence(tmp_path, monkeypatch)
     assert comments == []               # 零评论——不在已关闭 issue 上碰
     assert state["entries"][0]["extra_runs"] == []   # 死条目未被挂 extra_runs
     assert state["entries"][1]["run_id"] == 2 and state["entries"][1]["status"] == "QUEUED"
+
+
+def test_paused_env_redirect_ignores_legacy_dir(tmp_path, monkeypatch):
+    """PR#317 检视#19(轮2): env 重定向的 run 不检查真实 legacy 目录——与
+    _migrate_legacy_state_dir 的 env 守卫同口径,多实例互不误拦。"""
+    legacy = tmp_path / "legacy"; legacy.mkdir()
+    (legacy / "PAUSED").touch()
+    monkeypatch.setattr(tl, "DEFAULT_STATE_DIR", str(tmp_path / "inst-a"))
+    monkeypatch.setattr(tl, "LEGACY_STATE_DIR", str(legacy))
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "inst-b"))
+    assert tl._paused() is False          # 重定向实例: legacy PAUSED 不拦
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    assert tl._paused() is True           # 默认目录 run: legacy 仍生效(过渡期)
+
+
+def test_auth_fail_pattern_no_false_positive_on_bare_403():
+    """PR#317 检视#23(轮2): 认证判定收紧——裸 '403'(行号/URL 片段)不再
+    误判入熔断 streak;API Error/Not logged in/HTTP 403|401 照常命中。"""
+    assert tl.AUTH_FAIL_PATTERN.search("API Error: 403 Not logged in")
+    assert tl.AUTH_FAIL_PATTERN.search("HTTP 403 Forbidden")
+    assert tl.AUTH_FAIL_PATTERN.search("HTTP 401")
+    assert not tl.AUTH_FAIL_PATTERN.search("  at foo.c:403 in bar()")
+    assert not tl.AUTH_FAIL_PATTERN.search("see line 403 of the config")
+
+
+def test_agent_env_path_dead_constant_removed():
+    """PR#317 检视#22(轮2): AGENT_ENV_PATH 导入期快照死代码已删——防止
+    重新引入第二个可分叉真相源(build_claude_command 用 agent_env_path())。"""
+    import pr_local_review as plr
+    assert not hasattr(plr, "AGENT_ENV_PATH")

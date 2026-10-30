@@ -210,7 +210,7 @@ class Entry:
     updated_at: str                     # 最近更新时间(ISO8601)
     source: str                     # 任务来路: ci | audit | session | manual
     kind: str                       # bug | feature(决定 fix/ feat/ 分支前缀)
-    audit_hash: Optional[str]       # audit 源查重键(其余源为 None)
+    audit_hash: Optional[str]       # 查重键(audit/finding marker hash;ci/manual 为 None)
 
     # 注: 全部字段显式必填(含 extra_runs)——不做隐式默认,构造方须给全 19 字段
     # (source/kind/audit_hash 三个 v2 字段仅 from_dict 容错给默认,直接构造
@@ -606,11 +606,33 @@ def _label_names(issue_json: dict) -> list[str]:
 
 
 def list_open_agent_issues() -> list[dict]:
-    """agent-task 标签的 open issues(队列的 GitHub 侧真源,双源对账之一)。"""
+    """agent-task 标签的 open issues(队列的 GitHub 侧真源,双源对账之一)。
+    body 一并拉取(轮5 B46): reconcile 入队时按 body marker 归类
+    source/audit_hash——audit/finding marker 是引擎自己嵌的,零额外 gh 调用。"""
     res = gh_json(["issue", "list", "--repo", repo_slug(),
                    "--label", AGENT_LABEL_TASK, "--state", "open",
-                   "--json", "number,title,labels", "--limit", "100"])
+                   "--json", "number,title,labels,body", "--limit", "100"])
     return res if isinstance(res, list) else []
+
+
+# 轮5 B46: 入队归类——marker 前缀 → (source, 查重键)。audit/session intake
+# 建的 issue 经 reconcile 入队时还原来路,兑现 Entry v2 的 source 枚举与
+# audit_hash 字段(此前恒 manual/None,四源在 state 里坍缩成两源)。
+# 边界如实声明: enqueue-bug 单条路径(人发起,spec §8.3 不做自动查重)
+# 不嵌 marker → 归 manual;手建 issue 无 marker → manual。
+_SOURCE_MARKER_RES = (
+    (re.compile(r"<!-- task-loop:audit:([0-9a-f]{16}) -->"), "audit"),
+    (re.compile(r"<!-- task-loop:finding:([0-9a-f]{16}) -->"), "session"),
+)
+
+
+def _classify_issue_source(body: str) -> tuple[str, Optional[str]]:
+    """body marker → (source, 查重键);无 marker → (manual, None)。"""
+    for rx, src in _SOURCE_MARKER_RES:
+        m = rx.search(body or "")
+        if m:
+            return src, m.group(1)
+    return "manual", None
 
 
 def issue_eligible(label_names: list[str]) -> bool:
@@ -649,8 +671,9 @@ def reconcile_issues(state: dict, dry_run: bool = False) -> dict:
     不摘标签、不改 status(state 不落盘由编排层保证)。
     """
     entries = StateStore.entries(state)
-    open_labels = {int(it["number"]): _label_names(it)
-                   for it in list_open_agent_issues()}
+    open_list = list_open_agent_issues()
+    open_labels = {int(it["number"]): _label_names(it) for it in open_list}
+    open_bodies = {int(it["number"]): it.get("body") or "" for it in open_list}
     tracked = {e.issue_number for e in entries}
     for n, names in open_labels.items():
         if n in tracked:
@@ -658,18 +681,19 @@ def reconcile_issues(state: dict, dry_run: bool = False) -> dict:
         if not issue_eligible(names):
             continue
         if dry_run:
-            print(f"[dry-run] 将入队 manual issue #{n}(labels: {sorted(names)})")
+            print(f"[dry-run] 将入队 issue #{n}(labels: {sorted(names)})")
             continue
+        src, dedup_hash = _classify_issue_source(open_bodies.get(n, ""))
         entries.append(Entry(
             workflow="", run_id=0, status="QUEUED", issue_number=n,
             fix_branch="", pr_number=None, attempts=0, rounds=0,
             agent_pid=None, agent_started_at=None, agent_log=None,
             last_dispatched_head=None, extra_runs=[],
             created_at=_now_iso(), updated_at=_now_iso(),
-            source="manual",
+            source=src,
             kind="bug" if AGENT_LABEL_BUG in names else "feature",
-            audit_hash=None))
-        print(f"[queue] manual issue #{n} → QUEUED")
+            audit_hash=dedup_hash))
+        print(f"[queue] {src} issue #{n} → QUEUED")
     # HUMAN_CLOSED 清扫: 只查 QUEUED/DISPATCHED(有 PR 路径的条目由车道 B 收尾);
     # open 列表预筛(检视#13)——列表内零 gh 调用,离列表才复核。
     # 轮5(会话#3): 离列表复核的瞬时 gh 失败只跳过本条目——v1 迁移的 ci

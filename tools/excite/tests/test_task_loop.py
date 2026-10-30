@@ -373,6 +373,31 @@ def test_reconcile_human_closed_sweep(monkeypatch):
     assert e.status == "HUMAN_CLOSED" and e.agent_pid is None
 
 
+def test_reconcile_classifies_source_by_body_marker(monkeypatch):
+    """轮5 B46: 入队按 body marker 还原来路——audit/finding marker(引擎
+    自己嵌的)→ source=audit/session + audit_hash;无 marker → manual。
+    兑现 Entry v2 的四源枚举(此前恒 manual,audit_hash 恒 None 死字段)。"""
+    def mk(number, body):
+        return {"number": number, "title": "t",
+                "labels": [{"name": tl.AGENT_LABEL_TASK},
+                           {"name": tl.AGENT_LABEL_BUG}],
+                "body": body}
+    issues = [
+        mk(101, f"审查发现\n{tl.AUDIT_MARKER_FMT.format(hash='aabbccddeeff0011')}"),
+        mk(102, f"[review] m\n{tl.FINDING_MARKER_FMT.format(hash='1122334455667788')}"),
+        mk(103, "手建 issue,无 marker"),
+    ]
+    monkeypatch.setattr(tl, "list_open_agent_issues", lambda: issues)
+    state = {"entries": [], "auth_failure_streak": 0}
+    tl.reconcile_issues(state, dry_run=False)
+    by_no = {e.issue_number: e for e in tl.StateStore.entries(state)}
+    assert by_no[101].source == "audit" and \
+        by_no[101].audit_hash == "aabbccddeeff0011"
+    assert by_no[102].source == "session" and \
+        by_no[102].audit_hash == "1122334455667788"
+    assert by_no[103].source == "manual" and by_no[103].audit_hash is None
+
+
 def test_reconcile_offlist_view_failure_skips_entry_not_tick(monkeypatch, capsys):
     """轮5(会话#3): 离列表复核的 gh 失败只跳过本条目——不掀翻整个
     reconcile(否则 v1 迁移 ci 条目每 tick 走此路径,一次 5xx/4xx 就跳过

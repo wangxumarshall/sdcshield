@@ -24,7 +24,11 @@
 # 一致性断言（任一失败 → 非零退出、不产出 matrix.md）：
 #   清单 190 行；4 份 native summary + 1 份 verdicts 各覆盖全部 190 名；
 #   26 项 baked -O 在 128 seed1/seed2 与 256 seed2 三处命令行头逐字一致；
-#   无未知 result 值；无 FAIL / MISSING 格；每列恰 190 格、总 570 格。
+#   无未知 result 值；无 FAIL / MISSING 格；每列恰 190 格、总 570 格；
+#   128 列双 seed skip 仅限钉死集合 {sve512_fmmla_arm}（PR #307 #8——
+#   其余测试双 skip 或单 seed 分歧 skip 均 FATAL，防「合法 SKIP」标签
+#   张冠李戴 / seed 依赖型 skip 被 pass 掩蔽）；512 列 crash/timeout 格
+#   必有机制理由标签。
 #
 # locale：全链 LC_ALL=C（enumeration.md §6 的 comm/sort 教训）。
 
@@ -117,6 +121,11 @@ function cls(c, arr) {
 }
 
 END {
+    # 128 列合法双 seed SKIP 钉死集合（PR #307 #8）：唯一格 = fmmla（理由
+    # 内容引自 triage-128 §2 + 源码 :193-196）。任何其它测试双 seed skip
+    # 都不许静默套用该标签——FATAL 交人工分诊。
+    legal_skip["sve512_fmmla_arm"] = "F64MM UNDEFINED <VL=256"
+
     # 9 个 512 边界格机制标签（归类出处 = triage-512 §5.1 PMULL64/DC-CIVAC、§5.2 SIM-SPEED）
     breason["ipsec_aes192_gcm_sve"]      = "PMULL64"
     breason["ipsec_aes192_gcm_sve_wide"] = "PMULL64"
@@ -137,16 +146,20 @@ END {
             if (!seen[f "," t]) { printf "FATAL: %s missing in native summary #%d\n", t, f > "/dev/stderr"; fatal = 1 }
         if (!gseen[t]) { printf "FATAL: %s missing in gem5 verdicts\n", t > "/dev/stderr"; fatal = 1 }
 
-        # ---- 128 列：任一 seed pass 即 pass（两 seed 原始结果进证据列）；
-        #      两 seed 同格 skip = 合法 SKIP（架构下界，triage-128 §2）
+        # ---- 128 列：两 seed 无分歧是断言不变量（matrix.md §2「实测两 seed
+        #      无分歧绿」）；双 seed skip 仅限钉死集合（legal_skip），单 seed
+        #      skip（seed 依赖、非架构性）FATAL 交人工分诊——PR #307 #8。
         a1 = res[2 "," t]; a2 = res[3 "," t]
         if (a1 != "pass" && a1 != "skip") { printf "FATAL: 128s1 bad result [%s] %s\n", a1, t > "/dev/stderr"; fatal = 1 }
         if (a2 != "pass" && a2 != "skip") { printf "FATAL: 128s2 bad result [%s] %s\n", a2, t > "/dev/stderr"; fatal = 1 }
-        if (a1 == "pass" || a2 == "pass")
+        if (a1 == "skip" && a2 == "skip") {
+            if (!(t in legal_skip)) { printf "FATAL: unexpected double-skip: %s (only sve512_fmmla_arm is a legal SKIP, triage-128 §2)\n", t > "/dev/stderr"; fatal = 1 }
+            c128 = (t in legal_skip) ? "SKIP(legal: " legal_skip[t] ")" : "FAIL"
+        } else if (a1 == "skip" || a2 == "skip") {
+            printf "FATAL: seed-disagreement skip (non-architectural, manual triage): %s (%s/%s)\n", t, a1, a2 > "/dev/stderr"; fatal = 1; c128 = "FAIL"
+        } else {
             c128 = (t in knob) ? "pass(bounded: " knob[t] ")" : "pass"
-        else if (a1 == "skip" && a2 == "skip")
-            c128 = "SKIP(legal: F64MM UNDEFINED <VL=256)"
-        else { printf "FATAL: 128 cell not green: %s (%s/%s)\n", t, a1, a2 > "/dev/stderr"; fatal = 1; c128 = "FAIL" }
+        }
 
         # ---- 256 列：seed1 腿内 timed out 的格由 triage-256 §5 有界重跑转绿
         #      （同 seed 单测、clamp 下限一次通过）；seed2 腿内有界直绿。

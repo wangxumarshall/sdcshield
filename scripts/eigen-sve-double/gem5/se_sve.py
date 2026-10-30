@@ -1,8 +1,9 @@
 # gem5 SE-mode config for SVE vector-length-specific binaries.
 # Usage: gem5.opt se_sve.py <binary> [args...] --vl <quadwords>
-#   --vl: SVE vector length in 128-bit quadwords (1=128, 2=256, 4=512).
-#   REQUIRED: the VL tier is the identity of the verification this config
-#   exists for — a missing --vl is an error, never a silent 128-bit default.
+#   --vl: SVE vector length in 128-bit quadwords (1=128, 2=256, 4=512,
+#   8=1024). REQUIRED and domain-whitelisted: the VL tier is the identity
+#   of the verification this config exists for — a missing or out-of-domain
+#   --vl is an error, never a silent mislabeled-tier run.
 #
 # Sets ArmISA.sve_vl_se so the emulated CPU's runtime vector length matches
 # the -msve-vector-bits the binary was compiled with (size-specific SVE code
@@ -54,6 +55,13 @@ assert pos, "usage: gem5.opt se_sve.py <binary> [args] --vl <quadwords>"
 assert vl_given, (
     "--vl <quadwords> is REQUIRED (1=128, 2=256, 4=512 bit): the VL tier is "
     "the identity of the verification; refusing to silently default to 128-bit"
+)
+# --vl domain whitelist (PR #307 #20): only power-of-two quadword tiers are
+# meaningful verification identities (no size-specific binary is built for
+# 384-bit etc.); a wrong VALUE must fail as loudly as a missing flag.
+assert vl_qw in (1, 2, 4, 8), (
+    f"--vl {vl_qw} is not a supported tier (supported: 1=128, 2=256, 4=512, "
+    "8=1024 bit); refusing to run a mislabeled-tier verification"
 )
 binary = pos[0]
 

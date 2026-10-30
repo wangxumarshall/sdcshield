@@ -21,4 +21,13 @@ export C_INCLUDE_PATH=$HOME/.local/zlib/include
 export CPLUS_INCLUDE_PATH=$HOME/.local/zlib/include
 export LIBRARY_PATH=$HOME/.local/zlib/lib
 
+# Runtime visibility (PR #307 #27): the default G5 is the CHAOS copy-back
+# path — exactly the spot the README TRAP note warns goes STALE after a
+# `scons -C` rebuild (the artifact lands in the repo-root build/). Echo the
+# resolved binary + its md5 so every run (and every per-test batch log)
+# records WHICH gem5 actually executed; compare against the campaign binary
+# 3f9011f40dbe80ec1df478c62ddb0b06 before trusting tier evidence.
+g5md5=$(md5sum "$G5" 2>/dev/null | cut -d' ' -f1 || true)
+echo "run_sve.sh: G5=$G5  md5=${g5md5:-unavailable}  cfg=$CFG" >&2
+
 exec "$G5" "$CFG" "$@"

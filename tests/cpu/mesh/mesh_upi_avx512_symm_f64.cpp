@@ -57,9 +57,9 @@ struct TestData {
     alignas(16) double *data;             // 共享缓冲(16B 对齐)
     size_t num_blocks;                    // 运行时块数(按目标内存计算)
     size_t total_elements;                // 运行时总元素数
-    std::atomic<uint32_t> next_block;
+    std::atomic<uint64_t> next_block;
     std::atomic<uint64_t> global_sum;     // f64 位模式的精确和(见下)
-    std::atomic<uint32_t> write_done;
+    std::atomic<uint64_t> write_done;
     std::atomic<uint32_t> read_done;
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
@@ -67,7 +67,7 @@ struct TestData {
 }
 
 // 块值生成:slot j 的种子值(精确 0.5 倍数)
-static inline double block_value(uint32_t block, int j)
+static inline double block_value(uint64_t block, int j)
 {
     // 范围 [0.5, 16.0) 的精确值:0.5 * (1..32)
     return 0.5 * (double)(1 + ((block * 16 + (uint32_t)j) % 32));
@@ -123,7 +123,11 @@ static int mesh_upi_avx512_symm_f64_init(struct test *test) {
     size_t target = mesh_target_bytes();
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
-    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    /* 块索引空间 64 位(R2 修复):旧 32 位封顶 × uint32 next_block 的
+     * fetch_add 在块数 ≥ 2^32 时越过 0xFFFFFFFF 回绕到 0,低块被重复
+     * 认领重写——求和族假 FAIL、认领循环每 2^32 次认领才一次可退出。
+     * num_blocks 不再封顶:target 经 floor 除法而来,num_blocks ×
+     * block_bytes ≤ target ≤ SIZE_MAX,后续乘法无 size_t 溢出。 */
     td->total_elements = td->num_blocks * BLOCK_SIZE;
     size_t total_bytes = td->total_elements * elem_bytes;
 
@@ -155,11 +159,11 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
     do {
         // ---------- 写阶段:认领块,FP 生产,NEON 存储 ----------
         while (true) {
-            uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
+            uint64_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block >= td->num_blocks) break;
 
-            // 必须 64 位相乘:block 是 uint32_t,block * BLOCK_SIZE 是 32 位
-            // 运算,块数超过 2^20(缓冲 > 32 GiB)时偏移回绕,上半段永不写入。
+            // block 已 64 位(R2 修复):块索引空间与偏移乘法同宽——旧 uint32 索引
+            // 在块数 ≥ 2^32 时 fetch_add 回绕,低块被重复认领重写(见 init 封顶注释)。
             size_t offset = (size_t)block * BLOCK_SIZE;
             double vals[BLOCK_SIZE];
             double local_sum = 0.0;

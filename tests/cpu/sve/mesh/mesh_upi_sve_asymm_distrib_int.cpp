@@ -20,9 +20,9 @@ struct TestData {
     alignas(16) int32_t *data;           // 16 字节对齐即可
     size_t num_blocks;                   // 运行时块数(按目标内存计算)
     size_t total_elements;               // 运行时总元素数
-    std::atomic<uint32_t> next_block;
+    std::atomic<uint64_t> next_block;
     std::atomic<uint64_t> global_sum;
-    std::atomic<uint32_t> allocated_blocks;
+    std::atomic<uint64_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
     /* sense-reversal 轮屏障（B1-001 修复，移植自 NEON 侧 2731971d）：
      * 原协议结构性互等——写者外层每轮先等 `allocated_blocks == 0 &&
@@ -77,7 +77,11 @@ static int mesh_upi_sve_asymm_distrib_int_init(struct test *test) {
     size_t target = mesh_target_bytes(test);
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
-    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    /* 块索引空间 64 位(R2 修复):旧 32 位封顶 × uint32 next_block 的
+     * fetch_add 在块数 ≥ 2^32 时越过 0xFFFFFFFF 回绕到 0,低块被重复
+     * 认领重写——求和族假 FAIL、认领循环每 2^32 次认领才一次可退出。
+     * num_blocks 不再封顶:target 经 floor 除法而来,num_blocks ×
+     * block_bytes ≤ target ≤ SIZE_MAX,后续乘法无 size_t 溢出。 */
     td->total_elements = td->num_blocks * BLOCK_ELEMENTS;
     size_t total_bytes = td->total_elements * elem_bytes;
 
@@ -145,13 +149,13 @@ static int mesh_upi_sve_asymm_distrib_int_run(struct test *test, int cpu) {
              * 烧 2 次 test_time_condition，一轮 128 块远超预算，写者
              * 在填充中途预算耗尽退出。同 2731971 写者的无守卫填充。 */
             while (true) {
-                uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
+                uint64_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
                 if (block >= td->num_blocks) {
                     break;
                 }
 
-                // 必须 64 位相乘:block 是 uint32_t,block * BLOCK_ELEMENTS 是 32 位
-                // 运算,块数超过 2^29(缓冲 > 16 GiB)时偏移回绕,上半段永不写入。
+                // block 已 64 位(R2 修复):块索引空间与偏移乘法同宽——旧 uint32 索引
+                // 在块数 ≥ 2^32 时 fetch_add 回绕,低块被重复认领重写(见 init 封顶注释)。
                 size_t offset = (size_t)block * BLOCK_ELEMENTS;
                 int32_t vals[BLOCK_ELEMENTS];
                 uint64_t local_sum = 0;
@@ -184,8 +188,8 @@ static int mesh_upi_sve_asymm_distrib_int_run(struct test *test, int cpu) {
                  * 为假必须直接判失败并保留证据，不能丢弃结果（原实现
                  * 此处无读回校验；同 87ebc4b / 8502e491 SVE-wide 的修法）。 */
                 if (!block_ok) {
-                    fprintf(stderr, "mesh_upi_sve_asymm_distrib_int: Thread %d (writer), block %u immediate read-back mismatch, written vals[0..7]=(%d,%d,%d,%d,%d,%d,%d,%d), loaded data[0..7] at offset %zu=(%d,%d,%d,%d,%d,%d,%d,%d), result=%sFAIL%s\n",
-                            id, block,
+                    fprintf(stderr, "mesh_upi_sve_asymm_distrib_int: Thread %d (writer), block %llu immediate read-back mismatch, written vals[0..7]=(%d,%d,%d,%d,%d,%d,%d,%d), loaded data[0..7] at offset %zu=(%d,%d,%d,%d,%d,%d,%d,%d), result=%sFAIL%s\n",
+                            id, (unsigned long long)block,
                             vals[0], vals[1], vals[2], vals[3],
                             vals[4], vals[5], vals[6], vals[7],
                             offset,

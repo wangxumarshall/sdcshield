@@ -34,7 +34,9 @@ routes you; consult it before guessing.
    vehicles: the dual kernel above, or — since the 2026-10 all-VL campaign —
    the **real sdcshield binary** under gem5 SE at any VL via a 9-syscall
    stub chain (gem5-fi branch `feat/sve-se-prctl-stub-2026-10-28`): run
-   with `-f no` (nofork, one test per process), verdict = process exit
+   with `-f no -n 1` (nofork, one test per process, one worker — the
+   `se_sve.py` carrier provisions 4 thread contexts calibrated for exactly
+   this shape; dropping `-n 1` risks clone EAGAIN), verdict = process exit
    code; known limit — a benign shmem mmap-remap overlay caps each test at
    ~1 inner loop (functional correctness only; stress dimensions stay on
    native legs) and masks per-thread attribution detail.

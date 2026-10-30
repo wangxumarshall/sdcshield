@@ -16,7 +16,7 @@ merge 永远人工；feature 类需求确认（`agent-approved`）**。
   熔断语义的搬移来源，本文是其泛化后继
 - 测试：`tools/excite/tests/test_task_loop.py` +
   `tools/excite/tests/test_ci_triage.py`（经薄壳，锚定搬移零语义变化），
-  共 109 用例离线锚定全部关键语义；全套 `tools/excite/tests/` 236 passed
+  共 111 用例离线锚定全部关键语义；全套 `tools/excite/tests/` 238 passed
 - 设计规格（会话产物，不入库）：主仓
   `docs/superpowers/specs/2026-10-29-task-loop-design.md`
 
@@ -97,11 +97,17 @@ source，按 issue 号排序；两扫先经 `_dispatch_gate_ok` 标签资格复�
   load 的整份快照 save 回去，会把 scan 的推进整体回滚：丢 agent_pid/状态
   → 单飞失明 → 同一克隆重复派 agent（生产事故 9d6ba452 同类根因）。故
   audit 的一切持久化都经 `_audit_state_merge_write`：拿 scan.lock（阻塞式
-  flock——临界区只有一次 load+save，亚秒级；scan 从不碰 audit.lock，锁序
-  单向无死锁）后 load 磁盘**最新** state，只 update audit 自有键
-  （`audit_cursor`/`audit_seen`/`auth_failure_streak`），再原子 save。
+  flock——audit 自己的临界区只有一次 load+save，亚秒级；scan 从不碰
+  audit.lock，锁序单向无死锁）后 load 磁盘**最新** state，只 update audit
+  自有键（`audit_cursor`/`audit_seen`/`auth_failure_streak`），再原子 save。
   **entries 的权威属于 scan，audit 永不写它**。认证失效计数
   `_audit_streak_add` 同一纪律（scan.lock 内对磁盘最新值读-改-写）。
+  **等待时长的如实声明（轮6 #51）**：「亚秒级」说的是 audit 自己的临界区；
+  **等 scan 放锁**的时长可达一个 scan tick 的全长——scan 持锁期间可在
+  lane_b 内同步跑本地 claude 审查（至多 1h），audit 此时会阻塞等待且持着
+  audit.lock（下一 audit tick 锁忙退出，无死锁、无 state 损坏）。部署行
+  的 `timeout 7500` 把这一等待封顶（被杀点若在落盘前 = 设计好的「本轮零
+  落盘」语义，findings 查重由 gh body marker 兜底，下轮重试）。
 
 **关键约束**（全部由单测锚定）：全局同时最多 **1 个修复 agent**（跨全部
 source 共槽；audit 不占槽）；attempts ≤2、rounds ≤4、认证连续 ≥3 →
@@ -152,7 +158,7 @@ PAUSED 熔断；第 5 bot（local-claude）连续 3 tick 缺位仅告警不降�
 
 ```cron
 */30 * * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py scan >> ~/.local/state/sdcshield-task-loop/cron.log 2>&1
-17 */6 * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && /usr/bin/python3 scripts/task_loop.py audit >> ~/.local/state/sdcshield-task-loop/audit.log 2>&1
+17 */6 * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && timeout 7500 /usr/bin/python3 scripts/task_loop.py audit >> ~/.local/state/sdcshield-task-loop/audit.log 2>&1
 ```
 
 （audit 取 17 分——避开整点扎堆；scan 行沿用 */30 既有节奏仅换入口。

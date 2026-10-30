@@ -261,6 +261,46 @@ def test_enqueue_bug_skips_non_dict_findings(tmp_path, monkeypatch, capsys):
     assert "跳过非对象 finding" in capsys.readouterr().err
 
 
+def test_enqueue_bug_bad_json_clean_error(tmp_path, monkeypatch, capsys):
+    """轮6(#53): findings 文件本身不是合法 JSON(截断/手编坏)——干净报错
+    返回 2,不裸 traceback(A5 只覆盖了数组内非 dict 元素,漏了这道)。"""
+    class _Boom:
+        def read(self, *a):
+            raise AssertionError("findings 路径不得读 stdin")
+    monkeypatch.setattr(tl.sys, "stdin", _Boom())
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    ff = tmp_path / "truncated.json"
+    ff.write_text('[{"path": "a.c", "line": 1,', encoding="utf-8")
+    assert tl.main(["enqueue-bug", "--findings-file", str(ff)]) == 2
+    assert "不是合法 JSON" in capsys.readouterr().err
+
+
+def test_audit_paused_observes_range_then_skips_claude(
+        tmp_path, monkeypatch, capsys):
+    """轮6(#54): PAUSED 时 audit 先完成观测(fetch/区间计算,与 scan 线
+    「观测照常」对齐)再跳过 claude——不再在观测之前就整体早退。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    base = "base0000000000000000000000000000000000000000"
+    head = "head1111111111111111111111111111111111111111"
+    git_out = {"fetch": "", "rev-parse": head, "log": "abc1234 commit one"}
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        git_out.get(args[0], ""))
+    monkeypatch.setattr(tl, "_git_diff", lambda b, h: "+diff")
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl, "_paused", lambda: True)
+    claude_calls = []
+    monkeypatch.setattr(tl.pr_local_review, "run_claude",
+                        lambda *a, **k: claude_calls.append(a))
+    tl.StateStore(str(tmp_path)).save(
+        {"entries": [], "auth_failure_streak": 0,
+         "audit_cursor": {"sha": base, "at": "t"}})
+    assert tl.run_audit(dry_run=False) == 0
+    assert claude_calls == []                    # claude 被闸
+    out = capsys.readouterr().out
+    assert "本轮仅观测" in out and "1 commits" in out   # 观测照常展示区间
+
+
 def test_enqueue_bug_findings_dedup_via_marker(tmp_path, monkeypatch, capsys):
     """PR#317 检视#16(轮2): session findings 批量路径幂等——每条 finding
     以 _audit_hash 归一化 hash 嵌 body marker(<!-- task-loop:finding:h -->),
@@ -411,6 +451,7 @@ def test_reconcile_classifies_source_by_body_marker(monkeypatch):
         mk(101, f"审查发现\n{tl.AUDIT_MARKER_FMT.format(hash='aabbccddeeff0011')}"),
         mk(102, f"[review] m\n{tl.FINDING_MARKER_FMT.format(hash='1122334455667788')}"),
         mk(103, "手建 issue,无 marker"),
+        mk(104, f"CI 红\n{tl.RUN_MARKER_FMT.format(run_id=40596064101)}"),
     ]
     monkeypatch.setattr(tl, "list_open_agent_issues", lambda: issues)
     state = {"entries": [], "auth_failure_streak": 0}
@@ -421,6 +462,10 @@ def test_reconcile_classifies_source_by_body_marker(monkeypatch):
     assert by_no[102].source == "session" and \
         by_no[102].audit_hash == "1122334455667788"
     assert by_no[103].source == "manual" and by_no[103].audit_hash is None
+    # 轮6(#52): ci marker → source=ci + run_id 还原(fix_branch 依此回到
+    # fix/ci-<runid>,state 丢失重建不再退化为 manual/fix-issue-N)
+    assert by_no[104].source == "ci" and by_no[104].run_id == 40596064101
+    assert tl._default_fix_branch(by_no[104]) == "fix/ci-40596064101"
 
 
 def test_reconcile_offlist_view_failure_skips_entry_not_tick(monkeypatch, capsys):

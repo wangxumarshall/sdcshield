@@ -632,24 +632,31 @@ def list_open_agent_issues() -> list[dict]:
     return res if isinstance(res, list) else []
 
 
-# 轮5 B46: 入队归类——marker 前缀 → (source, 查重键)。audit/session intake
-# 建的 issue 经 reconcile 入队时还原来路,兑现 Entry v2 的 source 枚举与
-# audit_hash 字段(此前恒 manual/None,四源在 state 里坍缩成两源)。
-# 边界如实声明: enqueue-bug 单条路径(人发起,spec §8.3 不做自动查重)
-# 不嵌 marker → 归 manual;手建 issue 无 marker → manual。
+# 轮5 B46: 入队归类——marker 前缀 → (source, 查重键, run_id)。audit/
+# session intake 建的 issue 经 reconcile 入队时还原来路,兑现 Entry v2 的
+# source 枚举与 audit_hash 字段(此前恒 manual/None,四源在 state 里坍缩
+# 成两源)。轮6(#52)补 ci 源: RUN_MARKER_FMT 也识别——state 丢失重建时
+# 存活 ci issue 不再退化为 manual(fix_branch 从 fix/ci-<runid> 变
+# fix/issue-<N>,脱离既有分支命名)。边界如实声明: enqueue-bug 单条路径
+# (人发起,spec §8.3 不做自动查重)不嵌 marker → 归 manual;手建 issue
+# 无 marker → manual。
 _SOURCE_MARKER_RES = (
     (re.compile(r"<!-- task-loop:audit:([0-9a-f]{16}) -->"), "audit"),
     (re.compile(r"<!-- task-loop:finding:([0-9a-f]{16}) -->"), "session"),
+    (re.compile(r"<!-- ci-triage:run:(\d+) -->"), "ci"),
 )
 
 
-def _classify_issue_source(body: str) -> tuple[str, Optional[str]]:
-    """body marker → (source, 查重键);无 marker → (manual, None)。"""
+def _classify_issue_source(body: str) -> tuple[str, Optional[str], int]:
+    """body marker → (source, 查重键, run_id);无 marker → (manual,
+    None, 0)。run_id 仅 ci marker 携带(audit/finding/无 marker 均 0)。"""
     for rx, src in _SOURCE_MARKER_RES:
         m = rx.search(body or "")
         if m:
-            return src, m.group(1)
-    return "manual", None
+            if src == "ci":
+                return src, None, int(m.group(1))
+            return src, m.group(1), 0
+    return "manual", None, 0
 
 
 def issue_eligible(label_names: list[str]) -> bool:
@@ -700,9 +707,9 @@ def reconcile_issues(state: dict, dry_run: bool = False) -> dict:
         if dry_run:
             print(f"[dry-run] 将入队 issue #{n}(labels: {sorted(names)})")
             continue
-        src, dedup_hash = _classify_issue_source(open_bodies.get(n, ""))
+        src, dedup_hash, run_id = _classify_issue_source(open_bodies.get(n, ""))
         entries.append(Entry(
-            workflow="", run_id=0, status="QUEUED", issue_number=n,
+            workflow="", run_id=run_id, status="QUEUED", issue_number=n,
             fix_branch="", pr_number=None, attempts=0, rounds=0,
             agent_pid=None, agent_started_at=None, agent_log=None,
             last_dispatched_head=None, extra_runs=[],
@@ -2302,8 +2309,15 @@ def cmd_enqueue_bug(args: argparse.Namespace) -> int:
     """
     ensure_agent_labels()
     if getattr(args, "findings_file", None):
-        with open(args.findings_file, "r", encoding="utf-8") as f:
-            findings = json.load(f)
+        try:
+            with open(args.findings_file, "r", encoding="utf-8") as f:
+                findings = json.load(f)
+        except json.JSONDecodeError as exc:
+            # 轮6(#53): 文件本身不是合法 JSON(截断/手编坏)——A5 修复只
+            # 覆盖了数组内的非 dict 元素,这第一道校验裸 traceback;与
+            # 容器级校验同口径干净报错返回 2。
+            print(f"findings 文件不是合法 JSON({exc})", file=sys.stderr)
+            return 2
         if not isinstance(findings, list):
             print("findings 文件不是 JSON 数组", file=sys.stderr)
             return 2
@@ -2573,9 +2587,10 @@ def run_audit(dry_run: bool = False) -> int:
             except GhError as exc:
                 print(f"[warn] audit 侧标签确保失败(继续,建 issue 失败将"
                       f"整体返回 1): {exc}")
-        if _paused():
-            print("[paused] PAUSED 生效,audit 跳过 claude 调用(观测照常)")
-            return 0
+        # 轮6(#54): PAUSED 闸门后移至 claude 调用前——旧位置在 fetch/观测
+        # 之前就整体 return,文案「观测照常」名不副实(对照 scan 线 PAUSED
+        # 语义: 编排照跑仅派发被拦)。现 PAUSED 时照常 fetch + 计算区间
+        # (只读观测),仅跳过 claude 调用与状态落盘。
         # 只读上下文(裁定 11): cursor/seen 起点;本 dict 绝不再被写回磁盘
         # ——一切持久化走 _audit_state_merge_write/_audit_streak_add。
         state = StateStore(state_dir).load()
@@ -2621,6 +2636,15 @@ def run_audit(dry_run: bool = False) -> int:
                 print(f"[audit] 区间 diff 超单轮上限({AUDIT_MAX_DIFF_LINES} 行)"
                       f"——切块审查 {base[:8]}..{head[:8]}"
                       f"({len(commits.splitlines())} commits),余量下轮续审")
+            if _paused():
+                # 轮6(#54): 闸门在此——观测(fetch/区间/切块计算)已照常完成,
+                # 仅拦 claude 调用与状态落盘,与 scan 线「观测照常」语义对齐。
+                print(f"[paused] PAUSED 生效——本轮仅观测: 待审区间 "
+                      f"{base[:8]}..{head[:8]}"
+                      f"({len(commits.splitlines())} commits,约 "
+                      f"{diff.count(chr(10))} 行 diff),跳过 claude 调用,"
+                      f"cursor 不推进")
+                return 0
             if not dry_run:
                 prompt = pr_local_review.build_adversarial_prompt(
                     diff, {"title": f"main 增量审查 {base[:8]}..{head[:8]}"

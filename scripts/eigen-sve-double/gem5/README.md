@@ -43,15 +43,20 @@ EOF
 chmod +x ~/.local/bin/python3-config
 pip3 install --user -i https://mirrors.aliyun.com/pypi/simple/ scons
 
-# Build gem5.opt from the vendored CHAOS tree (note: the artifact lands in
-# the REPO ROOT build/, not CHAOS/gem5/build/ — verified again here):
-cd /home/sdc/wangxu/gem5-fi-fuzz
+# Build gem5.opt from the vendored CHAOS tree. Workspace path current as of
+# 2026-10-30: /home/sdc/wangxu/gem5-fi (the older gem5-fi-fuzz location no
+# longer exists on this host; gem5-fi paths are per-host — probe, and see
+# CLAUDE.md rule 2):
+cd /home/sdc/wangxu/gem5-fi
 export PATH="$HOME/.local/bin:$PATH" \
        C_INCLUDE_PATH=$HOME/.local/zlib/include \
        CPLUS_INCLUDE_PATH=$HOME/.local/zlib/include \
        LIBRARY_PATH=$HOME/.local/zlib/lib
 scons -C CHAOS/gem5 build/ARM/gem5.opt -j32     # ~25 min at -j32 on 127 cores
-# -> /home/sdc/wangxu/gem5-fi-fuzz/build/ARM/gem5.opt (1.1 GB)
+# -> /home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt (1.1 GB)
+#    (= run_sve.sh's default G5, the binary the 2026-10 all-VL campaign
+#     verified, md5 3f9011f40dbe80ec1df478c62ddb0b06; a byte-identical
+#     copy also exists at /home/sdc/wangxu/gem5-fi/build/ARM/gem5.opt)
 ```
 
 Pitfalls hit and solved (all reproducible from the log above):

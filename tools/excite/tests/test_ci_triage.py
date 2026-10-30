@@ -623,8 +623,13 @@ def test_prompt_contains_redlines():
     # 任务契约锚点: issue 号 + fix 分支名 + 结束语约定
     assert "77" in prompt
     assert "fix/ci-123456" in prompt
-    assert "ci-triage: done" in prompt
-    assert "ci-triage: escalated" in prompt
+    # 轮5(会话#7)写侧统一新契约: prompt 只嵌 task-loop: 标记(读侧双轨
+    # 仍认旧 ci-triage: ——覆盖在飞旧 agent;写侧吐旧标记会让过渡窗口
+    # 永不关闭、旧标记无法安全退役)
+    assert ct.TASK_DONE_MARK in prompt
+    assert ct.TASK_ESCALATED_MARK in prompt
+    assert "ci-triage: done" not in prompt
+    assert "ci-triage: escalated" not in prompt
     assert ct.UNTRUSTED_BANNER in prompt      # 不可信数据横幅(pr_loop 同源)
 
 

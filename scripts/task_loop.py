@@ -108,11 +108,14 @@ DEFAULT_CLONE_DIR = "/home/sdc/wangxu/operator/sdcshield-autoci"
 # agent.env 属于凭据文件,内容绝不进日志/issue/state)
 AGENT_ENV_NAME = "agent.env"
 
-# agent 结束语契约(build_agent_prompt/build_task_prompt 内嵌,reap 侧逐字匹配):
-#   ci 源(旧契约,车道 A/B):  ci-triage: done <fix_branch> / escalated <reason>
-#   issue 驱动任务(新契约):  task-loop: done <fix_branch> / escalated <reason>
-# 过渡双轨(Task 7): 在飞的旧 ci agent 仍输出 ci-triage: 标记,判档/取理由
-# 对两个 mark 都认(AGENT_DONE_MARKS / AGENT_ESCALATED_MARKS)。
+# agent 结束语契约(全部 prompt builder 一律插值新常量,轮5 会话#7 起写侧
+# 统一 task-loop: 前缀;reap 侧逐字匹配):
+#   唯一在写契约:  task-loop: done <fix_branch> / escalated <reason>
+# 过渡双轨(Task 7;轮5 会话#7 修正写侧): 读侧对旧 ci-triage: 标记仍认
+# (AGENT_DONE_MARKS / AGENT_ESCALATED_MARKS)——覆盖本 PR 合入时在飞的
+# 旧 ci agent 与历史日志;写侧此前仍逐字吐旧标记(build_agent_prompt 对
+# 每个新 ci 派发、build_bot_prompt 对全源车道 B),过渡窗口永不关闭、
+# 旧标记无法安全退役。现写侧全部走常量插值,旧标记只读不写,窗口有界。
 AGENT_DONE_MARK = "ci-triage: done"
 AGENT_ESCALATED_MARK = "ci-triage: escalated"
 TASK_DONE_MARK = "task-loop: done"
@@ -1103,8 +1106,8 @@ def build_agent_prompt(entry: Entry, run_detail: dict) -> str:
 {UNTRUSTED_BANNER}
 
 ## 结束语契约(最后一行,逐字)
-- 成功推分支并贴完报告后,输出一行: `ci-triage: done {fix_branch}`
-- 未能完成(复现不出/超预算/无法修复)时,输出一行: `ci-triage: escalated <原因>`
+- 成功推分支并贴完报告后,输出一行: `{TASK_DONE_MARK} {fix_branch}`
+- 未能完成(复现不出/超预算/无法修复)时,输出一行: `{TASK_ESCALATED_MARK} <原因>`
 """
 
 
@@ -1740,8 +1743,8 @@ CI 专用克隆(不是任何用户的工作区)。
 CLAUDE.md/AGENTS.md 为准。)
 
 ## 结束语契约(最后一行,逐字)
-- 成功推分支并贴完报告后,输出一行: `ci-triage: done {fix_branch}`
-- 无法完成(意见无法处置/超预算/验证不过)时,输出一行: `ci-triage: escalated <原因>`
+- 成功推分支并贴完报告后,输出一行: `{TASK_DONE_MARK} {fix_branch}`
+- 无法完成(意见无法处置/超预算/验证不过)时,输出一行: `{TASK_ESCALATED_MARK} <原因>`
 """
 
 

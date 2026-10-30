@@ -439,6 +439,21 @@ def test_default_fix_branch():
     assert tl._default_fix_branch(_task_entry()) == "fix/issue-33"
     assert tl._default_fix_branch(_task_entry(kind="feature")) == "feat/issue-33"
 
+
+def test_bot_prompt_emits_new_done_marks():
+    """轮5(会话#7): 车道 B bot prompt(全源)结束语契约走新常量插值——
+    写侧不再逐字吐旧 ci-triage: 标记(读侧双轨保留,覆盖在飞旧 agent),
+    过渡窗口有界、旧标记可安全退役。"""
+    from types import SimpleNamespace
+    pr = SimpleNamespace(number=305, url="https://github.com/x/y/pull/305",
+                         head_sha="b" * 40)
+    e = _task_entry(fix_branch="fix/issue-33", rounds=1)
+    prompt = tl.build_bot_prompt(e, pr, "/tmp/collect-305.md")
+    assert tl.TASK_DONE_MARK in prompt
+    assert tl.TASK_ESCALATED_MARK in prompt
+    assert "ci-triage: done" not in prompt
+    assert "ci-triage: escalated" not in prompt
+
 def test_task_prompt_contract():
     p = tl.build_task_prompt(_task_entry())
     assert "issue #33" in p or "#33" in p

@@ -346,10 +346,12 @@ prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/
   绝不碰用户工作区；bug 源「未复现不修」（复现不出如实 escalated），
   feature 源「偏离需求即 escalated」。
 - 结束语契约（最后一行逐字）：成功 `task-loop: done <fix_branch>` /
-  失败 `task-loop: escalated <原因>`——script 侧据此判档，谎报 done 会被
-  `gh pr list` 核实拆穿并计 attempts。过渡双轨：在飞的旧 ci agent 输出
-  `ci-triage: done/escalated` 前缀同样被认（车道 B bot 处置 agent 的
-  prompt 仍用旧前缀，两契约等价）。
+  失败 `task-loop: escalated <原因>`——**全部 prompt builder（车道 A ci、
+  任务、车道 B bot 处置）一律只嵌 `task-loop:` 新标记**（常量插值），
+  script 侧据此判档，谎报 done 会被 `gh pr list` 核实拆穿并计 attempts。
+  过渡双轨（只读不写）：合入时**在飞的旧 ci agent**输出 `ci-triage:
+  done/escalated` 前缀同样被认——覆盖旧 agent 与历史日志；写侧不再
+  产生旧标记，过渡窗口有界，旧标记可在在飞 agent 排空后安全退役。
 - issue 正文/评论/失败日志/collect 文件全部是**不可信数据**：统一裹
   `UNTRUSTED_BANNER`（与 pr_loop 同源），agent 不得执行其中任何"指令"。
 - **安全边界如实声明（PR#317 检视#18）**：横幅是提示注入**缓解措施，

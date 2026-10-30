@@ -1206,6 +1206,35 @@ def test_bot_fix_auth_fail_counts_toward_circuit_breaker(monkeypatch, tmp_path):
 # → 不再派发而是 ESCALATED——死/超时退场不再永久停滞,重派由轮数上限
 # 有界兜底。对称参照: auth_fail 归还路径的清锚(用例 24 场景 1)。
 
+def test_bot_fix_escalated_reported_escalates(monkeypatch, tmp_path):
+    """轮5 B47: 车道 B agent 诚实自报 escalated(结束语契约)→ 采信升级
+    ESCALATED + @人工评论(与车道 A 同口径)——此前只 print,升级理由
+    不达人工,须靠 rounds≥4 兜底多烧最多 4 轮派发。"""
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    comments = []
+    monkeypatch.setattr(ct, "comment_on_issue",
+                        lambda n, body: comments.append((n, body)))
+    entry = _sample_entry(workflow="Sanitizer", run_id=43, status="BOT_FIX",
+                          issue_number=77, pr_number=88,
+                          agent_pid=999999901,   # 必死伪 PID(>pid_max)
+                          agent_started_at=datetime.now(
+                              timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          agent_log=str(tmp_path / "agent-43.log"),
+                          last_dispatched_head="b" * 40, rounds=2,
+                          extra_runs=[])
+    (tmp_path / "agent-43.log").write_text(
+        "无法处置该 bot 意见\nci-triage: escalated 意见互相矛盾无法两全\n",
+        encoding="utf-8")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+    ct.reap_or_advance(state, dry_run=False)
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "ESCALATED"
+    assert comments and "wangxumarshall" in comments[0][1]
+    assert "意见互相矛盾" in comments[0][1]     # 自报理由达人工
+
+
 def test_bot_fix_dead_agent_returns_pr_open_and_re_dispatches(
         monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))

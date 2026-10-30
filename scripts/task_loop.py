@@ -1511,7 +1511,8 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                   dispatch);>2 升级人工。
     - BOT_FIX 条目: 结局只记录在条目上,状态不变(pr_loop 已接管);
       例外1 auth_fail 计入熔断(裁定 7);例外2 success 把
-      auth_failure_streak 归零(成功即证明凭据活着)。
+      auth_failure_streak 归零(成功即证明凭据活着);例外3(轮5 B47)
+      escalated_reported 采信升级——与车道 A 同口径,理由达人工。
     - 单飞语义: 处理中的 agent 未退场(PID 活)不影响本函数——只收割
       已结束的结局。
     - 历史 state 兼容(Task 4 R2 前): 「QUEUED + agent_pid 非 None」是旧
@@ -1565,6 +1566,18 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                     print(f"[reap] run {entry.run_id}(BOT_FIX): agent 认证"
                           f"失效(streak {state['auth_failure_streak']}"
                           f"/{AUTH_FAILURE_STREAK_LIMIT}),归还 PR_OPEN")
+                continue
+            if outcome == "escalated_reported":
+                # 轮5 B47: 车道 B 诚实自报升级同样采信(与 DISPATCHED 路径
+                # 同口径)——此前只 print 会让升级理由不达人工,须靠 rounds≥4
+                # 兜底多烧最多 4 轮派发;文档 §4 状态机表「agent 自报
+                # escalated」进入条件本就未限定车道。
+                reason = _escalated_reason_from_log(entry.agent_log)
+                print(f"[reap] run {entry.run_id}(BOT_FIX): agent 自报升级"
+                      f"({reason})")
+                _escalate(entry, state, f"agent 自报升级：{reason}",
+                          "查看 agent 日志与其贴在 issue 下的报告,决定后续"
+                          "处置", dry_run)
                 continue
             # pr_loop 接管期: 其余结局只记录,不推进状态机
             if outcome == "success":

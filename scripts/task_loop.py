@@ -1443,12 +1443,19 @@ def check_agent_outcome(entry: Entry) -> str:
 
 
 def _log_tail(path: Optional[str], limit: int = 800) -> str:
-    """升级评论用的日志尾部摘录(失败现场留存;读不到给占位说明)。"""
+    """升级评论用的日志尾部摘录(失败现场留存;读不到给占位说明)。
+    轮5(E6): seek 到末尾回读 limit 字节——agent 日志来自至多 1 小时的
+    claude 运行、可达 MB 级,不再为 800 字符摘录全量读入(与
+    _escalated_reason_from_log 同模式)。"""
     if not path or not os.path.exists(path):
         return "(日志缺失)"
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()[-limit:].strip() or "(日志为空)"
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - limit))
+            return f.read().decode("utf-8", errors="replace") \
+                .strip() or "(日志为空)"
     except OSError:
         return "(日志读取失败)"
 

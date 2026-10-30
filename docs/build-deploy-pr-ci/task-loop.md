@@ -16,7 +16,7 @@ merge 永远人工；feature 类需求确认（`agent-approved`）**。
   熔断语义的搬移来源，本文是其泛化后继
 - 测试：`tools/excite/tests/test_task_loop.py` +
   `tools/excite/tests/test_ci_triage.py`（经薄壳，锚定搬移零语义变化），
-  共 65 用例离线锚定全部关键语义；全套 `tools/excite/tests/` 189 passed
+  共 109 用例离线锚定全部关键语义；全套 `tools/excite/tests/` 236 passed
 - 设计规格（会话产物，不入库）：主仓
   `docs/superpowers/specs/2026-10-29-task-loop-design.md`
 
@@ -164,10 +164,15 @@ makedirs 与首启动迁移）。没有此前缀，换行即鸡生蛋死锁：�
 作波浪线展开，与既有行同机制。）
 安装：`crontab -e` 把既有 `ci_triage.py scan` 行替换为上行 scan、新增
 audit 行——`mkdir -p` 前缀使换行**无时序依赖**（不必等首个经薄壳的
-scan 建好新目录）。**cron PATH 注意**——cron 环境只有 `/usr/bin:/bin`
-量级裸 PATH，故用显式 `/usr/bin/python3`；agent 派发所需的
-`claude`/`gh` 由 agent.env 内的 `PATH` 提供（dispatch 命令先
-`source agent.env` 再起 claude）。
+scan 建好新目录）。**cron PATH 注意（轮5 会话#6 如实声明）**——cron
+环境只有 `/usr/bin:/bin` 量级裸 PATH，故用显式 `/usr/bin/python3`。
+**引擎自身的 gh 调用（label ensure / run list / issue create·search·close
+/ pr list）直接跑在 cron 的 PATH 上、从不 source agent.env**——`gh` 必须
+对 cron PATH 可达（本机 gh 在 `~/.local/bin`，靠 crontab 顶部一条
+`PATH=` 头提供；fresh 机器/新 crontab 若无该头，每 tick 会在第一个 gh
+调用处 exit 1）。agent 派发所需的 `claude`/`gh` 由 agent.env 内的
+`PATH` 提供（dispatch 命令先 `source agent.env` 再起 claude）——两个
+PATH 需求相互独立，缺一不可。
 
 **部署时序依赖（如实声明）**：autoci 克隆跟踪 main——本 PR 合入**前**，
 crontab 的 `ci_triage.py scan` 走 main 上的旧文件，不受影响；合入

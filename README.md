@@ -400,9 +400,9 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 6 |
 | 2 | PROD（默认）| `quality >= 2` | 490 |
-| | **合计** | | **500** |
+| | **合计** | | **501** |
 
-> 上表为 ARM64 gcc 构建的源码全量口径（2026-10-27 核对）；默认运行时实际数量随芯片 spec 过滤（SVE1 主机实测 479 PROD、无 SVE 鲲鹏 920 为 297，见「ARM64 spec 策略」节）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
+> 上表为 ARM64 gcc 构建的源码全量口径（2026-10-30 复核）；默认运行时实际数量随芯片 spec 过滤（SVE1 主机实测 480 PROD、无 SVE 鲲鹏 920 为 297，见「ARM64 spec 策略」节）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`

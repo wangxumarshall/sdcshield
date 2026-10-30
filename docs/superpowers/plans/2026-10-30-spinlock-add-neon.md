@@ -62,14 +62,14 @@
 
 - [x] **Step 6: 回归 + 计数**
   - `./builddir/sdcshield -e zstd19 -t 2000 -n 1` → exit: pass
-  - `./builddir/sdcshield --list-tests | wc -l` → 479（478+1，SVE 主机口径）
+  - `./builddir/sdcshield --list-tests | wc -l` → 480（2026-10-30 检视处置期复测：PROD 480 / --quality=0 486 / --quality=-1 491；原记录 479 系当时手数错误，docs commit 6da0f83b 的 480 为实测真值）
 
 - [x] **Step 7: Commit 1**
   `git add tests/cpu/spinlock_add/spinlock_add_neon.cpp tests/cpu/meson.build && git commit -s -m "feat(spinlock_add): ..."`
 
 ### Task 2: 计数同步（CLAUDE.md/README）
 
-- [ ] `--list-tests` 计数 478→479 写入 CLAUDE.md（SVE 主机口径行）与 README 对应行 → commit 2（-s）
+- [x] `--list-tests` 计数写入 CLAUDE.md（SVE 主机口径行）与 README 对应行 → commit 2（-s）——已完成于 6da0f83b（写入 480 实测口径）；检视处置（PR#328 意见 7/8/9）补齐其遗漏：README 合计行 500→501、脚注 479→480 与 363 行口径统一
 
 ---
 

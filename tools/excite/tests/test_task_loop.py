@@ -344,7 +344,10 @@ def test_approve_adds_label(monkeypatch):
     fake = FakeGh()
     monkeypatch.setattr(tl, "gh_json", fake.gh_json)
     assert tl.main(["approve", "42"]) == 0
-    assert fake.calls[0][0][:4] == ("issue", "edit", "42", "--repo")
+    # 轮5(近miss B5): 先幂等 ensure_agent_labels(label list),再打标
+    assert fake.calls[0][0][:2] == ("label", "list")
+    assert any(c[0][:4] == ("issue", "edit", "42", "--repo")
+               for c in fake.calls)
 
 
 # ============ Task 6: 队列对账 reconcile_issues + HUMAN_CLOSED ============

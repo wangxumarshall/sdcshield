@@ -228,10 +228,12 @@ swizzle_sve	0	9	exit: pass	5960680000	pass
 #   5958401000 kreg5_sve
 #   5958932000 sve_fpcr_cartesian_arm
 #
-# provenance audit (PR #307 #18): the rows below exceed the batch
-# script's outer timeout — evidence from triage-time direct runs
-# manually appended to batch.tsv (triage-512 §5.2 records the
-# eigen_svd_cdouble 9000 s long-timeout re-run: command shape
-# identical, only the outer timeout differed). Valid evidence, but
-# not script-reproducible:
-#   eigen_svd_cdouble_sve (wall=9000 s, rc=124) — not a gem5-512-batch.sh product (outer timeout 3600)
+# provenance audit (PR #307 #18/#25): stamped rows 0/206
+# (src=batch 6th field, added to gem5-512-batch.sh after this campaign;
+# 0 stamped = legacy batch). Flagged rows below; LIMIT (honest bound):
+# in a legacy batch the wall>3660 check is the only discriminator and it
+# is coincidental, not structural — a manually appended row with
+# wall <= 3600 s (e.g. a direct re-run with different -O overrides) is
+# mechanically indistinguishable from a script row; cross-check
+# triage-512 §4 (batch record) and the per-test logs before trusting:
+#   eigen_svd_cdouble_sve (wall=9000 s, rc=124) — exceeds the script outer timeout 3600

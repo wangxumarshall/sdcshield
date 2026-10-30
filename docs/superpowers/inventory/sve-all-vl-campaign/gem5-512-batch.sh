@@ -28,9 +28,12 @@
 #     代价：4 个 SIM-SPEED 超时边界格每次重跑都会再烧 3600 s——若有意跳过，
 #     手动 touch .done 并自担语义）。
 #
-# 产物（不入库，.gitignore 覆盖）：gem5-512/<t>.log（原始输出）、
-#   gem5-512/<t>.d/（m5out 工作目录）、gem5-512/batch.tsv（每测试一行
-#   rc/墙钟/exit 行——gem5-512-extract.sh 的机械提取输入）、
+# 产物（不入库，.gitignore 覆盖）：gem5-512/<t>.log（原始输出，含
+#   run_sve.sh 的 G5+md5 身份行）、gem5-512/<t>.d/（m5out 工作目录）、
+#   gem5-512/batch.tsv（每测试一行
+#   <test>\trc=<n>\twall=<n>s\t<exit-line>\t<sim-exit-line>\tsrc=batch
+#   ——末列为逐行溯源戳，PR #307 #25：无该列 = 手工并入或早于戳记的
+#   历史行；gem5-512-extract.sh 的机械提取 + 溯源审计输入）、
 #   gem5-512/identity.txt（批量时二进制身份：gem5 md5 + sdcshield 版本，
 #   PR #307 #7——提取器头部以此为准，杜绝「提取时重算 md5 盖旧数据」）。
 set -u
@@ -127,10 +130,14 @@ if [ "${1:-}" = "--one" ]; then
     end=$(date +%s)
     exitline=$(grep -a -m1 "^exit: " "$OUT/$t.log" || true)
     simexit=$(grep -a "Simulated exit code" "$OUT/$t.log" | tail -1)
-    printf '%s\trc=%s\twall=%ss\t%s\t%s\n' "$t" "$rc" "$((end-start))" \
+    # 6th field src=batch (PR #307 #25): per-row provenance stamp — a row
+    # without it is a manual/triage append or predates the stamp; the
+    # extractor's provenance audit keys on this. (Legacy 5-field rows parse
+    # unchanged: extra fields are ignored downstream.)
+    printf '%s\trc=%s\twall=%ss\t%s\t%s\tsrc=batch\n' "$t" "$rc" "$((end-start))" \
         "${exitline:-<no-exit-line>}" "${simexit:-<no-sim-exit>}" \
         >> "$OUT/batch.tsv"
-    printf '%s\trc=%s\twall=%ss\t%s\t%s\n' "$t" "$rc" "$((end-start))" \
+    printf '%s\trc=%s\twall=%ss\t%s\t%s\tsrc=batch\n' "$t" "$rc" "$((end-start))" \
         "${exitline:-<no-exit-line>}" "${simexit:-<no-sim-exit>}"
     # .done = 已通过（rc=0），非「已尝试」（PR #307 #10）：超时/崩溃格不
     # 标记，幂等重跑重新执行它们。batch.tsv 追加写、提取取末行，新行覆盖旧行。

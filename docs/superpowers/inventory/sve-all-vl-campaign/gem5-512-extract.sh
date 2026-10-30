@@ -8,7 +8,10 @@
 # Inputs (on disk, gitignored):
 #   <dir>/gem5-512/batch.tsv     — one line per executed test:
 #       <test>\trc=<n>\twall=<n>s\t<exit-line|<no-exit-line>>\t<sim-exit-line>
-#       (written by gem5-512-batch.sh's --one mode, O_APPEND single-line printf)
+#       [\tsrc=batch]
+#       (written by gem5-512-batch.sh's --one mode, O_APPEND single-line
+#       printf; the trailing src=batch stamp — absent in batches predating
+#       2026-10-30 — feeds the provenance audit below)
 #   <dir>/gem5-512/<test>.log    — raw gem5+sdcshield output of that test
 #   <dir>/sve-test-list.txt      — the 190-test list (row order + coverage)
 #
@@ -180,25 +183,42 @@ fi
             t = $5; sub(/^.*@ tick /, "", t); sub(/ .*/, "", t)
             print t, $1
         }' "$BATCH" | sort -n | head -10 | sed 's/^/#   /'
-    # provenance audit (PR #307 #18): rows whose wall-clock exceeds the batch
-    # script's outer timeout (3600 s + 60 s slack) were NOT produced by
-    # gem5-512-batch.sh — they are triage-time direct runs manually appended
-    # to batch.tsv. Flag them in-artifact so "mechanical extraction" never
-    # silently launders a hand-merged row.
-    prov=$(awk -F'\t' '{
+    # provenance audit (PR #307 #18/#25): three mechanical checks —
+    #   (1) wall > 3660 s: exceeds the batch script's outer timeout (3600 s
+    #       + 60 s slack) — NOT a script product;
+    #   (2) rows lacking the src=batch stamp, in a PARTIALLY stamped
+    #       batch.tsv: manually appended or legacy (fully-unstamped legacy
+    #       batches are covered by the LIMIT note instead of row spam);
+    #   (3) every listed test must have a non-empty per-test log on disk
+    #       (a row that never ran through --one has no log).
+    prov_wall=$(awk -F'\t' '{
             wall = $3; sub(/^wall=/, "", wall); sub(/s$/, "", wall)
             if (wall + 0 > 3660)
-                print "#   " $1 " (wall=" wall " s, " $2 ") — not a gem5-512-batch.sh product (outer timeout 3600)"
+                print "#   " $1 " (wall=" wall " s, " $2 ") — exceeds the script outer timeout 3600"
         }' "$BATCH")
-    if [ -n "$prov" ]; then
+    nstamped=$(awk -F'\t' '$6 == "src=batch"' "$BATCH" | wc -l)
+    ntotal=$(grep -c . "$BATCH")
+    prov_unstamped=""
+    if [ "$nstamped" -gt 0 ] && [ "$nstamped" -lt "$ntotal" ]; then
+        prov_unstamped=$(awk -F'\t' '$6 != "src=batch" { print "#   " $1 " — no src=batch stamp (manual append or legacy row)" }' "$BATCH")
+    fi
+    nologs=$(awk '{ sub(/\r$/, ""); if ($0 == "" || $0 ~ /^#/) next; sub(/\|.*/, ""); print }' "$LIST" \
+        | while IFS= read -r t; do
+              [ -s "$DIR/gem5-512/$t.log" ] || echo "#   $t — no non-empty per-test log on disk"
+          done)
+    if [ -n "$prov_wall" ] || [ -n "$prov_unstamped" ] || [ -n "$nologs" ]; then
         echo "#"
-        echo "# provenance audit (PR #307 #18): the rows below exceed the batch"
-        echo "# script's outer timeout — evidence from triage-time direct runs"
-        echo "# manually appended to batch.tsv (triage-512 §5.2 records the"
-        echo "# eigen_svd_cdouble 9000 s long-timeout re-run: command shape"
-        echo "# identical, only the outer timeout differed). Valid evidence, but"
-        echo "# not script-reproducible:"
-        echo "$prov"
+        echo "# provenance audit (PR #307 #18/#25): stamped rows $nstamped/$ntotal"
+        echo "# (src=batch 6th field, added to gem5-512-batch.sh after this campaign;"
+        echo "# 0 stamped = legacy batch). Flagged rows below; LIMIT (honest bound):"
+        echo "# in a legacy batch the wall>3660 check is the only discriminator and it"
+        echo "# is coincidental, not structural — a manually appended row with"
+        echo "# wall <= 3600 s (e.g. a direct re-run with different -O overrides) is"
+        echo "# mechanically indistinguishable from a script row; cross-check"
+        echo "# triage-512 §4 (batch record) and the per-test logs before trusting:"
+        if [ -n "$prov_wall" ]; then echo "$prov_wall"; fi
+        if [ -n "$prov_unstamped" ]; then echo "$prov_unstamped"; fi
+        if [ -n "$nologs" ]; then echo "$nologs"; fi
     fi
 } > "$OUT"
 

@@ -45,7 +45,9 @@
  * /var/tmp/spinlock_add_neon_<pid>.log，每行 = 迭代号/线程/输入前 4 元素/
  * 输出前 4 元素/验证结果，PASS 绿（\033[32m）、FAIL 红（\033[31m）；
  * 每线程 10000 行上限后转仅记失败（防日志爆炸），失败行永不受上限约束，
- * 失败时追加全 64 float 对照 dump。logverif=0 时完全不触碰 /var/tmp。
+ * 失败时追加全 64 float 对照 dump。logverif=0 时完全不触碰 /var/tmp；
+ * logverif=1 但打开失败（环境不可用）时 log_warning 降级禁用日志、测试
+ * 照跑（诊断附属不升格为检测失败）。
  *
  * Deviation note (documented): 内核为自包含 NEON intrinsics（本仓 neon_rot
  * 家族同范式）；第三方库（openblas/sleef）计算负载变体为后续独立单元。
@@ -320,13 +322,24 @@ static int spinlock_add_neon_init(struct test *test)
         char path[128];
         snprintf(path, sizeof(path), "/var/tmp/spinlock_add_neon_%d.log", (int)getpid());
         /* O_NOFOLLOW：/var/tmp 为 1777 粘滞目录，防预植同名符号链接把追加
-         * 写引导到任意文件（命中时 ELOOP 走下方失败路径，诚实 FAIL）。
+         * 写引导到任意文件（命中时 ELOOP 走下方降级路径）。
          * O_TRUNC：pid 复用时新轮从 0 写起，防跨轮追加混淆（<pid>.log 的
          * 单轮语义）——同轮内多线程 O_APPEND 原子追加不受影响 */
         d->log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_TRUNC | O_NOFOLLOW, 0644);
         if (d->log_fd < 0) {
-            log_error("spinlock_add_neon: cannot open %s (errno %d)", path, errno);
-            goto fail;
+            /* logverif 是 opt-in 诊断附属、不是检测契约：环境不可用（只读
+             * /var/tmp、SELinux 拒绝、O_NOFOLLOW 命中预植 symlink 的 ELOOP）
+             * 时降级为禁用日志继续跑——检测通道 A/B/C 不受影响，环境问题
+             * 不与 SDC 检出共享退出码、不污染战役自动分诊（cpufreq/thermal
+             * 缺失优雅降级同哲学，PR#328 二轮检视 :326）。用 log_warning
+             * 而非 log_error：后者会把本用例标 Failed（message_common_check
+             * 对 'E' 前缀调 logging_mark_thread_failed）。 */
+            log_warning("spinlock_add_neon: cannot open %s (errno %d: %s) — "
+                        "per-verification log disabled, test continues "
+                        "(logverif is a diagnostic aid, not a detection "
+                        "contract)",
+                        path, errno, strerror(errno));
+            d->log_fd = -1;
         }
     }
 

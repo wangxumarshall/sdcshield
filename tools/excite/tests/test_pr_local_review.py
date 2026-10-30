@@ -333,6 +333,20 @@ def _reviews_json(items):
     return json.dumps({"reviews": items})
 
 
+def test_agent_env_path_honors_env_redirect(monkeypatch, tmp_path):
+    """轮5 B45: env 重定向目录无条件优先——重定向实例用自己的凭据,
+    即使该目录尚无 agent.env 也绝不静默回落默认实例的文件(双凭据源)。"""
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "inst2"))
+    assert plr.agent_env_path() == str(tmp_path / "inst2" / "agent.env")
+    # TASKLOOP 优先级高于 CITRIAGE(与 _resolve_state_dir 同口径)
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path / "inst3"))
+    assert plr.agent_env_path() == str(tmp_path / "inst2" / "agent.env")
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    assert plr.agent_env_path() == str(tmp_path / "inst3" / "agent.env")
+
+
 def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path):
     import pr_loop
 

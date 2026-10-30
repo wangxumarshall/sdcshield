@@ -211,9 +211,17 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
 # ============ 检视引擎子进程缝(测试 monkeypatch 离线替身,不触网/不真跑 claude) ============
 
 # claude headless 认证环境(与 task_loop 共用 agent.env,见设计文档 C1/C3):
-# 新 state 目录优先,旧目录回退(迁移过渡期)。
+# env 重定向目录无条件优先,默认实例走 新目录优先、旧目录回退(迁移过渡期)。
 def agent_env_path() -> str:
-    """claude 认证 env 文件: 新 state 目录优先,旧目录回退(迁移过渡期)。"""
+    """claude 认证 env 文件: TASKLOOP_STATE_DIR/CITRIAGE_STATE_DIR 重定向
+    目录无条件优先(轮5 B45——与 task_loop._resolve_state_dir 同口径:
+    重定向实例的 5th-bot/audit/lane-b 用自己的凭据;重定向目录缺文件
+    就报错,绝不静默回落默认实例的 agent.env 造成同进程双凭据源),
+    默认实例新 state 目录优先,旧目录回退(迁移过渡期)。"""
+    for key in ("TASKLOOP_STATE_DIR", "CITRIAGE_STATE_DIR"):
+        v = os.environ.get(key)
+        if v:
+            return os.path.join(os.path.expanduser(v), "agent.env")
     for d in ("~/.local/state/sdcshield-task-loop",
               "~/.local/state/sdcshield-ci-triage"):
         p = os.path.join(os.path.expanduser(d), "agent.env")

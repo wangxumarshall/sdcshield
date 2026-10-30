@@ -1278,6 +1278,20 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
                                os.environ.get("CITRIAGE_CLONE_DIR",
                                               DEFAULT_CLONE_DIR))
     env_file = os.path.join(_resolve_state_dir(), AGENT_ENV_NAME)
+    if not os.path.exists(env_file):
+        # 轮5 B44: 凭据文件缺失不再假记账——source 短路下 claude 从未
+        # 启动,却会记 DISPATCHED/attempts+1/打 wip,烧满预算后以「agent
+        # 进程死亡」误导性升级。缺文件是部署问题: 真实派发拒绝且条目
+        # 保持原状不计 attempts;dry-run 如实预告该拒绝(预演保真)。
+        if dry_run:
+            print(f"[dry-run] 注意: agent.env 缺失({env_file})——真实派发"
+                  f"将拒绝(条目不派发不计 attempts),按 task-loop.md §3.3 "
+                  f"放置凭据后恢复")
+        else:
+            print(f"[dispatch] agent.env 缺失({env_file})——按 task-loop.md "
+                  f"§3.3 放置凭据(权限 600)后自动恢复;本条目不派发、"
+                  f"不计 attempts", file=sys.stderr)
+            return None
     # prompt 经 stdin(spec §9.1,修 ARG_MAX): 写 0600 临时文件后重定向——
     # run_background 的 `echo $!` PID 回显契约保持不变。
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

@@ -578,6 +578,7 @@ class FakeBg:
 
 def test_dispatch_sources_agent_env(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     clone_dir = tmp_path / "clone"
     clone_dir.mkdir()
     monkeypatch.setenv("CITRIAGE_CLONE_DIR", str(clone_dir))
@@ -926,6 +927,7 @@ def _fake_pr_loop(monkeypatch, pr, state="READY_TO_FIX"):
 
 def test_lane_b_dispatches_once_per_head(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
     bg = FakeBg()
@@ -1207,6 +1209,7 @@ def test_bot_fix_auth_fail_counts_toward_circuit_breaker(monkeypatch, tmp_path):
 def test_bot_fix_dead_agent_returns_pr_open_and_re_dispatches(
         monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
     bg = FakeBg()
@@ -1277,6 +1280,7 @@ def test_bot_fix_dead_agent_returns_pr_open_and_re_dispatches(
 def test_cmd_scan_toplevel_gherror_returns_1_and_saves_state(
         monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
 
     # lane_b 阶段: classify=READY_TO_MERGE,单条目级 try 内的 fetch_pr 走
@@ -1431,6 +1435,7 @@ def test_bot_fix_success_resets_auth_streak(monkeypatch, tmp_path):
 def test_dispatch_sets_dispatched_and_single_flight_within_round(
         monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
     # Task 7: 条目带 issue_number 且本用例未 fake gh_json——派发成功的
@@ -1490,6 +1495,7 @@ def test_dispatch_sets_dispatched_and_single_flight_within_round(
 
 def test_cmd_scan_lane_a_sweep_single_flight(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     # 两个不同 workflow 的红 run → 两个 QUEUED 条目(同轮派发扫的输入)
     runs = [
@@ -1553,6 +1559,7 @@ def test_cmd_scan_lane_a_sweep_single_flight(monkeypatch, tmp_path):
 
 def test_lane_b_dispatch_keeps_bot_fix(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
     # Task 7: 同 test_dispatch_sets_dispatched…——未 fake gh_json 的用例,
@@ -1779,6 +1786,7 @@ def test_kill_agent_if_alive_guards_pid_zero(monkeypatch, tmp_path):
 
 def test_lane_b_triggers_local_review_before_dispatch(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
 
@@ -1829,6 +1837,7 @@ def test_lane_b_triggers_local_review_before_dispatch(monkeypatch, tmp_path):
 
 def test_lane_b_refetches_pr_after_ensure_local_review(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
     bg = FakeBg()

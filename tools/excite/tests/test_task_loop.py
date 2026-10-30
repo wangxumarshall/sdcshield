@@ -403,6 +403,7 @@ def test_check_agent_outcome_accepts_both_marks(tmp_path):
 def test_dispatch_writes_prompt_file_and_wip_label(tmp_path, monkeypatch):
     state = {"entries": [], "auth_failure_streak": 0}
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
     labels = []
     monkeypatch.setattr(tl, "gh_label_add",
@@ -420,6 +421,30 @@ def test_dispatch_writes_prompt_file_and_wip_label(tmp_path, monkeypatch):
     assert "< " in captured["cmd"] and "claude -p" in captured["cmd"]
     prompt_files = list(tmp_path.glob("prompt-*"))
     assert len(prompt_files) == 1 and "Closes #33" in prompt_files[0].read_text()
+
+
+def test_dispatch_refuses_when_agent_env_missing(tmp_path, monkeypatch, capsys):
+    """轮5 B44: agent.env 缺失——真实派发拒绝(条目保持 QUEUED、attempts
+    不增、无 prompt 落盘、无 wip),dry-run 如实预告该拒绝。"""
+    state = {"entries": [], "auth_failure_streak": 0}
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    spawned = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda *a, **k: spawned.append(a) or 1111)
+    labels = []
+    monkeypatch.setattr(tl, "gh_label_add",
+                        lambda n, lb: labels.append((n, lb)))
+    e = _task_entry()          # QUEUED,attempts=0
+    assert tl.dispatch_agent(e, state) is None
+    assert e.status == "QUEUED" and e.attempts == 0 and e.agent_pid is None
+    assert spawned == [] and labels == []
+    assert not list(tmp_path.glob("prompt-*"))
+    assert "agent.env 缺失" in capsys.readouterr().err
+    # dry-run: 警告但不拒绝预演
+    assert tl.dispatch_agent(e, state, dry_run=True) is None
+    assert "agent.env 缺失" in capsys.readouterr().out
+    assert e.status == "QUEUED" and e.attempts == 0
 
 
 # ============ PR#317 检视#6: 派发记账即时落盘(跨进程崩溃窗口) ============
@@ -467,6 +492,7 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
     编排层还要跑其余条目才到 finally,期间崩溃同样丢 PID。"""
     from types import SimpleNamespace
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("TASKLOOP_REPO", "selftest/local")
     pr = SimpleNamespace(number=88, head_sha="b" * 40, url="https://x/88",
                          bot_done={"local-claude": "t"})
@@ -1104,6 +1130,7 @@ def test_dispatch_command_uses_setsid(tmp_path, monkeypatch):
     """检视#28(轮3): 派发命令内层 bash 经 setsid 成为会话/组长——$!
     记录的 PID 即 pgid,killpg 可整树击杀(claude 不再孤儿化)。"""
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
     monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
     captured = {}

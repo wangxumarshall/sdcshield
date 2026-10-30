@@ -190,12 +190,17 @@ crontab 的 `ci_triage.py scan` 走 main 上的旧文件，不受影响；合入
 
 ### 3.3 agent.env（凭据文件，不入库）
 
-`~/.local/state/sdcshield-task-loop/agent.env`（由 §3.2 迁移就位）：agent
+`~/.local/state/sdcshield-task-loop/agent.env`（由 §3.2 迁移就位；**全新
+部署无 legacy 可迁时须手工创建**——派发侧有前置检查，缺文件会拒绝派发并
+在 stderr 提示本节，条目保持 QUEUED 不烧 attempts）：agent
 派发前 `source` 的环境快照——`ANTHROPIC_AUTH_TOKEN` /
 `ANTHROPIC_BASE_URL` / 模型映射 / `PATH`。权限**必须 600**；内容绝不进
 日志/issue/state.json。第 5 bot（`pr_local_review.py`）经 `agent_env_path()`
-与本引擎**共用**此文件（新目录优先、旧目录回退）。失效症状 = agent 日志
-全体 `API Error`/`403`/`Not logged in`，连续 ≥3 次自动熔断（§5.2）。
+与本引擎**共用**此文件（env 重定向目录无条件优先，与 `_resolve_state_dir`
+同口径——重定向实例绝不用默认实例的凭据；默认实例新目录优先、旧目录
+回退）。失效症状 = agent 日志全体 `API Error`/`403`/`Not logged in`，
+连续 ≥3 次自动熔断（§5.2；判定只认**死进程临终 500 字符**内的认证
+特征——活 agent 复述 issue 内嵌 CI 日志中的认证字样不计入）。
 
 ### 3.4 完全停用
 

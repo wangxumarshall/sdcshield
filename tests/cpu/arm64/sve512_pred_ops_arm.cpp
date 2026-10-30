@@ -36,8 +36,9 @@
  *    (FADDA is defined left-to-right, so the scalar mirror is exact).
  *
  * 4. LDFF1 + FFR, three faces: (a) first-fault load from valid mapped
- *    memory must leave FFR all-true — svrdffr() compared against the
- *    operating predicate bit-for-bit, FFR primed with svsetffr() first
+ *    memory must leave FFR all-true — svrdffr() materialized into a byte
+ *    image (one byte per FFR bit) and compared against the golden bitmap
+ *    BIT-FOR-BIT by memcmp, FFR primed with svsetffr() first
  *    (an LDFF1 only clears the bit of a faulting element, never sets
  *    one, so the readback is only meaningful against an all-ones start);
  *    (b) a FAULTING first-fault load — element 0 mapped, element 1 on an
@@ -151,8 +152,20 @@ struct PredOpsData {
  * an SDC blind spot. The governing predicate must be b8 all-true as well:
  * CNTP activates an element only where BOTH predicates have their first
  * slice bit set, so a b64 governing predicate would mask bytes 1..7 and
- * keep the blind spot. Against an all-ones golden there are exactly 8*vl
- * predicate bits, so count == 8*vl is precisely a bit-for-bit comparison.
+ * keep the blind spot.
+ *
+ * BIT-FOR-BIT, not popcount: a count is an aggregate, and against a
+ * PARTIAL golden (the faulting face expects exactly 8 set bits) two
+ * complementary flips — one expected-1 bit dropping, one expected-0 bit
+ * rising — conserve the count and pass (round-3 review #17). The capture
+ * therefore also MATERIALIZES the FFR predicate into memory as a byte
+ * image (byte i = 1 iff FFR bit i is set; svsel over b8 elements, so each
+ * predicate bit governs exactly one image byte) and the checks memcmp the
+ * image against a golden bitmap — any single-bit deviation, in either
+ * direction, lands in exactly one byte. The count is still computed and
+ * returned, but only as a diagnostic for the failure messages; the pass
+ * condition is the image. The svsel/svst1_s8 pair is inside the window
+ * (intrinsics, no call).
  *
  * PrimeFFR=true re-primes the FFR (SETFFR) before the load; PrimeFFR=false
  * leaves the FFR as-is so back-to-back captures observe accumulation.
@@ -172,14 +185,30 @@ struct PredOpsData {
  * DECLARE_TEST pattern would have tripped on it first. */
 template <bool PrimeFFR>
 static inline __attribute__((always_inline)) long
-ffr_ldff1_capture(const double *from, double *to)
+ffr_ldff1_capture(const double *from, double *to, uint8_t *ffr_image)
 {
+    /* Zero-instruction compiler barrier — emits nothing, NOT a call (the
+     * window below stays one contiguous call-free instruction run; see
+     * the objdump evidence in the commit). GCC 12 does not model the
+     * FFR effects of svldff1/svsetffr for optimization purposes
+     * (measured on 12.3.1: an unused svldff1 is DCE'd outright, and
+     * svrdffr results get CSE'd across captures — a stale spill slot is
+     * reloaded where a fresh RDFFR is required). Every value this unit
+     * loads is consumed (stored to a buffer the caller memcmps), so the
+     * LDFF1 cannot be deleted; this barrier additionally forbids
+     * substituting an EARLIER capture's RDFFR value for this one's. The
+     * per-iteration golden comparison makes any staleness fail loudly
+     * rather than silently — but a false SDC costs a CI triage round
+     * (this PR's own origin), so the constraint is fixed here. */
+    __asm__ volatile ("" : : : "memory");
     if constexpr (PrimeFFR)
         svsetffr();
     svfloat64_t v = svldff1_f64(svptrue_b64(), from);
     svbool_t ffr = svrdffr();
     const long bits = svcntp_b8(svptrue_b8(), ffr);
     svst1_f64(svptrue_b64(), to, v);
+    svst1_s8(svptrue_b8(), reinterpret_cast<int8_t *>(ffr_image),
+             svsel(ffr, svdup_n_s8(1), svdup_n_s8(0)));
     return bits;
 }
 
@@ -196,11 +225,24 @@ ffr_ldff1_capture(const double *from, double *to)
  * same unprotected shape as the Sanitizer-CI bug this PR fixed. */
 static inline __attribute__((always_inline)) void
 ffr_fault_acc_capture(const double *fault_from, double *fault_to,
-                      const double *acc_from, double *acc_to,
+                      uint8_t *fault_image, const double *acc_from,
+                      double *acc_to, uint8_t *acc_image,
                       long &fault_bits, long &acc_bits)
 {
-    fault_bits = ffr_ldff1_capture<true>(fault_from, fault_to);
-    acc_bits = ffr_ldff1_capture<false>(acc_from, acc_to);
+    fault_bits = ffr_ldff1_capture<true>(fault_from, fault_to, fault_image);
+    acc_bits = ffr_ldff1_capture<false>(acc_from, acc_to, acc_image);
+}
+
+/* First differing FFR bit between a captured image and its golden —
+ * diagnostics for the failure messages only (failure path, outside every
+ * capture window; -1 = identical). */
+static ptrdiff_t ffr_first_diff(const uint8_t *image, const uint8_t *golden,
+                                size_t n)
+{
+    for (size_t i = 0; i < n; ++i)
+        if (image[i] != golden[i])
+            return (ptrdiff_t)i;
+    return -1;
 }
 
 static int sve512_pred_ops_arm_init(struct test *test)
@@ -404,6 +446,20 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         }
     }
 
+    /* FFR bitmap goldens + capture images, shared by Section 4 and the
+       sustained re-loop below (built once, outside every capture window —
+       only intrinsics and memcmps run per face). One byte per FFR bit:
+       8*vl bytes, vl <= 16 (init gate) bounds every array at 128.
+       m_gold: mapped face, every FFR bit set. f_gold: faulting AND
+       accumulation faces — element 0's 8 bits set (the fault sits at
+       element 1 = byte 8), the rest clear. */
+    uint8_t m_gold[128], f_gold[128];
+    uint8_t m_img[128], f_img[128], a_img[128];
+    for (size_t i = 0; i < 8 * vl; ++i) {
+        m_gold[i] = 1;
+        f_gold[i] = (i < 8) ? 1 : 0;
+    }
+
     // ---------------- Section 4: LDFF1 + FFR + FMAXV ----------------
     {
         // valid mapped memory -> first-fault must not fault, FFR all-true
@@ -415,22 +471,26 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // bit — so without SETFFR the readback is the previous,
         // undefined FFR state, not the set of successfully-loaded lanes),
         // then capture through the single always-inline window unit: the
-        // call-free [SETFFR, count-in-GPR, data-in-memory] discipline and
-        // the b8 full-bit count live in ffr_ldff1_capture's one body.
-        // The readback buffer is allocated BEFORE the window so no call
-        // can land between the capture and the store even on a
-        // Z-flushing kernel.
+        // call-free [SETFFR, image-and-data-in-memory] discipline, the b8
+        // full-bit count and the bit-for-bit image materialization live
+        // in ffr_ldff1_capture's one body. The readback buffers are
+        // allocated BEFORE the window so no call can land between the
+        // capture and the store even on a Z-flushing kernel.
         std::vector<double> back(d->vl_d);
-        const long ffr_bits = ffr_ldff1_capture<true>(mem.data(), back.data());
+        const long ffr_bits = ffr_ldff1_capture<true>(mem.data(), back.data(),
+                                                      m_img);
         if (memcmp(back.data(), mem.data(), d->vl_d * 8) != 0) {
             log_warning("sve512_pred_ops: LDFF1 readback mismatch");
             all_passed = false;
         }
-        // FFR must be all-true in every predicate bit after a mapped LDFF1
-        if (ffr_bits != (long)(8 * vl)) {
+        // FFR must be all-true in every predicate bit after a mapped
+        // LDFF1 — compared BIT-FOR-BIT on the materialized image (a bare
+        // popcount would pass any count-conserving corruption)
+        if (memcmp(m_img, m_gold, 8 * vl) != 0) {
             log_warning("sve512_pred_ops: FFR not all-true after mapped "
-                        "LDFF1 (bits=%ld, expected %zu)",
-                        ffr_bits, 8 * vl);
+                        "LDFF1 (count=%ld, expected %zu, first wrong bit "
+                        "%ld)", ffr_bits, 8 * vl,
+                        ffr_first_diff(m_img, m_gold, 8 * vl));
             all_passed = false;
         }
         /* Faulting face: element 0 mapped, element 1 on the unmapped
@@ -460,13 +520,14 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            partially-cleared FFR is live state, and a libc call — memcpy,
            measured — would clobber it). */
         long fault_bits, acc_bits;
-        ffr_fault_acc_capture(d->ffr_fault_k1, fback, mem.data(),
-                              back.data(), fault_bits, acc_bits);
-        if (fault_bits != 8) {
+        ffr_fault_acc_capture(d->ffr_fault_k1, fback, f_img, mem.data(),
+                              back.data(), a_img, fault_bits, acc_bits);
+        if (memcmp(f_img, f_gold, 8 * vl) != 0) {
             log_warning("sve512_pred_ops: FFR partial-clear wrong after "
-                        "faulting LDFF1 (bits=%ld, expected 8 — clear must "
-                        "start at the first faulting lane)",
-                        fault_bits);
+                        "faulting LDFF1 (count=%ld, expected 8, first "
+                        "wrong bit %ld — clear must start at the first "
+                        "faulting lane)", fault_bits,
+                        ffr_first_diff(f_img, f_gold, 8 * vl));
             all_passed = false;
         }
         {
@@ -481,10 +542,11 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                 all_passed = false;
             }
         }
-        if (acc_bits != 8) {
+        if (memcmp(a_img, f_gold, 8 * vl) != 0) {
             log_warning("sve512_pred_ops: mapped LDFF1 touched the FFR "
-                        "outside a fault (bits=%ld, expected 8 — "
-                        "accumulation broken)", acc_bits);
+                        "outside a fault (count=%ld, expected 8, first "
+                        "wrong bit %ld — accumulation broken)", acc_bits,
+                        ffr_first_diff(a_img, f_gold, 8 * vl));
             all_passed = false;
         }
         // FMAXV over the whilelt(k=vl/2) masked prefix: exact max
@@ -563,16 +625,20 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // re-maintained by hand here: test_time_condition() above, the
         // FMA-part allocations, and the memcmp below all sit outside it.
         const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
-                                                     ffr_back.data());
+                                                      ffr_back.data(), m_img);
         // Two DISTINCT failure faces, reported separately so the message
         // never contradicts itself (a combined `||` printed
         // "ffr_bits=16, expected 16" — equal numbers in an SDC claim —
-        // whenever only the data half tripped): the FFR count faces the
-        // predicate datapath, the memcmp faces the load datapath.
-        if (ffr_bits != (long)(8 * vl)) {
+        // whenever only the data half tripped): the FFR image faces the
+        // predicate datapath (bit-for-bit, not popcount — a bare count
+        // passes any count-conserving corruption), the memcmp faces the
+        // load datapath.
+        if (memcmp(m_img, m_gold, 8 * vl) != 0) {
             report_fail_msg("sve512_pred_ops_arm: FFR SDC detected "
-                            "(re-loop: ffr_bits=%ld, expected %zu after "
-                            "mapped LDFF1)", ffr_bits, 8 * vl);
+                            "(re-loop: first wrong bit %ld, count=%ld, "
+                            "expected %zu after mapped LDFF1)",
+                            ffr_first_diff(m_img, m_gold, 8 * vl), ffr_bits,
+                            8 * vl);
             return EXIT_FAILURE;
         }
         if (memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
@@ -586,12 +652,14 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            (the partially-cleared FFR is live state a libc call, memcpy
            measured, would clobber) */
         long fault_bits, acc_bits;
-        ffr_fault_acc_capture(d->ffr_fault_k1, f_back, ffr_mem.data(),
-                              ffr_back.data(), fault_bits, acc_bits);
-        if (fault_bits != 8) {
+        ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
+                              ffr_back.data(), a_img, fault_bits, acc_bits);
+        if (memcmp(f_img, f_gold, 8 * vl) != 0) {
             report_fail_msg("sve512_pred_ops_arm: FFR partial-clear SDC "
-                            "detected (re-loop: ffr_bits=%ld, expected 8 "
-                            "after faulting LDFF1)", fault_bits);
+                            "detected (re-loop: first wrong bit %ld, "
+                            "count=%ld, expected 8 after faulting LDFF1)",
+                            ffr_first_diff(f_img, f_gold, 8 * vl),
+                            fault_bits);
             return EXIT_FAILURE;
         }
         if (memcmp(f_back, f_exp, vl * 8) != 0) {
@@ -600,10 +668,12 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                             "%ld bits, prefix/tail mismatch)", fault_bits);
             return EXIT_FAILURE;
         }
-        if (acc_bits != 8) {
+        if (memcmp(a_img, f_gold, 8 * vl) != 0) {
             report_fail_msg("sve512_pred_ops_arm: FFR accumulation SDC "
-                            "detected (re-loop: ffr_bits=%ld, expected 8 "
-                            "unchanged after a mapped LDFF1)", acc_bits);
+                            "detected (re-loop: first wrong bit %ld, "
+                            "count=%ld, expected 8 unchanged after a "
+                            "mapped LDFF1)",
+                            ffr_first_diff(a_img, f_gold, 8 * vl), acc_bits);
             return EXIT_FAILURE;
         }
     }

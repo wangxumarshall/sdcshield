@@ -78,6 +78,11 @@ source，按 issue 号排序；两扫先经 `_dispatch_gate_ok` 标签资格复�
   的 claude 调用）。
 - cursor：state 的 `audit_cursor`（上次审到的 SHA + 时间）；无 cursor 首跑
   回看 24h。`git fetch` 后 `cursor..origin/main` 无新 commit → 本轮退出。
+- **单轮 diff 上限（轮5 B48）**：区间 diff 超 3000 行时从**最旧侧切块**，
+  本轮只审一块、cursor 只推进到块基，余量下一轮（6h）续审——PAUSED 长
+  挂恢复后 base 停在数周前的超大区间不会再因 claude 上下文溢出（空输出/
+  畸形 → strict 抛错 → cursor 不推进）而每 6h 重复烧配额死循环；单个
+  commit 自身超限时仍整块审查（尽力，不卡死在它身上）。
 - 审查复用 `pr_local_review` 对抗审查引擎（prompt 泛化：diff + commit
   messages 替代 PR context），在即用即弃 worktree 里跑，绝不碰用户工作区。
 - findings 逐条 hash 查重（`path+line+category+message` 归一化的 sha256

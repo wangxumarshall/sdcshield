@@ -959,6 +959,96 @@ def test_audit_does_not_clobber_concurrent_scan_state(tmp_path, monkeypatch):
     assert s2["audit_cursor"]["sha"].startswith("head1111")
     assert len(s2["audit_seen"]) == 1
 
+
+def _audit_chunk_fakes(monkeypatch, tmp_path, per_commit_lines):
+    """轮5 B48 测试基建: N 条 commit(base..head),第 i 条自身 diff 行数
+    per_commit_lines[i](numstat 口径);diff 按行数合成。返回 (head_sha,
+    审查过的区间记录, 创建的 issue 数)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    shas = [f"{i:040x}" for i in range(1, len(per_commit_lines) + 1)]
+    base = "0" * 40          # 字典序先于全部 shas(测试构造,自增尾数)
+    head = shas[-1]
+    numstat = []
+    for sha, n in zip(reversed(shas), reversed(per_commit_lines)):
+        numstat.append(sha)      # git log 新→旧序输出
+        numstat.append(f"{n}\t0\tfile.c")
+    reviewed = {}
+    def fake_git(args, clone_dir=None):
+        if args[0] == "fetch":
+            return ""
+        if args[0] == "rev-parse":
+            return head
+        if args[0] == "merge-base":
+            return base
+        if args[:2] == ["log", "--numstat"]:
+            return "\n".join(numstat)
+        if args[:2] == ["log", "--oneline"]:
+            return "\n".join(f"{s[:7]} msg" for s in shas)
+        return ""
+    monkeypatch.setattr(tl, "_git", fake_git)
+    def fake_diff(b, h):
+        n = sum(per_commit_lines[i] for i, s in enumerate(shas)
+                if b < s <= h)          # sha 字典序 = 提交序(测试构造)
+        reviewed[(b, h)] = n
+        return "\n".join("+" for _ in range(n))
+    monkeypatch.setattr(tl, "_git_diff", fake_diff)
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_add", lambda sha: "/tmp/wt")
+    monkeypatch.setattr(tl.pr_local_review, "_worktree_remove", lambda p: None)
+    monkeypatch.setattr(tl.pr_local_review, "_run_claude",
+                        lambda cmd, cwd, prompt: "[]")   # 零 findings 成功
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    return base, head, reviewed
+
+
+def test_audit_chunk_head_picks_oldest_side_under_cap(monkeypatch, tmp_path):
+    """轮5 B48: 块基选择——最旧侧累积到即将超限为止,返回块内最新
+    commit;单 commit 超限仍整块纳入(不卡死)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    shas = [f"{i:040x}" for i in range(1, 5)]
+    numstat = []
+    for sha, n in zip(reversed(shas), [800, 1200, 1500, 1000]):
+        numstat += [sha, f"{n}\t0\tf.c"]   # git log 新→旧序输出
+    monkeypatch.setattr(tl, "_git", lambda args, clone_dir=None:
+                        "\n".join(numstat)
+                        if args[:2] == ["log", "--numstat"] else "")
+    # cap=3000: 最旧两条 1000+1500=2500 ✓,再加 1200 超 → 块基 = shas[1]
+    assert tl._audit_chunk_head("b" * 40, shas[-1]) == shas[1]
+    # 单 commit 超限: 仍纳入该条(至少一条)
+    monkeypatch.setattr(tl, "AUDIT_MAX_DIFF_LINES", 500)
+    assert tl._audit_chunk_head("b" * 40, shas[-1]) == shas[0]
+
+
+def test_audit_oversized_range_reviews_chunk_and_cursor_advances_to_it(
+        tmp_path, monkeypatch, capsys):
+    """轮5 B48: 超限区间只审最旧块,cursor 推进到块基(不是 head)——
+    余量下一轮续审,超大区间不再每轮 strict 失败死循环烧配额。"""
+    per_commit = [1000, 1500, 1200, 800]    # 总 4500 > cap 3000
+    base, head, reviewed = _audit_chunk_fakes(monkeypatch, tmp_path, per_commit)
+    monkeypatch.setattr(tl, "AUDIT_MAX_DIFF_LINES", 3000)
+    state = {"entries": [], "auth_failure_streak": 0,
+             "audit_cursor": {"sha": base, "at": "t"}}
+    tl.StateStore(str(tmp_path)).save(state)
+    rc = tl.run_audit(dry_run=False)
+    assert rc == 0
+    # 全量探测(4500 行)后切块,实际只审 base..shas[1](最旧两条,2500 ≤ 3000)
+    chunk = [(b, h) for (b, h), n in reviewed.items() if h != head]
+    assert len(chunk) == 1 and chunk[0][0] == base
+    assert reviewed[chunk[0]] == 2500
+    s2 = tl.StateStore(str(tmp_path)).load()
+    assert s2["audit_cursor"]["sha"] != head and \
+        s2["audit_cursor"]["sha"].endswith("2")   # 推进到块基 shas[1]
+    assert "切块审查" in capsys.readouterr().out
+    # 下一轮: cursor=块基,续审余量(1200+800=2000 ≤ cap)→ cursor 到 head
+    reviewed.clear()
+    rc2 = tl.run_audit(dry_run=False)
+    assert rc2 == 0
+    chunk2 = [(b, h) for (b, h), n in reviewed.items()]
+    assert len(chunk2) == 1 and reviewed[chunk2[0]] == 2000
+    assert chunk2[0][1] == head
+    assert tl.StateStore(str(tmp_path)).load()["audit_cursor"]["sha"] == head
+
+
 def test_audit_auth_fail_increments_fresh_disk_streak(tmp_path, monkeypatch):
     """Ruling 11: streak 增量对锁内 fresh 磁盘值做,不吃启动时快照。"""
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))

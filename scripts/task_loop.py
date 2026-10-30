@@ -2329,6 +2329,12 @@ AUDIT_MARKER_FMT = "<!-- task-loop:audit:{hash} -->"
 # 各自独立(如实声明的边界)。
 FINDING_MARKER_FMT = "<!-- task-loop:finding:{hash} -->"
 AUDIT_FIRST_RUN_HOURS = 24      # 无 cursor 首跑回看窗口
+# 轮5 B48: 单轮审查的 diff 行数上限——超限从最旧侧切块,本轮只审一块,
+# cursor 只推进到块基(余量下轮续审)。防 PAUSED 长挂恢复后 base 停在
+# 数周前、整段 diff 超出 claude 上下文 → 空输出/畸形 → strict 抛
+# GhError → cursor 不推进 → 每 6h 对只增不减的同一区间重复烧配额的
+# 死循环。单 commit 自身超限时仍整块审查(尽力,不卡死在它身上)。
+AUDIT_MAX_DIFF_LINES = 3000
 
 
 def _audit_hash(finding: dict) -> str:
@@ -2377,6 +2383,35 @@ def _search_audit_issue(h: str) -> Optional[int]:
 def _git_diff(base: str, head: str) -> str:
     """audit 专用 diff(三点: 自 merge-base;独立函数便于测试替身)。"""
     return _git(["diff", f"{base}...{head}"])
+
+
+def _audit_chunk_head(base: str, head: str) -> str:
+    """轮5 B48: base..head 超单轮上限时,从最旧侧选块基——按每 commit
+    自身 diff 行数(numstat 增+删)从旧到新累积,装到即将超限为止,返回
+    块内最新 commit 的 SHA(本轮有效审查终点,即 cursor 推进目标)。
+    单 commit 自身超限也纳入(尽力审一块,不卡死);至少含一条。"""
+    stat = _git(["log", "--numstat", "--format=%H", f"{base}..{head}"])
+    shas: list[str] = []
+    lines_per: dict[str, int] = {}
+    cur: Optional[str] = None
+    for line in stat.splitlines():
+        if re.fullmatch(r"[0-9a-f]{40}", line):
+            cur = line
+            shas.append(cur)
+            lines_per[cur] = 0
+        elif cur is not None and "\t" in line:
+            parts = line.split("\t", 2)
+            try:
+                lines_per[cur] += int(parts[0]) + int(parts[1])
+            except ValueError:
+                pass          # binary 行("-\t-\tpath"): 不占文本 diff 行
+    acc, chunk_head = 0, shas[-1] if shas else head
+    for sha in reversed(shas):        # 最旧 → 最新
+        if acc > 0 and acc + lines_per[sha] > AUDIT_MAX_DIFF_LINES:
+            break
+        acc += lines_per[sha]
+        chunk_head = sha
+    return chunk_head
 
 
 def _audit_state_merge_write(keys: dict) -> None:
@@ -2511,6 +2546,16 @@ def run_audit(dry_run: bool = False) -> int:
                 return 0
             commits = _git(["log", "--oneline", f"{base}..{head}"])
             diff = _git_diff(base, head)
+            if diff.count("\n") > AUDIT_MAX_DIFF_LINES:
+                # 轮5 B48: 区间超限 → 最旧侧切块,本轮有效终点回退到块基,
+                # cursor 随之只推进到块基——(块基,head] 余量下一轮(6h)
+                # 续审,有界推进;不做切块则超大区间每轮 strict 失败烧配额。
+                head = _audit_chunk_head(base, head)
+                commits = _git(["log", "--oneline", f"{base}..{head}"])
+                diff = _git_diff(base, head)
+                print(f"[audit] 区间 diff 超单轮上限({AUDIT_MAX_DIFF_LINES} 行)"
+                      f"——切块审查 {base[:8]}..{head[:8]}"
+                      f"({len(commits.splitlines())} commits),余量下轮续审")
             if not dry_run:
                 prompt = pr_local_review.build_adversarial_prompt(
                     diff, {"title": f"main 增量审查 {base[:8]}..{head[:8]}"

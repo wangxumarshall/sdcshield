@@ -42,11 +42,14 @@
  *    against an all-ones starting state. (A faulting LDFF1 is not
  *    exercised — that is kernel territory; the mapped case checks the FFR
  *    datapath itself.) The RDFFR is issued back-to-back with the LDFF1,
- *    with no function call in between: the arm64 Linux syscall ABI
- *    discards live SVE state at syscall entry (kernel
- *    fpsimd_syscall_enter() -> sve_flush_live() zeroes every P register
- *    and the FFR), so an intervening call that issues a syscall would
- *    read the FFR as 0 — a false SDC. FMAXV tree reduction
+ *    and the LDFF1 back-to-back with the SETFFR, with no function call
+ *    anywhere in that window: the arm64 Linux syscall ABI discards live
+ *    SVE state at syscall entry (kernel fpsimd_syscall_enter() ->
+ *    sve_flush_live() zeroes every P register and the FFR), and a
+ *    first-fault load from mapped memory only ever CLEARS FFR bits —
+ *    it never sets one — so a syscall anywhere between the SETFFR and
+ *    the RDFFR (not just between LDFF1 and RDFFR) leaves the FFR
+ *    reading as 0 — a false SDC. FMAXV tree reduction
  *    (order-independent, exactly checkable) over the whilelt-masked
  *    prefix.
  *
@@ -256,15 +259,19 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // (undefined) FFR state, not the set of successfully-loaded lanes.
         svsetffr();
         svfloat64_t v = svldff1_f64(all, mem.data());
-        // Read the FFR back-to-back with the first-fault load, with no
-        // function call in between: the arm64 Linux syscall ABI discards
-        // live SVE state at syscall entry (kernel fpsimd_syscall_enter()
-        // -> sve_flush_live() zeroes every P register and the FFR), so a
-        // call that issues a syscall between LDFF1 and RDFFR — the
-        // allocation and libc/interceptor calls below — silently zeroes
-        // the FFR and reads as a false "SDC" (Sanitizer CI run 40596064101:
-        // count=0, expected 2 on two workers). Capture the FFR and its
-        // active-lane count while no call can intervene.
+        // Read the FFR back-to-back with the first-fault load, and keep
+        // the whole [SETFFR, RDFFR] window free of function calls — not
+        // just the LDFF1-to-RDFFR half: the arm64 Linux syscall ABI
+        // discards live SVE state at syscall entry (kernel
+        // fpsimd_syscall_enter() -> sve_flush_live() zeroes every P
+        // register and the FFR), and an LDFF1 from mapped memory only
+        // ever clears an FFR bit — it never sets one — so a syscall
+        // after the SETFFR but before the LDFFR zeroes the FFR just the
+        // same, and the readback below reports a false "SDC" (Sanitizer
+        // CI run 40596064101: count=0, expected 2 on two workers; the
+        // guilty calls there sat after the LDFF1, but any call landing
+        // in the window reproduces it). Capture the FFR and its bit
+        // count while no call can intervene.
         svbool_t ffr = svrdffr();
         // Count EVERY predicate bit, not just the per-element first bit:
         // CNTP with a b64 pattern tests only bit 0 of each 8-bit slice, so

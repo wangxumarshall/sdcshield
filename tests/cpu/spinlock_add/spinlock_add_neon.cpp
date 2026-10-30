@@ -317,8 +317,10 @@ static int spinlock_add_neon_init(struct test *test)
         char path[128];
         snprintf(path, sizeof(path), "/var/tmp/spinlock_add_neon_%d.log", (int)getpid());
         /* O_NOFOLLOW：/var/tmp 为 1777 粘滞目录，防预植同名符号链接把追加
-         * 写引导到任意文件（命中时 ELOOP 走下方失败路径，诚实 FAIL） */
-        d->log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0644);
+         * 写引导到任意文件（命中时 ELOOP 走下方失败路径，诚实 FAIL）。
+         * O_TRUNC：pid 复用时新轮从 0 写起，防跨轮追加混淆（<pid>.log 的
+         * 单轮语义）——同轮内多线程 O_APPEND 原子追加不受影响 */
+        d->log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_TRUNC | O_NOFOLLOW, 0644);
         if (d->log_fd < 0) {
             log_error("spinlock_add_neon: cannot open %s (errno %d)", path, errno);
             goto fail;

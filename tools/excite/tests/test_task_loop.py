@@ -874,3 +874,131 @@ def test_agent_env_path_dead_constant_removed():
     重新引入第二个可分叉真相源(build_claude_command 用 agent_env_path())。"""
     import pr_local_review as plr
     assert not hasattr(plr, "AGENT_ENV_PATH")
+
+
+# ===== PR#317 轮 3 检视修复 =====
+
+def test_ensure_agent_labels_uses_json_flag(monkeypatch):
+    """检视#25(轮3,Critical): gh label list 必须带 --json——缺省输出
+    三列文本表格,gh_json 原样返回 str,逐字符迭代 l["name"] 抛
+    TypeError 且编排层不捕,首个非 dry scan tick 必崩(真机实证)。"""
+    calls = []
+    def fake_gh_json(args, input_text=None):
+        calls.append(tuple(args))
+        if args[0] == "label" and args[1] == "list":
+            return [{"name": n} for n in
+                    ("agent-task", "agent-bug", "agent-feature",
+                     "agent-approved", "agent-wip", "agent-escalated")]
+        return None
+    monkeypatch.setattr(tl, "gh_json", fake_gh_json)
+    tl.ensure_agent_labels()
+    label_list = [c for c in calls if c[:2] == ("label", "list")]
+    assert len(label_list) == 1
+    assert "--json" in label_list[0] and "name" in label_list[0]
+    assert not any(c[:2] == ("label", "create") for c in calls)
+
+
+def test_auth_fail_below_threshold_removes_wip_label(monkeypatch, tmp_path):
+    """检视#26(轮3,Critical): auth_fail 未达熔断阈值的重派等待路径必须
+    摘 agent-wip——残留 wip 让下一 tick 的派发闸把 DISPATCHED+无 PID
+    条目判'不具资格'永久冻结,一次凭据失效即死锁。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    removed = []
+    monkeypatch.setattr(tl, "gh_label_remove",
+                        lambda n, lb: removed.append((n, lb)))
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "auth_fail")
+    monkeypatch.setattr(tl, "_kill_agent_if_alive",
+                        lambda e: setattr(e, "agent_pid", None))
+    state = {"entries": [dict(
+        workflow="Sanitizer", run_id=7, status="DISPATCHED", issue_number=42,
+        fix_branch="fix/ci-7", pr_number=None, attempts=1, rounds=0,
+        agent_pid=123, agent_started_at=None, agent_log=None,
+        last_dispatched_head=None, extra_runs=[], created_at="t",
+        updated_at="t", source="ci", kind="bug", audit_hash=None)],
+        "auth_failure_streak": 0}
+    tl.reap_or_advance(state, dry_run=False)
+    assert state["auth_failure_streak"] == 1           # 未达 3,不熔断
+    assert removed == [(42, "agent-wip")]              # 关键: wip 已摘
+    e = tl.StateStore.entries(state)[0]
+    assert e.status == "DISPATCHED" and e.agent_pid is None
+
+
+def _entry(**kw):
+    base = dict(workflow="", run_id=0, status="QUEUED", issue_number=9,
+                fix_branch="", pr_number=None, attempts=0, rounds=0,
+                agent_pid=None, agent_started_at=None, agent_log=None,
+                last_dispatched_head=None, extra_runs=[], created_at="t",
+                updated_at="t", source="manual", kind="bug", audit_hash=None)
+    base.update(kw)
+    return tl.Entry(**base)
+
+
+def test_dispatch_gate_ci_source_exempt_from_membership_freeze():
+    """检视#27(轮3): v1 迁移的 ci 条目 issue 无 agent-task 标签(旧
+    create_issue 不带 --label)永不在 open_labels 快照——ci 源豁免成员
+    资格冻结(冻结面=关闭 issue/PAUSED);task 源维持冻结语义。"""
+    ci = _entry(source="ci", status="DISPATCHED", issue_number=9)
+    manual = _entry(source="manual", issue_number=8)
+    open_labels = {}                       # 两 issue 均不在快照
+    assert tl._dispatch_gate_ok(ci, open_labels) is True
+    assert tl._dispatch_gate_ok(manual, open_labels) is False
+
+
+def test_kill_agent_killpg_for_leader_single_kill_fallback(monkeypatch):
+    """检视#28(轮3): 组长形态(setsid 派发)整组击杀 bash→timeout→claude;
+    非组长(历史形态/直起进程)回退单杀——防 killpg 误伤调用方自己的组。"""
+    killed = []
+    monkeypatch.setattr(tl.os, "getpgid", lambda pid: pid)     # 组长
+    monkeypatch.setattr(tl.os, "killpg",
+                        lambda pgid, sig: killed.append(("pg", pgid)))
+    monkeypatch.setattr(tl.os, "kill",
+                        lambda pid, sig: killed.append(("pid", pid)))
+    e = _entry(status="DISPATCHED", agent_pid=777)
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: True)
+    tl._kill_agent_if_alive(e)
+    assert killed == [("pg", 777)] and e.agent_pid is None
+    killed.clear()
+    e.agent_pid = 778
+    monkeypatch.setattr(tl.os, "getpgid", lambda pid: 4321)    # 非组长
+    tl._kill_agent_if_alive(e)
+    assert killed == [("pid", 778)] and e.agent_pid is None
+
+
+def test_dispatch_command_uses_setsid(tmp_path, monkeypatch):
+    """检视#28(轮3): 派发命令内层 bash 经 setsid 成为会话/组长——$!
+    记录的 PID 即 pgid,killpg 可整树击杀(claude 不再孤儿化)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    captured = {}
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: captured.update(cmd=cmd) or 99)
+    tl.dispatch_agent(_entry(), {"entries": [], "auth_failure_streak": 0})
+    assert "setsid" in captured["cmd"] and "claude -p" in captured["cmd"]
+
+
+def test_audit_dead_base_revision_self_heals(tmp_path, monkeypatch, capsys):
+    """检视#29(轮3): cursor 的 base 因 prune/改写不在 origin/main 历史
+    → merge-base 失败时回退 24h 窗口重derive,不崩溃循环;git 层其它
+    RuntimeError 优雅 return 1 不裸 traceback。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    store = tl.StateStore(str(tmp_path))
+    store.save({"entries": [], "auth_failure_streak": 0,
+                "audit_cursor": {"sha": "deadbeef" + "0" * 33, "at": "t"}})
+    git_map = {"rev-parse": "head1111111111111111111111111111111111111111",
+               "rev-list": "base9990000000000000000000000000000000000000",
+               "log": "abc1234 x", "diff": "+d"}
+    def fake_git(args, clone_dir=None):
+        if args[0] == "merge-base":
+            raise RuntimeError("git merge-base … 失败(exit 128): fatal")
+        return git_map.get(args[0], "")
+    monkeypatch.setattr(tl, "_git", fake_git)
+    monkeypatch.setattr(tl, "_git_diff", lambda b, h: "+diff")
+    assert tl.run_audit(dry_run=True) == 0
+    out = capsys.readouterr().out
+    assert "回退 24h 窗口" in out and "base999000"[:8] in out
+    # 其它 git 失败(fetch 阶段)→ 优雅退出
+    def boom(args, clone_dir=None):
+        raise RuntimeError("git fetch … 失败(exit 128)")
+    monkeypatch.setattr(tl, "_git", boom)
+    assert tl.run_audit(dry_run=True) == 1

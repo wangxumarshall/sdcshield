@@ -464,7 +464,8 @@ def gh_json_idem(args, input_text=None):
 def ensure_agent_labels() -> None:
     """幂等创建缺失的 agent-* 标签(gh label create 已存在会失败 → 先 list)。"""
     existing = {l["name"] for l in gh_json(
-        ["label", "list", "--repo", repo_slug(), "--limit", "100"]) or []}
+        ["label", "list", "--repo", repo_slug(), "--limit", "100",
+         "--json", "name"]) or []}
     for name, desc in (
         (AGENT_LABEL_TASK, "task-loop 任务资格(intake 自动/人工打即入队)"),
         (AGENT_LABEL_BUG, "bug 类,自动派发"),
@@ -608,6 +609,11 @@ def _dispatch_gate_ok(entry: Entry, open_labels: Optional[dict]) -> bool:
         return True
     names = open_labels.get(entry.issue_number)
     if names is None:
+        if entry.source == "ci":
+            # 检视#27(轮3): v1 迁移的 ci 条目 issue 由旧 create_issue 创建
+            # (不带 --label),永不在 open+agent-task 快照——ci 源豁免成员
+            # 资格冻结(其资格从来不由标签制;冻结面 = 关闭 issue/PAUSED)。
+            return True
         print(f"[gate] issue #{entry.issue_number} 不在 open+agent-task 列表"
               f"(人工摘标签/关闭),冻结待标签恢复")
         return False
@@ -1093,8 +1099,21 @@ def _kill_agent_if_alive(entry: Entry) -> None:
     """
     pid = entry.agent_pid
     if pid and agent_alive(pid):
+        # 检视#28(轮3): 优先整组击杀——SIGKILL 不波及子孙,单杀 bash 会
+        # 把 timeout/claude 孤儿化(最长继续跑 AGENT_TIMEOUT_SEC,期间可
+        # push/开 PR,与'终局不留无主活进程'矛盾)。仅当 pid 是组长
+        # (setsid 派发形态,pgid==pid)才 killpg;非组长(历史形态/直起
+        # 进程)回退单杀——盲目 killpg 会误伤调用方自己的组。取组失败
+        # (探活后瞬间退出等)同样走单杀,保持"必尝试击杀"的可观测语义。
         try:
-            os.kill(pid, signal.SIGKILL)
+            pgid = os.getpgid(pid)
+        except (ProcessLookupError, PermissionError):
+            pgid = None
+        try:
+            if pgid == pid:
+                os.killpg(pgid, signal.SIGKILL)
+            else:
+                os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass          # 探活与击杀之间退出: 已死,无需补刀
         except PermissionError:
@@ -1119,8 +1138,11 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     命令形态(prompt 经 stdin 重定向,spec §9.1——修 ARG_MAX: 超长 prompt
     经 argv 传递会撞内核命令长度上限,先落盘 <STATE_DIR>/prompt-<条目键>-
     <ts>.txt(0600,凭据同级私有)再 `< 文件` 喂给 claude 的 stdin):
-      nohup bash -c 'source <STATE_DIR>/agent.env && timeout <T> claude -p
+      nohup setsid bash -c 'source <STATE_DIR>/agent.env && timeout <T> claude -p
       --dangerously-skip-permissions < <prompt 文件>' >> <log> 2>&1 & echo $!
+    (setsid 使内层 bash 成为会话/进程组长——$! 记录的 PID 即 pgid,
+    _kill_agent_if_alive 的 killpg 可整树击杀 bash→timeout→claude,
+    claude 不再孤儿化;检视#28 轮3)
     - run_background 的 `echo $!` PID 回显契约保持不变(任务输出全在
       重定向里,wrapper stdout 只有 PID 一行);
     - cwd = agent 专用克隆目录(TASKLOOP_CLONE_DIR > CITRIAGE_CLONE_DIR,
@@ -1170,7 +1192,8 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     inner = (f"source {shlex.quote(env_file)} && "
              f"timeout {AGENT_TIMEOUT_SEC} claude -p "
              f"--dangerously-skip-permissions < {shlex.quote(prompt_path)}")
-    cmd = (f"nohup bash -c {shlex.quote(inner)} >> {shlex.quote(log)} 2>&1 "
+    cmd = (f"nohup setsid bash -c {shlex.quote(inner)} "
+           f">> {shlex.quote(log)} 2>&1 "
            f"& echo $!")
     if dry_run:
         print(f"[dry-run] 将派 agent 修 run {entry.run_id} → {fix_branch},"
@@ -1448,8 +1471,16 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                 # 未达阈值: 先击杀仍存活的 agent 再清引用(误判/竞态下单飞
                 # 不漏无主活进程),该结局只计一次;条目保持
                 # DISPATCHED——但 agent.env 未修好前重派必再
-                # auth_fail,继续烧凭据配额,故不立即重派,等下一轮/熔断
+                # auth_fail,继续烧凭据配额,故不立即重派,等下一轮/熔断。
+                # 摘 wip(检视#26 轮3,与 _requeue_or_escalate 同款): 残留
+                # wip 会让下一 tick 的派发闸把本条目判'不具资格'永久冻结。
                 _kill_agent_if_alive(entry)
+                if not dry_run and entry.issue_number is not None:
+                    try:
+                        gh_label_remove(entry.issue_number, AGENT_LABEL_WIP)
+                    except GhError as exc:
+                        print(f"[warn] agent-wip 标签摘除失败"
+                              f"(state 为权威,继续): {exc}")
                 print(f"[reap] run {entry.run_id}: agent 认证失效"
                       f"(streak {state['auth_failure_streak']}"
                       f"/{AUTH_FAILURE_STREAK_LIMIT}),不重派等下一轮")
@@ -2268,6 +2299,21 @@ def run_audit(dry_run: bool = False) -> int:
                           ).strftime("%Y-%m-%dT%H:%M:%SZ")
                 base = _git(["rev-list", "-1", f"--before={cutoff}",
                              f"origin/{MONITORED_BRANCH}"]) or head
+            else:
+                # 检视#29(轮3): cursor 的 base 可能因 fetch --prune/历史改写
+                # 不在 origin/main 历史——merge-base 失败时回退 24h 窗口
+                # 重derive 自愈(不回退则 log/diff 报 unknown revision,每
+                # 6h 崩溃循环)。
+                try:
+                    _git(["merge-base", base, head])
+                except RuntimeError as exc:
+                    cutoff = (datetime.now(timezone.utc)
+                              - timedelta(hours=AUDIT_FIRST_RUN_HOURS)
+                              ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    base = _git(["rev-list", "-1", f"--before={cutoff}",
+                                 f"origin/{MONITORED_BRANCH}"]) or head
+                    print(f"[audit] cursor base 不在 origin/main 历史"
+                          f"(prune/改写?)——回退 24h 窗口重derive: {exc}")
             if base == head:
                 print("[audit] main 无新提交,本轮退出")
                 return 0
@@ -2347,6 +2393,11 @@ def run_audit(dry_run: bool = False) -> int:
             return 0
         except GhError as exc:
             print(f"audit 失败(GhError): {exc}", file=sys.stderr)
+            return 1
+        except RuntimeError as exc:
+            # 检视#29(轮3): _git/_git_diff 失败统一 RuntimeError——裸
+            # traceback 会塞爆 cron 日志;cursor 不推进,git 恢复后自愈。
+            print(f"audit 失败(RuntimeError,git 层): {exc}", file=sys.stderr)
             return 1
     finally:
         if lock_fd is not None:      # dry-run 未开锁(零本地写,检视#14)

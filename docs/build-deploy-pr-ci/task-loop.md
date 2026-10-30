@@ -126,6 +126,12 @@ PAUSED 熔断；第 5 bot（local-claude）连续 3 tick 缺位仅告警不降�
   `agent-task` 但仍 open 的条目同样冻结（不误判 HUMAN_CLOSED）。边界：
   open 列表 `--limit 100`（与 manual 入队同限），超限的 open issue 不在
   快照内会被冻结——设计队列规模（单仓库同时活跃任务数）远小于此。
+  **控制面边界（PR#317 检视#27/#31 轮3）**：① ci 源条目豁免"不在
+  open+agent-task 列表"的成员资格冻结——v1 迁移的存量 ci issue 由旧
+  `create_issue` 创建（不带 `--label`），永不在快照内；ci 条目的冻结面
+  = 关闭 issue（HUMAN_CLOSED）或全局 PAUSED。② 车道 B 的 bot 处置
+  派发（PR_OPEN→BOT_FIX）**不**复查标签资格——对在检 PR 冻结 bot
+  处置的手段是关闭 issue 或 PAUSED，不是打标签。
 - intake 自动打的标签：ci 源 `agent-task agent-bug`；audit 源
   `agent-task agent-bug bug`；会话 bug `agent-task agent-bug bug`；会话
   feature `agent-task agent-feature enhancement`。现有 bug/enhancement
@@ -339,6 +345,12 @@ prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/
   这是与第 5 bot「PR 内容同源暴露」同级的**已知接受边界**（单人体量下
   的风险取舍），运维须知悉：若仓库转为多人协作/接受外部 PR，应先评估
   沙箱化（容器/VM 执行面）再放大 audit 的输入面。
+- **comment 重试的已知取舍（PR#317 检视#10/#21/#30，三轮维持）**：
+  `comment_on_issue` 经 `gh_json_idem` ≤3 重试（spec §10 既定分类）。
+  超时但服务端实际成功的窗口会重复发评论（含升级 @）——代价是可观测
+  的噪音；反向取舍（不重试）会**永久丢失**升级 @ 评论（`_escalate`
+  置 ESCALATED 后下轮永不补发）。两害相权取其轻，此为记录在案的
+  接受行为，非缺陷。
 - PR 竞态：agent push 后自开 PR（`--title "fix|feat: <摘要> (#N)"
   --body "Closes #N + 报告"`）；与 `auto-pr.yml` 谁先谁后不定——create
   因"分支已有 PR"失败时兜底 `gh pr edit` 改写标题与正文（必须含

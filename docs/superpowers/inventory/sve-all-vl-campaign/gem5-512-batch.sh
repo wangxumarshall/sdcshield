@@ -22,7 +22,11 @@
 #     clamp 下限），取自 native-256-LCG1002.stdout.txt 命令行；VL=512 下
 #     这些 knob 值（计数/字节语义）仍然有效。
 #   - 每测试独立 .d 工作目录（gem5 把 m5out 写进 cwd，并发共用会互相覆写）。
-#   - timeout 3600 兜底；断点续跑：$t.done 存在即跳过（幂等重启用）。
+#   - timeout 3600 兜底；断点续跑：$t.done = 该格 rc=0 已收口（PR #307 #10：
+#     语义是「已通过」而非「已尝试」——失败/边界格不落 .done，幂等重跑会
+#     重新执行它们；gem5 补 PMULL64/DC-CIVAC 编码后的 5 格重验正依赖此行为。
+#     代价：4 个 SIM-SPEED 超时边界格每次重跑都会再烧 3600 s——若有意跳过，
+#     手动 touch .done 并自担语义）。
 #
 # 产物（不入库，.gitignore 覆盖）：gem5-512/<t>.log（原始输出）、
 #   gem5-512/<t>.d/（m5out 工作目录）、gem5-512/batch.tsv（每测试一行
@@ -89,7 +93,20 @@ write_identity() {
 
 if [ "${1:-}" = "--one" ]; then
     t="$2"
-    [ -f "$OUT/$t.done" ] && exit 0          # 断点续跑：已完成即跳过
+    if [ -f "$OUT/$t.done" ]; then
+        # .done 现行语义 = rc=0 已收口。标记存在但 batch.tsv 末行非 rc=0
+        # = 2026-10-30 前旧语义（已尝试）的遗留——删标记、重新执行。
+        # 手动 touch .done 跳格仅在无矛盾行（lastrc 为空）时生效；失败行
+        # 一律重跑（要强制跳过请归档/删除该行）。
+        lastrc=$(awk -F'\t' -v t="$t" '$1 == t { last = $2 } END { print last }' \
+                 "$OUT/batch.tsv" 2>/dev/null || true)
+        if [ "$lastrc" = "rc=0" ] || [ -z "$lastrc" ]; then
+            exit 0                           # 断点续跑：rc=0 已收口即跳过
+        fi
+        echo "NOTE: $t carries .done but its last batch.tsv row is $lastrc" >&2
+        echo "      (stale marker, pre-2026-10-30 attempted-semantics) — re-running" >&2
+        rm -f "$OUT/$t.done"
+    fi
     [ -f "$OUT/identity.txt" ] || write_identity
     extra=""
     extra=$(grep -m1 "^$t|" "$OVR" 2>/dev/null | cut -d'|' -f2- || true)
@@ -107,7 +124,9 @@ if [ "${1:-}" = "--one" ]; then
         >> "$OUT/batch.tsv"
     printf '%s\trc=%s\twall=%ss\t%s\t%s\n' "$t" "$rc" "$((end-start))" \
         "${exitline:-<no-exit-line>}" "${simexit:-<no-sim-exit>}"
-    touch "$OUT/$t.done"
+    # .done = 已通过（rc=0），非「已尝试」（PR #307 #10）：超时/崩溃格不
+    # 标记，幂等重跑重新执行它们。batch.tsv 追加写、提取取末行，新行覆盖旧行。
+    [ "$rc" -eq 0 ] && touch "$OUT/$t.done"
     exit 0
 fi
 
@@ -124,6 +143,23 @@ if [ -f "$OUT/identity.txt" ]; then
     fi
 else
     write_identity
+fi
+# Stale .done audit (PR #307 #10): markers written before 2026-10-30 meant
+# "attempted", so failed/boundary cells may carry one. The per-cell guard in
+# --one re-runs such cells (stale marker + non-zero last row); this upfront
+# listing makes the cost visible before the batch spends hours on them.
+if [ -f "$OUT/batch.tsv" ]; then
+    stale=$(awk -F'\t' '{ last[$1] = $2 } END { for (t in last) print t "\t" last[t] }' \
+            "$OUT/batch.tsv" \
+        | while IFS=$'\t' read -r t rc; do
+              [ "$rc" = "rc=0" ] && continue
+              [ -f "$OUT/$t.done" ] && echo "  $t (last $rc)"
+          done)
+    if [ -n "$stale" ]; then
+        echo "WARNING: .done markers on non-green cells (pre-2026-10-30 attempted-" >&2
+        echo "         semantics) — the guard below will RE-RUN these cells this batch:" >&2
+        echo "$stale" >&2
+    fi
 fi
 xargs -a "$LIST" -P "$P" -I{} "$0" --one {}
 echo "batch end:   $(date '+%F %T')"

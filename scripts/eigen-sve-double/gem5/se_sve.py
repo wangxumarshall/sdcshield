@@ -57,9 +57,27 @@ assert vl_given, (
 )
 binary = pos[0]
 
-# free thread contexts for the workload's clone(2) calls: sdcshield forks a
-# child per test and each child spawns per-CPU worker threads, so provision
-# headroom (main + child + workers) without paying for idle Halted contexts.
+# free thread contexts for the workload's clone(2) calls. cpu_count=4 is
+# CALIBRATED for the campaign shape "-n 1 -f no" (nofork, one worker —
+# empirically sufficient, triage-512 §1); it is not a general formula: more
+# workers than that can exhaust the free-context pool and the next clone(2)
+# returns EAGAIN. Warn loudly when the command shape deviates (PR #307 #12).
+def _scan_flag(argv, flag):
+    for i, a in enumerate(argv):
+        if a == flag and i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+_n = _scan_flag(pos[1:], "-n")
+_f = _scan_flag(pos[1:], "-f")
+if _n != "1" or _f != "no":
+    print(
+        "WARNING: se_sve.py cpu_count=4 is calibrated for '-n 1 -f no'; this "
+        f"command shape ({f'-n {_n}' if _n is not None else 'no -n'} / "
+        f"{f'-f {_f}' if _f is not None else 'no -f'}) may exhaust the free "
+        "thread contexts -> clone(2) EAGAIN",
+        file=sys.stderr,
+    )
 cpu_count = 4
 
 system = System()

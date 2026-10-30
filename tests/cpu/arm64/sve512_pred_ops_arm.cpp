@@ -35,19 +35,30 @@
  *    through the reduction adder, golden in the same lane order
  *    (FADDA is defined left-to-right, so the scalar mirror is exact).
  *
- * 4. LDFF1 + FFR: first-fault load from valid mapped memory must leave
- *    FFR all-true; svrdffr() is compared against the operating predicate
- *    bit-for-bit. FFR is primed with svsetffr() first — an LDFF1 only
- *    clears the bit of a faulting element, so the FFR is only meaningful
- *    against an all-ones starting state. (A faulting LDFF1 is not
- *    exercised — that is kernel territory; the mapped case checks the FFR
- *    datapath itself.) The RDFFR is issued back-to-back with the LDFF1,
+ * 4. LDFF1 + FFR, three faces: (a) first-fault load from valid mapped
+ *    memory must leave FFR all-true — svrdffr() compared against the
+ *    operating predicate bit-for-bit, FFR primed with svsetffr() first
+ *    (an LDFF1 only clears the bit of a faulting element, never sets
+ *    one, so the readback is only meaningful against an all-ones start);
+ *    (b) a FAULTING first-fault load — element 0 mapped, element 1 on an
+ *    unmapped page — must suppress the fault, clear the FFR from lane 1
+ *    onward, and zero the unloaded tail (first-fault suppression is
+ *    precisely what LDFF1 exists for, not kernel territory: the expected
+ *    partially-cleared bit pattern is the only in-process way to drive
+ *    FFR bits to 0 and the only face that can see a stuck-at-1 bit in
+ *    [8, 8*VL); a fault on the FIRST active element is architecturally
+ *    delivered, so lane 0's bits can never be expected-0 and a
+ *    stuck-at-1 there is untestable by LDFF1 — measured on hardware and
+ *    gem5, which agree); (c) a mapped LDFF1 without a SETFFR must leave
+ *    the partially-cleared FFR untouched (accumulation). The RDFFR is
+ *    issued back-to-back with the LDFF1,
  *    and the LDFF1 back-to-back with the SETFFR, with no function call
  *    anywhere in that window — the whole capture is encapsulated in the
  *    single always-inline unit ffr_ldff1_capture (see there): the arm64
  *    Linux syscall ABI discards live
- *    SVE state at syscall entry (kernel fpsimd_syscall_enter() ->
- *    sve_flush_live() zeroes every P register and the FFR), and a
+ *    SVE state at syscall entry (measured on a 6.6 kernel: FFR is
+ *    zeroed, Z/P preserved; kernel sve_flush_{z,p,ffr} macros exist and
+ *    newer kernels may flush more), and a
  *    first-fault load from mapped memory only ever CLEARS FFR bits —
  *    it never sets one — so a syscall anywhere between the SETFFR and
  *    the RDFFR (not just between LDFF1 and RDFFR) leaves the FFR
@@ -73,6 +84,8 @@
 #ifdef __aarch64__
 #include <arm_sve.h>
 #include <device/cpu/arm64/arm64_vl.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #endif
 
 static constexpr size_t FADDA_STEPS = 256;
@@ -95,15 +108,20 @@ static constexpr uint64_t SENTINEL = 0x7FF8DEADBEEF0000ULL;
  *    (measured on a 6.6 kernel: FFR reads 0 after a syscall while Z/P are
  *    preserved; kernels carrying the newer fpsimd syscall-flush rework may
  *    flush P as well — the sve_flush_{z,p,ffr} macros all exist), and
- *  - any callee may itself use SVE and clobber caller-saved Z/P/FFR per
- *    the AAPCS64 SVE rules (an SVE-optimized memcpy in libc is enough),
+ *  - a plain libc call can clobber it with no syscall at all: measured on
+ *    this host's glibc, memcpy() zeroes the FFR (SVE-optimized callee;
+ *    the AAPCS64 does not preserve FFR across calls) while this build's
+ *    memcmp() happened to preserve it — per-call behavior is luck,
  *
  * so a call anywhere between the SETFFR and the RDFFR zeroes/clobbers the
  * FFR just the same as the Sanitizer CI run 40596064101 it fixed (count=0,
  * expected 2 on two workers; the guilty calls there sat after the LDFF1,
  * but any call landing in the window reproduces it). Closing the window
  * only at the scalar count would still leave the loaded Z data exposed on
- * a Z-flushing kernel, so the svst1 is inside the unit too.
+ * a Z-flushing kernel, so the svst1 is inside the unit too. PrimeFFR=false
+ * (accumulation face) additionally requires its capture to follow the
+ * previous one with NO call in between: the partially-cleared FFR it
+ * observes is live state that memcpy would already have destroyed.
  *
  * Count EVERY predicate bit, not just the per-element first bit: CNTP with
  * a b64 pattern tests only bit 0 of each 8-bit slice, so a stuck bit
@@ -132,6 +150,17 @@ ffr_ldff1_capture(const double *from, double *to)
 struct PredOpsData {
     size_t vl_d;
     std::vector<double> src;            // exact operands: src[j] = (j%4)-1.5
+    /* Page pair for the faulting-LDFF1 face: [base, base+ps) mapped and
+       filled with src at its tail, [base+ps, base+2*ps) punched out
+       (munmap) so element 1 of ffr_fault_k1 lands on an unmapped page.
+       The hole is made with munmap, not mprotect(PROT_NONE): gem5 SE
+       maps mprotect to a no-op (ignoreFunc in the ArmLinux64 syscall
+       table), and the fault source must behave identically on hardware
+       and in the gem5-fi dual-kernel validation. */
+    void *ffr_pages = nullptr;          // mmap base (2 pages)
+    size_t ffr_pages_bytes = 0;         // full original mapping (cleanup)
+    double *ffr_mapped = nullptr;       // src at the page-1 tail (mapped)
+    const double *ffr_fault_k1 = nullptr; // elem0 = last mapped double
 };
 
 #ifdef __aarch64__
@@ -162,6 +191,46 @@ static int sve512_pred_ops_arm_init(struct test *test)
         data->src.resize(data->vl_d);
         for (size_t j = 0; j < data->vl_d; ++j)
             data->src[j] = (double)(j % 4) - 1.5;   // exact values
+
+        /* Faulting-LDFF1 plumbing: 2 pages, punch out the second. The
+           governing predicate is all-true, so element 0 (the FIRST active
+           element) must be mapped — a fault there would be DELIVERED
+           (first-fault loads only suppress faults on elements after the
+           first active one; measured on hardware and in gem5) — while
+           element 1 sits on the unmapped page and its fault is suppressed
+           into an FFR clear from lane 1 onward. Needs 8*vl bytes of
+           mapped tail, i.e. 8*vl <= page size (128 <= 4096 at the widest
+           supported VL, but gate anyway: fail closed, not by arithmetic
+           luck). */
+        const long ps = sysconf(_SC_PAGESIZE);
+        if (ps <= 0 || (size_t)ps < 8 * data->vl_d) {
+            log_skip(TestResourceIssueSkipCategory,
+                     "sve512_pred_ops_arm init: page size %ld unusable "
+                     "for the faulting-LDFF1 face (need >= %zu)",
+                     ps, 8 * data->vl_d);
+            return EXIT_SKIP;
+        }
+        void *pg = mmap(nullptr, 2 * (size_t)ps, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (pg == MAP_FAILED) {
+            log_skip(TestResourceIssueSkipCategory,
+                     "sve512_pred_ops_arm init: mmap for the "
+                     "faulting-LDFF1 page pair failed");
+            return EXIT_SKIP;
+        }
+        if (munmap((char *)pg + ps, (size_t)ps) != 0) {
+            munmap(pg, 2 * (size_t)ps);
+            log_skip(TestResourceIssueSkipCategory,
+                     "sve512_pred_ops_arm init: munmap hole punch failed");
+            return EXIT_SKIP;
+        }
+        data->ffr_pages = pg;
+        data->ffr_pages_bytes = 2 * (size_t)ps;
+        data->ffr_mapped = (double *)((char *)pg + ps - 8 * data->vl_d);
+        data->ffr_fault_k1 = (const double *)((char *)pg + ps - 8);
+        for (size_t j = 0; j < data->vl_d; ++j)
+            data->ffr_mapped[j] = data->src[j];
+
         test->data = data.release();
         return EXIT_SUCCESS;
     } catch (const std::exception &e) {
@@ -326,6 +395,58 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                         ffr_bits, 8 * vl);
             all_passed = false;
         }
+        /* Faulting face: element 0 mapped, element 1 on the unmapped
+           hole. The fault must be SUPPRESSED and converted into an FFR
+           clear from lane 1 onward: expected count is exactly element
+           0's 8 bits, the loaded prefix is the last mapped double, and
+           every lane from the first faulting one on is zeroed (loads
+           stop at the first fault). This is the only in-process way to
+           drive FFR bits to an expected-0 state, so it is the ONLY face
+           that can see a stuck-at-1 bit anywhere in [8, 8*vl) — the
+           all-mapped face expects 1s everywhere and is blind to
+           stuck-at-1 by construction. Honest boundary: a fault on the
+           FIRST active element is architecturally delivered (SIGSEGV),
+           and no lane precedes lane 0, so lane 0's 8 bits can never be
+           driven to expected-0 by any first-faulting load — a stuck-at-1
+           in exactly those bits is untestable by LDFF1 (hardware and
+           gem5 agree on this rule). */
+        double fback[16];   // vl <= 16 (init gate): 8*16 = sizeof
+        const long fault_bits = ffr_ldff1_capture<true>(d->ffr_fault_k1,
+                                                        fback);
+        /* Accumulation face: a mapped LDFF1 WITHOUT a SETFFR must leave
+           the partially-cleared FFR untouched — LDFF1 never sets a bit
+           and clears one only on a fault, so the count must still be 8
+           and not snap back to all-ones (or to 0). Catches an FFR
+           write-on-success defect the all-true face cannot see. Its
+           capture MUST follow the faulting one with no call in between:
+           the partially-cleared FFR is live state, and a libc call
+           (memcpy, measured) would clobber it. */
+        const long acc_bits = ffr_ldff1_capture<false>(mem.data(), back.data());
+        if (fault_bits != 8) {
+            log_warning("sve512_pred_ops: FFR partial-clear wrong after "
+                        "faulting LDFF1 (bits=%ld, expected 8 — clear must "
+                        "start at the first faulting lane)",
+                        fault_bits);
+            all_passed = false;
+        }
+        {
+            double fexp[16];   // prefix loads, tail zeroed at the fault
+            fexp[0] = d->src[vl - 1];
+            for (size_t i = 1; i < vl; ++i)
+                fexp[i] = 0.0;
+            if (memcmp(fback, fexp, vl * 8) != 0) {
+                log_warning("sve512_pred_ops: faulting LDFF1 data wrong "
+                            "(prefix must load, tail must zero from the "
+                            "first fault)");
+                all_passed = false;
+            }
+        }
+        if (acc_bits != 8) {
+            log_warning("sve512_pred_ops: mapped LDFF1 touched the FFR "
+                        "outside a fault (bits=%ld, expected 8 — "
+                        "accumulation broken)", acc_bits);
+            all_passed = false;
+        }
         // FMAXV over the whilelt(k=vl/2) masked prefix: exact max
         {
             size_t k = vl / 2;
@@ -354,12 +475,20 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
     }
 
     // Sustained-stress buffers for the FFR datapath (hoisted so the loop
-    // body adds only SVE instructions and one memcmp per iteration; the
+    // body adds only SVE instructions and memcmps per iteration; the
     // FMA part below still allocates per iteration, which is fine — the
-    // only call-free requirement is the [SETFFR, RDFFR] window).
+    // only call-free requirement is the capture window). The re-loop
+    // drives all THREE FFR faces every iteration: mapped (all-ones
+    // golden), faulting (partial-clear golden — the suppressed fault
+    // also keeps the suppression path itself under sustained stress),
+    // and accumulation (mapped load must leave the partial FFR alone).
     std::vector<double> ffr_mem(vl), ffr_back(vl);
     for (size_t i = 0; i < vl; ++i)
         ffr_mem[i] = d->src[i];
+    double f_back[16], f_exp[16];   // vl <= 16 (init gate)
+    f_exp[0] = d->src[vl - 1];
+    for (size_t i = 1; i < vl; ++i)
+        f_exp[i] = 0.0;
 
     while (test_time_condition(test)) {
         // light re-loop of the density sweep (the full sweep already ran)
@@ -412,6 +541,30 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                             "mismatch)", ffr_bits);
             return EXIT_FAILURE;
         }
+        const long fault_bits = ffr_ldff1_capture<true>(d->ffr_fault_k1,
+                                                        f_back);
+        /* accumulation capture back-to-back with the faulting one — the
+           partially-cleared FFR is live state a libc call would clobber */
+        const long acc_bits = ffr_ldff1_capture<false>(ffr_mem.data(),
+                                                       ffr_back.data());
+        if (fault_bits != 8) {
+            report_fail_msg("sve512_pred_ops_arm: FFR partial-clear SDC "
+                            "detected (re-loop: ffr_bits=%ld, expected 8 "
+                            "after faulting LDFF1)", fault_bits);
+            return EXIT_FAILURE;
+        }
+        if (memcmp(f_back, f_exp, vl * 8) != 0) {
+            report_fail_msg("sve512_pred_ops_arm: faulting LDFF1 data SDC "
+                            "detected (re-loop: FFR partial-clear intact at "
+                            "%ld bits, prefix/tail mismatch)", fault_bits);
+            return EXIT_FAILURE;
+        }
+        if (acc_bits != 8) {
+            report_fail_msg("sve512_pred_ops_arm: FFR accumulation SDC "
+                            "detected (re-loop: ffr_bits=%ld, expected 8 "
+                            "unchanged after a mapped LDFF1)", acc_bits);
+            return EXIT_FAILURE;
+        }
     }
 
     return EXIT_SUCCESS;
@@ -421,7 +574,10 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
 static int sve512_pred_ops_arm_cleanup(struct test *test)
 {
 #ifdef __aarch64__
-    delete static_cast<PredOpsData *>(test->data);
+    auto *d = static_cast<PredOpsData *>(test->data);
+    if (d && d->ffr_pages)
+        munmap(d->ffr_pages, d->ffr_pages_bytes);  // hole inside: legal
+    delete d;
 #else
     (void)test;
 #endif

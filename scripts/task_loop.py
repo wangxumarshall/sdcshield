@@ -288,6 +288,20 @@ def _resolve_state_dir() -> str:
     return os.path.expanduser(DEFAULT_STATE_DIR)
 
 
+def _resolve_clone_dir() -> str:
+    """当前生效的 agent 专用克隆目录(与 _resolve_state_dir 同款式: env
+    双轨 TASKLOOP_CLONE_DIR > CITRIAGE_CLONE_DIR > DEFAULT,统一
+    expanduser)。轮5(L4): 此前四种拼法散在 dispatch/_git/heal/cmd_audit
+    ——nested-get 与 or-chain 对空串语义相反,expanduser 只有 cmd_audit
+    做(tilde 路径下 audit 过自身 isdir 前置后 _git 拿到未展开字面量,
+    每 tick RuntimeError)。单一出口杜绝克隆路径分叉。"""
+    for key in ("TASKLOOP_CLONE_DIR", "CITRIAGE_CLONE_DIR"):
+        v = os.environ.get(key)
+        if v:
+            return os.path.expanduser(v)
+    return DEFAULT_CLONE_DIR
+
+
 def _with_scan_lock(fn):
     """在 scan.lock(阻塞)内执行 fn 并返回其结果。
 
@@ -1310,9 +1324,7 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
               if entry.source == "ci" else build_task_prompt(entry))
     log = _agent_log_path(entry.run_id if entry.source == "ci"
                           else entry.issue_number)
-    clone_dir = os.environ.get("TASKLOOP_CLONE_DIR",
-                               os.environ.get("CITRIAGE_CLONE_DIR",
-                                              DEFAULT_CLONE_DIR))
+    clone_dir = _resolve_clone_dir()
     env_file = os.path.join(_resolve_state_dir(), AGENT_ENV_NAME)
     if not os.path.exists(env_file):
         # 轮5 B44: 凭据文件缺失不再假记账——source 短路下 claude 从未
@@ -1974,9 +1986,7 @@ def _git(args: list[str], clone_dir: Optional[str] = None) -> str:
     cwd=clone_dir, timeout=45, capture_output=True, text=True)。非零退出
     抛 RuntimeError(调用方捕获后打印错误、scan 继续)。
     """
-    cwd = clone_dir if clone_dir is not None else (
-        os.environ.get("TASKLOOP_CLONE_DIR")
-        or os.environ.get("CITRIAGE_CLONE_DIR") or DEFAULT_CLONE_DIR)
+    cwd = clone_dir if clone_dir is not None else _resolve_clone_dir()
     try:
         proc = subprocess.run(["git", *args], cwd=cwd,
                               capture_output=True, text=True,
@@ -2005,8 +2015,7 @@ def heal_clone(state: dict, dry_run: bool = False) -> None:
     dry_run 只打印意图、零 git 调用。异常(git 失败/非零退出)→ 打印错误,
     不炸 scan——自愈失败留给下一轮重试,观测/派发照常。
     """
-    clone_dir = os.environ.get("TASKLOOP_CLONE_DIR") or \
-        os.environ.get("CITRIAGE_CLONE_DIR") or DEFAULT_CLONE_DIR
+    clone_dir = _resolve_clone_dir()
     if has_running_agent(state):
         print(f"[heal] 有 agent 在跑,跳过克隆自愈(不踩工作区: {clone_dir})")
         return
@@ -2705,10 +2714,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
     同样应落在克隆里,chdir 一并前置。克隆目录缺失时如实报错返回 2,
     绝不静默留在用户工作区跑审查。
     """
-    clone_dir = os.path.expanduser(
-        os.environ.get("TASKLOOP_CLONE_DIR",
-                       os.environ.get("CITRIAGE_CLONE_DIR",
-                                      DEFAULT_CLONE_DIR)))
+    clone_dir = _resolve_clone_dir()
     if not os.path.isdir(clone_dir):
         print(f"[audit] 克隆目录不存在: {clone_dir}——先 clone 或设 "
               f"TASKLOOP_CLONE_DIR 指向 CI 专用克隆", file=sys.stderr)

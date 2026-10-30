@@ -193,3 +193,4 @@ sve_rot_ldr_at_top_rowmajor_k7p_one	pass	2	2006.979
 sve_rot_ldr_at_top_rowmajor_k7p_rand	pass	2	1993.004
 sve_rot_ldr_at_top_rowmajor_k7p_zero	pass	2	2027.201
 swizzle_sve	pass	68	1087.778
+# mce_check (framework-appended, not a list test): pass

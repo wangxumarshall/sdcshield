@@ -193,3 +193,4 @@ sve_rot_ldr_at_top_rowmajor_k7p_one	timed out	1	317381.379
 sve_rot_ldr_at_top_rowmajor_k7p_rand	timed out	1	365804.161
 sve_rot_ldr_at_top_rowmajor_k7p_zero	timed out	1	318057.911
 swizzle_sve	pass	72	1096.093
+# mce_check (framework-appended, not a list test): pass

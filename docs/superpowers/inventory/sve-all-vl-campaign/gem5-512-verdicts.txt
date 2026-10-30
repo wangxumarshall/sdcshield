@@ -202,13 +202,19 @@ sve_rot_ldr_at_top_rowmajor_k7p_rand	0	646	exit: pass	432294318000	pass
 sve_rot_ldr_at_top_rowmajor_k7p_zero	0	648	exit: pass	432244027000	pass
 swizzle_sve	0	9	exit: pass	5960680000	pass
 #
-# skip-audit (triage-512 §5.4 discipline): rc=0 cannot mechanically
-# exclude an honest init-skip — without --fatal-skips a skip also exits 0
-# and still prints "exit: pass" (framework/logging.cpp:587 vocabulary is
-# pass/fail/interrupted/invalid only; native 128 leg sve512_fmmla_arm). The
-# tick column is the audit handle: an honest init-skip stops at the
-# framework init floor (no test round — in the 2026-10-29 clean batch the
-# lowest real-run tick was 5.94e9, fma_sve). Lowest 10 rc=0 ticks:
+# skip-audit (triage-512 §5.4 discipline + mechanical floor, PR #307 #15):
+# rc=0 alone cannot exclude an honest init-skip — without --fatal-skips a
+# skip also exits 0 and still prints "exit: pass" (framework/logging.cpp:587
+# vocabulary is pass/fail/interrupted/invalid only; native 128 leg
+# sve512_fmmla_arm), and per-test yaml blocks are suppressed by the overlay
+# (0 of 190 campaign logs carry a "result:" line). Rows whose rc=0 tick
+# falls below the floor are classified ANOMALY(init-skip) above and stop
+# matrix generation (matrix-gen.sh FATALs on unknown verdicts).
+# Floor basis (measured 2026-10-30, batch command shape, gem5 md5
+# 3f9011f4...): honest skip sve2_cross_precision_arm @512 = 5.786e9;
+# lightest clean-batch real run fma_sve = 5.942e9; floor = 5.9e9.
+# LIMIT: a skip with heavy test_init can tick ABOVE the floor — audit
+# the lowest rc=0 ticks below by hand when reusing this extractor:
 #   5941874000 fma_sve
 #   5941995000 insert_extract_sve
 #   5945205000 lsu_store_forward_sve

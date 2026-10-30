@@ -20,21 +20,25 @@
 #   verdict classification (mechanical; process exit code is authoritative —
 #   the overlay can suppress the exit: line and mislabel skips, so the line
 #   is only corroboration):
-#       pass     rc=0 with the exit line present as "exit: pass"
+#       pass     rc=0 with the exit line present as "exit: pass" AND tick
+#                >= the init-skip floor (tick_floor in the awk below)
 #       timeout  rc=124 (outer 3600s timeout)
 #       fail     "exit: fail" or rc!=0 with an exit line
 #       crash    rc!=0 without an exit line (gem5 fatal / signal)
 #       ANOMALY  anything else (flagged for manual triage) — including rc=0
-#                with the exit line SUPPRESSED: never auto-pass such a cell.
-#                Without --fatal-skips an honest init-skip ALSO exits 0
-#                (framework/sandstone.cpp: exit_code = EXIT_FAILURE only on
-#                total_failures || (total_skips && fatal_skips)), and the
-#                exit-line vocabulary is pass/fail/interrupted/invalid only
-#                (framework/logging.cpp:587) — a skipped run still prints
-#                "exit: pass" (native 128 leg, sve512_fmmla_arm). rc=0
-#                therefore cannot MECHANICALLY exclude a skip; the appended
-#                skip-audit block (tick floor, triage-512 §5.4) is the
-#                required corroboration when reusing this extractor.
+#                with the exit line SUPPRESSED, and rc=0+"exit: pass" whose
+#                tick is BELOW the init-skip floor. Never auto-pass such
+#                cells: without --fatal-skips an honest init-skip ALSO exits
+#                0 (framework/sandstone.cpp: exit_code = EXIT_FAILURE only
+#                on total_failures || (total_skips && fatal_skips)) and
+#                still prints "exit: pass" (vocabulary pass/fail/interrupted/
+#                invalid only, framework/logging.cpp:587). No log LINE
+#                discriminates: per-test yaml blocks are suppressed by the
+#                overlay (0 of 190 campaign logs carry a "result:" line) —
+#                the tick floor is the only mechanical handle. LIMIT: a skip
+#                whose test_init is heavier than the lightest real round can
+#                tick ABOVE the floor; the appended skip-audit block (lowest
+#                rc=0 ticks) is the required human corroboration.
 #
 # The script refuses to trust a partial batch: missing rows abort loudly with
 # the missing test names on stderr.
@@ -113,6 +117,16 @@ fi
             }
             close(BATCHARG)
             missing = 0
+            # init-skip tick floor (PR #307 #15; measured 2026-10-30 with
+            # the exact batch command shape on the campaign host, gem5 md5
+            # 3f9011f4...): an honest init-skip runs NO test round, so its
+            # tick sits below the lightest real run. Measured honest skip
+            # sve2_cross_precision_arm @512 (SVE2 gate closed in gem5) =
+            # 5.786e9; lightest clean-batch real run fma_sve = 5.942e9;
+            # floor 5.9e9 sits between them. Re-anchor this constant from a
+            # fresh skip-vs-lightest-real measurement when reusing the
+            # extractor on a different binary/config.
+            tick_floor = 5900000000
             for (i = 1; i <= n; i++) {
                 t = order[i]
                 if (!(t in rc)) {
@@ -123,7 +137,11 @@ fi
                 hasexit = (exitl[t] != "<no-exit-line>")
                 e = exitl[t]; sub(/^exit: /, "", e)
                 v = "ANOMALY"
-                if (rc[t] == 0 && e == "pass") v = "pass"
+                if (rc[t] == 0 && e == "pass") {
+                    v = "pass"
+                    if (tick[t] != "" && tick[t] + 0 < tick_floor)
+                        v = "ANOMALY(init-skip)"
+                }
                 else if (rc[t] == "124") v = "timeout"
                 else if (hasexit && e == "fail") v = "fail"
                 else if (!hasexit && rc[t] != 0) v = "crash"
@@ -134,13 +152,19 @@ fi
         }
     ' /dev/null
     echo "#"
-    echo "# skip-audit (triage-512 §5.4 discipline): rc=0 cannot mechanically"
-    echo "# exclude an honest init-skip — without --fatal-skips a skip also exits 0"
-    echo "# and still prints \"exit: pass\" (framework/logging.cpp:587 vocabulary is"
-    echo "# pass/fail/interrupted/invalid only; native 128 leg sve512_fmmla_arm). The"
-    echo "# tick column is the audit handle: an honest init-skip stops at the"
-    echo "# framework init floor (no test round — in the 2026-10-29 clean batch the"
-    echo "# lowest real-run tick was 5.94e9, fma_sve). Lowest 10 rc=0 ticks:"
+    echo "# skip-audit (triage-512 §5.4 discipline + mechanical floor, PR #307 #15):"
+    echo "# rc=0 alone cannot exclude an honest init-skip — without --fatal-skips a"
+    echo "# skip also exits 0 and still prints \"exit: pass\" (framework/logging.cpp:587"
+    echo "# vocabulary is pass/fail/interrupted/invalid only; native 128 leg"
+    echo "# sve512_fmmla_arm), and per-test yaml blocks are suppressed by the overlay"
+    echo "# (0 of 190 campaign logs carry a \"result:\" line). Rows whose rc=0 tick"
+    echo "# falls below the floor are classified ANOMALY(init-skip) above and stop"
+    echo "# matrix generation (matrix-gen.sh FATALs on unknown verdicts)."
+    echo "# Floor basis (measured 2026-10-30, batch command shape, gem5 md5"
+    echo "# 3f9011f4...): honest skip sve2_cross_precision_arm @512 = 5.786e9;"
+    echo "# lightest clean-batch real run fma_sve = 5.942e9; floor = 5.9e9."
+    echo "# LIMIT: a skip with heavy test_init can tick ABOVE the floor — audit"
+    echo "# the lowest rc=0 ticks below by hand when reusing this extractor:"
     awk -F'\t' '
         $2 == "rc=0" && $5 ~ /@ tick / {
             t = $5; sub(/^.*@ tick /, "", t); sub(/ .*/, "", t)

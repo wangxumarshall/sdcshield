@@ -32,13 +32,13 @@
 - Produces: 注册测试 `spinlock_add_neon`；knobs：`logverif`（0/1，默认 0）、`selftest`（0=off/1=stall/2=data）；日志 `/var/tmp/spinlock_add_neon_<pid>.log`（仅 logverif=1 时创建）
 
 **设计定案（实现者须逐条遵守）：**
-- 锁行结构 `alignas(64)` 恰 64B：`lock_word(0=free/1=held) | epoch | holder | magic | pad[5]`——dump 格式对齐五案"8 字节窗口、同行其余字段完好"指纹
-- 内核：16 向量 × 4 组 × 4 轮 vfma 链（`a=vfmaq(a,b,c)` 轮换），输入 |x|≤1 时输出界 ~1806（有限、确定性、无 NaN 路径）
+- 锁行结构 `alignas(64)` 恰 64B：`lock_word(0=free/1=held) | epoch | holder | magic | pad[4]`——dump 格式对齐五案"8 字节窗口、同行其余字段完好"指纹
+- 内核：4 组 × 4 向量 × 4 轮 vfma 链（`a=vfmaq(a,b,c)` 轮换），输入 |x|≤1 时输出理论上界 ~3e20（<<FLT_MAX、有限、确定性、无 NaN 路径；探针实测 10^6 slot max|out|≈1.36e20——原稿 ~1806 系错误数学，首轮检视 :304 已修正代码注释，此处同步）
 - 输入映射：`(float)((int32)random32() / 2147483648.0)` ∈ [-1,1)，init 一次性生成 SLOTS(128)×64 float，所有线程只读共享
 - 获锁：`__atomic_compare_exchange_n(..., __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)` 自旋 + `yield`；等待 >10.0s（对齐 sbsa-gwdt）→ dump 全行 + report_fail
 - 释放：临界区内 `shared_counter++/local_counts[slot]++/holder/epoch++` 后 `__atomic_store_n(lock_word,0,__ATOMIC_RELEASE)`
 - 多核逻辑安全：slot=cpu%128 输入只读、内核纯函数、out 线程栈私有、计数对（shared/local）同在临界区（窗口 < locks.cpp 先例）、日志 O_APPEND 单 write()
-- selftest=stall：首个进临界区线程持锁 sleep(11)（需 ≥2 线程、-t ≥25000）；selftest=data：init 毒化 `golden[0]+=1.0f`
+- selftest=stall：首个进临界区线程持锁 sleep(11)（需 ≥2 线程、-t ≥25000）；selftest=data：init 对各 slot golden[0] 位级 XOR 最低尾数位（原设计 `+=1.0f` 在 |x|≥2^24 时舍入后位型不变、毒化静默失效——首轮检视 :304 已改位级毒化，此处同步）
 - 日志行：`iter=N cpu=C in=[4 floats] out=[4 floats] result=\033[32mPASS\033[0m`（失败 \033[31mFAIL）；每线程上限 10000 行后仅记失败（防爆炸）；失败行永不受限
 - 非 aarch64：不编译（meson aarch64 门控；检视处置删除了原设计的 log_skip 占位死分支）
 

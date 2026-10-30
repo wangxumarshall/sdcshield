@@ -53,10 +53,18 @@ export PATH="$HOME/.local/bin:$PATH" \
        CPLUS_INCLUDE_PATH=$HOME/.local/zlib/include \
        LIBRARY_PATH=$HOME/.local/zlib/lib
 scons -C CHAOS/gem5 build/ARM/gem5.opt -j32     # ~25 min at -j32 on 127 cores
-# -> /home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt (1.1 GB)
-#    (= run_sve.sh's default G5, the binary the 2026-10 all-VL campaign
-#     verified, md5 3f9011f40dbe80ec1df478c62ddb0b06; a byte-identical
-#     copy also exists at /home/sdc/wangxu/gem5-fi/build/ARM/gem5.opt)
+# TRAP (gem5-fi repo README "已知陷阱" / campaign plan Task 4 Step 3):
+# `scons -C` writes the artifact to the REPO-ROOT build/ARM/gem5.opt — NOT
+# to CHAOS/gem5/build/ARM/. run_sve.sh defaults to the CHAOS path, so after
+# a rebuild you MUST copy it back or the runner silently keeps the STALE
+# binary (historically produced "injection not taking effect" ghosts):
+mkdir -p CHAOS/gem5/build/ARM
+cp -f build/ARM/gem5.opt CHAOS/gem5/build/ARM/gem5.opt
+md5sum CHAOS/gem5/build/ARM/gem5.opt
+# (the binary the 2026-10 all-VL campaign verified:
+#  md5 3f9011f40dbe80ec1df478c62ddb0b06, 1.1 GB; both paths held
+#  byte-identical copies as of 2026-10-30 because the copy-back above had
+#  been done — repo-root copy mtime 17:46:32, CHAOS copy 17:47:13)
 ```
 
 Pitfalls hit and solved (all reproducible from the log above):

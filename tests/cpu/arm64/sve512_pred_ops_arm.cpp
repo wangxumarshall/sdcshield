@@ -324,6 +324,14 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         return EXIT_FAILURE;
     }
 
+    // Sustained-stress buffers for the FFR datapath (hoisted so the loop
+    // body adds only SVE instructions and one memcmp per iteration; the
+    // FMA part below still allocates per iteration, which is fine — the
+    // only call-free requirement is the [SETFFR, RDFFR] window).
+    std::vector<double> ffr_mem(vl), ffr_back(vl);
+    for (size_t i = 0; i < vl; ++i)
+        ffr_mem[i] = d->src[i];
+
     while (test_time_condition(test)) {
         // light re-loop of the density sweep (the full sweep already ran)
         svbool_t pg = svwhilelt_b64_u64(0, vl - 1);
@@ -343,6 +351,29 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                                 "detected (re-loop)");
                 return EXIT_FAILURE;
             }
+        }
+
+        // Re-sample the first-fault datapath every iteration — Section 4
+        // above is the detailed one-shot pass, but the framework calls
+        // test_run once per worker (sandstone_run.cpp), so without this
+        // the LDFF1/FFR path gets a single sampling opportunity and a
+        // marginal SDC that only shows under sustained stress escapes
+        // (AGENTS.md: timed continuous stress, short-run pass proves
+        // nothing). The [SETFFR, RDFFR] window here must stay free of
+        // function calls exactly as in Section 4: test_time_condition()
+        // above, the FMA-part allocations, and the memcmp below all sit
+        // outside it.
+        svsetffr();
+        svfloat64_t v = svldff1_f64(all, ffr_mem.data());
+        svbool_t ffr = svrdffr();
+        const long ffr_bits = svcntp_b8(svptrue_b8(), ffr);
+        svst1_f64(all, ffr_back.data(), v);
+        if (ffr_bits != (long)(8 * vl) ||
+            memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
+            report_fail_msg("sve512_pred_ops_arm: FFR/LDFF1 SDC detected "
+                            "(re-loop: ffr_bits=%ld, expected %zu)",
+                            ffr_bits, 8 * vl);
+            return EXIT_FAILURE;
         }
     }
 

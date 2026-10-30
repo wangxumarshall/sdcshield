@@ -186,12 +186,19 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     # 主负载的内存防线是 monitor 联锁（v5 §8.6 分工），主阶段路径零内存检查
     cleanup_orphans
     local i rcf
+    # 复测线程数沿用原命令的 -n/--threads；原命令未指定时不传（框架默认全核）。
+    # 旧实现硬编码 -n 0：框架按最小值 1 线程运行并告警，多线程用例随即
+    # "requires at least 2 threads" SKIP —— 2026-10-30 事件因此留下
+    # "retest rc=0 fail/crash=0" 的假复跑通过记录（retest1.out 实证）。
+    local nthr_args=()
+    read -ra nthr_args <<< "$(printf '%s\n' "$cmd" \
+        | grep -oE -- '(^| )(-n|--threads)[= ]+[0-9]+' | head -1)"
     : > "$evdir/retests.txt"
     if [ -n "$failed_test" ] && [ -n "$seed_ok" ]; then
         for i in 1 2 3; do
             sleep 5; check_pause
             retest_guarded "retest$i" "$evdir/retests.txt" 150s \
-                "$BIN" -e "$failed_test" -s "$fail_seed" -n 0 -t 120s --max-test-loop-count=0 \
+                "$BIN" -e "$failed_test" -s "$fail_seed" "${nthr_args[@]}" -t 120s --max-test-loop-count=0 \
                 "${FLAGS[@]}" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
             rcf=$?
             [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记

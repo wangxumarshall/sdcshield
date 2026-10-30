@@ -1188,3 +1188,28 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
     分档验证，未在本轮处置。
   - mesh 用例在 `-t 60s`（L3 轮转）时相位 2 未开始即 PASS（空过）；
     与核心缺陷正交，未在本轮改。
+
+## 2026-10-31（重构建暴露 openssl_sm3sm4 确定性异常——布局敏感, 非 SDC; 根因未定）
+
+- **现象**: 用 HEAD（29da76ef）重构建后, `openssl_sm3sm4` 单线程 4KB、
+  `-s LCG:435143909` 确定性 FAIL（roundtrip mismatch, 偏移 16 起）;
+  任意 seed/尺寸同败。旧战役二进制（f9046e4b22d2-dirty, 10-29 11:07
+  构建）同参数 PASS。frameworks/tests 差异 54 文件（#300-#316 同期合入）。
+- **实证链**:
+  - 代码一致: `ssl_sm3sm4_run/init`、`sm4_cbc_*`、EVP 包装、
+    `memset_random`、`sandstone_ssl_init` 归一化反汇编逐指令相同;
+    `libcrypto.a`（install 与源码目录两份）解包对象逐一 sha256 相同;
+    s_EVP_* 指针与静态符号地址一致; OPENSSL_armcap_P 两者均 0xbd
+    （无 SM4/SM3 位, 走 C 实现）。
+  - 数据/库正确: gdb 取到失败运行的真实 key/iv/plaintext, 用同一
+    libcrypto.a 独立复算 = 标准 CBC（`51ab2046…`）, 而二进制自身
+    EVP 输出为 `d91a9b71…`——SM4 各模式与 AES 各档均不匹配。
+  - 布局敏感: 在测试内加 4 行调试语句（仅失败时落盘）→ 5/5 PASS;
+    撤销后 3/3 FAIL。`OPENSSL_armcap=0` 时 FAIL 变 PASS。
+- **定性**: 确定性、可复现的软件/构建异常, 非硬件 SDC。根因未定位
+  （库/测试代码相同而结果不同, 疑与构建期状态或运行期 OpenSSL
+  分派状态被破坏有关, 待独立排查）。
+- **运行处置**: 独立全量名单剔除 `openssl_sm3sm4`（299 用例, 其余
+  全部在跑）; 战役 L3 仍会命中一次（`-F` 未开, 记 FAIL 不中断）,
+  事件按本条定性处置。旧 dirty 二进制的通过结果不可作为基线（其
+  源码状态不可复现）。

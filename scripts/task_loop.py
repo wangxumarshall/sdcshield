@@ -2290,16 +2290,19 @@ def _audit_hash(finding: dict) -> str:
 
 def _search_finding_issue(h: str) -> Optional[int]:
     """gh search issues 按 body marker 查 session findings 幂等(PR#317
-    检视#16 轮2): 命中 open issue 号,无匹配返回 None——重跑 enqueue-bug
-    --findings-file 时已建条目据此跳过(与 _search_audit_issue 同款形态,
-    独立命名空间)。"""
-    res = gh_json(["search", "issues", "--repo", repo_slug(),
-                   "--state", "open", "--json", "number,body",
-                   "--limit", "20", f"task-loop:finding:{h}"])
+    检视#16 轮2): 命中 issue 号(任意状态),无匹配返回 None——重跑
+    enqueue-bug --findings-file 时已建条目据此跳过(与 _search_audit_issue
+    同款形态,独立命名空间)。轮5(会话#1)补双态搜索: session 路径无
+    state 第二源,人工驳回关闭后 open-only 重跑必然重建被拒 finding 并
+    自动派 agent——与检视#35(轮4)给 audit 修的是同一缺陷类。"""
     marker = FINDING_MARKER_FMT.format(hash=h)
-    for it in (res if isinstance(res, list) else []):
-        if marker in (it.get("body") or ""):
-            return int(it["number"])
+    for st in ("open", "closed"):
+        res = gh_json(["search", "issues", "--repo", repo_slug(),
+                       "--state", st, "--json", "number,body",
+                       "--limit", "20", f"task-loop:finding:{h}"])
+        for it in (res if isinstance(res, list) else []):
+            if marker in (it.get("body") or ""):
+                return int(it["number"])
     return None
 
 

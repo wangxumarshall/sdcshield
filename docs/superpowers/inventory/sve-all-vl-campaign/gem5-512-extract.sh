@@ -93,6 +93,7 @@ fi
             while ((getline line < LIST) > 0) {
                 sub(/\r$/, "", line)
                 if (line == "" || line ~ /^#/) continue
+                sub(/\|.*/, "", line)   # list contract: optional "|time|default" suffix (parse_test_list_line)
                 n++; order[n] = line
             }
             close(LIST)
@@ -148,7 +149,10 @@ fi
 } > "$OUT"
 
 rows=$(grep -c -v "^#" "$OUT"); rows=$((rows - 1))
-expected=$(grep -c . "$LIST")
+# expected count uses the SAME line contract as the awk loader above (blank
+# and ^# lines skipped) — grep -c . would count comment lines and false-fail
+# the row check on a commented list (PR #307 #21).
+expected=$(awk '{ sub(/\r$/, ""); if ($0 == "" || $0 ~ /^#/) next; n++ } END { print n + 0 }' "$LIST")
 if [ "$rows" -ne "$expected" ]; then
     echo "ERROR: $rows data rows != $expected list tests in $OUT" >&2
     exit 2

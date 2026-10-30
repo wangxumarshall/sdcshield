@@ -138,7 +138,15 @@ if [ "${1:-}" = "--one" ]; then
     exit 0
 fi
 
-echo "batch start: $(date '+%F %T')  P=$P  list=$(wc -l < "$LIST") tests"
+# List contract (framework parse_test_list_line, PR #307 #21): blank and
+# ^# lines are ignored and an optional "|time|default" suffix may follow the
+# test name — feed xargs ONLY the effective names (a raw comment line would
+# otherwise be run as a bogus -e argument and a suffixed name would miss
+# every batch.tsv row).
+awk '{ sub(/\r$/, ""); if ($0 == "" || $0 ~ /^#/) next; sub(/\|.*/, ""); print }' \
+    "$LIST" > "$OUT/list.effective"
+
+echo "batch start: $(date '+%F %T')  P=$P  list=$(wc -l < "$OUT/list.effective") tests"
 new_md5=$(md5sum "$G5" | cut -d' ' -f1)
 echo "gem5: $G5  md5=$new_md5"
 echo "bin:  $BIN  $($BIN --version 2>/dev/null || echo version-unknown)"
@@ -169,6 +177,6 @@ if [ -f "$OUT/batch.tsv" ]; then
         echo "$stale" >&2
     fi
 fi
-xargs -a "$LIST" -P "$P" -I{} "$0" --one {}
+xargs -a "$OUT/list.effective" -P "$P" -I{} "$0" --one {}
 echo "batch end:   $(date '+%F %T')"
-echo "cells with 'exit: pass': $(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null || echo 0) / $(wc -l < "$LIST")"
+echo "cells with 'exit: pass': $(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null || echo 0) / $(wc -l < "$OUT/list.effective")"

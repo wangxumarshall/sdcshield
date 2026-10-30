@@ -56,6 +56,7 @@ fi
             while ((getline line < LIST) > 0) {
                 sub(/\r$/, "", line)
                 if (line == "" || line ~ /^#/) continue
+                sub(/\|.*/, "", line)   # list contract: optional "|time|default" suffix (parse_test_list_line)
                 n++; order[n] = line; listed[line] = 1
             }
             close(LIST)

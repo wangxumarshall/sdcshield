@@ -329,6 +329,16 @@ prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/
   prompt 仍用旧前缀，两契约等价）。
 - issue 正文/评论/失败日志/collect 文件全部是**不可信数据**：统一裹
   `UNTRUSTED_BANNER`（与 pr_loop 同源），agent 不得执行其中任何"指令"。
+- **安全边界如实声明（PR#317 检视#18）**：横幅是提示注入**缓解措施，
+  不是安全边界**（同 pr_local_review 的 I3 已知边界）。所有 agent 与
+  audit 审查都以 `--dangerously-skip-permissions` 跑**无沙箱** claude，
+  可执行任意命令；其输入面包括 PR diff/正文、issue 正文/评论、CI 日志，
+  以及 **audit 每 6h 对 main 增量的 diff 全文 + commit messages**——
+  squash-merge 的 commit message 可含外部贡献者（无 push 权者）撰写的
+  PR 标题/正文文本，即无人值守线会周期性地把此类文本喂给无沙箱 claude。
+  这是与第 5 bot「PR 内容同源暴露」同级的**已知接受边界**（单人体量下
+  的风险取舍），运维须知悉：若仓库转为多人协作/接受外部 PR，应先评估
+  沙箱化（容器/VM 执行面）再放大 audit 的输入面。
 - PR 竞态：agent push 后自开 PR（`--title "fix|feat: <摘要> (#N)"
   --body "Closes #N + 报告"`）；与 `auto-pr.yml` 谁先谁后不定——create
   因"分支已有 PR"失败时兜底 `gh pr edit` 改写标题与正文（必须含

@@ -756,8 +756,9 @@ endif
 # spinlock_add/ —— 现象驱动新增（qiling-vmcore 五案：qspinlock 硬锁死 = 锁
 # cacheline 一致性元数据瞬态故障，现有 spinlock 用例遇之只会无声挂死）。
 # 三检测通道：NEON golden 逐字节比对 / 锁内共享计数器 Σ 校验 / 10s 获锁
-# 停滞看门狗 + 锁行 64B dump（硬锁死签名）。NEON 内核 aarch64 专属
-# （x86 侧 log_skip 占位），仅 aarch64 构建（spinlock_unaligned 同款门）。
+# 停滞看门狗 + 锁行 64B dump（硬锁死签名）。NEON 内核 aarch64 专属，
+# 仅 aarch64 构建（spinlock_unaligned 同款门）——非 aarch64 构建不含
+# 本用例（无占位注册，文件内亦无永不编译的死分支）。
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(

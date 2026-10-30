@@ -15,7 +15,7 @@
 - CLAUDE.md 规则 1：one patch per unit（测试本体一个 commit，计数同步一个 commit）
 - CLAUDE.md 规则 2：build.sh 零新告警 + 真实运行引用输出 + zstd19 回归 + x86 非回归（新文件 aarch64 门控）
 - CLAUDE.md 规则 3：`git commit -s`，feature 分支（feat/spinlock-add-neon），不推 main
-- CLAUDE.md 规则 5/6：x86 不受影响（meson `host_machine.cpu_family() == 'aarch64'` 门，spinlock_unaligned 先例）；非 aarch64 侧 log_skip 占位
+- CLAUDE.md 规则 5/6：x86 不受影响（meson `host_machine.cpu_family() == 'aarch64'` 门，spinlock_unaligned 先例）；非 aarch64 构建不含本用例（检视处置 2026-10-30：原「log_skip 占位」分支在门控下永不编译，已删除——见 PR#328 检视 :760 处置）
 - 检测器自检纪律（coherence_probe SELFTEST_W 同款）：新机部署必跑 selftest 两通道
 - 机器现状约束：-O0/-O3 两臂实验占用 cpuset 0-123 至 ~14:44 —— 验证运行全部钉到 124-127 空闲核，收官后再补全核跑
 
@@ -40,7 +40,7 @@
 - 多核逻辑安全：slot=cpu%128 输入只读、内核纯函数、out 线程栈私有、计数对（shared/local）同在临界区（窗口 < locks.cpp 先例）、日志 O_APPEND 单 write()
 - selftest=stall：首个进临界区线程持锁 sleep(11)（需 ≥2 线程、-t ≥25000）；selftest=data：init 毒化 `golden[0]+=1.0f`
 - 日志行：`iter=N cpu=C in=[4 floats] out=[4 floats] result=\033[32mPASS\033[0m`（失败 \033[31mFAIL）；每线程上限 10000 行后仅记失败（防爆炸）；失败行永不受限
-- 非 aarch64：init/run 全部 log_skip 占位（core179 约定）
+- 非 aarch64：不编译（meson aarch64 门控；检视处置删除了原设计的 log_skip 占位死分支）
 
 - [x] **Step 1: 创建测试文件**（完整代码，见下方代码块——本计划的权威版本）
 

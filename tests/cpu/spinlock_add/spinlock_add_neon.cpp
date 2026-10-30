@@ -58,9 +58,10 @@
 #include <unistd.h>
 #include <time.h>
 
-#if defined(__aarch64__)
-#include <arm_neon.h>
-#endif
+#include <arm_neon.h> /* 本文件仅经 tests/cpu/meson.build 的 aarch64 门控编译
+                       *（spinlock_unaligned 同款先例）；非 aarch64 构建不含
+                       * 本用例——误接线时 arm_neon.h/NEON intrinsics 即编译
+                       * 失败，显式暴露而非无声死代码 */
 
 #define SPINLOCK_ADD_NEON_SLOTS 128
 #define SPINLOCK_ADD_NEON_FLOATS 64          /* 16 x float32x4 */
@@ -98,8 +99,6 @@ static uint64_t spinlock_add_neon_now_ns(void)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
-
-#if defined(__aarch64__)
 
 /* 纯函数 NEON 内核：4 组 x (a,b,c,d) 向量链 x 4 轮 vfma。确定性（IEEE 单
  * 舍入 FMA），无共享状态。 */
@@ -247,26 +246,8 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 }
 
-#else /* !__aarch64__ */
-
-static int spinlock_add_neon_run(struct test *test, int cpu)
-{
-    (void)test; (void)cpu;
-    log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): aarch64 NEON required for spinlock_add_neon");
-    return EXIT_SKIP;
-}
-
-#endif
-
 static int spinlock_add_neon_init(struct test *test)
 {
-#if !defined(__aarch64__)
-    (void)test;
-    log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): aarch64 NEON required for spinlock_add_neon");
-    return EXIT_SKIP;
-#else
     auto *d = static_cast<SpinlockAddNeonData *>(malloc(sizeof(SpinlockAddNeonData)));
     if (!d)
         return EXIT_FAILURE;
@@ -359,7 +340,6 @@ fail:
     free(d->local_counts);
     free(d);
     return EXIT_FAILURE;
-#endif
 }
 
 static int spinlock_add_neon_cleanup(struct test *test)
@@ -367,7 +347,6 @@ static int spinlock_add_neon_cleanup(struct test *test)
     auto *d = static_cast<SpinlockAddNeonData *>(test->data);
     int ret = EXIT_SUCCESS;
     if (d) {
-#if defined(__aarch64__)
         /* 通道B：Σ 逐线程获锁数 == 共享计数器（数据行写丢失检测；
          * add-only 无抵消方向；优雅收尾下计数对同窗更新，无逻辑假阳性） */
         uint64_t total = 0;
@@ -386,7 +365,6 @@ static int spinlock_add_neon_cleanup(struct test *test)
              * 先释放后报告；这里直接以返回值收尾，退出码路径完整）。 */
             ret = EXIT_FAILURE;
         }
-#endif
         if (d->log_fd >= 0)
             close(d->log_fd);
         free(d->inputs);

@@ -1002,3 +1002,58 @@ def test_audit_dead_base_revision_self_heals(tmp_path, monkeypatch, capsys):
         raise RuntimeError("git fetch … 失败(exit 128)")
     monkeypatch.setattr(tl, "_git", boom)
     assert tl.run_audit(dry_run=True) == 1
+
+
+# ===== PR#317 轮 4 检视修复 =====
+
+def test_timeout_outcome_kills_live_agent_before_requeue(monkeypatch, tmp_path):
+    """检视#33(轮4): timeout 判档先于探活,PID 可能仍活——重派路径清引用
+    前必须击杀(孤儿化+单飞失明+heal 踩活工作区);dead 结局击杀幂等无害。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    killed = []
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "timeout")
+    monkeypatch.setattr(tl, "_kill_agent_if_alive",
+                        lambda e: (killed.append(e.agent_pid),
+                                   setattr(e, "agent_pid", None)))
+    state = {"entries": [dict(
+        workflow="Sanitizer", run_id=3, status="DISPATCHED", issue_number=11,
+        fix_branch="fix/ci-3", pr_number=None, attempts=1, rounds=0,
+        agent_pid=555, agent_started_at=None, agent_log=None,
+        last_dispatched_head=None, extra_runs=[], created_at="t",
+        updated_at="t", source="ci", kind="bug", audit_hash=None)],
+        "auth_failure_streak": 0}
+    tl.reap_or_advance(state, dry_run=False)
+    assert killed == [555]                    # timeout 活 PID 被击杀
+    e = tl.StateStore.entries(state)[0]
+    assert e.attempts == 2 and e.agent_pid is None   # 走重派记账
+
+
+def test_audit_search_finding_issue_checks_closed_too(monkeypatch):
+    """检视#35(轮4): audit 幂等查重双态搜索——创建轮中途崩溃+人工驳回
+    关闭的组合窗口下,不得重建人工已驳回的 issue。"""
+    states_queried = []
+    def fake_gh(args, input_text=None):
+        if tuple(args[:2]) == ("search", "issues"):
+            states_queried.append(args[args.index("--state") + 1])
+            if args[args.index("--state") + 1] == "closed":
+                return [{"number": 77, "body": "x "
+                         + tl.AUDIT_MARKER_FMT.format(hash="ab" * 8) + " y"}]
+            return []
+        return None
+    monkeypatch.setattr(tl, "gh_json", fake_gh)
+    assert tl._search_audit_issue("ab" * 8) == 77
+    assert states_queried == ["open", "closed"]     # 双态都查了
+
+
+def test_audit_non_dry_ensures_labels(monkeypatch, tmp_path):
+    """检视#36(轮4): audit 单独存活的部署(scan 停用)下,建 finding issue
+    前须幂等确保 agent-* 标签在位——否则每个 create 都 GhError,cursor
+    永不推进,覆盖面静默归零。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    called = []
+    monkeypatch.setattr(tl, "ensure_agent_labels",
+                        lambda: called.append(1))
+    monkeypatch.setattr(tl, "_with_scan_lock", lambda fn: called.append("m"))
+    monkeypatch.setattr(tl, "_paused", lambda: True)   # PAUSED 早退前已确保
+    assert tl.run_audit(dry_run=False) == 0
+    assert called == ["m", 1]                # 迁移后、PAUSED 闸前已确保标签

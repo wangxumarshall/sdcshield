@@ -276,6 +276,26 @@ def _resolve_state_dir() -> str:
     return os.path.expanduser(DEFAULT_STATE_DIR)
 
 
+def _with_scan_lock(fn):
+    """在 scan.lock(阻塞)内执行 fn 并返回其结果。
+
+    audit 线对 state 的写路径统一经 scan.lock(锁序恒 audit→scan,与
+    _audit_state_merge_write 一致,单向无死锁)——检视#34(轮4): 迁移的
+    TOCTOU 检查+copy2 若在 audit.lock 下裸跑,可与 scan.lock 内的同一
+    函数交错写坏 state.json(load 只捕 FileNotFoundError,损坏即每 tick
+    裸崩)。scan 线自身已持 scan.lock,不经本助手(同进程对同一文件的
+    第二个 flock 会自阻塞)。"""
+    state_dir = _resolve_state_dir()
+    os.makedirs(state_dir, exist_ok=True)
+    lock_fd = os.open(os.path.join(state_dir, SCAN_LOCK_NAME),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        return fn()
+    finally:
+        os.close(lock_fd)
+
+
 def _migrate_legacy_state_dir() -> None:
     """首启动自动迁移(spec §10): 新目录无 state.json 且旧目录有 → 拷贝
     state.json + agent.env(已存在则跳过该文件)。旧目录保留归档不动;
@@ -1485,6 +1505,11 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                       f"(streak {state['auth_failure_streak']}"
                       f"/{AUTH_FAILURE_STREAK_LIMIT}),不重派等下一轮")
         else:   # dead / timeout
+            # 检视#33(轮4): timeout 判档先于探活(check_agent_outcome 的
+            # C1 判定序),PID 可能仍活(claude 挺过 SIGTERM/D 状态/宿主挂
+            # 起后墙钟超窗)——清引用前必须击杀,否则孤儿化 + 单飞失明 +
+            # heal_clone 踩活工作区(dead 结局本已死,击杀幂等无害)。
+            _kill_agent_if_alive(entry)
             entry.attempts += 1
             _requeue_or_escalate(entry, state,
                                  "agent " + ("超时" if outcome == "timeout"
@@ -2182,13 +2207,17 @@ def _search_finding_issue(h: str) -> Optional[int]:
 def _search_audit_issue(h: str) -> Optional[int]:
     """gh search issues 按 body marker 查 audit 幂等(双源之一,另一源 state
     audit_seen)。"""
-    res = gh_json(["search", "issues", "--repo", repo_slug(),
-                   "--state", "open", "--json", "number,body",
-                   "--limit", "20", f"task-loop:audit:{h}"])
     marker = AUDIT_MARKER_FMT.format(hash=h)
-    for it in (res if isinstance(res, list) else []):
-        if marker in (it.get("body") or ""):
-            return int(it["number"])
+    # 检视#35(轮4): 双态搜索——创建轮中途崩溃(hash 未落 audit_seen)叠加
+    # 人工驳回关闭的组合窗口下,open-only 会重建人工已驳回的 issue(违背
+    # ci 源「绝不重建人工关闭的 issue」的人工接管语义)。
+    for st in ("open", "closed"):
+        res = gh_json(["search", "issues", "--repo", repo_slug(),
+                       "--state", st, "--json", "number,body",
+                       "--limit", "20", f"task-loop:audit:{h}"])
+        for it in (res if isinstance(res, list) else []):
+            if marker in (it.get("body") or ""):
+                return int(it["number"])
     return None
 
 
@@ -2280,8 +2309,18 @@ def run_audit(dry_run: bool = False) -> int:
         if not dry_run:
             # 首启动迁移(裁定 7 续,与 scan 同口径): 仅非 dry——dry-run
             # 复跑无痕零本地写;env 重定向的 run 由内部守卫豁免(不动真实
-            # 默认目录)。
-            _migrate_legacy_state_dir()
+            # 默认目录)。检视#34(轮4): 迁移在 scan.lock 内执行,与 scan
+            # 线互斥(锁序 audit→scan,与 _audit_state_merge_write 一致),
+            # 防并发首跑 TOCTOU 交错写坏 state.json。
+            _with_scan_lock(_migrate_legacy_state_dir)
+            # 检视#36(轮4): scan 线停用/持续失败而 audit 单独存活的部署
+            # 下,标签缺失会让每个 finding 的 issue create GhError、cursor
+            # 永不推进——建 issue 前先幂等确保 agent-* 标签在位。
+            try:
+                ensure_agent_labels()
+            except GhError as exc:
+                print(f"[warn] audit 侧标签确保失败(继续,建 issue 失败将"
+                      f"整体返回 1): {exc}")
         if _paused():
             print("[paused] PAUSED 生效,audit 跳过 claude 调用(观测照常)")
             return 0

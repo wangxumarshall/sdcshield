@@ -126,10 +126,11 @@ PAUSED 熔断；第 5 bot（local-claude）连续 3 tick 缺位仅告警不降�
   `agent-task` 但仍 open 的条目同样冻结（不误判 HUMAN_CLOSED）。边界：
   open 列表 `--limit 100`（与 manual 入队同限），超限的 open issue 不在
   快照内会被冻结——设计队列规模（单仓库同时活跃任务数）远小于此。
-  **控制面边界（PR#317 检视#27/#31 轮3）**：① ci 源条目豁免"不在
-  open+agent-task 列表"的成员资格冻结——v1 迁移的存量 ci issue 由旧
-  `create_issue` 创建（不带 `--label`），永不在快照内；ci 条目的冻结面
-  = 关闭 issue（HUMAN_CLOSED）或全局 PAUSED。② 车道 B 的 bot 处置
+  **控制面边界（PR#317 检视#27/#31/#37 轮3-4）**：① ci 源条目**整体**
+  豁免"不在 open+agent-task 列表"的成员资格冻结（论据是 v1 存量 ci
+  issue 由旧 `create_issue` 创建、永不在快照内；新 ci issue 同样适用，
+  无日落条件——代价是"摘 agent-task"对 ci 条目不构成冻结手段）；ci
+  条目的冻结面 = 关闭 issue（HUMAN_CLOSED）或全局 PAUSED。② 车道 B 的 bot 处置
   派发（PR_OPEN→BOT_FIX）**不**复查标签资格——对在检 PR 冻结 bot
   处置的手段是关闭 issue 或 PAUSED，不是打标签。
 - intake 自动打的标签：ci 源 `agent-task agent-bug`；audit 源
@@ -264,9 +265,11 @@ python3 scripts/task_loop.py status            # 队列总览: streak/PAUSED/单
                                                #   + 全部条目 + 待入队任务
 python3 scripts/task_loop.py dry-run           # scan 只读演练: 零 gh 写/零 git/零派发/零本地写
                                                #   (不建状态目录/锁文件),复跑无痕
-python3 scripts/task_loop.py audit --dry-run   # audit 只读演练: 展示将审查的提交范围,
+python3 scripts/task_loop.py audit --dry-run   # audit 演练: 展示将审查的提交范围,
                                                #   零 claude 调用,state 不落盘,
-                                               #   零本地写(不建锁文件)
+                                               #   零本地写(不建锁文件)——但
+                                               #   git fetch --all --prune 是真实
+                                               #   远端引用刷新(克隆内写,检视#39)
 ```
 
 env 重定向（测试/多实例）：`TASKLOOP_STATE_DIR`（>

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ci_triage.py — 兼容薄壳(过渡期,PR-1a): 全部职责已搬至 task_loop.py。
 #
+# SPDX-License-Identifier: Apache-2.0
+#
 # 必须用**模块别名**而非 `from task_loop import *`: 测试做
 # `import ci_triage as ct` 后 `monkeypatch.setattr(ct, "gh_json", ...)`
 # ——星号 re-export 会产生两份命名空间,monkeypatch 打在壳模块上、

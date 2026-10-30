@@ -28,7 +28,9 @@
  *                                        通道A 应触发（单线程即可，cpu 无关）
  *
  * 负载形态：每线程独立 NEON vfma 链（64 floats/slot，输入 ∈ [-1,1]，
- * 4 组 × 4 向量 × 4 轮 fused multiply-add，输出界 ~1806 无溢出无 NaN 路径），
+ * 4 组 × 4 向量 × 4 轮 fused multiply-add，输出理论上界 ~3e20——4 轮交叉
+ * vfma 指数增长所致，远小于 FLT_MAX，无溢出无 NaN 路径；本机探针实测
+ * 10^6 slot max|out|=1.36e20、无非有限值），
  * 随后在全局自旋锁（CAS-acquire / release-store，qspinlock 同指令谱系）
  * 临界区内递增共享计数器——深争用 + 实算负载。
  *
@@ -62,7 +64,7 @@
 
 #define SPINLOCK_ADD_NEON_SLOTS 128
 #define SPINLOCK_ADD_NEON_FLOATS 64          /* 16 x float32x4 */
-#define SPINLOCK_ADD_NEON_ROUNDS 4           /* |x|<=1 → 输出界 ~1806（有限） */
+#define SPINLOCK_ADD_NEON_ROUNDS 4           /* |x|<=1 → 输出理论上界 ~3e20（<<FLT_MAX；实测 max ~1.4e20） */
 #define SPINLOCK_ADD_NEON_STALL_SECONDS 10.0 /* sbsa-gwdt 同阈值 */
 #define SPINLOCK_ADD_NEON_LOG_MAX 10000      /* 每线程逐次日志行上限 */
 #define SPINLOCK_ADD_NEON_MAGIC 0x5A5AC0DE5A5AC0DEull
@@ -298,10 +300,18 @@ static int spinlock_add_neon_init(struct test *test)
     }
 
     /* 自检 data：毒化每个 slot 的 golden 首元素（cpu 无关——任意 cpuset 布局
-     * 都会命中；输出界 ~1806，+1.0f 保证相异） */
+     * 都会命中）。位级 XOR 最低尾数位：对任意位型（含 0/±Inf/NaN 及
+     * |x|>=2^24 的 ulp>1 值域）无条件改变，memcmp 必检出——+1.0f 在
+     * |x|>=2^24 时舍入后位型不变（本机探针：10^6 slot 有 164 个的
+     * out[0] 落在该域，0.016%），毒化会静默失效 */
     if (d->selftest == 2)
-        for (int s = 0; s < SPINLOCK_ADD_NEON_SLOTS; ++s)
-            d->golden[(size_t)s * SPINLOCK_ADD_NEON_FLOATS] += 1.0f;
+        for (int s = 0; s < SPINLOCK_ADD_NEON_SLOTS; ++s) {
+            float *g = &d->golden[(size_t)s * SPINLOCK_ADD_NEON_FLOATS];
+            uint32_t bits;
+            memcpy(&bits, g, sizeof bits);
+            bits ^= 1;
+            memcpy(g, &bits, sizeof bits);
+        }
 
     /* 锁行初始化 */
     d->line->lock_word = 0;

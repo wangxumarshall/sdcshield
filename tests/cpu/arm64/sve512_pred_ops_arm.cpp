@@ -266,18 +266,28 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // count=0, expected 2 on two workers). Capture the FFR and its
         // active-lane count while no call can intervene.
         svbool_t ffr = svrdffr();
-        const long ffr_count = svcntp_b64(all, ffr);
+        // Count EVERY predicate bit, not just the per-element first bit:
+        // CNTP with a b64 pattern tests only bit 0 of each 8-bit slice, so
+        // a stuck bit anywhere in bits 1..7 of a slice kept the old count
+        // at vl and passed — an SDC blind spot the header's bit-for-bit
+        // claim did not cover. The governing predicate must be b8 all-true
+        // as well: CNTP activates an element only where BOTH predicates
+        // have their first slice bit set, so a b64 governing predicate
+        // would mask bytes 1..7 and keep the blind spot. The golden is
+        // all-ones and there are exactly 8*vl predicate bits, so
+        // count == 8*vl is precisely a bit-for-bit comparison.
+        const long ffr_bits = svcntp_b8(svptrue_b8(), ffr);
         std::vector<double> back(d->vl_d);
         svst1_f64(all, back.data(), v);
         if (memcmp(back.data(), mem.data(), d->vl_d * 8) != 0) {
             log_warning("sve512_pred_ops: LDFF1 readback mismatch");
             all_passed = false;
         }
-        // FFR must equal the governing predicate (all-true here)
-        if (ffr_count != (long)vl) {
+        // FFR must be all-true in every predicate bit after a mapped LDFF1
+        if (ffr_bits != (long)(8 * vl)) {
             log_warning("sve512_pred_ops: FFR not all-true after mapped "
-                        "LDFF1 (count=%ld, expected %zu)",
-                        ffr_count, vl);
+                        "LDFF1 (bits=%ld, expected %zu)",
+                        ffr_bits, 8 * vl);
             all_passed = false;
         }
         // FMAXV over the whilelt(k=vl/2) masked prefix: exact max

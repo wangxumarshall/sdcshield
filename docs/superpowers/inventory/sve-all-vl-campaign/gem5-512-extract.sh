@@ -16,14 +16,25 @@
 #   identity header (gem5 md5, sdcshield version, command shape),
 #   column header, then ONE row per listed test IN LIST ORDER:
 #       <test> <rc> <wall-s> <exit-line> <tick> <verdict>
+#   then a trailing skip-audit comment block (see below).
 #   verdict classification (mechanical; process exit code is authoritative —
 #   the overlay can suppress the exit: line and mislabel skips, so the line
 #   is only corroboration):
-#       pass     rc=0 (exit: line present as "exit: pass", or suppressed)
+#       pass     rc=0 with the exit line present as "exit: pass"
 #       timeout  rc=124 (outer 3600s timeout)
 #       fail     "exit: fail" or rc!=0 with an exit line
 #       crash    rc!=0 without an exit line (gem5 fatal / signal)
-#       ANOMALY  anything else (flagged for manual triage)
+#       ANOMALY  anything else (flagged for manual triage) — including rc=0
+#                with the exit line SUPPRESSED: never auto-pass such a cell.
+#                Without --fatal-skips an honest init-skip ALSO exits 0
+#                (framework/sandstone.cpp: exit_code = EXIT_FAILURE only on
+#                total_failures || (total_skips && fatal_skips)), and the
+#                exit-line vocabulary is pass/fail/interrupted/invalid only
+#                (framework/logging.cpp:587) — a skipped run still prints
+#                "exit: pass" (native 128 leg, sve512_fmmla_arm). rc=0
+#                therefore cannot MECHANICALLY exclude a skip; the appended
+#                skip-audit block (tick floor, triage-512 §5.4) is the
+#                required corroboration when reusing this extractor.
 #
 # The script refuses to trust a partial batch: missing rows abort loudly with
 # the missing test names on stderr.
@@ -89,7 +100,7 @@ ver=$(/home/sdc/wangxu/sdcshield-main/builddir/sdcshield --version 2>/dev/null |
                 hasexit = (exitl[t] != "<no-exit-line>")
                 e = exitl[t]; sub(/^exit: /, "", e)
                 v = "ANOMALY"
-                if (rc[t] == 0 && (e == "pass" || e == "<no-exit-line>")) v = "pass"
+                if (rc[t] == 0 && e == "pass") v = "pass"
                 else if (rc[t] == "124") v = "timeout"
                 else if (hasexit && e == "fail") v = "fail"
                 else if (!hasexit && rc[t] != 0) v = "crash"
@@ -99,6 +110,19 @@ ver=$(/home/sdc/wangxu/sdcshield-main/builddir/sdcshield --version 2>/dev/null |
             exit(missing ? 1 : 0)
         }
     ' /dev/null
+    echo "#"
+    echo "# skip-audit (triage-512 §5.4 discipline): rc=0 cannot mechanically"
+    echo "# exclude an honest init-skip — without --fatal-skips a skip also exits 0"
+    echo "# and still prints \"exit: pass\" (framework/logging.cpp:587 vocabulary is"
+    echo "# pass/fail/interrupted/invalid only; native 128 leg sve512_fmmla_arm). The"
+    echo "# tick column is the audit handle: an honest init-skip stops at the"
+    echo "# framework init floor (no test round — in the 2026-10-29 clean batch the"
+    echo "# lowest real-run tick was 5.94e9, fma_sve). Lowest 10 rc=0 ticks:"
+    awk -F'\t' '
+        $2 == "rc=0" && $5 ~ /@ tick / {
+            t = $5; sub(/^.*@ tick /, "", t); sub(/ .*/, "", t)
+            print t, $1
+        }' "$BATCH" | sort -n | head -10 | sed 's/^/#   /'
 } > "$OUT"
 
 rows=$(grep -c -v "^#" "$OUT"); rows=$((rows - 1))

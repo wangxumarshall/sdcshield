@@ -200,3 +200,21 @@ sve_rot_ldr_at_top_rowmajor_k7p_one	0	647	exit: pass	432243638000	pass
 sve_rot_ldr_at_top_rowmajor_k7p_rand	0	646	exit: pass	432294318000	pass
 sve_rot_ldr_at_top_rowmajor_k7p_zero	0	648	exit: pass	432244027000	pass
 swizzle_sve	0	9	exit: pass	5960680000	pass
+#
+# skip-audit (triage-512 §5.4 discipline): rc=0 cannot mechanically
+# exclude an honest init-skip — without --fatal-skips a skip also exits 0
+# and still prints "exit: pass" (framework/logging.cpp:587 vocabulary is
+# pass/fail/interrupted/invalid only; native 128 leg sve512_fmmla_arm). The
+# tick column is the audit handle: an honest init-skip stops at the
+# framework init floor (no test round — in the 2026-10-29 clean batch the
+# lowest real-run tick was 5.94e9, fma_sve). Lowest 10 rc=0 ticks:
+#   5941874000 fma_sve
+#   5941995000 insert_extract_sve
+#   5945205000 lsu_store_forward_sve
+#   5951101000 sve512_pred_ops_arm
+#   5952840000 bigint_mulx_sve
+#   5955766000 gmp_bignum_sve
+#   5956369000 kreg9_sve
+#   5958302000 kreg2_sve
+#   5958401000 kreg5_sve
+#   5958932000 sve_fpcr_cartesian_arm

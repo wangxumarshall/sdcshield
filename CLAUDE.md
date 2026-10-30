@@ -21,14 +21,23 @@ routes you; consult it before guessing.
    behavior is unrunnable on this machine because the chip lacks the
    capability (missing HWCAP/HWCAP2 bit such as SME, an unsupported VL/SVL
    tier, a newer ISA generation), then verifying only the SKIP path is NOT
-   sufficient — the change MUST be validated in gem5-fi
-   (`/home/sdc/wangxu/operator/gem5-fi`, CHAOS/SE, same-source dual kernel under
-   `workloads/sdcshield/`) at the affected VL/SVL tiers, quoting real run
-   output (tier, checksum, `SDCSHIELD_FAILS=0`); if gem5 validation is
-   genuinely impossible, state that verification boundary honestly instead.
-   Never pass off "SKIP reason unchanged" as the verification of a
-   functional change (PR #242 precedent: input-formula fix verified by
-   `sme_za_tileview_dual.c` at SVL 128/256/512/1024-bit).
+   sufficient — the change MUST be validated in gem5-fi (CHAOS/SE,
+   same-source dual kernel under `workloads/sdcshield/`) at the affected
+   VL/SVL tiers, quoting real run output (tier, checksum,
+   `SDCSHIELD_FAILS=0`); if gem5 validation is genuinely impossible, state
+   that verification boundary honestly instead. Never pass off "SKIP reason
+   unchanged" as the verification of a functional change (PR #242 precedent:
+   input-formula fix verified by `sme_za_tileview_dual.c` at SVL
+   128/256/512/1024-bit). The gem5-fi workspace path is per-host — probe it,
+   don't trust stale doc paths (this host: `/home/sdc/wangxu/gem5-fi`,
+   vendored source under `CHAOS/gem5/`; older docs say `operator/`). Two
+   vehicles: the dual kernel above, or — since the 2026-10 all-VL campaign —
+   the **real sdcshield binary** under gem5 SE at any VL via a 9-syscall
+   stub chain (gem5-fi branch `feat/sve-se-prctl-stub-2026-10-28`): run
+   with `-f no` (nofork, one test per process), verdict = process exit
+   code; known limit — a benign shmem mmap-remap overlay caps each test at
+   ~1 inner loop (functional correctness only; stress dimensions stay on
+   native legs) and masks per-thread attribution detail.
 3. **DCO + auto-push** — `git commit -s` (last line `Signed-off-by: wangxu
    <wangxumarshall@qq.com>`, nothing after, no Co-Authored-By). Push each
    verified commit to the feature branch, never `main`; run
@@ -131,11 +140,13 @@ END_DECLARE_TEST
   wider VL. Verification path follows rule 2: tiers the host supports are
   verified natively here; tiers it lacks go to gem5-fi
   (`--sve_vl/--sme_vl {1,2,4,8}` = 128/256/512/1024-bit). `tests_sve`
-  compiles at fixed 128-bit; `sleef_sve` stays there by design. The two Eigen
-  SVE tests no longer need a VL-pinning launcher: each payload is built once
-  per tier (GEMM 128/256/512/1024, complex SVD 128/256/512) under its own
-  Eigen namespace and a vector-length-agnostic dispatcher picks the variant
-  matching the framework-pinned worker VL.
+  compiles at fixed 128-bit; `sleef_sve` and the sve_rot probe family live
+  in the true-VLA `tests_sve_vla` library and run at any runtime VL
+  (verified 128/256 native + 512 gem5, 2026-10-30 all-VL campaign). The two
+  Eigen SVE tests no longer need a VL-pinning launcher: each payload is built
+  once per tier (GEMM 128/256/512/1024, complex SVD 128/256/512) under its
+  own Eigen namespace and a vector-length-agnostic dispatcher picks the
+  variant matching the framework-pinned worker VL.
 - **ARM64 spec policy (2026-10-27)**: sdcshield probes the chip's spec once
   (`arm64_spec_get()`: extension bits + the MAXIMUM tier, measured by asking
   the kernel for the architectural ceiling and reading back what it granted —

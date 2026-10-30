@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-10-30（会话：SVE 全 VL 验证运动收口——190×3 证据矩阵 + gem5 真二进制 SE 通路）
+
+### 结论
+
+- **矩阵结果**：190 个 SVE 用例（tag∪name 枚举，`sve-test-list.txt`）× 128/256/512-bit
+  = **570 格：560 pass（469 直绿 + 91 有界几何）+ 1 合法 SKIP + 9 gem5 边界格 + 0 FAIL**。
+  **全程零测试代码缺陷**——Task 7 发现-修复循环无测试修复可做，缩减为两个工具卫生项
+  （extract-summary.sh mce_check 行 / run_sve.sh 陈旧 G5 默认路径）。
+- **三类发现，全部分诊闭环**：① 环境性（256 腿 seed1 25 格超时：内存自适应几何把
+  单迭代工作量放大到 300 s 超时预算内无法完成一轮，与 seed 无关 → 同 seed 有界
+  重跑全绿）；② 架构性合法 SKIP（唯一格 `sve512_fmmla_arm@128`，F64MM
+  UNDEFINED <VL=256，实测 SIGILL）；③ gem5 侧限制（9 格：2×PMULL64 GCM
+  [gem5 缺 64-bit PMULL 编码] + 3×DC-CIVAC [SE 模式缓存维护路径 raise
+  UndefinedInstruction] + 4×仿真速超时 [~1400× 减速下单轮超实用预算]；native 两档全绿）。
+- **三腿采集方式**：128 = `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 进程内降档（避开
+  `PR_SVE_SET_VL` 不跨 `execve` 的坑，见 2026-10-27 怪癖条目）、256 = 原生默认档，
+  各 2 seeds（LCG:1001/1002）；512 = gem5 SE 跑真 sdcshield 二进制。
+- **gem5 真二进制 SE 通路（可复用资产）**：gem5-fi 分支 `feat/sve-se-prctl-stub-2026-10-28`
+  （HEAD `ad6e36d2`）9-syscall stub 链：sched_getaffinity（真填线程上下文位图）→
+  memfd_create（ENOSYS，框架自有 fallback 接管）→ prlimit RLIMIT_NOFILE → socket
+  三件套 → fcntl64 F_DUPFD/F_DUPFD_CLOEXEC（补第三参语义）→ dup3 → perf_event_open
+  （ENOSYS）→ fdatasync（ignore）→ clock_nanosleep（ignoreWarnOnce）。执行模式
+  `-f no` nofork + 单测单进程，判定 = **进程退出码**（`exit:` 行会被间歇抑制）。
+- **shmem 叠印根因（Ruling H，benign）**：gem5 不保留 MAP_SHARED tmpfile 内容跨
+  munmap+重映射，而框架 `commit_shmem()` 的拆-重映射是 Linux 合法模式 → 重映射页
+  全零 → PerThreadData 叠印 SharedMemory（NDEBUG 吞掉 assert 防线）→ 后果三连：
+  `-t` 时限预算结构性失效（每测试恰 ~1 轮内层循环 ⇒ **512 腿语义 = 功能性正确性，
+  压力/重复维度归 native 腿**）、Skip 标签虚标（曾致 `--fatal-skips` 假红格，已废弃
+  该旗标）、exit 行间歇抑制。非越界写——三重实证：源码写入点审计 + /tmp 探针
+  native/gem5 对照（gem5 零填重映射页）+ syscall 追踪 clone-pid 值闭环（104 = worker
+  tid 落 `+0x2c`）。
+- **Ruling G（冻结基线 + delta）**：矩阵钉在 `12ccda540fd4` + campaign commits
+  （`git diff 12ccda54..HEAD -- tests/ framework/` 为空）；运动期间并行合并的
+  PR #302（eigen 修复，merge `51868e40`）与 PR #316（SVE OOB 四连修，merge
+  `29da76ef`）不在矩阵语义内（各自 PR-loop 自带验证义务）。
+- **Ruling I（边界格终局）**：9 个 gem5 边界格终局；gem5 侧补 PMULL64 编码 +
+  DC-CIVAC SE 路径（圈外后续）可转绿 5 格。
+- **Ruling J（框架健壮性观察，未修）**：`mem_disambig_alu_sve` 超时杀灭迟滞实测
+  **1280 s**（300 s 预算的 4.3 倍，triage-256 §4 #15）——超时收尸路径的迟滞值得
+  框架侧关注；其时间窗与一次 seed2 中途死亡+主机重启吻合（相关、因果未证）。
+
+### 实证
+
+- 工件全部入库 `docs/superpowers/inventory/sve-all-vl-campaign/`：
+  `matrix.md`（570 格，`matrix-gen.sh` 从 8 份入库工件机械生成、幂等、内置断言）
+  + 4 份 native summary（128/256 × 2 seeds）+ `gem5-512-verdicts.txt`（190 行
+  机械判定）+ `triage-{128,256,512}.md` + `gem5-overrides.txt`（16 条降容，以文件
+  为权威）。原始 yaml 日志按 Ruling E 不入库（.gitignore）。
+- 抽查 10+1 格回放原始工件全部一致（Task 8）；`sve512_fmmla_arm@512` 经 Exec 追踪
+  直证 514 条 `fmmla` 真实执行；`sleef_sve@512` 平反链顺带产出"SLEEF SVE 内核在
+  gem5@512 逐位确定"的正面证据。
+- gem5 二进制 md5 `3f9011f40dbe80ec1df478c62ddb0b06`（9-stub 终版），sdcshield
+  `12ccda540fd4`，native 与 512 腿同源。
+- campaign 分支 `feat/sve-all-vl-verification-2026-10-28`：`12ccda54` 起运动提交
+  全部为 docs / campaign 工具脚本 / gem5 启动脚本，零 tests/framework 改动。
+
+### 状态与下一步
+
+- 运动收口（Task 9 = README/CLAUDE.md/本日志三处文档同步）。后续候选：gem5 侧
+  PMULL64 / DC-CIVAC 实装（转绿 5 格）；`mem_disambig` 杀灭迟滞的框架侧修复评估。
+
+---
+
 ## 2026-10-26（会话：主机向量能力「先探测、不假设」规则化）
 
 ### 结论（本机实测）

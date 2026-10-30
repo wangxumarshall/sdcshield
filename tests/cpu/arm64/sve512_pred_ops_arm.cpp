@@ -446,26 +446,37 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         }
     }
 
-    /* FFR bitmap goldens + capture images, shared by Section 4 and the
-       sustained re-loop below (built once, outside every capture window —
-       only intrinsics and memcmps run per face). One byte per FFR bit:
-       8*vl bytes, vl <= 16 (init gate) bounds every array at 128.
-       m_gold: mapped face, every FFR bit set. f_gold: faulting AND
-       accumulation faces — element 0's 8 bits set (the fault sits at
-       element 1 = byte 8), the rest clear. */
+    /* FFR face goldens + shared capture buffers for Section 4 AND the
+       sustained re-loop below — hoisted to ONE construction site (round-3
+       review #19: the fault-layout golden used to exist as two isomorphic
+       hand-built copies, fexp/f_exp, with drifting fback/f_back names; a
+       fault-layout change now edits this one place). Built outside every
+       capture window — only intrinsics and memcmps run per face. One
+       byte per FFR bit: 8*vl bytes, vl <= 16 (init gate) bounds every
+       byte array at 128. m_gold: mapped face, every FFR bit set.
+       f_gold: faulting AND accumulation faces — element 0's 8 bits set
+       (the fault sits at element 1 = byte 8), the rest clear. ffr_mem
+       carries the src pattern for the mapped/accumulation loads and
+       doubles as their readback buffer; f_back/f_exp are the faulting
+       face's data buffer and golden (prefix loads the last mapped
+       double, tail zeroed at the fault). */
     uint8_t m_gold[128], f_gold[128];
     uint8_t m_img[128], f_img[128], a_img[128];
+    std::vector<double> ffr_mem(vl), ffr_back(vl);
+    double f_back[16], f_exp[16];   // vl <= 16 (init gate)
     for (size_t i = 0; i < 8 * vl; ++i) {
         m_gold[i] = 1;
         f_gold[i] = (i < 8) ? 1 : 0;
     }
+    for (size_t i = 0; i < vl; ++i)
+        ffr_mem[i] = d->src[i];
+    f_exp[0] = d->src[vl - 1];
+    for (size_t i = 1; i < vl; ++i)
+        f_exp[i] = 0.0;
 
     // ---------------- Section 4: LDFF1 + FFR + FMAXV ----------------
     {
-        // valid mapped memory -> first-fault must not fault, FFR all-true
-        std::vector<double> mem(d->vl_d);
-        for (size_t i = 0; i < d->vl_d; ++i)
-            mem[i] = d->src[i];
+        // valid mapped memory -> first-fault must not fault, FFR all-true.
         // Prime FFR to all-ones before the first-fault load (LDFF1 only
         // *clears* the FFR bit of each faulting element — it never sets a
         // bit — so without SETFFR the readback is the previous,
@@ -476,10 +487,10 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // in ffr_ldff1_capture's one body. The readback buffers are
         // allocated BEFORE the window so no call can land between the
         // capture and the store even on a Z-flushing kernel.
-        std::vector<double> back(d->vl_d);
-        const long ffr_bits = ffr_ldff1_capture<true>(mem.data(), back.data(),
+        const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
+                                                      ffr_back.data(),
                                                       m_img);
-        if (memcmp(back.data(), mem.data(), d->vl_d * 8) != 0) {
+        if (memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
             log_warning("sve512_pred_ops: LDFF1 readback mismatch");
             all_passed = false;
         }
@@ -508,7 +519,6 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            driven to expected-0 by any first-faulting load — a stuck-at-1
            in exactly those bits is untestable by LDFF1 (hardware and
            gem5 agree on this rule). */
-        double fback[16];   // vl <= 16 (init gate): 8*16 = sizeof
         /* Accumulation face: a mapped LDFF1 WITHOUT a SETFFR must leave
            the partially-cleared FFR untouched — LDFF1 never sets a bit
            and clears one only on a fault, so the count must still be 8
@@ -520,8 +530,8 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            partially-cleared FFR is live state, and a libc call — memcpy,
            measured — would clobber it). */
         long fault_bits, acc_bits;
-        ffr_fault_acc_capture(d->ffr_fault_k1, fback, f_img, mem.data(),
-                              back.data(), a_img, fault_bits, acc_bits);
+        ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
+                              ffr_back.data(), a_img, fault_bits, acc_bits);
         if (memcmp(f_img, f_gold, 8 * vl) != 0) {
             log_warning("sve512_pred_ops: FFR partial-clear wrong after "
                         "faulting LDFF1 (count=%ld, expected 8, first "
@@ -530,17 +540,11 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                         ffr_first_diff(f_img, f_gold, 8 * vl));
             all_passed = false;
         }
-        {
-            double fexp[16];   // prefix loads, tail zeroed at the fault
-            fexp[0] = d->src[vl - 1];
-            for (size_t i = 1; i < vl; ++i)
-                fexp[i] = 0.0;
-            if (memcmp(fback, fexp, vl * 8) != 0) {
-                log_warning("sve512_pred_ops: faulting LDFF1 data wrong "
-                            "(prefix must load, tail must zero from the "
-                            "first fault)");
-                all_passed = false;
-            }
+        if (memcmp(f_back, f_exp, vl * 8) != 0) {
+            log_warning("sve512_pred_ops: faulting LDFF1 data wrong "
+                        "(prefix must load, tail must zero from the "
+                        "first fault)");
+            all_passed = false;
         }
         if (memcmp(a_img, f_gold, 8 * vl) != 0) {
             log_warning("sve512_pred_ops: mapped LDFF1 touched the FFR "
@@ -576,22 +580,15 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         return EXIT_FAILURE;
     }
 
-    // Sustained-stress buffers for the FFR datapath (hoisted so the loop
-    // body adds only SVE instructions and memcmps per iteration; the
-    // FMA part below still allocates per iteration, which is fine — the
-    // only call-free requirement is the capture window). The re-loop
-    // drives all THREE FFR faces every iteration: mapped (all-ones
-    // golden), faulting (partial-clear golden — the suppressed fault
-    // also keeps the suppression path itself under sustained stress),
-    // and accumulation (mapped load must leave the partial FFR alone).
-    std::vector<double> ffr_mem(vl), ffr_back(vl);
-    for (size_t i = 0; i < vl; ++i)
-        ffr_mem[i] = d->src[i];
-    double f_back[16], f_exp[16];   // vl <= 16 (init gate)
-    f_exp[0] = d->src[vl - 1];
-    for (size_t i = 1; i < vl; ++i)
-        f_exp[i] = 0.0;
-
+    // Sustained-stress re-loop of the FFR datapath, reusing the hoisted
+    // goldens and buffers above (the loop body adds only SVE instructions
+    // and memcmps per iteration; the FMA part below still allocates per
+    // iteration, which is fine — the only call-free requirement is the
+    // capture window). It drives all THREE FFR faces every iteration:
+    // mapped (all-ones golden), faulting (partial-clear golden — the
+    // suppressed fault also keeps the suppression path itself under
+    // sustained stress), and accumulation (mapped load must leave the
+    // partial FFR alone).
     while (test_time_condition(test)) {
         // light re-loop of the density sweep (the full sweep already ran)
         svbool_t pg = svwhilelt_b64_u64(0, vl - 1);

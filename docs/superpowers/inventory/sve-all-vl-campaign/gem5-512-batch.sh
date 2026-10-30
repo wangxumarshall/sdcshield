@@ -146,6 +146,17 @@ fi
 awk '{ sub(/\r$/, ""); if ($0 == "" || $0 ~ /^#/) next; sub(/\|.*/, ""); print }' \
     "$LIST" > "$OUT/list.effective"
 
+# Duplicate-name guard (PR #307 #19): two concurrent --one instances for the
+# same test would share $OUT/$t.d and `>`-clobber $t.log — the exact "logs
+# crossed, evidence void" failure triage-512 §1 recorded when two calibration
+# instances collided. Fail BEFORE the batch burns hours.
+dups=$(sort "$OUT/list.effective" | uniq -d)
+if [ -n "$dups" ]; then
+    echo "ERROR: duplicate test names in $LIST — concurrent --one instances would clobber each other's .d/.log (triage-512 §1 recorded failure mode):" >&2
+    echo "$dups" >&2
+    exit 2
+fi
+
 echo "batch start: $(date '+%F %T')  P=$P  list=$(wc -l < "$OUT/list.effective") tests"
 new_md5=$(md5sum "$G5" | cut -d' ' -f1)
 echo "gem5: $G5  md5=$new_md5"

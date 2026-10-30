@@ -2460,40 +2460,35 @@ def _audit_state_merge_write(keys: dict) -> None:
     只是与一个 scan tick 串行)后 load 磁盘最新 state,只 update audit
     自有键(audit_cursor/audit_seen/auth_failure_streak),再原子 save。
     entries 的权威属于 scan,audit 永不写它。
-    """
-    state_dir = _resolve_state_dir()
-    os.makedirs(state_dir, exist_ok=True)
-    lock_fd = os.open(os.path.join(state_dir, SCAN_LOCK_NAME),
-                      os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)    # 阻塞等在跑的 scan tick 放锁
-        fresh = StateStore(state_dir).load()
+
+    锁获取经 _with_scan_lock(轮5 R1): 此前本函数与 _audit_streak_add
+    各自内联同一段 makedirs+open+flock+close 样板——锁纪律(阻塞 LOCK_EX、
+    fd 生命周期、先建目录)是裁定 11 的正确性核心,多副本意味着任何演进
+    漏改一处就静默破坏单写者不变式。三个 audit 写函数统一走同一助手。"""
+    def _merge() -> None:
+        store = StateStore()
+        fresh = store.load()
         fresh.update(keys)
-        StateStore(state_dir).save(fresh)
-    finally:
-        os.close(lock_fd)
+        store.save(fresh)
+    _with_scan_lock(_merge)
 
 
 def _audit_streak_add(delta: int) -> int:
     """auth_failure_streak 的锁内读-改-写(裁定 10+11): 增量对磁盘最新值做,
     不吃 audit 启动时快照——并发 scan 的 success 归零/收割计数才不会被快照
     算术回滚或重复计。与 _audit_state_merge_write 同纪律(scan.lock 内
-    load-改-save),返回更新后的 streak 供熔断判定与日志。"""
-    state_dir = _resolve_state_dir()
-    os.makedirs(state_dir, exist_ok=True)
-    lock_fd = os.open(os.path.join(state_dir, SCAN_LOCK_NAME),
-                      os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        fresh = StateStore(state_dir).load()
+    load-改-save,经 _with_scan_lock),返回更新后的 streak 供熔断判定与
+    日志。"""
+    def _add() -> int:
+        store = StateStore()
+        fresh = store.load()
         fresh["auth_failure_streak"] = \
             fresh.get("auth_failure_streak", 0) + delta
         if delta > 0:
             fresh["auth_failure_at"] = _now_iso()   # 轮5(会话#8) 守卫判据
-        StateStore(state_dir).save(fresh)
+        store.save(fresh)
         return fresh["auth_failure_streak"]
-    finally:
-        os.close(lock_fd)
+    return _with_scan_lock(_add)
 
 
 def _audit_streak_reset_if_fresh(success_at: str) -> None:
@@ -2503,20 +2498,16 @@ def _audit_streak_reset_if_fresh(success_at: str) -> None:
     凭据失效、并发 scan 已在 scan.lock 内记入 streak」的更新事实,用审查
     开始前的陈旧成功证据抹掉——事件序与写入序倒置,熔断延迟一拍。守卫下:
     陈旧成功不归零,凭据持续坏则 audit 下轮自身失败走增量路径,streak
-    照常累积。scan.lock 内读-判-写(与 _audit_state_merge_write 同纪律)。"""
-    state_dir = _resolve_state_dir()
-    os.makedirs(state_dir, exist_ok=True)
-    lock_fd = os.open(os.path.join(state_dir, SCAN_LOCK_NAME),
-                      os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        fresh = StateStore(state_dir).load()
+    照常累积。scan.lock 内读-判-写(经 _with_scan_lock,与其他 audit 写
+    同纪律)。"""
+    def _reset() -> None:
+        store = StateStore()
+        fresh = store.load()
         last_fail = fresh.get("auth_failure_at")
         if not last_fail or success_at >= last_fail:
             fresh["auth_failure_streak"] = 0
-        StateStore(state_dir).save(fresh)
-    finally:
-        os.close(lock_fd)
+        store.save(fresh)
+    _with_scan_lock(_reset)
 
 
 def run_audit(dry_run: bool = False) -> int:

@@ -42,7 +42,7 @@ C++ 常用算术转换把乘法提升为 `unsigned int`，结果 **mod 2^32 回�
 2. `tests/cpu/mesh/mesh_upi_avx_sym.cpp:128`（BLOCK_ELEMENTS=8192）
 3. `tests/cpu/mesh/mesh_upi_avx512_sym.cpp:105`（BLOCK_SIZE=8192）
 4. `tests/cpu/mesh/mesh_upi_avx512_symm_f64.cpp:161`（BLOCK_SIZE=4096，
-   回绕阈值 1048576 块 = 32 GiB，更早触发）
+   回绕阈值 1048576 块 = 32 GiB，更晚触发）
 
 ## 改动（4 文件，一个工作单元）
 
@@ -71,7 +71,8 @@ C++ 常用算术转换把乘法提升为 `unsigned int`，结果 **mod 2^32 回�
 
 ## 检视轮修订（2026-10-31，local-claude 两轮 12 条意见处置）
 
-本节修订正文的四处事实性偏差，原文保留于上（记录即历史，修订不抹除）：
+本节修订正文的四处事实性偏差，原文保留于上（记录即历史，修订不抹除）。
+二轮（意见 #21）另就地修正一处方向性笔误（见下第 5 条）：
 
 1. **「受影响文件」范围（正文 §受影响文件）**：「仅 4 个 mesh 用例的
    num_blocks 由物理内存运行时计算」只对 `tests/cpu/mesh/`（NEON）成立。
@@ -107,3 +108,10 @@ C++ 常用算术转换把乘法提升为 `unsigned int`，结果 **mod 2^32 回�
    驱动 handle_failure）。用例侧「-t 到期空过」（相位 1 超时 break →
    EXIT_SUCCESS 零校验 PASS，违反 CLAUDE.md 规则 6 精神）仍是独立缺陷，
    与 #332 分立跟踪。
+5. **f64 回绕阈值方向（正文 §受影响文件第 4 条，二轮意见 #21）**：原文
+   「1048576 块 = 32 GiB，更早触发」方向写反——f64 阈值（BLOCK_SIZE=4096
+   × 8B → 2^32 元素区 = 32 GiB，1048576 块）是 sse/avx（8192 × 4B →
+   16 GiB，524288 块）的**两倍**，按字节与按块数都**更晚**触发。与 in-code
+   注释（mesh_upi_avx512_symm_f64.cpp「每 32 GiB 一次」对 sse「每 16 GiB
+   一次」）及 progress-log「（sse/avx 16 GiB，f64 32 GiB）」口径一致。
+   已就地修正该笔误级单点错误（git 历史留有原文）。

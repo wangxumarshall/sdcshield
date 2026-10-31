@@ -320,8 +320,11 @@
 - **代码本身**:"We will make our repository public upon publication"(§4 脚注 2)——
   截至 arXiv v1(2026-05)**尚未公开**,需自行实现 LLVM pass(工作量:4 个 pass + 组合,
   Clang-14 pipeline 集成)。
-- **MemDiv 的 clflush**:**ARM64 无 clflush**。替代:`dc civac`(cache invalidate to PoC,
-  需内核或特权;用户态不可直接执行)、`dc cvau` + 自陷调用,或 Linux 用户态等价:
+- **MemDiv 的 clflush**:**ARM64 无 clflush**。替代:`dc civac`(cache invalidate to PoC;
+  纠错 2026-10-31/issue #318:按 VA 的缓存维护指令 EL0 用户态可直接执行、无需特权——
+  l2c_cross_cache_line_arm.cpp:165 等仓内测试即用户态执行,初版"需内核或特权;用户态
+  不可直接执行"的表述有误,该错误曾误导 cache_stress_aggressor 初版选 `__clear_cache`)、
+  `dc cvau` + 自陷调用,或 Linux 用户态等价:
   `__builtin___clear_cache`(只对 I-cache 保证)、映射 MAP_SHARED 落盘强制回写、
   `cachestat`/`seek+read` 绕 cache 途径有限。**最小可行替代**:
   (a) `msync`/`fsync` 强制脏行落盘 + `madvise(MADV_DONTNEED)` 丢弃页面后重取

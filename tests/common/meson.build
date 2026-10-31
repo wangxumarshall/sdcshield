@@ -9,9 +9,9 @@ tests_set_common += files(
 )
 
 if target_machine.system() == 'linux'
-    # x86-64 uses the IA32_SMI_COUNT MSR; other arches (e.g. ARM64) compile
-    # the placeholder stubs defined inside smi_count.cpp until a portable
-    # firmware/RAS-interrupt counter is wired up.
+    # x86-64 uses the IA32_SMI_COUNT MSR; aarch64 compiles the CNTVCT_EL0
+    # timing-gap probe; other arches compile the placeholder stubs defined
+    # inside smi_count.cpp (no portable firmware/RAS-interrupt counter).
     tests_set_common += files(
         'smi_count/smi_count.cpp',
     )

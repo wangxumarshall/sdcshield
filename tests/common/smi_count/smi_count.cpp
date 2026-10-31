@@ -9,6 +9,8 @@
  * This test is not really a test in the sense that it will never fail.  It is intended to simply
  * print differences in the number of SMI (System Management Interrupts) that have occurred since
  * either the beginning of the sandstone run or the last time this test itself has run
+ * (x86-64, via the IA32_SMI_COUNT MSR; on aarch64 this is a CNTVCT_EL0
+ * timing-gap probe instead - see the branch comment below)
  */
 
 #include "sandstone_p.h"
@@ -107,6 +109,11 @@ END_DECLARE_TEST
  * Thresholds: 100 us counts as a gap (well above timer-tick/IRQ handler
  * cost, 1-20 us measured), 1 ms is additionally tallied as severe. Both
  * are distribution buckets, not firmware attributions.
+ *
+ * --inject-idle invalidates the counts: the framework-injected usleep in
+ * test_loop_condition() lands between two adjacent CNTVCT reads and is
+ * counted as one (severe) gap per burst boundary. Do not read the numbers
+ * produced under that option.
  */
 
 #include <cinttypes>

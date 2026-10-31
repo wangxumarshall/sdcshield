@@ -105,9 +105,12 @@ grep -q 'raises SIGILL (measured 2026-10-27 on silicon' "$TMP/fmmla.quote" || qu
 #      任一断言失败 → exit 1，不写产物。
 awk -F'\t' -v OUT="$TMP" '
 FNR == 1 { fileno++ }
-# 输入 1: sve-test-list.txt —— 行定义（清单序 = 矩阵序）
+# 输入 1: sve-test-list.txt —— 行定义（清单序 = 矩阵序）；行契约与其余
+#   三个消费者一致（commit 90a7ca73）：剥 \r、跳 #/空行、切 |时长|default
+#   后缀（parse_test_list_line 契约，PR #307 #33）。
 fileno == 1 {
-    if ($0 !~ /^#/ && NF) { n++; order[n] = $1 }
+    sub(/\r$/, "")
+    if ($0 !~ /^#/ && NF) { sub(/\|.*/, ""); n++; order[n] = $1 }
     next
 }
 # 输入 2..5: native summaries —— <test>\t<result>\t<iters>\t<ms>（注释/头行跳过）

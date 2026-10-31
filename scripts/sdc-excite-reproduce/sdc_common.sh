@@ -91,6 +91,93 @@ extract_fail_seed() {    # $1=stdout_summary 路径 → 首个 fail 块内的 AE
     grep -m1 '^  fail: {' "$1" 2>/dev/null | grep -oE "AES:[0-9a-f]+"
 }
 
+# ---------------- 复测条件保真提取（handle_failure 定向复测命令构造）----------------
+# 定向复测的命令条件必须沿用原命令（v5 §7 复测契约「同条件复现」）——线程、每测试
+# 时长、CPU 拓扑、测试旋钮四维。历史教训（条件失真 → 假通过台账）：
+#   - 硬编码 -n 0（2026-10-30 retest1.out）：多线程用例 SKIP 却记
+#     "retest rc=0 fail/crash=0"；
+#   - 硬编码 -t 120s（同日 mesh 事件检视）：169GB 缓冲整轮 ~117s，120s 预算下
+#     相位 2 跑不完即沿 EXIT_SUCCESS 空过（相位 1 等待循环超时 break → 零校验
+#     PASS），复测永远无法证伪；
+#   - --cpuset（l5_dom 阶段）与 -O 旋钮（l3/l5_numa/dwell 阶段）被丢弃：cpuset
+#     受限相位的复测跑成全核，有效线程集与跨核拓扑均已改变。
+flag_time_to_s() { # $1=时长 token → 秒数（stdout）；形态非法 → 空输出 rc=1
+    # 与框架 string_to_millisecs 同口径（framework/sandstone_chrono.cpp:30）：
+    # 裸数=毫秒；ms/s/m/min/h 后缀各按其单位。ms→s 向上取整（看门狗宁长勿短）。
+    local n u
+    [[ "$1" =~ ^([0-9]+)(ms|s|min|m|h)?$ ]] || return 1
+    n="${BASH_REMATCH[1]}"; u="${BASH_REMATCH[2]}"
+    case "${u:-ms}" in
+        ms)    echo $(( (n + 999) / 1000 )) ;;
+        s)     echo "$n" ;;
+        m|min) echo $(( n * 60 )) ;;
+        h)     echo $(( n * 3600 )) ;;
+    esac
+}
+
+extract_retest_flags() { # $1=原命令串 → stdout 单行空格分隔的规整条件旗标
+    # 提取四类：-n/--threads（线程）、-t/--test-time/--time（每测试时长）、
+    #           --cpuset（CPU 拓扑）、-O/--test-option（测试旋钮，可多次）。
+    # 三种写法通吃：分离（"-n 8"）/短参附着（"-n8"）/长参等号（"--threads=8"）。
+    # 输出规范形单行（如 "-O a.b=1 -n 8 -t 1350s"），调用方
+    # read -ra flags <<< "$(extract_retest_flags "$cmd")" 重组（read 只读一行，
+    # 故必须单行）；值形态不合法的旗标静默丢弃（不把异常 token 带进复测命令）。
+    # -T 是不同选项（总时长），大小写敏感不误提。
+    # -O 按 <testid>.<key>=<val> 逐字沿用即可：框架 TestKeyWrapper 按
+    # <testid>.<key> 查找（docs/research/usage.md §旋钮），原命令里其他测试的
+    # 旋钮对定向复测的单测只是查不到，无副作用。
+    local words=() name val out="" k w
+    read -ra words <<< "$1"
+    for ((k=0; k<${#words[@]}; k++)); do
+        w="${words[$k]}"; name=""; val=""
+        case "$w" in
+            -n|--threads)           name=n;      val="${words[$((k+1))]:-}" ;;
+            -t|--test-time|--time)  name=t;      val="${words[$((k+1))]:-}" ;;
+            --cpuset)               name=cpuset; val="${words[$((k+1))]:-}" ;;
+            -O|--test-option)       name=O;      val="${words[$((k+1))]:-}" ;;
+            -n[0-9]*)               name=n;      val="${w#-n}" ;;
+            -t[0-9]*)               name=t;      val="${w#-t}" ;;
+            -O[!-]*)                name=O;      val="${w#-O}" ;;
+            --threads=*)            name=n;      val="${w#--threads=}" ;;
+            --test-time=*|--time=*) name=t;      val="${w#*=}" ;;
+            --cpuset=*)             name=cpuset; val="${w#--cpuset=}" ;;
+            --test-option=*)        name=O;      val="${w#--test-option=}" ;;
+        esac
+        [ -n "$name" ] || continue
+        case "$name" in
+            n)      [[ "$val" =~ ^[0-9]+$ ]] && out+="-n $val " ;;
+            t)      [[ "$val" =~ ^[0-9]+(ms|s|min|m|h)?$ ]] && out+="-t $val " ;;
+            cpuset) [ -n "$val" ] && out+="--cpuset=$val " ;;
+            O)      [[ "$val" =~ ^[^[:space:]=]+=.+$ ]] && out+="-O $val " ;;
+        esac
+    done
+    [ -n "$out" ] && printf '%s\n' "${out% }"
+    return 0
+}
+
+retest_t_budget() { # $1=原命令 -t 值（空=原命令未给） → stdout: "<预算> <来源> <看门狗秒>"
+    # -t 预算三档：原命令值沿用（条件保真，复测时间覆盖度不低于原始失败运行）；
+    # 超 RETEST_T_CAP_S(默认900s) 封顶——dwell 类 -t 可达小时级，同步复测不许
+    # 拖垮战役（wholecmd 路径 900s 封顶同款先例）；原命令未给用
+    # RETEST_T_DEFAULT_S(默认120s)。看门狗 = 预算秒 + RETEST_GUARD_MARGIN_S
+    # (默认90s，覆盖 init/teardown——169GB 级缓冲 init 的 memset 自身就超 30s，
+    # 旧 150s 硬编码只对 120s 预算成立)，下限 150s。
+    local orig_t="$1" retest_t src tsec
+    if [ -n "$orig_t" ]; then
+        retest_t="$orig_t"; src=inherited
+        tsec=$(flag_time_to_s "$orig_t")
+        if [ -n "$tsec" ] && [ "$tsec" -gt "${RETEST_T_CAP_S:-900}" ]; then
+            retest_t="${RETEST_T_CAP_S:-900}s"; src="capped(${orig_t})"
+        fi
+    else
+        retest_t="${RETEST_T_DEFAULT_S:-120}s"; src=default
+    fi
+    tsec=$(flag_time_to_s "$retest_t") || tsec=120
+    local guard=$(( tsec + ${RETEST_GUARD_MARGIN_S:-90} ))
+    [ "$guard" -lt 150 ] && guard=150
+    echo "$retest_t $src $guard"
+}
+
 # ---------------- 复现队列产出 + verify.request 消费（M3 T5 驱动集成）----------------
 # M2 controller 的 enqueue_reproduction 动作（账本行）在驱动侧的落点：handle_failure
 # 台账行后入队 spool/repro_queue/，由 tools/excite/sdc_reproducer.py --from-queue

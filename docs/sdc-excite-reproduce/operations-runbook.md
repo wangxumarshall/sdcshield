@@ -103,12 +103,27 @@ su -c "systemctl stop sdc-collector@percore sdc-collector@pmu sdc-collector@ras"
 
 ```
 驱动 handle_failure（提取式取证 yaml_extract/stdout_summary/context + 定向复测×3
+  ——条件四维（-n/-t/--cpuset/-O）沿用原命令，-t 预算 900s 封顶，看门狗随预算伸缩
   + 台账行 + enqueue_repro + snapshot.request——战役不中断）
 → sdc-eventd：sdc_mismatch 事件（red）入 spool/events.jsonl
 → sdc-controller：RED（freeze_ring 自动 + snapshot_root + enqueue_reproduction + hold_profile）
 → sdc-ring：120s 窗口固化 events/<event_id>/ring_window/（[-60s,+60s] 取证）
 → spool/repro_queue/ → 低负载时段人工消费（§7：门禁七项 → capsule + 概率复测）
 ```
+
+**复测台账行判读**（events/<id>/retests.txt，2026-10-31 条件保真修复后口径）：
+
+```
+retest1(targeted) rc=0 fail/crash=0 skip=1 t=120s(default) elapsed=35s
+```
+
+- `skip>0`：复测对象被跳过（如线程数不足）——本轮复测**未验证任何东西**，
+  不得读作复测通过（旧 -n 0 退化单线程假通过即此形态）；
+- `t=<预算>(<来源>)`：inherited=沿用原命令 / capped=超 900s 上限封顶 /
+  default=原命令未给 -t；
+- `elapsed≈t`：跑满时限——是「时限内未复现」的证据，对内部相位可被 -t
+  截短的用例（mesh 相位 1 超时空过类，独立缺陷）不构成「完整验证通过」；
+  判读存疑时看 retest*.yaml 的逐测试 result 与 retest*.out 的用例自打印。
 
 UE（EDAC 不可纠正错误）是**用户决策点**：即时告警 + 事件目录 + 台账行，不自动 PAUSE
 （v5 §8.6 黑/红分级 as-built 语义，d05 演练守卫）。

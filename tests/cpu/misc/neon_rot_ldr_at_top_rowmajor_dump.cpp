@@ -198,7 +198,7 @@ static int neon_rot_ldr_at_top_rowmajor_dump_run(struct test *test, int cpu) {
                             .act_lo = vgetq_lane_u64(act, 0), .act_hi = vgetq_lane_u64(act, 1),
                             .xor_lo = vgetq_lane_u64(xorv, 0), .xor_hi = vgetq_lane_u64(xorv, 1),
                         };
-                        write(data->dump_fd, &rec, sizeof(rec));
+                        if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best effort */ }
                     }
                 }
             }

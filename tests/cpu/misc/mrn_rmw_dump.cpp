@@ -204,7 +204,7 @@ static int mrn_rmw_run(struct test *test, int cpu) {
                             .verdict = (uint32_t)(((temp[i] == res_recompute) ? 1u : 0u)
                                                 | ((temp[i] == dst[i]) ? 2u : 0u)),
                         };
-                        write(data->dump_fd, &rec, sizeof(rec));
+                        if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best effort */ }
                     }
 
                     report_fail_msg("mrn_rmw_dump: data miscompare at index %u (op=%s)", (unsigned)i, op);

@@ -440,21 +440,77 @@ static int movbe_l1d_v_rev8_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 }
 
-#define DECLARE_VARIANT(name, desc, run) \
-DECLARE_TEST(name, desc) \
-    .test_init = movbe_v_init, \
-    .test_run = run, \
-    .test_cleanup = movbe_v_cleanup, \
-    .quality_level = TEST_QUALITY_PROD, \
+/* Variant declarations are spelled out as plain DECLARE_TEST blocks (not a
+ * DECLARE_VARIANT wrapper macro) so scripts/generate-short-ids.pl's
+ * "^DECLARE_TEST\(" scan finds each variant and emits its TEST_ID_* — the
+ * framework's DECLARE_TEST macro requires that define for .shortid. */
+
+DECLARE_TEST(movbe_l1d_v_rev,   "movbe_l1d variant BASELINE rev->str->ldr(reload) back-to-back 32-bit structurally == movbe_l1d MUST trigger (else run invalid)")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_rev_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST
 
-DECLARE_VARIANT(movbe_l1d_v_rev,   "movbe_l1d variant BASELINE rev->str->ldr(reload) back-to-back 32-bit structurally == movbe_l1d MUST trigger (else run invalid)", movbe_l1d_v_rev_run)
-DECLARE_VARIANT(movbe_l1d_v_nop,   "movbe_l1d variant 64 nop between first ldr and rev (pre-str timing window) str->reload stays back-to-back", movbe_l1d_v_nop_run)
-DECLARE_VARIANT(movbe_l1d_v_mul,   "movbe_l1d variant replace rev with mul (high-current ALU) before str tests pre-str transient current", movbe_l1d_v_mul_run)
-DECLARE_VARIANT(movbe_l1d_v_add,   "movbe_l1d variant replace rev with add (low-current ALU) before str tests pre-str transient current", movbe_l1d_v_add_run)
-DECLARE_VARIANT(movbe_l1d_v_rev64, "movbe_l1d variant 64 nop between str and reload ldr (post-str timing gap) rev kept", movbe_l1d_v_rev64_run)
-DECLARE_VARIANT(movbe_l1d_v_rev4,  "movbe_l1d variant 4 nop between str and reload ldr (post-str timing gap) rev kept — mid-point of str->ldr gap curve (0/1/2/4/8/64)", movbe_l1d_v_rev4_run)
-DECLARE_VARIANT(movbe_l1d_v_rev1,  "movbe_l1d variant 1 nop between str and reload ldr (post-str timing gap) rev kept — movbe str->ldr gap curve point (0/1/2/3/4/8/64)", movbe_l1d_v_rev1_run)
-DECLARE_VARIANT(movbe_l1d_v_rev2,  "movbe_l1d variant 2 nop between str and reload ldr (post-str timing gap) rev kept — movbe str->ldr gap curve point (0/1/2/3/4/8/64)", movbe_l1d_v_rev2_run)
-DECLARE_VARIANT(movbe_l1d_v_rev3,  "movbe_l1d variant 3 nop between str and reload ldr (post-str timing gap) rev kept — bisects the 2->4 nop cliff (2=6fail, 4=0fail)", movbe_l1d_v_rev3_run)
-DECLARE_VARIANT(movbe_l1d_v_rev8,  "movbe_l1d variant 8 nop between str and reload ldr (post-str timing gap) rev kept — mid-point of str->ldr gap curve (0/1/2/4/8/64)", movbe_l1d_v_rev8_run)
+DECLARE_TEST(movbe_l1d_v_nop,   "movbe_l1d variant 64 nop between first ldr and rev (pre-str timing window) str->reload stays back-to-back")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_nop_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST
+
+DECLARE_TEST(movbe_l1d_v_mul,   "movbe_l1d variant replace rev with mul (high-current ALU) before str tests pre-str transient current")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_mul_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST
+
+DECLARE_TEST(movbe_l1d_v_add,   "movbe_l1d variant replace rev with add (low-current ALU) before str tests pre-str transient current")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_add_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST
+
+DECLARE_TEST(movbe_l1d_v_rev64, "movbe_l1d variant 64 nop between str and reload ldr (post-str timing gap) rev kept")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_rev64_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST
+
+DECLARE_TEST(movbe_l1d_v_rev4,  "movbe_l1d variant 4 nop between str and reload ldr (post-str timing gap) rev kept — mid-point of str->ldr gap curve (0/1/2/4/8/64)")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_rev4_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST
+
+DECLARE_TEST(movbe_l1d_v_rev1,  "movbe_l1d variant 1 nop between str and reload ldr (post-str timing gap) rev kept — movbe str->ldr gap curve point (0/1/2/3/4/8/64)")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_rev1_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST
+
+DECLARE_TEST(movbe_l1d_v_rev2,  "movbe_l1d variant 2 nop between str and reload ldr (post-str timing gap) rev kept — movbe str->ldr gap curve point (0/1/2/3/4/8/64)")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_rev2_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST
+
+DECLARE_TEST(movbe_l1d_v_rev3,  "movbe_l1d variant 3 nop between str and reload ldr (post-str timing gap) rev kept — bisects the 2->4 nop cliff (2=6fail, 4=0fail)")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_rev3_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST
+
+DECLARE_TEST(movbe_l1d_v_rev8,  "movbe_l1d variant 8 nop between str and reload ldr (post-str timing gap) rev kept — mid-point of str->ldr gap curve (0/1/2/4/8/64)")
+    .test_init = movbe_v_init,
+    .test_run = movbe_l1d_v_rev8_run,
+    .test_cleanup = movbe_v_cleanup,
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST

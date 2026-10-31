@@ -205,7 +205,7 @@ static int dualcmp_run(struct test *test, int cpu) {
             snprintf(msg, sizeof(msg),
                      "dualcmp miscompare: dst_bad=%d temp_bad=%d | 2nd-str-only(dst-wrong,a)=%lu 1st-str-only(temp-wrong,b)=%lu divergent=%lu same-wrong(upstream)=%lu first_bad=%d",
                      dst_bad ? 1 : 0, temp_bad ? 1 : 0, st.a_only, st.b_only, st.ab_div, st.ab_same, st.first_bad);
-            report_fail_msg(msg);
+            report_fail_msg("%s", msg);
         }
     }
 

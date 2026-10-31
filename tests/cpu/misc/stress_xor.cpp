@@ -154,7 +154,7 @@ static int stress_xor_run(struct test *test, int cpu) {
                             .actual = actual,
                             .xor_val = xorv,
                         };
-                        write(data->dump_fd, &rec, sizeof(rec));
+                        if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best effort */ }
                     }
 
                     report_fail_msg("stress_xor: data miscompare at index %u", (unsigned)i);

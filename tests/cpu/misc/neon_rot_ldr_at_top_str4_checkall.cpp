@@ -177,7 +177,7 @@ static void __attribute__((noinline)) str4_checkall_cold_scan(
                 .junk2_lo = vgetq_lane_u64(j2, 0), .junk2_hi = vgetq_lane_u64(j2, 1),
                 .dst_lo = vgetq_lane_u64(d, 0), .dst_hi = vgetq_lane_u64(d, 1),
             };
-            write(data->dump_fd, &rec, sizeof(rec));
+            if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best effort */ }
         }
     }
 
@@ -202,7 +202,7 @@ static void __attribute__((noinline)) str4_checkall_cold_scan(
                 ._pad = 0,
                 /* remaining fields zero: the mismatch did not survive the re-read */
             };
-            write(data->dump_fd, &rec, sizeof(rec));
+            if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best effort */ }
         }
     }
 }

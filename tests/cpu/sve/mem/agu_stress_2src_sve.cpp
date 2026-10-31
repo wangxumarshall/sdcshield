@@ -138,7 +138,23 @@ static int agu_stress_2src_sve_run(struct test *test, int cpu) {
     uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc_safe(64, (count + (size_t)lanes) * sizeof(uint64_t)));
     svbool_t pg = svwhilelt_b64((uint64_t)0, (uint64_t)lanes);
 
-    TEST_LOOP(test, 1 << 13) {
+    /* Loop granularity: the body is a full sweep of all count elements —
+     * 2 source vector loads + the str z/ldr z/str z amplifier (temp write,
+     * temp reload, dst write) + the golden memcmp (dst + expected reads) —
+     * so one body moves ~7 x count x 8 B of memory per thread. count is
+     * memory-adaptive (sdc_auto_linear_count: 600 permille of RAM across 5
+     * linear buffers, clamped to 32M elements = 256 MiB), which makes one
+     * body seconds-scale under bandwidth contention. TEST_LOOP only checks
+     * the -t deadline every N bodies (framework/sandstone.h): the N = 1<<13
+     * was inherited from the scalar ancestor agu_stress_2src, whose fixed
+     * 1024-element (8 KiB) buffers kept one checkpoint at ~448 MiB of
+     * traffic — with adaptive sizing the first deadline check slid to
+     * hours-scale, so any realistic -t reads as "Timed Out" (issue #349,
+     * same failure class as #326 / PR #347). N = 4 bounds the exit latency
+     * to 4 bodies (~seconds) while keeping the auto-fracture segment
+     * (default 40 checks = 160 bodies) long enough that per-segment
+     * re-entry (temp/dst re-alloc) stays negligible. */
+    TEST_LOOP(test, 4) {
         for (size_t base = 0; base < count; base += lanes) {
             /* 2 源加载: asm 保证的 ldr z */
             svuint64_t a = load_vec_sve(data->srcA + base);

@@ -282,10 +282,14 @@ cat <<'HDR'
 
 ## 0. 代码基线与二进制身份
 
-- **代码基线（Ruling G 冻结）**：`12ccda540fd4` + 本运动分支 commits。后者实测只含
-  docs / campaign 工具脚本 / gem5 启动脚本（`scripts/eigen-sve-double/gem5/`），
-  `git diff 12ccda54..HEAD -- tests/ framework/` 为空——**矩阵证据描述的测试代码与
-  基线完全一致**（Task 7 runbook：三腿 570 格分诊 = 零测试代码缺陷）。
+- **代码基线（Ruling G 冻结）**：`12ccda540fd4` + 本运动分支 commits。证据冻结时点
+  （2026-10-30，Task 8 生成 commit `e4720831`）实测分支只含 docs / campaign 工具
+  脚本 / gem5 启动脚本（`scripts/eigen-sve-double/gem5/`）——
+  `git diff 12ccda54..e4720831 -- tests/ framework/` 为空（可复核），
+  **矩阵证据描述的测试代码与基线完全一致**（Task 7 runbook：三腿 570 格分诊 =
+  零测试代码缺陷）。注：2026-10-31 起本分支合入了 main（#302/#316/#317 等，
+  §0.1 delta 表为权威差异清单），当前 HEAD 的 tests/ framework/ 已不再等于
+  冻结基线——复核上述 diff 请用 `e4720831`，勿用移动的 HEAD。
 - 二进制：native 两腿 `sdcshield-12ccda540fd4`（四份 summary 头 `version:` 行一致，实测）；
   512 腿 gem5 `/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt`
   md5 `3f9011f40dbe80ec1df478c62ddb0b06`（Task 5 终版 9-stub 链）+ 同源 sdcshield。

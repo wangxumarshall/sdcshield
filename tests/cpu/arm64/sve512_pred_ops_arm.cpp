@@ -395,8 +395,18 @@ ffr_ldff1_capture(const double *from, double *to, uint8_t *ffr_image)
      * loads and stores from being reordered across the window start
      * under aggressive scheduling, and mirrors the gem5 dual kernel's
      * capture_img, which carries the same barrier inside its own
-     * noinline body. Every value this unit loads is consumed (stored to
-     * a buffer the caller memcmps), so the LDFF1 cannot be deleted. */
+     * noinline body. The LDFF1 cannot be deleted because its result
+     * feeds the svst1 through the caller-supplied *to pointer — a
+     * store to memory that escapes this function, which no optimizer
+     * may remove. (Round-6 #14, stated honestly: for the <false>
+     * accumulation capture that store's destination is NOT golden-
+     * checked afterwards — the caller memcmps the FFR image, not the
+     * acc data. The acc capture's load is the same all-true-predicate
+     * mapped load from ffr_mem whose data plane the mapped face
+     * byte-checks on every iteration, and the FFR start state has no
+     * architectural path into a load's data return — FFR is an output
+     * of LDFF1, never an input — so the unchecked acc data plane is a
+     * declared boundary, not an oversight.) */
     __asm__ volatile ("" : : : "memory");
     if constexpr (PrimeFFR)
         svsetffr();

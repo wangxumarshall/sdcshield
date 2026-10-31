@@ -140,6 +140,26 @@ typedef SANDSTONE_FP16_TYPE fp16_t;
 #define FLOAT80_MANTISSA_BITS 63
 #define FLOAT80_QUIET_BITS    1
 
+#ifdef __aarch64__
+/* aarch64: long double is IEEE binary128 (issue #180) — 1+15+112 with an
+ * IMPLICIT integer bit (no jbit). The 112-bit fraction spans two bitfield
+ * units, so the significand is addressed as mantissa_lo/mantissa_hi in
+ * struct Float80 below. The shared FLOAT80_EXPONENT_* / SIGN / QUIET macros
+ * above are format-identical between x87-80 and binary128 (15-bit exponent,
+ * bias 16383, all-ones = Inf/NaN, denormal exponent 0). The x87-only
+ * significand macros are undefined here so any aarch64 use is a compile
+ * error instead of a silent wrong-layout read. */
+#define FLOAT80_FRACTION_BITS      112
+#define FLOAT80_MANTISSA_LO_BITS   64
+#define FLOAT80_MANTISSA_HI_BITS   48
+#define FLOAT80_MANTISSA_LO_MASK   0xffffffffffffffffu
+#define FLOAT80_MANTISSA_HI_MASK   0x0000ffffffffffffu
+#undef FLOAT80_JBIT_BITS
+#undef FLOAT80_MANTISSA_BITS
+#undef FLOAT80_MANTISSA_MASK
+#undef FLOAT80_MANTISSA_QUIET_NAN_MASK
+#endif
+
 #define FLOAT16_DECIMAL_DIG        5
 #define FLOAT16_DENORM_MIN         5.96046447753906250000000000000000000e-8
 #define FLOAT16_DIG                3
@@ -763,6 +783,80 @@ STATIC_INLINE bool Float64_is_max(Float64 f)      { return (f.exponent == FLOAT6
 STATIC_INLINE uint64_t Float64_get_nan_payload(Float64 f) { return f.as_nan.payload; }
 STATIC_INLINE double Float64_as_fp(Float64 f) { return f.as_float; }
 
+#ifdef __aarch64__
+/* aarch64: long double = IEEE binary128 (issue #180). Bitfield map
+ * (little-endian; GCC packs adjacent bitfields LSB-first per 64-bit
+ * unit, none of these straddles a unit boundary): mantissa_lo
+ * bits 0..63, mantissa_hi bits 64..111, exponent bits 112..126, sign
+ * bit 127. There is no explicit integer bit: normals carry it
+ * implicitly and exponent == 0 means zero (fraction all zero) or
+ * denormal (fraction nonzero), per IEEE 754. */
+struct Float80 {
+    union {
+        struct {
+            uint64_t mantissa_lo : FLOAT80_MANTISSA_LO_BITS;
+            uint64_t mantissa_hi : FLOAT80_MANTISSA_HI_BITS;
+            uint64_t exponent    : FLOAT80_EXPONENT_BITS;
+            uint64_t sign        : FLOAT80_SIGN_BITS;
+        };
+        struct {
+            uint64_t payload_lo : FLOAT80_MANTISSA_LO_BITS;
+            uint64_t payload_hi : FLOAT80_MANTISSA_HI_BITS - FLOAT80_QUIET_BITS;
+            uint64_t quiet      : FLOAT80_QUIET_BITS;
+            uint64_t exponent   : FLOAT80_EXPONENT_BITS;
+            uint64_t sign       : FLOAT80_SIGN_BITS;
+        } as_nan;
+        struct {
+            uint64_t low64;
+            uint64_t high64;
+        } as_hex;
+        long double as_float;
+    };
+
+#ifdef __cplusplus
+    constexpr inline Float80() = default;
+    constexpr inline Float80(long double f) : as_float(f) { }
+    /* same arity as the x87 (s, e, jbit, mantissa) builder below;
+     * all-zero arguments build +0.0 on both architectures */
+    constexpr inline Float80(uint64_t s, uint64_t e, uint64_t mhi, uint64_t mlo): mantissa_lo(mlo), mantissa_hi(mhi), exponent(e), sign(s) { }
+
+    constexpr inline long double as_fp() const {
+        return as_float;
+    }
+
+    static constexpr inline Float80 max()     { return { 0, FLOAT80_INFINITY_EXPONENT - 1, FLOAT80_MANTISSA_HI_MASK, FLOAT80_MANTISSA_LO_MASK }; }
+
+    constexpr inline bool is_negative() const { return sign != 0; }
+    constexpr inline bool is_zero() const     { return (exponent == FLOAT80_DENORM_EXPONENT) && (mantissa_hi == 0) && (mantissa_lo == 0); }
+    constexpr inline bool is_denormal() const { return (exponent == FLOAT80_DENORM_EXPONENT) && ((mantissa_hi != 0) || (mantissa_lo != 0)); }
+    constexpr inline bool is_finite() const   { return exponent != FLOAT80_NAN_EXPONENT; }
+    constexpr inline bool is_max() const      { return (exponent == FLOAT80_INFINITY_EXPONENT - 1) && (mantissa_hi == FLOAT80_MANTISSA_HI_MASK) && (mantissa_lo == FLOAT80_MANTISSA_LO_MASK); }
+    constexpr inline bool is_inf() const      { return (exponent == FLOAT80_INFINITY_EXPONENT) && (mantissa_hi == 0) && (mantissa_lo == 0); }
+    constexpr inline bool is_nan() const      { return  (exponent == FLOAT80_NAN_EXPONENT) && ((mantissa_hi != 0) || (mantissa_lo != 0)); }
+    constexpr inline bool is_snan() const     { return is_nan() && (as_nan.quiet == 0); }
+    constexpr inline bool is_qnan() const     { return is_nan() && (as_nan.quiet != 0); }
+    /* the binary128 NaN payload is 111 bits wide; this returns its low 64 */
+    constexpr inline uint64_t get_nan_payload() const   { return as_nan.payload_lo; }
+    constexpr inline Float80 operator-() const {
+        return { (uint64_t) (sign ^ 1), exponent, mantissa_hi, mantissa_lo };
+    }
+#endif
+};
+typedef struct Float80 Float80;
+
+STATIC_INLINE bool Float80_is_negative(Float80 f) { return f.sign != 0; }
+STATIC_INLINE bool Float80_is_zero(Float80 f)     { return (f.exponent == FLOAT80_DENORM_EXPONENT) && (f.mantissa_hi == 0) && (f.mantissa_lo == 0); }
+STATIC_INLINE bool Float80_is_denormal(Float80 f) { return (f.exponent == FLOAT80_DENORM_EXPONENT) && ((f.mantissa_hi != 0) || (f.mantissa_lo != 0)); }
+STATIC_INLINE bool Float80_is_finite(Float80 f)   { return f.exponent != FLOAT80_NAN_EXPONENT; }
+STATIC_INLINE bool Float80_is_max(Float80 f)      { return (f.exponent == FLOAT80_INFINITY_EXPONENT - 1) && (f.mantissa_hi == FLOAT80_MANTISSA_HI_MASK) && (f.mantissa_lo == FLOAT80_MANTISSA_LO_MASK); }
+STATIC_INLINE bool Float80_is_inf(Float80 f)      { return (f.exponent == FLOAT80_INFINITY_EXPONENT) && (f.mantissa_hi == 0) && (f.mantissa_lo == 0); }
+STATIC_INLINE bool Float80_is_nan(Float80 f)      { return (f.exponent == FLOAT80_NAN_EXPONENT) && ((f.mantissa_hi != 0) || (f.mantissa_lo != 0)); }
+STATIC_INLINE bool Float80_is_snan(Float80 f)     { return Float80_is_nan(f) && (f.as_nan.quiet == 0); }
+STATIC_INLINE bool Float80_is_qnan(Float80 f)     { return Float80_is_nan(f) && (f.as_nan.quiet != 0); }
+
+STATIC_INLINE uint64_t Float80_get_nan_payload(Float80 f) { return f.as_nan.payload_lo; }
+STATIC_INLINE long double Float80_as_fp(Float80 f) { return f.as_float; }
+#else /* x86: x87 80-bit extended precision — byte-for-byte unchanged (issue #180) */
 struct Float80 {
     union {
         struct {
@@ -831,6 +925,7 @@ STATIC_INLINE bool Float80_is_qnan(Float80 f)     { return Float80_is_nan(f) && 
 
 STATIC_INLINE uint64_t Float80_get_nan_payload(Float80 f) { return f.as_nan.payload; }
 STATIC_INLINE long double Float80_as_fp(Float80 f) { return f.as_float; }
+#endif /* __aarch64__ */
 
 /**
  * @brief C/C++ builders (inlined)
@@ -891,6 +986,19 @@ STATIC_INLINE Float64 new_float64(uint64_t sign, uint64_t exponent, uint64_t man
 #endif
 }
 
+#ifdef __aarch64__
+/* binary128: (sign, exponent, mantissa_hi, mantissa_lo); same arity as
+ * the x87 builder so all-zero (and other positional) call sites compile
+ * on both architectures (issue #180) */
+STATIC_INLINE Float80 new_float80(uint64_t sign, uint64_t exponent, uint64_t mantissa_hi, uint64_t mantissa_lo)
+{
+#ifdef __cplusplus
+    return Float80(sign, exponent, mantissa_hi, mantissa_lo);
+#else
+    return (Float80) {{{ .sign = sign, .exponent = exponent, .mantissa_hi = mantissa_hi, .mantissa_lo = mantissa_lo }}};
+#endif
+}
+#else
 STATIC_INLINE Float80 new_float80(uint64_t sign, uint64_t exponent, uint64_t jbit, uint64_t mantissa)
 {
 #ifdef __cplusplus
@@ -899,6 +1007,7 @@ STATIC_INLINE Float80 new_float80(uint64_t sign, uint64_t exponent, uint64_t jbi
     return (Float80) {{{ .sign = sign, .exponent = exponent, .jbit = jbit, .mantissa = mantissa }}};
 #endif
 }
+#endif /* __aarch64__ */
 /** @} */
 
 /**

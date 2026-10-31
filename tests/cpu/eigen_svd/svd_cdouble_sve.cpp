@@ -28,7 +28,9 @@
  * run_budget_ms note in sve_probe_and_init) — clamped to [300, 6000]. The
  * preinit no
  * longer sizes the matrix at all: it only writes a desired_duration
- * UPPER bound from the same memory ceiling, and sizing in the child also
+ * UPPER bound from the same memory ceiling — or from the explicit
+ * knob/env, which the child applies VERBATIM and therefore must scale
+ * the duration too (issue #352) — and sizing in the child also
  * fixes exec_each_test children, whose freshly-exec'd image never ran the
  * preinit and previously sized every run at the un-initialised 300.
  * An explicit override is available via
@@ -148,9 +150,17 @@ static int solve_once_cdouble_sve(int n)
  *   dur   = t(n_hi) × 0.95,  t(N) = 243.4s·(N/4400)³ + 1s  (x3b fit,
  *           within ±2% of the measured points at N>=2400).
  *
- * Child n <= n_hi: the child returns min(n_mem, n_run, hi), n_mem uses
+ * Child n <= n_hi holds for the AUTO branch only: the child returns
+ * min(n_mem, n_run, hi), n_mem uses
  * the same budget/c/worker-scaled threads, and its most-conservative
  * AR(25) keeps n_run below the memory ceiling on this host class.
+ * An explicit knob/env is applied VERBATIM (dim = knob, no min against
+ * n_hi — issue #352), so the duration model must follow the knob too:
+ * with n_hi alone, every knob above n_hi times out at the 300 s hard
+ * grace (5×t(n_hi)×0.95+30 s < one full 2×t(knob) iteration; e.g.
+ * knob=4400 single-threaded: 300 s vs ~487 s measured model) and the
+ * child is SIGQUIT-killed mid-iteration — the exact functional
+ * regression the pre-reinit code's knob-scaled timeout prevented.
  * (Correction of an earlier comment that claimed a host with fewer
  * threads "only shrinks n_hi — the safe direction": that was backwards.
  * A hard-coded 127 makes the child's n_mem denominator SMALLER than
@@ -180,7 +190,23 @@ static int size_matrix_preinit(struct test *test)
     int n_hi = (int)std::sqrt(budget_kb / ((double)workers * c_kb));
     if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
     if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;
-    double iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
+
+    /* 显式 knob/env 档(issue #352): child 对显式 mdim 逐字采用
+     * (dim = knob, 不与 n_hi 取 min), duration 模型必须跟着 knob 缩放,
+     * 否则任何 knob > n_hi 的显式大维度档都落在 300 s 硬宽限
+     * (5×t(n_hi)×0.95+30 s 远小于一次 2×t(knob) 完整迭代) 被
+     * SIGQUIT 误杀——迁移前 preinit 的 timeout 恰是随 knob 缩放的,
+     * 此处恢复该契约。读取通道与 clamp 范围与 child 完全一致,
+     * 两处取值恒相同。 */
+    int n_model = n_hi;
+    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
+    if (knob == 0)
+        sdc_env_knob_int_clamped("eigen_svd_cdouble_sve", "mdim", &knob,
+                                 MDIM_MIN, MDIM_MAX);
+    if (knob > 0)
+        n_model = (int)knob;
+
+    double iter_s = 243.4 * std::pow((double)n_model / 4400.0, 3.0) + 1.0;
     test->desired_duration = (int)(iter_s * 950.0);   /* ms, -5% margin */
     return EXIT_SUCCESS;
 }
@@ -395,11 +421,12 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
   .minimum_cpu = 0,
   /* desired_duration is written by test_preinit (parent, before the
    * framework computes test_duration for the first run) as an UPPER-BOUND
-   * estimate from the memory ceiling (P0-1: the child sizes the dimension
-   * itself via the joint solver; this only keeps the parent's timing
-   * expectation at or above the child's choice, so exactly one run
-   * iteration executes and the derived timeout (5*duration+30s, 300s
-   * floor) scales along). */
+   * estimate from the memory ceiling (auto mode) or the explicit knob
+   * (which the child applies verbatim — issue #352) (P0-1: the child
+   * sizes the dimension itself via the joint solver; this only keeps the
+   * parent's timing expectation at or above the child's choice, so
+   * exactly one run iteration executes and the derived timeout
+   * (5*duration+30s, 300s floor) scales along). */
   .desired_duration = 0,
   .fracture_loop_count = 5,
   .quality_level = TEST_QUALITY_PROD,

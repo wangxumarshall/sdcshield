@@ -238,7 +238,14 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
 - **svd_cdouble_sve**（P0-1）：mdim 计算从 preinit 迁到 child `test_init`
   （`sve_probe_and_init` 内，tier 选择后）；preinit 只留 desired_duration
   ——【v2/q2】用最保守 AR（内存密集族单节点 25）+ 静态表 c 推 **n 的
-  上界**再推 duration，不变式：child 精算 n ≤ preinit n 上界。child 里
+  上界**再推 duration，不变式：child 精算 n ≤ preinit n 上界。
+  【2026-10-31 勘误，issue #352】该不变式**仅对 auto 分支成立**：显式
+  knob/env 档 child 逐字采用 dim=knob（不经 min(n_mem, n_run, hi)），
+  修复前 preinit 的 duration 模型只随 n_hi 缩放 → knob>n_hi 的显式
+  大维度档落在 300s 硬宽限被 SIGQUIT 误杀（迁移前 preinit 的 timeout
+  恰随 knob 缩放）。现 preinit 与 child 同通道同 clamp 读 knob/env，
+  n_model=knob（显式）或 n_hi（auto）；`gemm_double_max_arm`（§4.5
+  末项）同步同构修复。child 里
   `sdc_joint_dim_slice` per-node 精算。天然修复 exec_each_test 模式
   preinit 不跑导致 g_dim 恒 300 的分歧（LSP 核实修正 #3）；
   **exec 模式下 desired_duration 的说明【v2 修正】：`test_duration()`

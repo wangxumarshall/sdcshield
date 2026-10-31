@@ -72,6 +72,9 @@
  *
  * Deviation note (documented): 内核为自包含 NEON intrinsics（本仓 neon_rot
  * 家族同范式）；第三方库（openblas/sleef）计算负载变体为后续独立单元。
+ * 循环条件直连 test_time_condition（非 TEST_LOOP，locks/spinlock 家族习语）
+ * ——--inject-idle 的占空比注入对本测试不生效（时长仍被同选项折算），依据
+ * 与边界见 run 循环尾部注释（PR#328 六轮检视 :394）。
  * @endparblock
  */
 
@@ -461,6 +464,20 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
             return EXIT_FAILURE;
         }
         iter++;
+        /* 循环条件直连 test_time_condition 而非 TEST_LOOP/test_loop_condition
+         * ——locks/spinlock 家族统一习语（locks.cpp:68、spinlock_cross_socket.cpp:78
+         * 同款 do-while；全仓 248 文件直连 vs 218 文件 TEST_LOOP）。后果须知情
+         * （PR#328 六轮检视 :394）：--inject-idle 的 usleep 注入只存在于
+         * test_loop_condition（上游 8d510c9c 有意设计："existing tests that
+         * directly use test_time_condition() won't be affected by the idle
+         * injection"），但时长折算是框架全局行为——本测试在 inject-idle 实验
+         * 中为 (1-idle_rate)×时长 × 100% 占空比，与 TEST_LOOP 用例不一致。
+         * 不改为 test_loop_condition 的依据：① 该函数每 N 次迭代才被调用一次
+         * （TEST_LOOP 粒度），inner_loop_count/骨折切片随之为 ×N（本测试切片
+         * 行为——含 logverif 每切片文件与行预算——经二~五轮检视校准，重构
+         * 即重开已收敛议题）；② 独行修复无战役收益：直连条件是 248 文件的
+         * 框架级语义，占空比一致性须框架层统一解决。此边界在此声明而非
+         * 静默存在 */
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;

@@ -99,11 +99,14 @@ static inline double fma_chain_scalar(double v)
 // PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
 // 本用例全线程并行认领填充(while(true),循环体无任何
 // test_time_condition)——整轮时长既不受 -t 约束也不受迭代预算约束;
-// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。写阶段「一致性测试」是
-// store_buf 自比较(不回读 td->data,零数据检出),真检出只在读阶段的
-// 期望和逐位比较(read_sum == expected_sum,双侧精确)——而等待每自旋
-// 查预算(耐心 ~40 自旋),预算耗尽即 break 跳过读阶段:大缓冲轮次
-// 零检出。默认 ≈27.7 GB(61 GiB 主机)整轮撞宽限悬崖(同族 sym 实测
+// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。写阶段(run 写循环内)无
+// 任何校验——不回读 td->data,也没有 store_buf 比较(R6 勘误,意见26:
+// store_buf 自比较位于读阶段,R5 版误挂到写阶段)。真检出全在读阶段:
+// 聚合和 read_sum == expected_sum(双侧精确)+ store_buf 自比较;另有
+// FMA 链对同源输入的标量 golden 逐元素比对——检 FMA 计算路径分歧,不检
+// 内存内容(两侧读同一 vals)。等待每自旋查预算(耐心 ~40 自旋),预算
+// 耗尽即 break 跳过读阶段:大缓冲轮次零检出。默认 ≈27.7 GB(61 GiB
+// 主机)整轮撞宽限悬崖(同族 sym 实测
 // 324.3 s timed out;小缓冲宽限内填完时零校验空转 pass,同日 asymm_int
 // 实测 245.5 s pass)——两态均零读侧检出。
 // merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR

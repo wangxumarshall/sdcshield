@@ -39,13 +39,18 @@ struct TestData {
 // PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
 // 本用例全线程并行认领填充(while(true),循环体无任何
 // test_time_condition)——整轮时长既不受 -t 约束也不受迭代预算约束;
-// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。块级立即回读检查
-// (block_ok/ok → FAIL,同线程 Store/Load 窗口)是唯一的真检出;等待
-// 每自旋查预算(耐心 ~40 自旋)→ 预算耗尽即 break 跳过读阶段,而读
-// 阶段本身仅 store_buf 自一致性比较、不对照写入值(跨线程路径零检
-// 出,merge-base 既有)。默认 ≈27.7 GB(61 GiB 主机)本机实测首轮
-// 26.7 s(超 -t 3 s 预算 ~9 倍;R4 检视轮同配置 53.9 s、18 倍)后空转
-// pass;更慢负载下撞宽限悬崖 → timed out/exit: invalid——两态的跨线程路径均零检出。
+// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。R6 勘误(意见24):R5 版
+// 「(block_ok/ok → FAIL)是唯一的真检出」与本文件代码不符——写侧立即
+// 回读算出 ok 后在空体 if 中被丢弃,不产生任何 FAIL(姊妹 PR #331 commit
+// f1c23a65 已在其分支把 avx_sym/sse_sym 的 !ok 接通为 report_fail,本分支
+// 未含该修复)。本用例 FAIL 能力的数据校验只在读阶段:聚合和
+// read_sum == expected_sum(写侧累加 vs 读侧全量重读——非逐字节,补偿性
+// 双错等和保持型损坏不可见)+ store_buf 自一致性(读路径 store/reload
+// 自比较,不对照写入值);等待每自旋查预算(耐心 ~40 自旋)→ 预算耗尽
+// 即 break 跳过读阶段,该轮零校验。默认 ≈27.7 GB(61 GiB 主机)本机实测
+// 首轮 26.7 s(超 -t 3 s 预算 ~9 倍;R4 检视轮同配置 53.9 s、18 倍)后
+// 空转 pass;更慢负载下撞宽限悬崖 → timed out/exit: invalid——两态
+// 结局的该轮均零校验。
 // merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
 // 引入。
 static size_t mesh_target_bytes() {

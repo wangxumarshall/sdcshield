@@ -56,8 +56,13 @@ struct TestData {
 // 机器负载在两态间摆动,均零读侧检出。读侧校验(read_sum 对
 // expected_sum 跨线程求和 + Store/Load 一致性)在合法 knob 配置下可达
 // 但随尺寸衰减:实测 1 MiB 1012 行 → 4 MiB 214 → 1 GiB 4 → 4 GiB 3 行;
-// 默认 27.7 GB 远超等待耐心且整轮撞宽限悬崖。写侧无 data 回读比较
-// (依赖读阶段兜底,见 run 内注释)——读阶段被跳过的轮次即零检出。
+// 默认 27.7 GB 远超等待耐心且整轮撞宽限悬崖。写侧立即回读比较存在
+// (run 写循环内 svld1+svcmpeq+svcntp→ok)但结果被空体 if 丢弃、不产生
+// FAIL——R6 勘误(意见26):R5 版「写侧无 data 回读比较」失实,失效机理
+// 是「比较后丢弃」而非「无比较」,#357 的修法应是接通该结果而非补比较
+// (姊妹 PR #331 commit f1c23a65 对 avx_sym/sse_sym 已先行接通);读侧
+// 兜底只有聚合和+store_buf 自比较,和保持型损坏不可见——读阶段被跳过
+// 的轮次即零检出。
 // merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
 // 引入。
 static size_t mesh_target_bytes(struct test *test)

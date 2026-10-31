@@ -38,8 +38,10 @@ struct TestData {
 // 本用例多写者(除读核心外全部线程)while(true) 无界认领填充
 // (循环体无任何 test_time_condition)——整轮时长既不受 -t 约束也不受
 // 迭代预算约束;唯一硬界是父进程宽限 max(5×-t+30s, 300s)(SIGQUIT→
-// timed out/exit: invalid)。块级 block_ok 立即回读检查存在(同线程
-// Store/Load 窗口的真检出)。读核心等待每自旋查预算(耐心 ~40 自旋)
+// timed out/exit: invalid)。块级 block_ok 立即回读比较存在但结果被完全
+// 丢弃([[maybe_unused]],无记录、无 FAIL 路径——R6 勘误:R5 版把本用例
+// 记账为「有写侧真检出」失实,接通修法见姊妹 PR #331 commit f1c23a65
+// 先例)。读核心等待每自旋查预算(耐心 ~40 自旋)
 // → 读侧校验在全部合法 knob 配置(下限 1 MiB)实测不可达(1 MiB 零
 // 校验行)。默认目标 ≈27.7 GB(61 GiB 主机)整轮撞宽限悬崖(同族
 // mesh_upi_sve_asymm_int 实测 245.5 s 空转 pass/sym 324.3 s timed

@@ -5,6 +5,86 @@
 
 ---
 
+## 2026-10-31（issue #182 根因定案：sve512 chain/special 家族非 512-bit VL golden 失配——f32 NaN/Inf 饱和操作数 × IMP-DEF 载荷，f64 无测试侧缺陷；1024 档首次采集）
+
+### 结论
+
+- **根因（f32 两测试 sve512_f32_chain_arm/svd）**：历史 VL=128 runner 失配
+  = `3d731d24` 起 f64 指数偏置缺陷（`0x3FE/0x3FF << 23` 拼 f32 位型：0x3FF 臂
+  `0xFF800000` 落 NaN/−Inf 指数类、0x3FE 臂 `0xFF000000` 是 ≈2^127 巨幅有限
+  ——整体 ≈37.5% NaN 类 + 62.5% 有限(37.5% 巨幅)，复现器实测 3109/8192=38.0%
+  NaN，链数步内饱和为 NaN/Inf）× 标量 fmadd 与 SVE FMLA 的 NaN 载荷选择
+  **IMPLEMENTATION-DEFINED**（ARM ARM 无标量/向量一致性要求）——字节精确
+  golden 遍历 NaN 饱和结果在架构上就是无效测试设计；**与 VL 无关**，
+  `svcntb()==64` 占位门控属误诊（操作数域 bug 被当成 VL 问题）。修复已在树
+  （`ff8ddec1` 正确 f32 偏置 0x7E/0x7F）。
+- **f64 两测试（sve512_f64_chain_svd/special_svd）无测试侧缺陷**：有限操作数
+  下 golden≡hw 逐位相等是架构保证（单舍入 FMA 对有限输入确定性；special 的
+  分类比较本就容忍载荷分歧）。0xd02 VL=256 上 issue 时刻代码（3d731d24 临时
+  检出重建，反汇编证实 golden=`fmadd s0`/hw=`fmla z0.s` 两不同路径）与当前
+  代码均 pass。历史 N2 失配为 runner 侧数值发散（真实 SDC 候选或环境；CI
+  日志已过期不可复盘）——如实声明边界。
+- **微架构分化**：0xd02 实测两路径 NaN 位一致（复现器 8/8 lane，含纯 NaN
+  饱和链的最大载荷分歧机会）；0xd22 同理推断同选（历史 512-bit 通过）。GH
+  runner 的 Neoverse N2 两路径分歧是**推断**（代码事实 + 架构规则 + 观察到
+  失配三者反推的唯一自洽解释；N2 不可再访问，无法直接观测）——本机不可复现
+  N2 行为这一事实本身就是根因链的一环。
+- **P3 Ruling 残留风险关闭**：`f32×块slab` 与 `special×块slab` 组合寻址
+  （gem5 dual-kernel 未直接覆盖、被点名为"真 SVE 主机非 512 档首现失败首要
+  怀疑"）经 0xd02 VL=256 真实硬件多种子全 pass 实证。
+- **PR #283 评审登记的"真实 SVE 主机未覆盖"缺口补齐**；1024-bit 档 gem5 SE
+  真二进制证据首次采集。
+
+### 实证
+
+- **本机（Kunpeng 0xd02, SVE1, PR_SVE_GET_VL=32B=256-bit, 128 核）当前代码**：
+  4 测试 `--quick` 全 pass（真实运行 49.9/215.4/138.7/11.4 s 非 skip）；
+  `-t 2000 -s LCG:1003` 与 `LCG:1004` 全核全 pass（354/371 worker 结果 0 fail）。
+- **issue 时刻代码（3d731d24 四文件临时检出、不提交）**：4 测试同样全 pass
+  （7.9/431.7/270.5/21.6 s）——0xd02 上历史失配不可复现（NaN 载荷同选）。
+- **复现器**（入库
+  `docs/superpowers/inventory/issue182-sve512-allvl/repro_qnan_bias.cpp`，
+  输出归档同目录 `repro_output.txt`；gcc 12.3.1 -O2 -march=armv8.2-a+sve）：
+  忠实重建 3d731d24 完整生成器（25% 表 + 75% 构造），旧生成器 8192 抽取
+  3109 NaN(38.0%)/0 Inf/5083 有限(3047 巨幅 |x|>1e30)、链饱和 min=mean=max=0
+  （全部 lane 第 0 步即非有限）、scalar-fmadd vs SVE-FMLA 8/8 lane 位一致；
+  新生成器 0 NaN/8192 有限(0 巨幅)、全链有限、8/8 一致。
+- **过程事故（诚实记录，检视 round 1 发现）**：复现器首版用朴素 LCG（LSB
+  周期 2），m 流指数抽取恒落奇偶性同侧——整流退化恒 0x3FF，首版输出
+  "4096 NaN / 0 finite" 为伪影，据此写的"操作数 100% qNaN"口径错误；检视以
+  位级算术证伪（0x3FE<<23=0xFF000000 指数 0xFE 有限巨幅），探针+直方图
+  复核成立后改 splitmix64 + 双流审计，本条目与 plan/注释均已按修正数字
+  重写。教训：审计类工具的 RNG 低比特周期性可与调用模式整流 alias，产出
+  看似合理实则退化的"实测"。
+- **gem5 SE 真二进制**（gem5.opt md5 `3f9011f40dbe80ec1df478c62ddb0b06`，
+  `-t 500 -n 1 -f no --ignore-timeout`，每格独立 m5out，全部 rc=0；verdict
+  工件入库 `docs/superpowers/inventory/issue182-sve512-allvl/gem5-verdicts.txt`）：
+  - 512-bit（--vl 4）：f32_chain_arm tick 8467506000 / f32_chain_svd
+    1199021558000 / f64_chain_svd 604436572000 / f64_special_svd 28577750000，
+    全 `exit: pass`（与战役 512 腿 verdict 一致，本次为当前 HEAD 二进制复锚）。
+  - 1024-bit（--vl 8，**首次**）：f32_chain_arm 11773188000 / f32_chain_svd
+    2390926374000 / f64_chain_svd 1201984971000 / f64_special_svd 51746798000，
+    全 `exit: pass`。512→1024 tick 比 f32_chain_svd/f64_chain_svd 均 2.0×
+    （= lanes 倍增的标量 golden 工作量，tier 语义正确性旁证）。
+- **默认集**：`--list-tests` 488 项含全部 4 测试（门控撤除后在 SVE 主机默认
+  PROD 集真实在列）。
+- **既有证据链复用**（4 文件自战役基准 12ccda54 零改动，证据直接适用）：
+  native-128/256 各 2 seeds（LCG:1001/1002，战役 summary）、gem5 kernel 四档
+  48 run（PR #283）、gem5 真二进制 512 档（战役 verdicts）。
+
+### 交付
+
+- plan：`docs/superpowers/plans/2026-10-31-issue182-sve512-allvl.md`（根因论证
+  与验证矩阵全文，含检视 round 1 修正）。
+- 4 测试 docblock/init 注释收口：'四档 kernel 证据清除'（PR #283 评审已收窄的
+  过时口径）→ 根因定案 + 真实硬件/1024 档证据（纯注释零行为变化：构建零新
+  警告、4 测试 quick 与改前一致全 pass、zstd19 回归 pass、x86 零触碰）。
+- 工件入库 `docs/superpowers/inventory/issue182-sve512-allvl/`：
+  `repro_qnan_bias.cpp`（复现器源）+ `repro_output.txt`（实测输出）+
+  `gem5-verdicts.txt`（512 复锚 + 1024 首采，gem5 身份与命令形态）。
+- 家族其余 6 文件（gather/scatter/xlswave/f64_chain_arm/f64_special_arm）同款
+  旧口径未动——超出本 issue 范围，留待后续统一刷新。
+
 ## 2026-10-30（会话：SVE 全 VL 验证运动收口——190×3 证据矩阵 + gem5 真二进制 SE 通路）
 
 ### 结论

@@ -20,9 +20,17 @@
  * Still a serial svmla_f64_x chain (512 steps), byte-exact compared to a
  * scalar std::fma reference. Compiled WITHOUT -msve-vector-bits so it uses
  * the CPU runtime vector length — all-VL (128..1024-bit, all-VL Phase 2
- * P3; the pre-P3 512-bit single-value gate and its issue #182 caveat are
- * cleared by the four-tier dual-kernel evidence in gem5-fi
- * feat/sve512-dual). test_init gates via the framework layer
+ * P3). The pre-P3 512-bit single-value gate and its issue #182 caveat
+ * are closed with the boundary stated (2026-10-31): no test-side
+ * defect exists — finite operands make the scalar-fmadd golden and the
+ * SVE FMLA bit-identical at every VL by architecture (single-rounding
+ * FMA is deterministic for finite inputs), so the historical runner
+ * mismatches were a runner-side divergence (real-SDC candidate or
+ * environment; CI logs expired, unreproducible on Kunpeng 0xd02 VL=256
+ * — issue-time and current code both pass — and in gem5 at all four
+ * tiers). Verified on real VL!=512 SVE hardware (0xd02, VL=256, seeds
+ * LCG:1001..1004: pass) and in gem5 SE real-binary at 512/1024-bit.
+ * test_init gates via the framework layer
  * (arm64_require_sve_vl: HWCAP_SVE capability + range check in one call,
  * no SVE instruction executes before the probe), returning a clean
  * EXIT_SKIP on SVE-less CPUs; test_run re-checks the VL and fails closed
@@ -150,8 +158,11 @@ static int sve512_f64_chain_svd_init(struct test *test)
        framework-layer call (the geometry has been svcnt-dynamic all
        along; only the old single-value gate pinned one tier). The
        historical VL=128 golden mismatch on a hosted CI runner
-       (issue #182) is cleared by the four-tier dual-kernel evidence
-       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
+       (issue #182) has no test-side defect behind it (2026-10-31):
+       finite operands make the scalar-fmadd golden bit-identical to
+       SVE FMLA at every VL by architecture; the divergence was
+       runner-side and is unreproducible on 0xd02 VL=256 and in gem5
+       (docblock above states the boundary). arm64_require_sve_vl
        returns the VL in BYTES — f64 lanes = svl/8, range-checked
        below (release-effective, NDEBUG-proof). */
     const long svl = arm64_require_sve_vl(test, 128, 1024);

@@ -184,13 +184,24 @@ enum SpinlockAddNeonAcquire {
  * 流转）同样走 FAIL：本核 CAS 持续失败且（本核读到的）epoch 停走，按
  * 冻结论处。饥饿重置有上限（SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX）：
  * 连续 3 次重置后仍超时且锁行在流动 = 持续饥饿/进展异常，以区分性消息
- * FAIL——既防假阳性也防线程在无限重置中永不返回。 */
+ * FAIL——既防假阳性也防线程在无限重置中永不返回。FAIL 报文/dump 的等待
+ * 时长取进入 acquire 起的累计（t_entry 基线，跨窗求和），看门狗预算基线
+ * t0 则每窗重置——两基线分工见函数内注释（PR#328 五轮检视 :309）。 */
 static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddNeonData *d,
                                                              int cpu, uint64_t *stall_ns_out)
 {
     const uint64_t limit = (uint64_t)(SPINLOCK_ADD_NEON_STALL_SECONDS * 1e9);
     const uint64_t confirm_limit = (uint64_t)(SPINLOCK_ADD_NEON_CONFIRM_SECONDS * 1e9);
-    uint64_t t0 = spinlock_add_neon_now_ns();
+    /* 两条时间基线（PR#328 五轮检视 :233/:309）：
+     *   t_entry —— 本次获锁尝试的累计等待基线：自进入 acquire 起永不重置。
+     *             报告口径：FROZEN/NO_PROGRESS 的 stall_ns 与 dump_line 的
+     *             "LOCK STALL %.3fs" 统一取 now-t_entry（跨饥饿重置窗口求和），
+     *             "across %d wait windows (%.1fs total)" 才名实相符。
+     *   t0 —— 本窗看门狗预算基线：饥饿重置时重置（判定口径：确认窗判"锁在
+     *         流动"后须重算 10s 预算）。原实现报告口径也误取 now-t0，4 窗各
+     *         >10s 的 NO_PROGRESS 把 ~11s 的末窗时长谎报成了 total。 */
+    const uint64_t t_entry = spinlock_add_neon_now_ns();
+    uint64_t t0 = t_entry;
     uint64_t expected = 0;
     uint32_t spins = 0;
     int starvation_resets = 0;
@@ -230,7 +241,7 @@ static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddN
                 }
                 if (flowed) {
                     if (starvation_resets >= SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX) {
-                        *stall_ns_out = spinlock_add_neon_now_ns() - t0;
+                        *stall_ns_out = spinlock_add_neon_now_ns() - t_entry;
                         return SPINLOCK_ACQUIRE_NO_PROGRESS;
                     }
                     starvation_resets++;
@@ -243,7 +254,7 @@ static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddN
                     spins = 0;
                     continue;
                 }
-                *stall_ns_out = spinlock_add_neon_now_ns() - t0;
+                *stall_ns_out = spinlock_add_neon_now_ns() - t_entry;
                 return SPINLOCK_ACQUIRE_FROZEN;
             }
         }

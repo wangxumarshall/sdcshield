@@ -124,9 +124,12 @@ struct PredOpsData {
        MAP_FIXED refilled-but-untouched hole still fault-clears the FFR
        tail exactly like the punched hole), so the interference needs a
        pre-faulted page. Not zero either way, so the fault/acc failure
-       paths carry the ffr_hole_intact() discriminator: a re-mapped hole
-       is reported as environment interference (TestResourceIssue SKIP),
-       never as SDC. */
+       paths carry the ffr_hole_probe() discriminator: a PROVEN re-mapped
+       hole is reported as environment interference (TestResourceIssue
+       SKIP), never as SDC — and an unprovable probe state is reported
+       as a possible SDC, never silently folded into the SKIP (the
+       verdict mapping and its TOCTOU boundary live with
+       ffr_check_fault_acc_faces / ffr_hole_probe). */
     void *ffr_pages = nullptr;          // mmap base (2 pages)
     size_t ffr_page_bytes = 0;          // ONE page: cleanup unmaps ONLY page
                                         // 1 (round-4 #22 — the hole page may
@@ -272,21 +275,55 @@ static ptrdiff_t ffr_first_diff(const uint8_t *image, const uint8_t *golden,
 }
 
 /* Failure-path-only discriminator for the munmap hole (see PredOpsData):
- * is the punched-out page STILL unmapped? msync(MS_ASYNC) on an anonymous
+ * is the punched-out page mapped NOW? msync(MS_ASYNC) on an anonymous
  * mapping is a no-op flush, so success vs ENOMEM is exactly "mapped vs
- * unmapped" (measured on this host: hole -> -1/ENOMEM, mapped -> 0).
- * Runs only AFTER a fault/acc check has already tripped, long after the
- * capture completed — a syscall here cannot touch the captured state.
+ * unmapped" (measured on this host: hole -> -1/ENOMEM, mapped -> 0; the
+ * page-aligned exactly-one-page probe shape has no other errno reachable
+ * here — but a seccomp/LSM filter can turn any syscall into -1/EPERM, so
+ * the third state exists and must be handled). THREE states, and the
+ * verdict mapping in ffr_check_fault_acc_faces carries the detector's
+ * bias (round-4 #23/#31): remapped is PROVEN interference (msync
+ * succeeded on a page the test never mapped), intact is PROVEN
+ * still-hole, and unknown proves NEITHER — only a proven re-map may
+ * downgrade a failure to SKIP; an unknown probe is reported as a
+ * possible SDC instead of being folded into the SKIP the old two-state
+ * version silently chose. Runs only AFTER a fault/acc check has already
+ * tripped, long after the capture completed — a syscall here cannot
+ * touch the captured state.
+ *
+ * TOCTOU, stated honestly (round-4 #25): the probe observes the hole at
+ * PROBE time, not at capture time, and userspace has no atomic
+ * capture+probe. Both directions are real: forward (hole intact at
+ * capture — the golden break is a true SDC — then a mapper lands in the
+ * hole before the probe -> SKIP swallows a real SDC) and reverse (hole
+ * occupied at capture — no fault, goldens broken — then the mapper
+ * unmaps before the probe -> intact -> false SDC). Both are strictly
+ * narrower than the flake class this probe exists to kill: each needs a
+ * <=1-page anonymous mapper to land in (and for the reverse, fully
+ * vacate) this exact page inside the few-hundred-instruction
+ * capture-to-probe window, on a host where the residual-risk note above
+ * already bounds the mapper itself as having no ordinary producer. A
+ * re-capture-based convergence ("capture again and SKIP if it now
+ * passes") was evaluated and REJECTED: a clean re-capture is equally
+ * consistent with a genuine transient SDC, and an SDC detector must not
+ * swallow an observed mismatch on a re-run. The SKIP message therefore
+ * states the probe timing so a triager knows the classification
+ * boundary.
  * gem5 boundary: the repo test never runs under gem5 SE (whose syscall
  * table maps msync to unimplementedFunc, i.e. fatal); the dual kernel
  * mirrors only the healthy-path goldens and does not exercise this. */
-static bool ffr_hole_intact(const PredOpsData *d)
+enum class ffr_hole_state { intact, remapped, unknown };
+
+static ffr_hole_state ffr_hole_probe(const PredOpsData *d, int *probe_errno)
 {
     const size_t ps = d->ffr_page_bytes;   // the hole: page 2 of the pair
     errno = 0;
     if (msync((char *)d->ffr_pages + ps, ps, MS_ASYNC) == 0)
-        return false;                    // someone re-mapped the hole
-    return errno == ENOMEM;              // ENOMEM == still unmapped
+        return ffr_hole_state::remapped;  // someone re-mapped the hole
+    *probe_errno = errno;
+    if (errno == ENOMEM)
+        return ffr_hole_state::intact;    // ENOMEM == still unmapped
+    return ffr_hole_state::unknown;       // seccomp/LSM/...: neither proven
 }
 
 /* Mapped-face verification — the SINGLE source of truth for both call
@@ -347,15 +384,27 @@ static int ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
  * interference gate — the SINGLE source of truth for both call sites
  * (round-4 #26/#32: two isomorphic hand copies differing in message
  * text AND failure semantics; the mapped-face behavior inconsistency
- * round-4 #24 caught was this drift made real). The gate (round-3
- * #18): if the unmapped hole got mapped by an external mapper, the
- * fault never happened, ALL THREE fault/acc goldens break at once, and
- * reporting SDC would be false — skip honestly. Immediate=false:
- * Section 4 aggregate semantics (log_warning + all_passed=false, all
- * three faces checked, the caller issues the verdict; returns
- * EXIT_SUCCESS or EXIT_SKIP). Immediate=true: re-loop semantics —
- * reaching the gate there implies every earlier face of the iteration
- * already passed, so no hole-independent failure can be pending;
+ * round-4 #24 caught was this drift made real). The gate maps the hole
+ * probe (ffr_hole_probe — see there for the TOCTOU boundary) to
+ * verdicts with the detector's bias (round-3 #18, round-4 #23/#24/#25/
+ * #31):
+ *   - remapped hole AND no hole-independent failure pending: the three
+ *     mismatches are fully explained by the environment (the fault
+ *     never happened, ALL THREE goldens break at once) — honest
+ *     TestResourceIssue SKIP.
+ *   - remapped hole AND a hole-independent failure already on record
+ *     (all_passed == false — the mapped face and sections 1-3 never
+ *     touch the hole): SKIP is FORBIDDEN, it would swallow real SDC
+ *     evidence (round-4 #24). The hole is logged as context; the SDC
+ *     verdict takes precedence.
+ *   - unknown errno: neither proven — a possible SDC is NOT downgraded
+ *     into a SKIP; the mismatch is reported with the indeterminacy
+ *     logged (round-4 #23/#31).
+ * Immediate=false: Section 4 aggregate semantics (log_warning +
+ * all_passed=false, all three faces checked, the caller issues the
+ * verdict; returns EXIT_SUCCESS or EXIT_SKIP). Immediate=true: re-loop
+ * semantics — reaching the gate there implies every earlier face of the
+ * iteration already passed, so all_passed is true by construction;
  * report_fail_msg kills the worker on the first broken face. */
 template <bool Immediate>
 static int ffr_check_fault_acc_faces(const PredOpsData *d, size_t vl,
@@ -371,14 +420,29 @@ static int ffr_check_fault_acc_faces(const PredOpsData *d, size_t vl,
     const bool data_bad = memcmp(f_back, f_exp, vl * 8) != 0;
     const bool acc_bad = memcmp(a_img, f_gold, 8 * vl) != 0;
     if (ffr_bad || data_bad || acc_bad) {
-        if (!ffr_hole_intact(d)) {
+        int probe_errno = 0;
+        const ffr_hole_state hole = ffr_hole_probe(d, &probe_errno);
+        if (hole == ffr_hole_state::remapped && all_passed) {
             log_skip(TestResourceIssueSkipCategory,
                      "sve512_pred_ops_arm: the unmapped hole for the "
                      "faulting-LDFF1 face was re-mapped by an external "
                      "mapper%s — fault source invalidated by the "
-                     "environment, not an SDC",
+                     "environment, not an SDC (hole probed AFTER the "
+                     "capture; capture-time state is unobservable — see "
+                     "ffr_hole_probe)",
                      Immediate ? " (re-loop)" : "");
             return EXIT_SKIP;
+        }
+        if (hole == ffr_hole_state::unknown) {
+            log_warning("sve512_pred_ops_arm: hole discriminator "
+                        "indeterminate (msync errno=%d) — a re-mapped "
+                        "hole cannot be proven, the mismatch is "
+                        "reported as a possible SDC", probe_errno);
+        } else if (!all_passed) {
+            log_warning("sve512_pred_ops_arm: the hole was re-mapped, "
+                        "but a hole-independent failure is already on "
+                        "record — the SDC verdict takes precedence over "
+                        "the environment SKIP");
         }
     }
     const char *tag = Immediate ? " (re-loop)" : "";

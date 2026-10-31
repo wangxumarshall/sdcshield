@@ -77,6 +77,10 @@
 #include <cerrno>   /* errno：logverif 打开失败降级路径使用；不依赖框架头链
                      * 传递包含（PR#328 三轮检视 :368——上游 include 整理时
                      * 偶然可见性会静默破碎） */
+#include <chrono>   /* std::chrono::milliseconds（selftest=stall 前置条件校验读
+                     * 生效测试时长）：直连纪律同 <cerrno>——此前仅经
+                     * sandstone_p.h:30 → sandstone_chrono.h:24 偶然可见
+                     * （PR#328 五轮检视 :443） */
 #include <cstdint>
 #include <cstdio>
 #include <cstring>

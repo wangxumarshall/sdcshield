@@ -611,8 +611,12 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
  * 拟合出参 fit(spec §4.3 M3): 成功路径填充 {a_ms, p} —— 单解模型
  * t(n)=a_ms·n^p, a_ms 已按两点差分扣除固定开销 b(见函数尾); 早退
- * 路径保持 {0,0}(无效, 消费方跳过 n_run)。默认 nullptr, 既有调用
- * (7 实参)签名不变。
+ * 路径保持 {0,0}(无效, 消费方跳过 n_run)。
+ * probe_floor_ms/fit 缺省 {1.0, nullptr}: 既有 7 实参调用(跨 arch
+ * 存量链, 含 x86-64 #else 分支)签名与行为不变(rule 5, issue #351——
+ * 该缺省值即 f84966bc 之前的历史噪声底语义, 不得随 ARM 侧 M3 口径
+ * 联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)显式传
+ * 100.0。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
  *   if (dim > lo)
@@ -628,6 +632,7 @@ template <typename F>
 static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                                      const char *test_id, const char *knob,
                                      double k_floor, F solve_once,
+                                     double probe_floor_ms = 1.0,
                                      struct sdc_fit *fit = nullptr)
 {
     if (fit) { fit->a_ms = 0.0; fit->p = 0.0; }  /* 早退路径保持无效 */
@@ -639,14 +644,19 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
         return std::chrono::duration<double, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
     };
-    /* probe 档自适应抬升: 小档求解太快(<100ms)时固定开销(构造/预处理)
-     * 在计时中占比过高——幂律系数被抬高, 外推维度被压低(实测 sve 模型
-     * t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高 ~14×,
-     * 立方根收缩 2.4×)。翻倍 probe 档直到固定开销占比 <10%(>=100ms,
-     * spec §4.3 M3; 1ms→100ms)或触及 hi——否则外推基数失真。 */
+    /* probe 档自适应抬升: 小档求解太快(< probe_floor_ms)时翻倍 probe 档
+     * 直到可测量或触及 hi——否则外推基数失真。两级语义(issue #351):
+     *   - 缺省 1.0(历史噪声底): 求解快到 1ms 以下即被计时噪声淹没
+     *     (实测稀疏 Cholesky 规则带状 probe 在 64 档仅 0.1ms, 外推
+     *     失控)——跨 arch 存量 7 参调用(x86-64 #else 链)byte-identical
+     *     沿用此口径, 不得随 ARM 侧 M3 口径联动改动(rule 5)。
+     *   - 100.0(spec §4.3 M3): 固定开销(构造/预处理)在计时中占比
+     *     <10%, 幂律系数不被抬高(实测 sve 模型 t(N)=243.4·(N/4400)³+1
+     *     的 +1 项在 N=300 档占 93%, 系数虚高 ~14×, 立方根收缩 2.4×)
+     *     ——仅由联合求解(ARM-only)显式传入, 与其 fit 差分扣 b 配套。 */
     int p1 = lo;
     double t1 = probe(p1);
-    while (t1 < 100.0 && p1 * 2 <= hi) {
+    while (t1 < probe_floor_ms && p1 * 2 <= hi) {
         p1 *= 2;
         t1 = probe(p1);
     }
@@ -711,9 +721,10 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
         /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
          *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p
          * b≈0 时严格退化为 a = t1/p1^p。差分在 b 为常数的模型下精确,
-         * 常规档(b 占比 <10%, 与 100ms 阈值配套)与 b 主导的对抗档都
-         * 成立; 代价是对差分 (t2−t1) 的测量噪声敏感(p1/mid 档位拉得
-         * 越开越稳)。退化保护(档位重合/计时持平/非有限/非正)回退
+         * 常规档(b 占比 <10%, 与联合求解显式传入的 probe_floor_ms=100.0
+         * 配套)与 b 主导的对抗档都成立; 代价是对差分 (t2−t1) 的测量
+         * 噪声敏感(p1/mid 档位拉得越开越稳)。退化保护(档位重合/计时
+         * 持平/非有限/非正)回退
          * b=0 口径 a = t1/p1^p —— 系数只高不低, 消费方 n_run 只小
          * 不大(保守方向)。 */
         double pn = std::pow((double)p1, k);
@@ -1055,13 +1066,15 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         if (per_solve < 1)
             per_solve = 1;
         /* 探针上限 = knob hi(不用 n_mem 截断): 差分基线 (p1, mid) 拉得
-         * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 阈值
-         * 机制约束(终点档起每档 ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem
-         * 无关。返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit。 */
+         * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 探针档
+         * 下限(下方显式实参, spec §4.3 M3——模板缺省 1.0 是存量 7 参
+         * 链的历史语义, 不得联动改动, issue #351)约束(终点档起每档
+         * ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem 无关。返回值弃用(其内
+         * 向外推是未扣 b 的保守口径), 只取 fit。 */
         struct sdc_fit fit;
         sdc_calibrated_dim(a->lo, a->hi, per_solve,
                            test ? test->id : "(global)", knob, 3.0,
-                           solve_once, &fit);
+                           solve_once, 100.0, &fit);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
             double nr = std::pow((double)a->run_budget_ms
                                  / (ar * 2.0 * fit.a_ms), 1.0 / fit.p);

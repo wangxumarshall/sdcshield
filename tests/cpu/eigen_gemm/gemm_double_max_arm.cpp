@@ -140,7 +140,7 @@ static int solve_once_gemm(int n)
  * only writes an UPPER bound:
  *
  *   n_hi = sqrt(budget650_kb / (workers × c_GEMM_F64)), clamped to
- *          [MDIM_MIN, MDIM_MAX] — the same three-source memory budget
+ *          [MDIM_MIN, MDIM_MAX] — the same four-source memory budget
  *          and RSS-table coefficient the child's n_mem uses, with
  *          workers = the run's actual whole-machine worker count
  *          (sdc_total_threads(), available in preinit: commit_shmem()

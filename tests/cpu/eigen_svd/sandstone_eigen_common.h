@@ -95,7 +95,7 @@ template <typename SVD, int Dim> struct EigenSVDTest
      * template users (eigen_svd{,_double,_double2,_fvectors,_cdouble,
      * _cdouble_noavx512} + eigen_svd_jacobi{,_double,_cdouble,_fvectors})
      * migrate in this single edit. Per knob of the joint model:
-     *   memory — per-NUMA-node budget (three-source sdc_budget_bytes)
+     *   memory — per-NUMA-node budget (four-source sdc_budget_bytes)
      *            against the RSS table coefficient of rss_family(); the
      *            call-site legacy triple passed through below is the
      *            defensive fallback the table supersedes (call-site

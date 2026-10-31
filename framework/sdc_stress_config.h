@@ -90,13 +90,15 @@ static inline uint64_t sdc_phys_mem_bytes(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* 可用内存预算: 三源取 min(spec §4.2)                                  */
+/* 可用内存预算: 四源取 min(spec §4.2 + issue #310 承诺源)              */
 /* ------------------------------------------------------------------ */
 
-/* [可用内存预算] 三源取 min(spec §4.2): 物理×‰ / MemAvailable×0.9 /
- * cgroup 限额−已用。任一来源读失败(返回 0)即跳过该来源。
+/* [可用内存预算] 四源取 min(spec §4.2 + issue #310): 物理×‰ /
+ * MemAvailable×0.9 / cgroup 限额−已用 / strict overcommit 承诺余量。
+ * 任一来源读失败(前三源返回 0, 承诺源返回 UINT64_MAX)即跳过该来源。
  * 动机: 旧口径只读 _SC_PHYS_PAGES, 批处理/容器限额下超分——
- * "job oom" 实测前科(svd_cdouble_sve.cpp:114-120 注释)。 */
+ * "job oom" 实测前科(svd_cdouble_sve.cpp:114-120 注释); 承诺源补
+ * overcommit_memory=2 内核上"物理可用 ≠ 可承诺"的盲区(#310)。 */
 static inline uint64_t sdc_memavailable_bytes(void)
 {
     FILE *f = fopen("/proc/meminfo", "r");
@@ -243,6 +245,54 @@ static inline uint64_t sdc_cgroup_limit_bytes(void)
     return a1 < a2 ? a1 : a2;
 }
 
+/* [承诺预算] 第四源(issue #310): 仅 vm.overcommit_memory=2(strict) 内核
+ * 生效——匿名私有承诺(含 fork 的 COW 记账)受 CommitLimit =
+ * RAM×ratio/100 + swap 硬限制, 超限是 mmap/brk ENOMEM(bad_alloc 降档/
+ * 线程级 SKIP), 不是 OOM-kill。前三源全物理口径, 而 MemAvailable(物理
+ * 空闲)与承诺余量独立: ratio=50 的 60GB+4GB swap 机器上 MemAvailable×0.9
+ * 可给出 ~40GB 预算, 承诺余量却只有 CommitLimit−Committed_AS——sizing
+ * 会系统性越界(#310 的 Y002 部署形态)。
+ * VmHWM 反馈回路替代不了本源: =2 下分配在 RSS 增长之前就被拒,
+ * bad_alloc 降级路径的样本到不了反馈写入点(幸存者偏差), c 被低估 →
+ * n 膨胀 → 更多 ENOMEM——反馈闭环在承诺受限机器上是盲的。
+ * 口径: 0.9×(CommitLimit−Committed_AS)(/proc/meminfo, 全系统现读,
+ * 与 MemAvailable 源同"现读+折扣"哲学——承诺记账本身精确, 折扣留给
+ * 并行 slice 各自 sizing 与实际分配之间的时间窗 + 他进程并发抢承诺;
+ * sqrt(0.9)≈0.95 的维度代价可忽略)。承诺已满 → 0(诚实: 一分不能再
+ * 承诺)。非 =2(0=heuristic/1=always, CommitLimit 无强制力)、sysctl
+ * 读失败、meminfo 字段缺失 → UINT64_MAX "不约束"(与既有"读失败跳过
+ * 该来源"约定一致, 不放大也不缩小预算)。 */
+static inline uint64_t sdc_commit_headroom_bytes(void)
+{
+    FILE *f = fopen("/proc/sys/vm/overcommit_memory", "r");
+    if (!f)
+        return UINT64_MAX;
+    int policy;
+    bool ok = fscanf(f, "%d", &policy) == 1;
+    fclose(f);
+    if (!ok || policy != 2)
+        return UINT64_MAX;
+    uint64_t limit = 0, committed = 0;
+    f = fopen("/proc/meminfo", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof line, f)) {
+            unsigned long long kb;
+            if (sscanf(line, "CommitLimit: %llu kB", &kb) == 1)
+                limit = kb * 1024ull;
+            else if (sscanf(line, "Committed_AS: %llu kB", &kb) == 1)
+                committed = kb * 1024ull;
+        }
+        fclose(f);
+    }
+    if (limit == 0 || committed == 0)
+        return UINT64_MAX;      /* 字段缺失/不可读 → 跳过该来源 */
+    if (limit <= committed)
+        return 0;               /* 承诺已满 */
+    uint64_t head = limit - committed;
+    return head - head / 10;    /* ×0.9, 与 MemAvailable 源对称 */
+}
+
 static inline uint64_t sdc_budget_bytes(int permille)
 {
     uint64_t b = sdc_phys_mem_bytes() * (uint64_t)permille / 1000;
@@ -250,6 +300,24 @@ static inline uint64_t sdc_budget_bytes(int permille)
     if (ma > 0 && ma * 9 / 10 < b) b = ma * 9 / 10;
     uint64_t cg = sdc_cgroup_limit_bytes();
     if (cg > 0 && cg < b) b = cg;
+    /* #310 第四源: strict overcommit 下的承诺余量(非 =2 时为
+     * UINT64_MAX, 本块无操作)。成为最小来源时打一次诊断——该部署形态
+     * 的用户直接看到预算被 CommitLimit 钳制, 而非对着 ENOMEM/降档猜测。 */
+    uint64_t head = sdc_commit_headroom_bytes();
+    if (head != UINT64_MAX && head < b) {
+        b = head;
+        static bool logged = false;   /* 每 TU 一次(static inline 是内部
+                                      * 链接, static local 随 TU 各一份);
+                                      * 每 slice child 是独立进程, 实测
+                                      * 每 child 一条(仅 node-budget 路
+                                      * 径触发), 诊断足够且不刷屏 */
+        if (!logged) {
+            logged = true;
+            log_warning("[承诺预算] overcommit_memory=2: 预算被 CommitLimit "
+                        "钳制为 %.1f GiB (0.9×(CommitLimit−Committed_AS))",
+                        (double)b / 1073741824.0);
+        }
+    }
     return b;
 }
 
@@ -913,7 +981,7 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
      * 显式 -O/配置文件/env 值完全旁路联合求解(时间校准/自适应都不跑,
      * 用户自担), 此前无任何内存预期提示。早退前按本函数的模型口径算
      *   预期合计 = 全机线程 × c × n² + slices × shared
-     * 与全局三源预算 sdc_budget_bytes(permille) 比对: 超出 → [内存越界],
+     * 与全局四源预算 sdc_budget_bytes(permille) 比对: 超出 → [内存越界],
      * 不足一半 → [欠压力], 中间档安静。口径:
      *   - threads 用 sdc_total_threads()(全局): 显式 knob 在 init 查询
      *     时 thread_count() 是 slice 口径, 预算按全机分摊(与

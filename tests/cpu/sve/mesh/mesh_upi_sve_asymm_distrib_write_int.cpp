@@ -91,9 +91,11 @@ static int mesh_upi_sve_asymm_distrib_write_int_init(struct test *test) {
      * fetch_add 越过 0xFFFFFFFF 回绕到 0,低块被重复认领重写——求和族
      * global_sum 重复累计→假 FAIL,break 式认领循环每 2^32 次认领仅一张
      * 退出票。该回绕在旧封顶下仅剩一个角落可触发:计算块数 ≥ 2^32 时
-     * 封顶恰把 num_blocks 钉在 0xFFFFFFFF(本用例 2^32 块 = 128 GiB 缓冲可
-     * 分配即命中:默认 45% 物存路径需 ≥285 GiB 主机,env 显式指定亦可;
-     * 计算块数贴边 2^32 − 线程数以上的窄带同理),拿到 0xFFFFFFFF 的
+     * 封顶恰把 num_blocks 钉在 0xFFFFFFFF(本用例 2^32 块 = 128 GiB;该
+     * 角落对本用例任何配置均不可达——填充每认领一次即查预算,每轮
+     * ~40 认领即截断并触发 fracture 重启重置 next_block,认领计数器
+     * 永不积累到 2^32;计算块数贴边 2^32 − 线程数以上的窄带同理),
+     * 拿到 0xFFFFFFFF 的
      * 线程 break 后计数器回绕到 0,其余写者重新认领低块重写,退出票每
      * 2^32 次认领仅一张、N 线程需 N 张,写阶段无法在测试时限内自然终
      * 止;计算块数 ≤ 2^32 − 线程数的常态下认领总数 < 2^32+1,不可达;

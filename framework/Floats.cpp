@@ -91,14 +91,24 @@ static_assert(Float64_11_22.mantissa == 22, "Float64: Incorrect mantissa");
 static constexpr Float80 Float80_all_ones = new_float80(~0, ~0, ~0, ~0);
 static_assert(Float80_all_ones.sign == 1, "Float80: Incorrect sign");
 static_assert(Float80_all_ones.exponent == FLOAT80_NAN_EXPONENT, "Float80: Incorrect exponent");
+#ifndef __aarch64__
 static_assert(Float80_all_ones.jbit == 1, "Float80: Incorrect j-bit");
 static_assert(Float80_all_ones.mantissa == FLOAT80_MANTISSA_MASK, "Float80: Incorrect mantissa");
+#else
+static_assert(Float80_all_ones.mantissa_hi == FLOAT80_MANTISSA_HI_MASK, "Float80: Incorrect high mantissa");
+static_assert(Float80_all_ones.mantissa_lo == FLOAT80_MANTISSA_LO_MASK, "Float80: Incorrect low mantissa");
+#endif
 
 static constexpr Float80 Float80_11_22 = new_float80(0, 11, 33, 22);
 static_assert(Float80_11_22.sign == 0, "Float80: positive expected");
 static_assert(Float80_11_22.exponent == 11, "Float80: Incorrect exponent");
+#ifndef __aarch64__
 static_assert(Float80_11_22.jbit == 1, "Float80: Incorrect j-bit");
 static_assert(Float80_11_22.mantissa == 22, "Float80: Incorrect mantissa");
+#else
+static_assert(Float80_11_22.mantissa_hi == 33, "Float80: Incorrect high mantissa");
+static_assert(Float80_11_22.mantissa_lo == 22, "Float80: Incorrect low mantissa");
+#endif
 
 /**
  * @brief Sanity checks
@@ -161,9 +171,22 @@ static_assert(sizeof(Float80) == sizeof(long double), "Float80 structure is not 
 static_assert(FLOAT80_NAN_EXPONENT == FLOAT80_EXPONENT_MASK, "All Float80::NaNs have all exponent bits set");
 static_assert(FLOAT80_INFINITY_EXPONENT == FLOAT80_EXPONENT_MASK, "Float80::Inf has all exponent bits set");
 static_assert(MASK(FLOAT80_EXPONENT_BITS) == FLOAT80_EXPONENT_MASK, "Float80 exponent mask has different size than the field");
+#ifndef __aarch64__
 static_assert(MASK(FLOAT80_MANTISSA_BITS) == FLOAT80_MANTISSA_MASK, "Float80 mask has different size than mantissa+jbit");
 static_assert(QUIET(FLOAT80) == FLOAT80_MANTISSA_QUIET_NAN_MASK, "Quiet bit is MSB of the mantissa");
 static_assert(FLOAT80_SIGN_BITS + FLOAT80_EXPONENT_BITS + FLOAT80_JBIT_BITS + FLOAT80_MANTISSA_BITS == 80, "Bitfields sums to type size");
+#else
+/* aarch64: long double = binary128 (issue #180) — widths are pinned here;
+ * the bitfield ORDER (sign | exponent | mantissa_hi | mantissa_lo, packed
+ * LSB-first per 64-bit unit) cannot be proven in a constant expression
+ * (cross-union-member reads are not allowed and GCC 12's bit_cast rejects
+ * unions), so it is pinned at runtime by the Float80Binary128 unit test
+ * which decodes compiler/libc-produced binary128 values through the
+ * field view. */
+static_assert(MASK(FLOAT80_MANTISSA_HI_BITS) == FLOAT80_MANTISSA_HI_MASK, "Float80 high-mantissa mask has different size than the field");
+static_assert(MASK(FLOAT80_MANTISSA_LO_BITS) == FLOAT80_MANTISSA_LO_MASK, "Float80 low-mantissa mask has different size than the field");
+static_assert(FLOAT80_SIGN_BITS + FLOAT80_EXPONENT_BITS + FLOAT80_FRACTION_BITS == 128, "Bitfields sums to type size");
+#endif
 
 /** @} */
 
@@ -370,8 +393,13 @@ Float80 new_random_float80()
 
     f.sign = random32();
     f.exponent = random32();
+#ifndef __aarch64__
     f.jbit = 1;
     f.mantissa = set_random_bits(random32() % (FLOAT80_MANTISSA_BITS + 1), FLOAT80_MANTISSA_BITS);
+#else
+    f.mantissa_lo = set_random_bits(random32() % (FLOAT80_MANTISSA_LO_BITS + 1), FLOAT80_MANTISSA_LO_BITS);
+    f.mantissa_hi = set_random_bits(random32() % (FLOAT80_MANTISSA_HI_BITS + 1), FLOAT80_MANTISSA_HI_BITS);
+#endif
     return f;
 }
 

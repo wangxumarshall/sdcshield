@@ -5,6 +5,52 @@
 
 ---
 
+## 2026-10-31（issue #180：Float80/long-double 框架适配 aarch64 binary128——解除 2 个 x86-only 守卫）
+
+### 结论
+
+- **选型 A（per-arch 语义）落地**：`Float80` 在两架构都表示 `long double`——x86 = x87
+  80 位（显式 jbit，原文逐字节不动），aarch64 = IEEE binary128（1+15+112，隐式整数位）。
+  位域映射：`mantissa_lo` bits 0..63 / `mantissa_hi` bits 64..111 / `exponent` bits
+  112..126 / `sign` bit 127（GCC 小端 LSB-first 逐 64 位单元分配，无跨单元 straddle）。
+  指数类宏（15 位、bias 0x3fff、全 1 = Inf/NaN）两格式位同义，保持共享；x87-only
+  尾数宏在 aarch64 分支 `#undef`——误用即编译错而非静默错读。
+- **不选 B（重映射 `long double`→`Float128Data`）**：FloatGeneration 测试直接构造
+  `Float80` 结构体不经过类型映射，B 修不了它；且 `__SIZEOF_FLOAT128__` 在 aarch64
+  GCC 未定义（实测），`Float128Data` 无对应 C 类型。
+- **`type_name(Float80Data) == "_Float64x"` 两架构都对**（issue 第 3 项核对）：TS
+  18661-3 的「binary64 之扩展」在 aarch64 就是 binary128 的 `long double`
+  （本机实测 `__FLT64X_MANT_DIG__=113`、`sizeof(_Float64x)=16`；x86 = x87 64 位尾数）。
+  返回值零改动，仅注释 per-arch 化。
+- **顺带纠正 `type_real_size(Float80Data)` aarch64 错报 10**（枚举低 6 位编码 x87
+  10-of-16 布局）：改为 `sizeof(long double)`=16——logging.cpp:1284 的 mismatch XOR
+  mask 现在覆盖全 16 字节（此前指数/符号字节差异进不了 mask）。
+- **aarch64 golden 位型表**（issue 第 4 项）：IEEE 754 binary128 标准位型，C 探针 +
+  C++ `numeric_limits` 探针 + x86 侧 `DataCompare.Float128` 表三方一致；glibc `%La`
+  渲染两架构不同属预期（x87 显式整数位 → `0xf.xxx`，binary128 归一化 → `0x1.xxx`）。
+- **generated_vectors.c float80 池**：497 条 x87 walk 位型在 binary128 无语义且
+  `.jbit` 设计符已不存在；该池无任何测试消费者（grep 实证）。x86 表原文保留，
+  aarch64 给 7 条真实 binary128 特殊值（`.as_float` 布局无关初值）维持接口可链接。
+
+### 实证
+
+- 构建：`meson setup --buildtype=release` + `SDC_BUILD_JOBS=20 ./scripts/build.sh`
+  主目标零错误零警告；unittests 目标 1 个警告 = 基线同款 gtest 头内联警告
+  （stash A/B 对比：1 vs 1，零新警告）。
+- 单测：CI 官方过滤口径
+  `--gtest_filter=-LinuxThermalFixture.CurrentMachine_TestUsingSingletomTemperaturesOnCurrentMachine`
+  全量 **104/104 PASSED**（基线 101 + 解守卫 2 + 新增 `Float80Binary128.LayoutAndPredicates` 1）。
+  注意：本机全量不过滤会段错误在 thermal 测试（基线同崩，环境性，CI 亦因此过滤它）。
+- 位序钉死：constexpr 跨联合体成员读非法且 GCC 12 `bit_cast` 拒绝联合体 → 编译期
+  断言钉宽度（MASK/求和 128），位序由新增运行时测试证明——编译器/libc 产出的真实
+  binary128 值（max/min/denorm_min/inf/qNaN/sNaN/±0/1.0/-2.0）穿过位域视图逐字段
+  解码 + IS_* 分类 + 构造往返 `as_fp()`（独立于位域代码的证据链）。
+- 回归：`./builddir/sdcshield -e zstd19 -t 2000 -n 1` → `exit: pass`。
+- x86 非回归：目检 diff 全部在 `#ifdef __aarch64__`/`#else 原文` 内、x86 golden 表
+  逐字节不变（本机无 x86 编译器，边界如实声明，x86 侧待 CI 复核）。
+
+---
+
 ## 2026-10-30（会话：SVE 全 VL 验证运动收口——190×3 证据矩阵 + gem5 真二进制 SE 通路）
 
 ### 结论

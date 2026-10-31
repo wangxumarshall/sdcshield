@@ -868,6 +868,22 @@ const int num_simple_vectors_float64 = 419;
 
 //======================================================
 Float80  simple_vectors_float80[] = {
+#ifdef __aarch64__
+    /* issue #180: aarch64 long double is binary128 — the 496 x87-layout
+     * walk patterns below (sign/exponent/jbit/mantissa field triplets
+     * tuned to the x87 80-bit encoding) have no binary128 meaning, and
+     * their .jbit designator no longer exists in the aarch64 Float80
+     * layout. This pool has no test consumers (grep-verified 2026-10-31);
+     * keep the static_vectors interface linkable with genuine binary128
+     * special values, initialized layout-independently via .as_float. */
+    {.as_float = 0.0L},
+    {.as_float = 1.0L},
+    {.as_float = -1.0L},
+    {.as_float = 0x1p-16382L},                              /* LDBL_MIN */
+    {.as_float = 0x1.ffffffffffffffffffffffffffffp+16383L}, /* LDBL_MAX */
+    {.as_float = __builtin_infl()},                          /* infinity */
+    {.as_float = __builtin_nanl("")},                        /* quiet NaN */
+#else
     // Walk 1
     {.sign=0, .exponent=0x7fff, .jbit=1, .mantissa=0x0000000000000001},
     {.sign=0, .exponent=0x7fff, .jbit=1, .mantissa=0x0000000000000002},
@@ -1391,8 +1407,13 @@ Float80  simple_vectors_float80[] = {
    // special data
     {.sign=0, .exponent=0x7fff, .jbit=1, .mantissa=0x0000000000000000},
     {.as_float = 0.0},
+#endif /* __aarch64__ */
 };
+#ifdef __aarch64__
+const int num_simple_vectors_float80 = 7;
+#else
 const int num_simple_vectors_float80 = 497;
+#endif
 
 
 

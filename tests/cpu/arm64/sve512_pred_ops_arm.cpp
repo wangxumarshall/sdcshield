@@ -128,7 +128,13 @@ struct PredOpsData {
        is reported as environment interference (TestResourceIssue SKIP),
        never as SDC. */
     void *ffr_pages = nullptr;          // mmap base (2 pages)
-    size_t ffr_pages_bytes = 0;         // full original mapping (cleanup)
+    size_t ffr_page_bytes = 0;          // ONE page: cleanup unmaps ONLY page
+                                        // 1 (round-4 #22 — the hole page may
+                                        // have been re-mapped by an external
+                                        // mapper by cleanup time, and
+                                        // munmapping it would destroy a
+                                        // mapping the test does not own;
+                                        // process exit reclaims the rest)
     double *ffr_mapped = nullptr;       // src at the page-1 tail (mapped)
     const double *ffr_fault_k1 = nullptr; // elem0 = last mapped double
 };
@@ -276,9 +282,9 @@ static ptrdiff_t ffr_first_diff(const uint8_t *image, const uint8_t *golden,
  * mirrors only the healthy-path goldens and does not exercise this. */
 static bool ffr_hole_intact(const PredOpsData *d)
 {
-    const size_t half = d->ffr_pages_bytes / 2;   // the hole: 1 page
+    const size_t ps = d->ffr_page_bytes;   // the hole: page 2 of the pair
     errno = 0;
-    if (msync((char *)d->ffr_pages + half, half, MS_ASYNC) == 0)
+    if (msync((char *)d->ffr_pages + ps, ps, MS_ASYNC) == 0)
         return false;                    // someone re-mapped the hole
     return errno == ENOMEM;              // ENOMEM == still unmapped
 }
@@ -343,7 +349,7 @@ static int sve512_pred_ops_arm_init(struct test *test)
             return EXIT_SKIP;
         }
         data->ffr_pages = pg;
-        data->ffr_pages_bytes = 2 * (size_t)ps;
+        data->ffr_page_bytes = (size_t)ps;
         data->ffr_mapped = (double *)((char *)pg + ps - 8 * data->vl_d);
         data->ffr_fault_k1 = (const double *)((char *)pg + ps - 8);
         for (size_t j = 0; j < data->vl_d; ++j)
@@ -748,8 +754,18 @@ static int sve512_pred_ops_arm_cleanup(struct test *test)
 {
 #ifdef __aarch64__
     auto *d = static_cast<PredOpsData *>(test->data);
+    /* Unmap ONLY page 1 — the one page the test owns unconditionally.
+       The hole page is no longer ours if an external mapper landed in it
+       during the run: a NON-RESIDENT mapping breaks no golden (LDFF1
+       suppresses the demand-paging minor fault too — measured), so a
+       green run can carry an occupied hole without ever noticing, and
+       munmapping the full original range would destroy that foreign
+       mapping and SIGSEGV its owner in cleanup, far from the cause
+       (round-4 #22). If the hole is still unmapped, leaving it alone
+       changes nothing (munmap of a hole is a no-op); process exit
+       reclaims everything regardless. */
     if (d && d->ffr_pages)
-        munmap(d->ffr_pages, d->ffr_pages_bytes);  // hole inside: legal
+        munmap(d->ffr_pages, d->ffr_page_bytes);
     delete d;
 #else
     (void)test;

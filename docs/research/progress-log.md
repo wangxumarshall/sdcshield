@@ -1216,3 +1216,45 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   实际恒走 case 0（eq）, "rotating" 语义退化; logic 兄弟已改
   (base+sub)/4, mask 未跟。golden/run 同源自洽, 无 SDC 检出损失,
   非本轮意见范围; 修复需独立单元 + 独立 gem5 验证, 留待后续轮次。
+
+## 2026-10-31（issue #7：smi_count ARM64 移植——CNTVCT 时序毛刺探针）
+
+- **决策**: 方案 A（软件探针）。两轮实测判死方案 B（内核数据源）与
+  "占位永久化"（方案 C 弃价值）: 裸机 HIP09 128 核上 /proc/stat steal
+  自启动恒 0（paravirt 在、无 provider）、/proc/interrupts 无任何
+  EL3/SMC/firmware 行（Group-0 中断由 TF-A 处理, 结构性不可见）、PMU
+  exc_taken(0x09) 仅计 EL0→EL1 异常且内核态需 root（paranoid=2）、SDEI
+  计数在 root-only debugfs、无 cpuidle 驱动故稳态 SMC 流量≈0。方案三
+  （改 TF-A 加 SMCCC OEM 函数）超仓库边界。
+- **实现**: tests/common/smi_count/smi_count.cpp 的 #else 拆为
+  #elif __aarch64__（真探针）+ #else（其它架构占位原样）。每 worker
+  TEST_LOOP 窗口内连续 mrs cntvct_el0（~25ns/读）, 统计 >100µs 毛刺
+  （次数/ >1ms 严重数 / 最大 / 累计）, 非零才 log_platform_message
+  （INFO, -vv 可见, 与 x86 SMI 消息同通路）。init 装 SIGILL 守卫探
+  CNTVCT/CNTFRQ EL0 可读性, 陷阱即诚实 SKIP。fracture_loop_count=-1
+  （自动 fracture 每 40 内循环重启 run 会清零统计）; desired_duration=0
+  （默认 1s 窗口）; PROD（x86 对等, 永不失败）。
+- **阈值依据**（独立探针 128 核 10s, loadavg≈2.5）: ≤20µs 桶 978 次/
+  cpu（tick/IRQ）; 2–5ms 桶 125 次/cpu（CFS 抢占主导）——双峰之间的
+  谷区（200µs–2ms, ~20 次/cpu）才是固件级事件会落入的区间。100µs/
+  1ms 只是分布分桶, 不做来源归因——语义边界写进代码注释、README 与
+  issue 收尾。
+- **验证**: build.sh 零新警告; 改动前基线 skip+占位 reason 逐字留档,
+  改后默认清单 488→489（PROD 入集）; 单核 -t 5000 pass 且跑满窗口
+  （test-runtime 5000.653ms）; CPU0 加竞争负载的判别实验出
+  "493 gaps > 100us (493 > 1000us), max 4057us, total stolen
+  1975167us"（CFS 时间片签名, 消息通路实证）; 全核 -t 10000 10s:
+  15/128 CPU 报毛刺（cpu75=147/max 1.1ms 局部化, cpu28 max 12ms）,
+  113 CPU 静默（静默=干净）; SIGILL 恢复机制用真陷阱寄存器
+  cntpct_el0（本机 EL0 SIGILL）实证: 捕获信号 4、siglongjmp 恢复、
+  守卫复原三步全过; zstd19 -t 2000 -n 1 → exit: pass; framework/
+  零 diff, 删除行 16 条全部来自原 #else 占位段（x86 段零触碰）。
+- **验证边界（诚实声明）**: "内核禁用 EL0VCTEN 致 SKIP" 分支在任何
+  可用环境都不存在（Linux arm64 为 vDSO 恒开 EL0 计数器访问）,
+  gem5 同样不会关——该守卫只做了机制级（真 SIGILL 陷阱恢复）与编译
+  级验证, 未在真实禁用内核上跑过。
+- **文档**: README 质量表 5→4 SKIP / 489→490 PROD（总数 500 不变,
+  注明 2026-10-31 增量与本机复测 489/495/499——README 旧 479 口径
+  因 main 期间增合已过期）、占位表删 smi_count 行、新增探针语义边界
+  段; architecture.md 占位示例改 ist 独例 + InterruptMonitor 节注明
+  ARM64 smi_count 绕过 InterruptMonitor 的原因。

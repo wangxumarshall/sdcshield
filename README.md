@@ -360,7 +360,7 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 
 ### ARM64 spec 策略与默认用例集（2026-10-27 起）
 
-sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `struct test::arm64_requires`（SVE/SVE2/SME/SME2 要求位，`framework/sandstone.h`）与 `arm64_min_vl_bits`（最低档位）过滤，只保留芯片能执行的用例——因此默认用例数是 **host-dependent** 的：SVE1 主机（Kunpeng 920 0xd02，SVE-256/无 SVE2/SME，gcc + 全部 vendored 依赖）实测 **480** 个 PROD（`--quality=0` 486、`--quality=-1` 491），无 SVE 的鲲鹏 920 上 **298** 个（2026-10-27 实测 297 + `spinlock_add_neon` 合入 +1 **推算**——该用例无 `arm64_requires`、内核为 baseline NEON，aarch64 门控即注册；297 实测于其合入前，`git diff dff197cf..` 区间默认集恰只增此一例；无 SVE 主机无法本地模拟——`SDCSHIELD_ARM64_SPEC_MAX_VL` 只降 VL、不掩 HWCAP_SVE——待无 SVE 主机实测复核）。
+sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `struct test::arm64_requires`（SVE/SVE2/SME/SME2 要求位，`framework/sandstone.h`）与 `arm64_min_vl_bits`（最低档位）过滤，只保留芯片能执行的用例——因此默认用例数是 **host-dependent** 的：SVE1 主机（Kunpeng 920 0xd02，SVE-256/无 SVE2/SME，gcc + 全部 vendored 依赖）实测 **480** 个 PROD（`--quality=0` 486、`--quality=-1` 491；2026-10-30 首测、2026-10-31 复测一致；基线链＝2026-10-27 实测 479 + `spinlock_add_neon` 1，主仓 CLAUDE.md 旧值 478 系 2026-10-26 过期实测），无 SVE 的鲲鹏 920 上 **298** 个（2026-10-31 无 SVE 主机实测复核＝2026-10-27 实测 297 + `spinlock_add_neon` +1，**推算与实测一致**——记录于 feat/spinlock-add-neon-extract@28f797ad；该用例无 `arm64_requires`、内核为 baseline NEON，aarch64 门控即注册；297 实测于其合入前，`git diff dff197cf..` 区间默认集恰只增此一例）。
 
 - `-e` / `--test-list-file` **旁路过滤**：显式请求的用例仍会注册，能力不足时诚实 SKIP（附理由），而不是从列表里消失。
 - **控制线程**在 `test_init` 前 pin 到芯片最大档（其 aux 线程与 per-CPU worker 继承该 VL，init golden 与 run lane 档位一致，即使 sysctl 压低了默认值）；每个 SVE/SVE2 worker 重新 pin 并校验读回——pin 被拒 = SKIP，读回不符 = FAIL。
@@ -402,7 +402,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | 2 | PROD（默认）| `quality >= 2` | 490 |
 | | **合计** | | **501** |
 
-> 上表为 ARM64 gcc 构建的源码全量口径（2026-10-30 复核）；默认运行时实际数量随芯片 spec 过滤（SVE1 主机实测 480 PROD、无 SVE 鲲鹏 920 为 298＝2026-10-27 实测 297 + `spinlock_add_neon`（无 spec 门控即注册）+1 推算、待实测复核，见「ARM64 spec 策略」节）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
+> 上表为 ARM64 gcc 构建的源码全量口径（2026-10-30 复核）；默认运行时实际数量随芯片 spec 过滤（SVE1 主机实测 480 PROD（2026-10-31 复测一致）、无 SVE 鲲鹏 920 为 298＝2026-10-27 实测 297 + `spinlock_add_neon`（无 spec 门控即注册）+1（2026-10-31 无 SVE 主机实测复核、推算与实测一致，feat/spinlock-add-neon-extract@28f797ad），见「ARM64 spec 策略」节）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`

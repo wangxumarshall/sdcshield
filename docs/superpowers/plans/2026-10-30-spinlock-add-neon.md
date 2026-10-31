@@ -62,7 +62,7 @@
 
 - [x] **Step 6: 回归 + 计数**
   - `./builddir/sdcshield -e zstd19 -t 2000 -n 1` → exit: pass
-  - `./builddir/sdcshield --list-tests | wc -l` → 480（2026-10-30 检视处置期复测：PROD 480 / --quality=0 486 / --quality=-1 491；原记录 479 系当时手数错误，docs commit 6da0f83b 的 480 为实测真值）
+  - `./builddir/sdcshield --list-tests | wc -l` → 480（计数口径：本仓 `--list-tests` 映射 raw id 模式——framework/sandstone_opts.cpp:142 → ListMode::RawTests，每用例一行 `puts(test->id)`、无表头无组样板，`wc -l` 即纯用例数；上游 `--list` 的带描述/Groups 样板模式不适用于本口径。2026-10-30 首测与 2026-10-31 复测一致：PROD 480 / --quality=0 486 / --quality=-1 491。计数链条修正（PR#328 六轮检视 :65，撤回 0eae0e28 的「手数错误」不实归因）：原记录 479 是「CLAUDE.md 基线 478 + 1」的**推算**而非实测，且推算基线过期——真实基线为 479（README 2026-10-27 实测口径；主仓 CLAUDE.md 的 478 系 2026-10-26 旧实测、与 README 479 在本 PR 之前即互相矛盾，478 为过期值），PR 分支实测 480 = 真基线 479 + spinlock_add_neon 1；docs commit 6da0f83b 的 480 为 PR 分支实测真值，但其归因叙述「479 系手数错误」不成立——479 非手数所得，是过期基线上的正确加法）
 
 - [x] **Step 7: Commit 1**
   `git add tests/cpu/spinlock_add/spinlock_add_neon.cpp tests/cpu/meson.build && git commit -s -m "feat(spinlock_add): ..."`

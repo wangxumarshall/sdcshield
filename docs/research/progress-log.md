@@ -1229,3 +1229,49 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   确定复现恰是 SDC 取证的常态形态。后续该用例的每笔 FAIL 仍按事件流水线
   全量取证/复测, 按候选跟踪, 根因定位前不得按用例名整体豁免为非 SDC。）
   旧 dirty 二进制的通过结果不可作为基线（其源码状态不可复现）。
+
+## 2026-10-31（PR #331 二轮检视处置：复测第五维/台账口径 + mesh 写侧落地 + #358 关闭）
+
+local-claude 对 head d7afaa88 提 5 条（#19-#23），全部采纳（#19 附证据
+修正），5 个工作单元 5 commit（一补丁一单元）：
+
+- **#19 复测第五维 --quality（286a041e）**: `extract_retest_flags` 原只提
+  四维，BETA 用例（arm64_sdc/arm64_sdc_sve，TEST_QUALITY_BETA=0 < 默认
+  PROD=2）的定向复测被框架运行期门控拦截（sandstone_run.cpp:1768
+  "is in BETA quality" → result: skip），与 -n 0 同族零验证。补提
+  --quality（=N/分离两形态）。实证（PR head 二进制）: 不带 → skip；
+  --quality=0 → pass。**证据修正**: power_virus* 三件均 PROD 默认集可见，
+  不受此失真影响；另发现 l5_dit 的 resolve 依默认 --list-tests 名单展开、
+  arm64_sdc 本就不可达（该阶段 --quality=0 现为空转）——战役选用例策略
+  议题，未在本轮改（待人工定夺是否让 BETA 用例进战役）。
+- **#20 台账口径（e0e68467）**: t= 恒秒（5000→5s、2min→120s、1h→
+  capped(1h)、1500ms→2s 向上取整）；elapsed 剥离 retest_guarded 前置门
+  等待（RETEST_MEMGUARD_WAIT_S，等待>0 另记 memguard_wait=Ns，实测注入
+  低内存 rc=250/wait=2 与健康 rc=0/wait=0 两态）；runbook §1.5 判读由
+  「elapsed≈t」改「elapsed≥t」并注明 t 恒秒。
+- **#22 写侧算出即丢（f1c23a65）**: sse_sym/avx_sym 写相位逐 lane 回读
+  比对结果 ok 原被空体 if 丢弃（旧注释「最终会在全量校验时捕获」对和保持
+  型损坏不成立——读相只有聚合和 + store_buf 自拷贝）。!ok 落地为
+  report_fail（对齐 avx512_sym 语义）。故障注入实证: 写后单点改写
+  data[offset+7] → result: fail 'write-phase immediate read-back mismatch'；
+  探针已回撤，净构建 256MiB pass。
+- **#23 截断空过（427e08a9，closes #358）**: 四件 mesh 用例 -t 于相位 1/
+  屏障到期时零校验 EXIT_SUCCESS → validated_any 跟踪，从未完成校验轮即
+  退出改 log_skip + EXIT_SKIP。实证: sse_sym 4GiB/-t 1s → result: skip
+  （逐线程理由落 yaml），avx_sym/avx512_sym 2GiB、symm_f64 4GiB 同款；
+  正常档 256MiB → pass；f64 2GiB 填充<1s 完成整轮真实 PASS 亦验证（完成
+  轮次后到期退出不受影响）。复测台账数值面闭合: 空过形态从
+  rc=0/skip=0 变 skip=1（runbook §1.5 既有判读「不得读作复测通过」）。
+- **#21 f64 阈值方向（3a07c6c1）**: plan「1048576 块 = 32 GiB，更早触发」
+  方向写反 → 更晚（f64 32 GiB 是 sse/avx 16 GiB 的两倍），按修订节惯例
+  记第 5 条。
+
+验证基线: `./scripts/build.sh -j 32` 零新警告；pytest
+test_driver_retest_flags 19 passed（新增 quality×2 + budget 归一×1）；
+mesh 四件双路径实测如上；改动均在 #ifdef __aarch64__ 内，x86-64 #else
+占位分支零触碰。test_driver_memguard 的
+test_orphan_cleanup_targets_own_user_only 在 pristine d7afaa88 上同样
+失败（环境相关既有问题，非本轮引入）。
+
+遗留: #332（mesh 读相逐字节内容校验重设计——golden 重算/双缓冲）仍
+OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。

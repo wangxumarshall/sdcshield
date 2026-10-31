@@ -66,6 +66,8 @@ C++ 常用算术转换把乘法提升为 `unsigned int`，结果 **mod 2^32 回�
 ## 边界与后续（不在本单）
 
 - 用例在 `-t` 到期于相位 1 时"空过"（未执行任何校验即 PASS）——独立缺陷。
+  （2026-10-31 二轮处置更新：已在本 PR 修复，commit 427e08a9——零校验
+  退出改诚实 EXIT_SKIP，closes #358。）
 - 169 GB 缓冲 × 2 个 test plan 并发 → 事件 20261030-092537 SIGKILL
   （code 9，OOM）——内存预算独立缺陷，另行处置。
 
@@ -107,7 +109,9 @@ C++ 常用算术转换把乘法提升为 `unsigned int`，结果 **mod 2^32 回�
    标注，见 sdc_common.sh `extract_retest_flags`/`retest_t_budget` 与
    驱动 handle_failure）。用例侧「-t 到期空过」（相位 1 超时 break →
    EXIT_SUCCESS 零校验 PASS，违反 CLAUDE.md 规则 6 精神）仍是独立缺陷，
-   与 #332 分立跟踪。
+   与 #332 分立跟踪。（二轮 #23 更新：该缺陷已在本 PR commit 427e08a9
+   修复——零校验退出改诚实 EXIT_SKIP，closes #358；读相内容校验缺口仍由
+   #332 跟踪。）
 5. **f64 回绕阈值方向（正文 §受影响文件第 4 条，二轮意见 #21）**：原文
    「1048576 块 = 32 GiB，更早触发」方向写反——f64 阈值（BLOCK_SIZE=4096
    × 8B → 2^32 元素区 = 32 GiB，1048576 块）是 sse/avx（8192 × 4B →

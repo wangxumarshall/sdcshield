@@ -102,7 +102,24 @@ static int cache_stress_civac_run(struct test *test, int cpu) {
 
     uint32_t iter = 0;
 
-    TEST_LOOP(test, 1 << 13) {
+    /* Loop granularity (issues #369/#360 class): the body is one full
+     * 16384-element sweep whose every element pays a `dc civac` + `dsb sy`
+     * line-evict + full drain before the reload — ~3.7 ms per body
+     * (measured: 30.2 s quick -n4 on a 128-core Kunpeng 920, 30.6 s on the
+     * CI 4-vCPU Neoverse-N2 runner). The N = 1<<13 inherited from the
+     * movbe_dump.cpp ancestry (plain ldr/rev/str body, no per-element
+     * barrier, checkpoint < 270 ms) therefore slid the first deadline check
+     * to ~30 s; --quick stops at that first check, so 4 worker threads
+     * burned ~121 s of CPU per forked test child — exactly on the quick CI
+     * step's `ulimit -St 120`, zero margin, and runner contention turned it
+     * into SIGXCPU flakes (reproduced locally: crash code 24 under
+     * `ulimit -St 120`, pass under 600). N = 4 lands the checkpoint at
+     * ~15 ms, inside the framework's TargetLoopDuration = 10 ms band
+     * (sandstone_p.h). The hot 16384-element loop is untouched: the check
+     * runs only between complete passes and adds no conditional inside the
+     * hot loop; in uncapped -t runs the per-second stimulus is unchanged —
+     * only the -t overshoot shrinks from ~30 s to one checkpoint. */
+    TEST_LOOP(test, 4) {
         for (size_t i = 0; i < CSTRESS_BUFFER_SIZE; ++i) {
             /* Hot path: ldr input → bswap → str swapped → evict swapped's
              * line → bswap back → ldr input (reload, now L2/L3 after evict

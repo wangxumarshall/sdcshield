@@ -323,7 +323,10 @@ cat <<'HDR2'
   `256s1/s2` → `native-256-LCG100{1,2}.summary.txt`，`rc` → `gem5-512-verdicts.txt`
   （四份 summary + verdicts 的行名与清单 190 名逐一同序，生成脚本断言守卫）。
 - **种子语义**：native 格 = 任一 seed pass 即 pass；实测两 seed 无分歧绿（128 腿
-  189+1 双 seed 一致；256 腿唯 seed1 的 25 个超时格经 §5 重跑补绿，seed2 腿内直绿）。
+  189+1 双 seed 机械一致；256 腿 165 格双 seed 机械一致，唯 seed1 的 25 个超时格
+  （证据列 `to`）的**入库机械证据仅 seed2 单腿**——seed1 侧绿证据 = triage-256
+  §5 的有界重跑散文表（同 seed 单测、clamp 下限一次通过；其原始 /tmp 日志易失
+  未入库，不构成可再生成证据，本矩阵不以再生成能力主张该侧）。
 - **VL 不敏感性注记**：7 个无 tag 的 ipsec 免检件（`ipsec_3des_docsis_aes_cmac_sve_wide` /
   `ipsec_3des_docsis_aes_xcbc_sve_wide` / `ipsec_aes128_cbc_aes_cmac_sve` /
   `ipsec_aes192_cbc_xcbc_96_sve` / `ipsec_aes192_ctr_xcbc_sve` / `ipsec_aes192_gcm_sve` /

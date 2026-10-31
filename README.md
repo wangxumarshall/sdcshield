@@ -369,6 +369,10 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 
 当前 ARM64 构建默认 quality 的用例数即按上述机制**随芯片能力过滤**（源码全量上界：489 PROD + 6 BETA + 5 SKIP，gcc + 全部 vendored 依赖齐备、过滤前；`--quality=0` / `--quality=-1` 集合同样过滤）。含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
+### SVE 用例全 VL 验证矩阵（2026-10-30 收口）
+
+190 个 SVE 用例（tag∪name 枚举口径）× 128/256/512-bit 三档真实证据矩阵（570 格）：**560 pass（469 直绿 + 91 有界几何）+ 1 合法 SKIP + 9 gem5 边界格 + 0 FAIL**，运动全程零测试代码缺陷（指**本轮运动检出**为零——冻结基线上另有 5 个测试携带 PR #316 检视事后修复的越界缺陷，其 15 格 pass 是「同条件可跑绿」的弱证据、不构成基线洁净性证明，见 matrix.md §4 † 脚注）。三档采集：128 = `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 进程内降档、256 = 原生（SVE-256 主机默认档），各 2 seeds（其中 256 腿 25 个超时格的**入库机械证据为 seed2 单腿**——seed1 侧绿证据是 triage-256 §5 的有界重跑记录，其原始日志易失未入库，见矩阵 §2 种子语义）；512 = gem5 SE 跑真 sdcshield 二进制（9-syscall stub 链 + `-f no` nofork，每测试 ~1 轮内层循环——512 列语义为**功能性正确性**，压力/重复维度由 native 腿承担）。两个边界注记：① 唯一 SKIP = `sve512_fmmla_arm@128`——F64MM 在 VL<256 架构性 UNDEFINED（实测 SIGILL，`svmmla_f64` 门从 256 起）；② 9 个 gem5 边界格（2×PMULL64 GCM + 3×DC-CIVAC + 4×仿真速超时）native 两档全绿，属 gem5 侧实现限制，其中 5 格可随 gem5 补编码/路径转绿。矩阵证据钉在冻结基线 `12ccda540fd4`（运动期间并行合并的 PR #302/#316 不在其语义内）。证据索引：[docs/superpowers/inventory/sve-all-vl-campaign/matrix.md](docs/superpowers/inventory/sve-all-vl-campaign/matrix.md)（`matrix-gen.sh` 从入库工件机械生成，重跑即复现）+ 逐腿分诊 `triage-{128,256,512}.md`（同目录）。
+
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
 | 内存 / 拷贝 | `memcpy_l{1d,2,3}_cache_size`、`memcpy_rewr`、`mem_disambiguation`、`mmu_stress_arm`、`random_access_sweep` | 各级缓存带宽、store-to-load 转发、跨行一致性与内存序、TLB 扰动、大 mmap 随机偏移/块长扫掠（L1..DRAM 尺度 + NEON RMW 字节精确校验，knob: mode/valmode/size_mb） |

@@ -25,7 +25,7 @@ Corruption）**——即计算不崩溃、但产生错误比特。其检测原�
    伪装通过（no-op 测试报 pass 是 bug）。`mce_check` 在 ARM64 是真实的 EDAC 后端测试，**必须通过**。
    **本机能力不支持时的 gem5-fi 强制验证**：受影响行为若因当前机器芯片能力缺失（缺
    HWCAP/HWCAP2 位如 SME、VL/SVL 档位不支持、新指令代际）而无法真机运行，仅验证 SKIP
-   路径**不构成完整验证**——必须用 gem5-fi（`/home/sdc/wangxu/gem5-fi-fuzz`，CHAOS/SE，
+   路径**不构成完整验证**——必须用 gem5-fi（`/home/sdc/wangxu/gem5-fi`，CHAOS/SE，
    `workloads/sdcshield/` 下同源 dual kernel）在受影响的 VL/SVL 档位仿真验证并引用真实
    run 输出（档位、checksum、`SDCSHIELD_FAILS=0`）；确实无法 gem5 验证时须如实声明验证
    边界。**禁止把「SKIP 理由不变」单独充当功能性修改的验证结论**（PR #242 先例：

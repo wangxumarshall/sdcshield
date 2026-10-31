@@ -20,11 +20,13 @@
  * adopts the CPU runtime vector length — all-VL (128..1024-bit, all-VL
  * Phase 2 P3). The pre-P3 512-bit single-value gate and its issue #182
  * caveat are closed with the root cause pinned (2026-10-31): the
- * historical VL=128 runner mismatch was the pre-ff8ddec1 qNaN operand
- * bias — f64-biased exponents 0x3FE/0x3FF shifted into f32 patterns
- * made every operand a qNaN, and the NaN payload split between the
+ * historical VL=128 runner mismatch was the pre-ff8ddec1 operand-bias
+ * bug — f64-biased exponents 0x3FE/0x3FF shifted into f32 patterns
+ * (0x3FF<<23 = 0xFF800000 is the NaN/-Inf exponent class; 0x3FE<<23 =
+ * 0xFF000000 is a ~2^127 huge finite) saturate the chain to NaN/Inf
+ * within a few steps, and the NaN payload split between the
  * scalar-fmadd golden and SVE FMLA is IMPLEMENTATION-DEFINED, so a
- * byte-exact golden over NaN operands is architecturally unsound —
+ * byte-exact golden over such operands is architecturally unsound —
  * NOT a VL-dependent math/alignment defect. Verified on real VL!=512
  * SVE hardware (Kunpeng 0xd02, VL=256, seeds LCG:1001..1004: pass)
  * and in gem5 SE real-binary at 512/1024-bit. test_init gates via the
@@ -152,10 +154,11 @@ static int sve512_f32_chain_arm_init(struct test *test)
        framework-layer call (the geometry has been svcnt-dynamic all
        along; only the old single-value gate pinned one tier). The
        historical VL=128 golden mismatch on a hosted CI runner
-       (issue #182) is root-caused (2026-10-31): pre-ff8ddec1 qNaN
-       operands + the IMP-DEF NaN-payload split between the scalar
-       fmadd golden and SVE FMLA — an unsound byte-exact golden over
-       NaN operands, not a VL-dependent defect (docblock above).
+       (issue #182) is root-caused (2026-10-31): pre-ff8ddec1
+       NaN/Inf-saturating operands (f64-biased exponents) + the
+       IMP-DEF NaN-payload split between the scalar fmadd golden and
+       SVE FMLA — an unsound byte-exact golden over such operands,
+       not a VL-dependent defect (docblock above).
        arm64_require_sve_vl returns the VL in BYTES — f32 lanes =
        svl/4, range-checked below (release-effective, NDEBUG-proof). */
     const long svl = arm64_require_sve_vl(test, 128, 1024);

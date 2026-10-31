@@ -29,6 +29,7 @@
 #define AES_IV_SIZE (12)
 #define GCM_TAG_SIZE (16)
 
+namespace { /* ODR: per-TU aes_gcm_avx512_data (2-file same-name hazard) */
 struct aes_gcm_avx512_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
@@ -37,6 +38,7 @@ struct aes_gcm_avx512_data {
     uint8_t golden_tag[GCM_TAG_SIZE];
     size_t data_size;
 };
+}
 
 static size_t ipsec_data_size(struct test *test)
 {

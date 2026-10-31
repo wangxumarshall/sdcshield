@@ -31,6 +31,7 @@
 #define CMAC_96_DIGEST_SIZE   (12)
 #define CMAC_FULL_DIGEST_SIZE (16)
 
+namespace { /* ODR: per-TU aes_cmac_avx_data (2-file same-name hazard) */
 struct aes_cmac_avx_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
@@ -40,6 +41,7 @@ struct aes_cmac_avx_data {
     uint8_t golden_mac[CMAC_96_DIGEST_SIZE];
     size_t data_size;
 };
+}
 
 static size_t ipsec_data_size(struct test *test)
 {

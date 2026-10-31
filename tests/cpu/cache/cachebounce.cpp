@@ -5,10 +5,12 @@
 
 static constexpr size_t CACHE_LINE_SIZE = 64;
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct alignas(CACHE_LINE_SIZE) SharedData {
     std::atomic<uint64_t> counter;      // 实际累加结果
     std::atomic<uint64_t> total_adds;   // 总尝试递增次数
 };
+}
 
 static int cachebounce_init(struct test *test) {
     auto *data = new (std::align_val_t{CACHE_LINE_SIZE}) SharedData();

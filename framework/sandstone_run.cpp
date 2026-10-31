@@ -789,6 +789,10 @@ static uintptr_t thread_runner(int thread_number)
     pin_to_logical_processor(LogicalProcessor(device_info[thread_number].cpu_number), current_test()->id);
 
     PerThreadData::Test *this_thread = sApp->test_thread_data(thread_number);
+    // RNG invariant (issue #348): nothing between thread birth and this call
+    // may use the framework RNG -- thread_local_rng() classifies an unbound
+    // thread_num >= 0 as a raw std::thread and would give it a private
+    // engine. random_init_thread() is what binds the worker to its slot.
     random_init_thread(thread_number);
     int ret = EXIT_FAILURE;
 

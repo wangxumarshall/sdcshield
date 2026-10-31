@@ -18,6 +18,8 @@
 // own initialization, which would land in this instrumented override and
 // re-enter the still-uninitialized sanitizer runtime (SIGSEGV in
 // __tsan_func_entry before main, observed 2026-10-31 on a TSan build).
+// GCC-only macro, same as the ASan guard below it; a clang TSan build would
+// need __has_feature(thread_sanitizer) instead (this repo builds with GCC).
 #if !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
 
 // For Sandstone, we'd like to always return zeroed memory to our tests, to

@@ -196,7 +196,10 @@ streams still depend on `-s`. Framework threads bind the exact slots they
 always used (`random_init_global` / `random_init_thread` / the
 `thread_num == -1` first-use fallback), so their streams stay bit-exact
 under `-s`. Caveat: which raw thread gets which counter value depends on
-scheduling, so per-raw-thread replay across runs is not guaranteed.
+scheduling, so per-raw-thread replay across runs is not guaranteed; and a
+detached raw thread whose *first* RNG call happens after the test finished
+could race the scheduler's `random_advance_seed()` on the global slot —
+join raw threads before `test_run`/`test_cleanup` returns.
 
 ## Eigen 5.0 SVE double packets (vendored)
 

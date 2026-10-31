@@ -696,9 +696,12 @@ void random_init_global(const char *seed_from_user)
         sApp->random_engine->seedGlobalEngine(sseq);
     }
 
-    // (re)bind the calling (main / re-initing child) thread to the fresh
-    // global engine slot: a child that re-runs this must not keep a cached
-    // pointer into the previous engine's freed per_thread vector (issue #348)
+    // Bind the initializing thread to the global engine slot. Load-bearing
+    // for the exec'd child (exec_mode_run calls this with fresh TLS, where
+    // thread_num is still zero-initialized to 0 and never set to -1): without
+    // this, that thread would be misclassified as a raw thread and its
+    // random_advance_seed() calls would advance a private engine instead of
+    // the global one (issue #348, same zero-init defect family).
     tls_engine = rng_for_thread(-1);
 }
 

@@ -152,6 +152,9 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
     int id = td->thread_idx.fetch_add(1, std::memory_order_relaxed);
     uint32_t total = thread_count();
 
+    /* 本线程是否完成过至少一整轮「填充→全量读取校验」——同 sse_sym
+     * （issue #358 / PR #331 二轮意见 #23：-t 截断空过改诚实 SKIP）。 */
+    bool validated_any = false;
     do {
         // ---------- 写阶段:认领块,FP 生产,NEON 存储 ----------
         while (true) {
@@ -267,6 +270,7 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
                             "mismatch or consistency failure");
             return EXIT_FAILURE;
         }
+        validated_any = true;   // 本轮全量读取校验（精确和+FMA 链 golden）已通过
 
         td->read_done.fetch_add(1, std::memory_order_seq_cst);
 
@@ -298,6 +302,13 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
 
     } while (test_time_condition(test));
 
+    if (!validated_any) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "mesh_upi_avx512_symm_f64: test time expired before the "
+                 "first full validation round completed (runtime-sized "
+                 "buffer fill outlives -t); nothing was verified in this run");
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 }
 

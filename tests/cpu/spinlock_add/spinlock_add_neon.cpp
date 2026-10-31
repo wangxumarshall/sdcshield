@@ -18,16 +18,26 @@
  *                        + 锁行元数据对账：epoch==共享计数器（同临界区构造
  *                        等值）、magic/pad==init 指纹——锁行元数据写丢失而
  *                        lock_word 完好（非挂死形态）时通道A/C 全盲，此处补检
- *   通道C（锁字挂死，核心增量）：获锁等待 >10s（对齐 sbsa-gwdt）→
- *                        report_fail + dump 锁所在 64B cacheline 全部 8 个 u64
- *                        （对齐五案"8 字节窗口撕裂、同行其余字段完好"的
- *                        现场录像格式；magic 字段对账爆炸半径）
+ *   通道C（锁字挂死，核心增量）：获锁等待 >10s（对齐 sbsa-gwdt）后进入
+ *                        1s 确认窗二次判定——epoch 停走且 CAS 持续失败 =
+ *                        确认冻结（真冻结时 epoch 必停走：epoch 唯一递增
+ *                        路径在持锁者临界区内，lock_word 冻结=无人能再持
+ *                        锁）→ report_fail + dump 锁所在 64B cacheline 全部
+ *                        8 个 u64（对齐五案"8 字节窗口撕裂、同行其余字段
+ *                        完好"的现场录像格式；magic 字段对账爆炸半径）；
+ *                        确认窗内 epoch 增长或 CAS 成功 = 锁在正常流转、
+ *                        本线程被调度饥饿——log 告警并重置等待预算继续争
+ *                        用（不 FAIL，防高负载共享机假阳性），跨 3 个窗口
+ *                        仍无获锁才以进展异常 FAIL（消息与冻结论区分）
  *
  * 三通道自检（部署到新机器后必跑，coherence_probe SELFTEST_W 同款纪律——
  * 阳性通过后阴性结果才有意义；错值 fail loudly 而非静默 off，防 typo 无声
  * 击穿部署纪律）：
- *   -O spinlock_add_neon.selftest=stall  首个进临界区线程持锁 11s →
- *                                        通道C 应触发（需 ≥2 线程、-t ≥ 25000）
+ *   -O spinlock_add_neon.selftest=stall  首个进临界区线程持锁 15s →
+ *                                        通道C 应触发（需 ≥2 线程、-t ≥ 25000；
+ *                                        15s > 看门狗 10s + 确认窗 1s + 裕量
+ *                                        ——模拟冻结须长于两段式全检出时延，
+ *                                        否则确认窗内 CAS 成功会被判为饥饿）
  *   -O spinlock_add_neon.selftest=data   init 毒化各 slot golden →
  *                                        通道A 应触发（单线程即可，cpu 无关）
  *
@@ -76,6 +86,9 @@
 #define SPINLOCK_ADD_NEON_FLOATS 64          /* 16 x float32x4 */
 #define SPINLOCK_ADD_NEON_ROUNDS 4           /* |x|<=1 → 输出理论上界 ~3e20（<<FLT_MAX；实测 max ~1.4e20） */
 #define SPINLOCK_ADD_NEON_STALL_SECONDS 10.0 /* sbsa-gwdt 同阈值 */
+#define SPINLOCK_ADD_NEON_CONFIRM_SECONDS 1.0 /* 超时后的冻结确认窗（两段式判定，见 acquire） */
+#define SPINLOCK_ADD_NEON_STALL_SLEEP_SECONDS 15 /* 自检持锁秒数：须 > 看门狗+确认窗+裕量 */
+#define SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX 3 /* 饥饿重置上限：跨 3+1 窗口无获锁 → 进展异常 FAIL */
 #define SPINLOCK_ADD_NEON_LOG_MAX 10000      /* 每线程逐次日志行上限 */
 #define SPINLOCK_ADD_NEON_MAGIC 0x5A5AC0DE5A5AC0DEull
 
@@ -141,22 +154,86 @@ static_assert((SPINLOCK_ADD_NEON_SPIN_CLOCK_PERIOD &
                (SPINLOCK_ADD_NEON_SPIN_CLOCK_PERIOD - 1)) == 0,
               "spin clock sampling period must be a power of two");
 
-static bool spinlock_add_neon_acquire(struct SpinlockAddNeonData *d, uint64_t *stall_ns_out)
+enum SpinlockAddNeonAcquire {
+    SPINLOCK_ACQUIRE_OK,
+    SPINLOCK_ACQUIRE_FROZEN,      /* 确认冻结：确认窗内 epoch 停走 + CAS 持续失败 */
+    SPINLOCK_ACQUIRE_NO_PROGRESS, /* 锁行持续流动但本线程跨窗口无法获锁 */
+};
+
+/* 两段式看门狗判定（PR#328 四轮检视 :157）：等待超时 ≠ 锁冻结——等待者被
+ * 调度饥饿 >10s（高负载共享机/cgroup 限流抢占本线程，此时他线程正常获锁）
+ * 时墙钟同样超时，单段墙钟判定会把该形态误报为 hard-lockup。超时后进入
+ * 确认窗（SPINLOCK_ADD_NEON_CONFIRM_SECONDS）二次采样：
+ *   - CAS 成功，或锁行 epoch 增长 → 锁在正常流转，超时源于本线程饥饿/
+ *     瞬态 → log 告警、重置等待预算继续争用，不 FAIL；
+ *   - epoch 停走且 CAS 持续失败满窗 → 确认冻结 → FAIL。
+ * 真冻结时 epoch 必停走：epoch 唯一递增路径是持锁者在临界区内的自增
+ * （run 的 C 段），lock_word 冻结 = 无人再能成为持锁者 = 递增路径已死，
+ * 故"停走才 FAIL"不引入新假阴性；非对称读冻结（本核观测冻住、他核正常
+ * 流转）同样走 FAIL：本核 CAS 持续失败且（本核读到的）epoch 停走，按
+ * 冻结论处。饥饿重置有上限（SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX）：
+ * 连续 3 次重置后仍超时且锁行在流动 = 持续饥饿/进展异常，以区分性消息
+ * FAIL——既防假阳性也防线程在无限重置中永不返回。 */
+static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddNeonData *d,
+                                                             int cpu, uint64_t *stall_ns_out)
 {
     const uint64_t limit = (uint64_t)(SPINLOCK_ADD_NEON_STALL_SECONDS * 1e9);
-    const uint64_t t0 = spinlock_add_neon_now_ns();
+    const uint64_t confirm_limit = (uint64_t)(SPINLOCK_ADD_NEON_CONFIRM_SECONDS * 1e9);
+    uint64_t t0 = spinlock_add_neon_now_ns();
     uint64_t expected = 0;
     uint32_t spins = 0;
+    int starvation_resets = 0;
     for (;;) {
         if (__atomic_compare_exchange_n(&d->line->lock_word, &expected, 1,
                                         false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
-            return true;
+            return SPINLOCK_ACQUIRE_OK;
         expected = 0;
         if ((++spins & (SPINLOCK_ADD_NEON_SPIN_CLOCK_PERIOD - 1)) == 0) {
             const uint64_t waited = spinlock_add_neon_now_ns() - t0;
             if (waited > limit) {
-                *stall_ns_out = waited;
-                return false;
+                const uint64_t epoch0 = d->line->epoch;
+                const uint64_t c0 = spinlock_add_neon_now_ns();
+                bool acquired = false, flowed = false;
+                for (;;) {
+                    if (__atomic_compare_exchange_n(&d->line->lock_word, &expected, 1,
+                                                    false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+                        acquired = true;
+                        break;
+                    }
+                    expected = 0;
+                    if (d->line->epoch != epoch0) {
+                        flowed = true;
+                        break;
+                    }
+                    if (spinlock_add_neon_now_ns() - c0 > confirm_limit)
+                        break; /* epoch 停走 + CAS 失败满确认窗 = 确认冻结 */
+                    __asm__ volatile("yield");
+                }
+                if (acquired) {
+                    /* 确认窗内获锁：锁健康，超时是本线程被饿——告警后正常继续 */
+                    log_warning("spinlock_add_neon: cpu %d waited %.1fs for the lock but "
+                                "acquired it during the confirm window — scheduling "
+                                "starvation, not a freeze; continuing",
+                                cpu, (double)waited / 1e9);
+                    return SPINLOCK_ACQUIRE_OK;
+                }
+                if (flowed) {
+                    if (starvation_resets >= SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX) {
+                        *stall_ns_out = spinlock_add_neon_now_ns() - t0;
+                        return SPINLOCK_ACQUIRE_NO_PROGRESS;
+                    }
+                    starvation_resets++;
+                    log_warning("spinlock_add_neon: cpu %d waited %.1fs but the lock line "
+                                "kept flowing (epoch advanced) — scheduling starvation, "
+                                "not a freeze; wait budget reset (%d/%d)",
+                                cpu, (double)waited / 1e9, starvation_resets,
+                                SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX);
+                    t0 = spinlock_add_neon_now_ns();
+                    spins = 0;
+                    continue;
+                }
+                *stall_ns_out = spinlock_add_neon_now_ns() - t0;
+                return SPINLOCK_ACQUIRE_FROZEN;
             }
         }
         __asm__ volatile("yield");
@@ -168,15 +245,16 @@ static void spinlock_add_neon_release(struct SpinlockAddNeonData *d)
     __atomic_store_n(&d->line->lock_word, 0, __ATOMIC_RELEASE);
 }
 
-/* 锁行 64B 全量 dump（五案现场录像格式） */
-static void spinlock_add_neon_dump_line(struct SpinlockAddNeonData *d, int cpu, uint64_t stall_ns)
+/* 锁行 64B 全量 dump（五案现场录像格式）；verdict 由两段式判定给出（冻结
+ * /进展异常的区分性签名） */
+static void spinlock_add_neon_dump_line(struct SpinlockAddNeonData *d, int cpu,
+                                        uint64_t stall_ns, const char *verdict)
 {
     const volatile uint64_t *q = reinterpret_cast<const volatile uint64_t *>(d->line);
-    log_error("spinlock_add_neon: LOCK STALL %.3fs on cpu %d — hard-lockup signature "
-              "(lock word frozen at 1 / release write lost); lock cacheline 64B dump: "
+    log_error("spinlock_add_neon: LOCK STALL %.3fs on cpu %d — %s; lock cacheline 64B dump: "
               "lock_word=0x%016lX epoch=%lu holder=%lu magic=0x%016lX "
               "pad=[0x%016lX,0x%016lX,0x%016lX,0x%016lX]%s",
-              (double)stall_ns / 1e9, cpu,
+              (double)stall_ns / 1e9, cpu, verdict,
               (unsigned long)q[0], (unsigned long)q[1], (unsigned long)q[2],
               (unsigned long)q[3], (unsigned long)q[4], (unsigned long)q[5],
               (unsigned long)q[6], (unsigned long)q[7],
@@ -198,13 +276,30 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         /* A: NEON 实算负载（锁外，本线程私有 out） */
         spinlock_add_neon_kernel(in, out);
 
-        /* B: 获锁——等待计时 + 10s 看门狗（通道C） */
+        /* B: 获锁——两段式看门狗（通道C：10s 超时 + 1s 确认窗，冻结/饥饿区分） */
         uint64_t stall_ns = 0;
-        if (!spinlock_add_neon_acquire(d, &stall_ns)) {
-            spinlock_add_neon_dump_line(d, cpu, stall_ns);
-            report_fail_msg("spinlock_add_neon: lock acquisition stalled %.1fs (>%.0fs) "
-                            "on cpu %d — hard-lockup signature",
-                            (double)stall_ns / 1e9, SPINLOCK_ADD_NEON_STALL_SECONDS, cpu);
+        const enum SpinlockAddNeonAcquire acq = spinlock_add_neon_acquire(d, cpu, &stall_ns);
+        if (acq != SPINLOCK_ACQUIRE_OK) {
+            spinlock_add_neon_dump_line(d, cpu, stall_ns,
+                acq == SPINLOCK_ACQUIRE_FROZEN
+                    ? "hard-lockup signature CONFIRMED (epoch static across the "
+                      "confirm window, CAS failing — lock word frozen at 1 / "
+                      "release write lost)"
+                    : "progress anomaly (lock line kept flowing but this thread "
+                      "never acquired — sustained starvation?)");
+            if (acq == SPINLOCK_ACQUIRE_FROZEN)
+                report_fail_msg("spinlock_add_neon: lock acquisition stalled %.1fs (>%.0fs) "
+                                "on cpu %d, frozen CONFIRMED (lock line static for >=%.0fs, "
+                                "CAS failing) — hard-lockup signature",
+                                (double)stall_ns / 1e9, SPINLOCK_ADD_NEON_STALL_SECONDS, cpu,
+                                SPINLOCK_ADD_NEON_CONFIRM_SECONDS);
+            else
+                report_fail_msg("spinlock_add_neon: lock line kept flowing but this thread "
+                                "failed to acquire across %d wait windows (%.1fs total) on "
+                                "cpu %d — sustained starvation or progress anomaly, not a "
+                                "lock freeze",
+                                SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX + 1,
+                                (double)stall_ns / 1e9, cpu);
             return EXIT_FAILURE;
         }
 
@@ -215,10 +310,12 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         d->line->holder = (uint64_t)cpu;
         d->line->epoch = d->line->epoch + 1;
 
-        /* 自检 stall：首个进临界区的线程持锁 11s，其他线程看门狗应触发 */
+        /* 自检 stall：首个进临界区的线程持锁 15s（> 看门狗 10s + 确认窗 1s
+         * + 裕量——模拟冻结须长于两段式全检出时延，否则确认窗内其他线程
+         * CAS 成功会被判为饥饿、阳性击穿），其他线程看门狗应触发 */
         if (d->selftest == 1 && d->stall_armed == 0) {
             d->stall_armed = 1;
-            sleep(11);
+            sleep(SPINLOCK_ADD_NEON_STALL_SLEEP_SECONDS);
         }
 
         spinlock_add_neon_release(d);

@@ -31,14 +31,21 @@
  *     original clamped to SIZE-16 for its single qword); offsets are
  *     8-byte aligned either way. Offsets are drawn once in init and
  *     replayed identically every sweep (original semantics).
+ *   - the per-thread address span is a raw anonymous mmap with
+ *     MADV_NOHUGEPAGE and pre-touched access windows (issue #366):
+ *     the span only randomizes addresses, so untouched pages stay
+ *     unmapped and RSS is bounded by the 512 offset pages (~2 MiB)
+ *     instead of the span size.
  * @endparblock
  */
 
 #include "sandstone.h"
 #include "sdc_stress_config.h"
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <sys/mman.h>
 
 #if defined(__aarch64__)
 #include <arm_sve.h>
@@ -49,8 +56,9 @@
  *   1. -O mem_disambig_alu_sve.buffer_bytes=N / 配置文件同名条目
  *   2. 环境变量 SDC_MEM_DISAMBIG_ALU_SVE_BUFFER_BYTES
  *   3. 自适应: 字节数直给(参照 mesh 模式), 占物理内存 60%,
- *      2 个大内存消费者均摊。PATTERNS(地址模式数)与本旋钮无关,
- *      保持常量。 */
+ *      2 个大内存消费者均摊, 再按本 slice 线程数均摊(run 里每线程
+ *      各 mmap 一份跨度, 不除则 N 线程合计 = N × 预算, issue #366)。
+ *      PATTERNS(地址模式数)与本旋钮无关, 保持常量。 */
 static size_t disambig_alu_sve_buffer_bytes(struct test *test)
 {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0, 4096, 1ll << 40);
@@ -58,7 +66,16 @@ static size_t disambig_alu_sve_buffer_bytes(struct test *test)
         sdc_env_knob_int_clamped("mem_disambig_alu_sve", "buffer_bytes", &v, 4096, 1ll << 40);
     if (v > 0)
         return (size_t)v;
-    return (size_t)sdc_target_workset_bytes(600, 2, nullptr);
+    /* 自适应预算再按本 slice 线程数均摊(同 mmu_split_tlb_sve 的
+     * budget / thread_count() 口径): 跨度只服务 512 个稀疏偏移的
+     * 地址随机性, RSS 由预触页数决定, 不占工作集预算的常驻份额。 */
+    int threads = thread_count();
+    if (threads < 1)
+        threads = 1;
+    uint64_t bytes = sdc_target_workset_bytes(600, 2, nullptr) / (uint64_t)threads;
+    if (bytes < 4096)
+        bytes = 4096;
+    return (size_t)bytes;
 }
 
 #define DISAMBIG_ALU_SVE_PATTERNS 512
@@ -137,7 +154,39 @@ static int mem_disambig_alu_sve_run(struct test *test, int cpu)
         report_fail_msg("mem_disambig_alu_sve: vector length changed between init and run");
     }
 
-    uint8_t *buffer = static_cast<uint8_t *>(aligned_alloc_safe(64, data->buffer_bytes));
+    /* 跨度分配走裸 mmap 而非 aligned_alloc_safe: 框架的 malloc 覆盖层
+     * (sysdeps/linux/malloc.cpp)对每块分配全量 memset 清零, "稀疏跨度"
+     * 会被急切清零成全缓冲常驻 + 全量缺页——issue #366 实测首个检查点
+     * >60 s 零检查点、废弃运行孤儿 RSS 52 GiB 伴 swap 抖动的真因(本机
+     * AnonHugePages=0/majflt=0, 非 THP 大页风暴; THP 与否只改缺页粒度,
+     * 不改清零字节数)。MAP_ANONYMOUS 内核按需零填充, 未触页不占内存,
+     * "测试拿到零化内存"的确定性承诺由内核保证, 语义不降级。 */
+    uint8_t *buffer = static_cast<uint8_t *>(
+        mmap(nullptr, data->buffer_bytes, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (buffer == MAP_FAILED) {
+        log_skip(OSResourceIssueSkipCategory,
+                 "mem_disambig_alu_sve: disambig buffer mmap failed: %s",
+                 strerror(errno));
+        return EXIT_SKIP;
+    }
+    /* 稀疏探针不需要 2 MiB 大页: NOHUGEPAGE 把 512 个随机偏移的首触
+     * 锁在 4 KiB 粒度, 每线程 RSS 上界 = 512 页 × 4 KiB ≈ 2 MiB, 与
+     * 宿主 THP 策略解耦(THP=always 且大页分配成功的机器上不设此项,
+     * 每偏移首触 2 MiB, 128 线程 × 512 × 2 MiB = 128 GiB 回到 OOM)。
+     * madvise 失败(老内核/gem5 SE 未实现该 advice)仅记录并降级。 */
+    if (madvise(buffer, data->buffer_bytes, MADV_NOHUGEPAGE) != 0)
+        log_warning("mem_disambig_alu_sve: MADV_NOHUGEPAGE failed (%s), "
+                    "first sweep keeps host-default page faults", strerror(errno));
+    /* 预触 512 个访问窗([off, off+lanes*8) 首尾各一字节; 8 对齐偏移 +
+     * ≤128 B 窗最多跨 2 页), 把残余 4 KiB 缺页移出计时区。写 0 不影响
+     * body 语义(store→load 回读比较, 缓冲旧内容无关)。 */
+    for (int i = 0; i < DISAMBIG_ALU_SVE_PATTERNS; i++) {
+        uint8_t *p = buffer + data->offsets[i];
+        p[0] = 0;
+        p[(size_t)data->lanes * 8 - 1] = 0;
+    }
+
     svbool_t pg = svptrue_b64();
 
     TEST_LOOP(test, 1 << 13) {
@@ -178,7 +227,7 @@ static int mem_disambig_alu_sve_run(struct test *test, int cpu)
         }
     }
 
-    free(buffer);
+    munmap(buffer, data->buffer_bytes);
     return EXIT_SUCCESS;
 }
 

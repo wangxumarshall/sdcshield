@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstring>
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct alignas(16) SharedData {
     std::atomic<__int128> data;        // 原子128位数据
     std::atomic<uint64_t> seq;
@@ -11,6 +12,7 @@ struct alignas(16) SharedData {
      * writer writes THIS value — see the run function. */
     __int128 pattern;
 };
+}
 
 static int atomic_simd_128_init(struct test *test) {
     auto *sd = new SharedData;

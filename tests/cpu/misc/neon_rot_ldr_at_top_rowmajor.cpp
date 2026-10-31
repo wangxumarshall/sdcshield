@@ -90,7 +90,7 @@ static int neon_rot_ldr_at_top_rowmajor_run(struct test *test, int cpu) {
     uint64x2_t *dst  = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_COUNT * sizeof(uint64x2_t)));
 
     uint64_t sweep = 0;
-    TEST_LOOP(test, 1 << 8) {
+    TEST_LOOP(test, 1 << 13) {
         const bool ascending = (sweep & 1) == 0;
         for (int n = 0; n < NEON_ROT_LDR_AT_TOP_ROWMAJOR_COUNT; n++) {
             const int i = ascending ? n : (NEON_ROT_LDR_AT_TOP_ROWMAJOR_COUNT - 1 - n);

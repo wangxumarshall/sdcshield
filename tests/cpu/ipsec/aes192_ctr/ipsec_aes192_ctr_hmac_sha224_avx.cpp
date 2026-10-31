@@ -29,6 +29,7 @@
 #define HMAC_KEY_SIZE (28) // SHA-224 key size can be 28 bytes or larger
 #define HMAC_DIGEST_SIZE (28)
 
+namespace { /* ODR: per-TU aes_hmac_avx_data (10-file same-name hazard) */
 struct aes_hmac_avx_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
@@ -38,6 +39,7 @@ struct aes_hmac_avx_data {
     uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_mac[HMAC_DIGEST_SIZE];
 };
+}
 
 static void hmac_sha224(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t len, uint8_t *out) {
     HMAC_CTX *ctx = s_HMAC_CTX_new();

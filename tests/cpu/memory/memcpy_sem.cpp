@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <atomic>
-#include <random>
 #include <vector>
 #include <thread>
 #include <semaphore.h>
@@ -45,8 +44,7 @@ static int memcpy_sem_run(struct test *test, int cpu) {
     (void)cpu;
 
     // 随机数生成器
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint8_t> dist(0, 255);
+    auto dist = []() { return (uint8_t)((0) + (int64_t)(random64() % (uint64_t)((255) - (0) + 1))); };
 
     // 信号量：用于同步所有线程同时开始
     sem_t sem;
@@ -65,11 +63,11 @@ static int memcpy_sem_run(struct test *test, int cpu) {
             thread_data[i].src.resize(BLOCK_SIZE);
             thread_data[i].dst.resize(BLOCK_SIZE);
             for (size_t j = 0; j < BLOCK_SIZE; ++j) {
-                thread_data[i].src[j] = dist(rng);
+                thread_data[i].src[j] = dist();
             }
             // 目标缓冲区初始化为随机值（避免未初始化干扰）
             for (size_t j = 0; j < BLOCK_SIZE; ++j) {
-                thread_data[i].dst[j] = dist(rng);
+                thread_data[i].dst[j] = dist();
             }
         }
 

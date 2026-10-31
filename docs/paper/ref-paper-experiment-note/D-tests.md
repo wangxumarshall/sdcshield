@@ -111,7 +111,7 @@
 ### 不能支持 / 缺失
 
 - **无 FPCR/FPSR 控制助手**:没有 helper 读写 FP 舍入模式(FPCR.RMode)、flush-to-zero(FPCR.FZ)、trap 使能 — 需要测试自己 `mrs/msr fpcr`(仓内零先例)。
-- **无 cache flush 数据面 helper**:`__clear_cache` 是 I-cache 语义(cache_stress_aggressor.cpp:24-28 注释自承"对数据也有效"是存疑的近似);dc civac 只在 l2c_cross_cache_line_arm.cpp:163 内联 asm 局部使用,未成公共 helper。
+- **无 cache flush 数据面 helper**:dc civac 内联 asm 已在六处测试局部使用(l2c_cross_cache_line_arm.cpp:165、l2c_cross_cache_line_sve.cpp:169、mrn_rmw_fwd_vs_l1d_sve.cpp:188、movbe_l1d_vs_l2_sve.cpp:192、vmx_vmexit_invd.cpp:45、cache_stress_aggressor.cpp:36——issue #318 修复弃用 `__clear_cache`:它是 I-cache 语义,不失效 L1 行、数据面零逐出压力),但未提炼成公共 helper。
 - **无跨核同步栅栏助手**:power_virus_dit 想要"多核 lockstep burst"但各线程独立 do-while,实际相位随机漂移;框架无 barrier/启动同步 API。
 - **NUMA 归属控制不直接**:框架报 numa_id,但分配策略(first-touch/mbind/set_mempolicy)无封装;memcpy_rewr 用 numa_split 角色分派是唯一近似(不带 mbind)。
 - **校验延迟只有测试自己管理**:框架不提供"延迟校验/带内 vs 带外"模式开关。

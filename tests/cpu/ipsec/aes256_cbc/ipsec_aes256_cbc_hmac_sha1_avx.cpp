@@ -30,6 +30,7 @@
 #define HMAC_SHA1_96_DIGEST_SIZE (12)
 #define HMAC_SHA1_FULL_DIGEST_SIZE (20)
 
+namespace { /* ODR: per-TU aes_hmac_avx_data (10-file same-name hazard) */
 struct aes_hmac_avx_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
@@ -39,6 +40,7 @@ struct aes_hmac_avx_data {
     uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_mac[HMAC_SHA1_96_DIGEST_SIZE];
 };
+}
 
 static void hmac_sha1_96(const uint8_t *key, size_t key_len, const uint8_t *msg, size_t len, uint8_t *out) {
     HMAC_CTX *ctx = s_HMAC_CTX_new();

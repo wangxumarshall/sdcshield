@@ -15,23 +15,12 @@
  * Do NOT add extra volatile reads or local snapshots to the hot path —
  * that perturbs the instruction schedule and can stop the defect from
  * triggering (see memory movbe-dump-compiler-dce-root-cause).
- *
- * Additionally writes a binary record to a per-process log file on failure:
- *   - inputA, inputB : source operands
- *   - golden          : expected[i] (precomputed ALU result)
- *   - actual_dst      : dst[i] after store-load forwarding
- *   - actual_temp     : temp[i] after ALU store (intermediate)
- *   - xor             : golden ^ actual_dst
- *   - index, iteration, cpu, op_type, timestamp
  * @endparblock
  */
 
 #include "sandstone.h"
 #include <cstdint>
 #include <cstring>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/time.h>
 
 #define MRN_RMW_COUNT 1024
 
@@ -39,26 +28,7 @@ struct MrnRmwData {
     uint64_t *srcA;
     uint64_t *srcB;
     uint64_t *expected;
-    int dump_fd;  // binary log file descriptor
 };
-
-#pragma pack(push, 1)
-struct mrn_rmw_dump_record {
-    uint64_t timestamp_us;   // microseconds since epoch
-    uint32_t cpu;            // logical cpu where failure occurred
-    uint32_t iteration;      // TEST_LOOP iteration number
-    uint32_t index;          // array index where failure occurred
-    uint32_t op_type;        // 0=add, 1=sub, 2=xor, 3=and
-    uint64_t inputA;         // data->srcA[index]
-    uint64_t inputB;         // data->srcB[index]
-    uint64_t golden;         // data->expected[index] (precomputed ALU result)
-    uint64_t actual_dst;     // dst[index] after store-load forwarding
-    uint64_t actual_temp;    // temp[index] after ALU store (intermediate)
-    uint64_t res_recompute;  // ALU result recomputed in cold branch from inputA/B
-    uint64_t xor_val;        // golden ^ actual_dst
-    uint32_t verdict;        // bit0: temp==recompute(store faithful) bit1: temp==dst(fwd faithful)
-};
-#pragma pack(pop)
 
 #if defined(__x86_64__) || defined(__i386__)
 
@@ -103,14 +73,6 @@ static int mrn_rmw_init(struct test *test) {
         }
     }
 
-    // Open binary dump log (per-process, append)
-    char path[256];
-    snprintf(path, sizeof(path), "/tmp/mrn_rmw_dump_%d.bin", getpid());
-    data->dump_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (data->dump_fd < 0) {
-        log_error("mrn_rmw_dump: failed to open dump log %s", path);
-    }
-
     test->data = data;
     return EXIT_SUCCESS;
 }
@@ -119,7 +81,6 @@ static int mrn_rmw_run(struct test *test, int cpu) {
     auto *data = static_cast<MrnRmwData *>(test->data);
     uint64_t *temp = static_cast<uint64_t *>(aligned_alloc(64, MRN_RMW_COUNT * sizeof(uint64_t)));
     uint64_t *dst  = static_cast<uint64_t *>(aligned_alloc(64, MRN_RMW_COUNT * sizeof(uint64_t)));
-    uint32_t iter = 0;
 
     TEST_LOOP(test, 1 << 13) {
         for (int i = 0; i < MRN_RMW_COUNT; i++) {
@@ -154,64 +115,26 @@ static int mrn_rmw_run(struct test *test, int cpu) {
                     const char *op = (i % 4 == 0) ? "add"
                                    : (i % 4 == 1) ? "sub"
                                    : (i % 4 == 2) ? "xor" : "and";
-
-                    // Recompute the ALU result HERE, in the cold branch, from
-                    // the same inputA/inputB the hot loop used. Runs only on
-                    // failure; does NOT touch the hot loop. Compares the
-                    // hot-loop stored temp[i] against this cold recompute to
-                    // split ALU-compute-wrong (temp != recompute) from
-                    // store/forwarding damage (temp == recompute != golden).
-                    uint64_t res_recompute;
-                    switch (i % 4) {
-                        case 0: res_recompute = inputA + inputB; break;
-                        case 1: res_recompute = inputA - inputB; break;
-                        case 2: res_recompute = inputA ^ inputB; break;
-                        default: res_recompute = inputA & inputB; break;
-                    }
+                    unsigned char *gb = (unsigned char *)&golden;
+                    unsigned char *ab = (unsigned char *)&actual;
+                    unsigned char *xb = (unsigned char *)&xorv;
                     log_error("mrn_rmw_dump: miscompare at index %u (op=%s): "
                               "inputA=0x%016lX inputB=0x%016lX golden=0x%016lX "
-                              "actual=0x%016lX recompute=0x%016lX xor=0x%016lX | "
-                              "temp=0x%016lX dst=0x%016lX | %s%s%s",
+                              "actual=0x%016lX xor=0x%016lX | "
+                              "bytes[b7..b0] golden=%02X%02X%02X%02X%02X%02X%02X%02X "
+                              "actual=%02X%02X%02X%02X%02X%02X%02X%02X "
+                              "xor=%02X%02X%02X%02X%02X%02X%02X%02X",
                               (unsigned)i, op,
                               (unsigned long)inputA, (unsigned long)inputB,
                               (unsigned long)golden, (unsigned long)actual,
-                              (unsigned long)res_recompute, (unsigned long)xorv,
-                              (unsigned long)temp[i], (unsigned long)dst[i],
-                              (temp[i] == res_recompute) ? "[store-faithful]" : "[ALU-COMPUTE-WRONG]",
-                              (temp[i] == dst[i]) ? "[fwd-faithful]" : "[fwd-damaged]",
-                              (temp[i] == res_recompute && dst[i] == temp[i] && dst[i] != golden)
-                                  ? " -> store+fwd OK, error predates this op (input/golden path)"
-                                  : "");
-
-
-                    // Write binary record (cold branch only)
-                    if (data->dump_fd >= 0) {
-                        struct timeval tv;
-                        gettimeofday(&tv, NULL);
-                        struct mrn_rmw_dump_record rec = {
-                            .timestamp_us = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec,
-                            .cpu = (uint32_t)cpu,
-                            .iteration = iter,
-                            .index = (uint32_t)i,
-                            .op_type = (uint32_t)(i % 4),
-                            .inputA = inputA,
-                            .inputB = inputB,
-                            .golden = golden,
-                            .actual_dst = actual,
-                            .actual_temp = temp[i],
-                            .res_recompute = res_recompute,
-                            .xor_val = xorv,
-                            .verdict = (uint32_t)(((temp[i] == res_recompute) ? 1u : 0u)
-                                                | ((temp[i] == dst[i]) ? 2u : 0u)),
-                        };
-                        if (write(data->dump_fd, &rec, sizeof(rec)) < 0) { /* best effort */ }
-                    }
-
+                              (unsigned long)xorv,
+                              gb[7], gb[6], gb[5], gb[4], gb[3], gb[2], gb[1], gb[0],
+                              ab[7], ab[6], ab[5], ab[4], ab[3], ab[2], ab[1], ab[0],
+                              xb[7], xb[6], xb[5], xb[4], xb[3], xb[2], xb[1], xb[0]);
                     report_fail_msg("mrn_rmw_dump: data miscompare at index %u (op=%s)", (unsigned)i, op);
                 }
             }
         }
-        iter++;
     }
 
     free(dst);
@@ -222,9 +145,6 @@ static int mrn_rmw_run(struct test *test, int cpu) {
 static int mrn_rmw_cleanup(struct test *test) {
     auto *data = static_cast<MrnRmwData *>(test->data);
     if (data) {
-        if (data->dump_fd >= 0) {
-            close(data->dump_fd);
-        }
         free(data->srcA);
         free(data->srcB);
         free(data->expected);
@@ -233,7 +153,7 @@ static int mrn_rmw_cleanup(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(mrn_rmw_dump, "mrn_rmw dump variant: records inputA/inputB/golden/actual_dst/actual_temp/xor binary log on miscompare (ALU RMW + store-load forwarding)")
+DECLARE_TEST(mrn_rmw_dump, "mrn_rmw dump variant: records input/golden/actual/xor on miscompare (ALU RMW + store-load forwarding)")
     .test_init = mrn_rmw_init,
     .test_run = mrn_rmw_run,
     .test_cleanup = mrn_rmw_cleanup,

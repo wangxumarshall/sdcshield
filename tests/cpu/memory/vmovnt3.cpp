@@ -17,8 +17,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
+#ifdef __aarch64__
 #include <arm_neon.h>
+#endif
 
 // ============================================================================
 // 测试配置
@@ -60,26 +61,34 @@ static void print_colored_result(const char* test_name, bool passed,
 // ============================================================================
 
 static int vmovnt3_init(struct test *test) {
+#ifndef __aarch64__
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): ARM NEON required for this memory test");
+    return EXIT_SKIP;
+#else
     (void)test;
     return EXIT_SUCCESS;
+#endif
 }
 
 static int vmovnt3_run(struct test *test, int cpu) {
     (void)cpu;
-
+#ifdef __aarch64__
     // 线程局部数据，对齐到 16 字节（NEON 加载/存储对齐要求）
     alignas(16) float src[TOTAL_FLOATS];
     alignas(16) float store_buf[TOTAL_FLOATS];
     alignas(16) float reload_buf[TOTAL_FLOATS];
 
-    // 每个线程独立随机数生成器
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    /* randomization hardening (B3-007): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; range [-1.0f, 1.0f) mapped
+     * from frandomf's [0,1). */
+    auto dist = []() { return frandomf_scale((float)(1.0f) - (float)(-1.0f)) + (float)(-1.0f); };
 
     do {
         // ---------- 1. 生成随机浮点数 ----------
         for (size_t i = 0; i < TOTAL_FLOATS; ++i) {
-            src[i] = dist(rng);
+            src[i] = dist();
         }
 
         // ---------- 2. 模拟非临时加载 + 预取 ----------
@@ -124,9 +133,9 @@ static int vmovnt3_run(struct test *test, int cpu) {
 
         // ---------- 6. 输出结果 ----------
         // 这里我们将 reload_buf 视为 "输出"（即从内存读取回来的数据）
-        print_colored_result("vmovnt3", passed, src, reload_buf, TOTAL_FLOATS);
-
+        // 仅在失败时打印，避免每轮 PASS 导致日志膨胀。
         if (!passed) {
+            print_colored_result("vmovnt3", passed, src, reload_buf, TOTAL_FLOATS);
             report_fail_msg("vmovnt3: data mismatch or consistency failure");
             return EXIT_FAILURE;
         }
@@ -134,6 +143,12 @@ static int vmovnt3_run(struct test *test, int cpu) {
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
+#else
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): ARM NEON required for this memory test");
+    return EXIT_SKIP;
+#endif
 }
 
 static int vmovnt3_finish(struct test *test) {

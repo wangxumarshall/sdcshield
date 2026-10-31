@@ -199,7 +199,20 @@ static int ssl_sm3sm4_run(struct test *test, int cpu)
 
     int outlen = 0;
 
-    TEST_LOOP(test, 256) {
+    /* Loop granularity: the body moves ~13x data_size of memory per thread
+     * (re-roll write + 2x SM4 encrypt + 1x SM4 decrypt + 2x SM3 + 2x golden
+     * memcmp), and data_size is memory-adaptive (up to ~100 MiB/thread on a
+     * 128 GiB host, see sm_data_size), so one body alone is seconds-scale
+     * under full-core bandwidth/SM4-throughput contention. TEST_LOOP only
+     * checks the -t deadline every N bodies (framework/sandstone.h
+     * TEST_LOOP): the historical N=256 was sized for the original fixed
+     * 1 KiB buffer (656bc064, ~2.8 MiB per checkpoint) and made the first
+     * deadline check minutes-scale after the adaptive model landed — a
+     * -t that cannot be honored reads as "Timed Out" (issue #326). N=4
+     * bounds the exit latency to 4 bodies (~5 s at 128 threads/102.4 MiB)
+     * while keeping the fracture segment (fracture_loop_count=4, i.e. 16
+     * bodies) long enough that per-segment re-entry stays ~3% overhead. */
+    TEST_LOOP(test, 4) {
         /* Re-roll: fresh plaintext + same-iteration golden through the
          * same EVP path for this thread's data. */
         memset_random(local_d.plaintext, SM_DATA_SIZE);

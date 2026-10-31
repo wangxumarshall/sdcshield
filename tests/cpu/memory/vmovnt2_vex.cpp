@@ -2,8 +2,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <random>
+#ifdef __aarch64__
 #include <arm_neon.h>
+#endif
 
 // 打印整数向量（最多 8 个元素）
 static void print_vector(const char* label, const int32_t* v, int len) {
@@ -26,13 +27,20 @@ static void print_vector(const char* label, const int64_t* v, int len) {
 }
 
 static int vmovnt2_vex_init(struct test *test) {
+#ifndef __aarch64__
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): ARM NEON required for this memory test");
+    return EXIT_SKIP;
+#else
     (void)test;
     return EXIT_SUCCESS;
+#endif
 }
 
 static int vmovnt2_vex_run(struct test *test, int cpu) {
     (void)cpu;
-
+#ifdef __aarch64__
     // ARM64 上 NEON 默认可用，无需检测
 
     // 线程局部数据（对齐至 16 字节，NEON 对齐要求）
@@ -43,14 +51,16 @@ static int vmovnt2_vex_run(struct test *test, int cpu) {
     alignas(16) int64_t store_i64[4];
     alignas(16) int64_t reload_i64[4];
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int32_t> i32dist(-10000, 10000);
-    std::uniform_int_distribution<int64_t> i64dist(-1000000LL, 1000000LL);
+    /* randomization hardening (B3-007): framework RNG (per-thread stream,
+     * -s reproducible) replaces std::mt19937; ranges [-10000, 10000] and
+     * [-1000000, 1000000]. */
+    auto i32dist = []() { return (int32_t)((-10000) + (int64_t)(random64() % (uint64_t)((10000) - (-10000) + 1))); };
+    auto i64dist = []() { return (int64_t)((-1000000LL) + (int64_t)(random64() % (uint64_t)((1000000LL) - (-1000000LL) + 1))); };
 
     do {
         // 生成随机数据
-        for (int i = 0; i < 8; ++i) src_i32[i] = i32dist(rng);
-        for (int i = 0; i < 4; ++i) src_i64[i] = i64dist(rng);
+        for (int i = 0; i < 8; ++i) src_i32[i] = i32dist();
+        for (int i = 0; i < 4; ++i) src_i64[i] = i64dist();
 
         // ---- 测试 256-bit int32 (两个 128 位向量) ----
         int32x4_t v_i32_0 = vld1q_s32(src_i32);
@@ -107,6 +117,12 @@ static int vmovnt2_vex_run(struct test *test, int cpu) {
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
+#else
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): ARM NEON required for this memory test");
+    return EXIT_SKIP;
+#endif
 }
 
 static int vmovnt2_vex_finish(struct test *test) {

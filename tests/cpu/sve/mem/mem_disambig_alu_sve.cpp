@@ -34,8 +34,9 @@
  *   - the per-thread address span is a raw anonymous mmap with
  *     MADV_NOHUGEPAGE and pre-touched access windows (issue #366):
  *     the span only randomizes addresses, so untouched pages stay
- *     unmapped and RSS is bounded by the 512 offset pages (~2 MiB)
- *     instead of the span size.
+ *     unmapped and RSS is bounded by the 512 access windows (each
+ *     straddling at most 2 pages: <= 4 MiB per thread at 4 KiB pages,
+ *     ~2 MiB expected) instead of the span size.
  * @endparblock
  */
 
@@ -171,9 +172,10 @@ static int mem_disambig_alu_sve_run(struct test *test, int cpu)
         return EXIT_SKIP;
     }
     /* 稀疏探针不需要 2 MiB 大页: NOHUGEPAGE 把 512 个随机偏移的首触
-     * 锁在 4 KiB 粒度, 每线程 RSS 上界 = 512 页 × 4 KiB ≈ 2 MiB, 与
-     * 宿主 THP 策略解耦(THP=always 且大页分配成功的机器上不设此项,
-     * 每偏移首触 2 MiB, 128 线程 × 512 × 2 MiB = 128 GiB 回到 OOM)。
+     * 锁在 4 KiB 粒度, 每线程 RSS 上界 = 512 窗 × 至多 2 页 × 4 KiB
+     * ≤ 4 MiB(随机偏移下期望 ~2 MiB; 按 4 KiB 主机页计), 与宿主 THP
+     * 策略解耦(THP=always 且大页分配成功的机器上不设此项, 每偏移首触
+     * 2 MiB, 128 线程 × 512 × 2 MiB = 128 GiB 回到 OOM)。
      * madvise 失败(老内核/gem5 SE 未实现该 advice)仅记录并降级。 */
     if (madvise(buffer, data->buffer_bytes, MADV_NOHUGEPAGE) != 0)
         log_warning("mem_disambig_alu_sve: MADV_NOHUGEPAGE failed (%s), "

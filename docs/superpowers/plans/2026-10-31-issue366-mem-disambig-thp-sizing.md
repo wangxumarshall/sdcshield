@@ -130,7 +130,8 @@ static size_t disambig_alu_sve_buffer_bytes(struct test *test)
         return EXIT_SKIP;
     }
     /* 稀疏探针不需要 2 MiB 大页: NOHUGEPAGE 把 512 个随机偏移的首触
-     * 锁定在 4 KiB 粒度, 每线程 RSS 上界 = 512 页 × 4 KiB ≈ 2 MiB,
+     * 锁定在 4 KiB 粒度, 每线程 RSS 上界 = 512 窗 × 至多 2 页 × 4 KiB
+     * ≤ 4 MiB(随机偏移下期望 ~2 MiB; 按 4 KiB 主机页计),
      * 与宿主 THP 策略解耦(THP=always 且分配成功的机器上, 不设则每偏移
      * 首触 2 MiB, 128 线程 × 512 × 2 MiB = 128 GiB 又回 OOM)。失败
      * (老内核/gem5 SE 未实现该 advice)仅记录并降级, 探针语义不变。 */
@@ -213,7 +214,7 @@ stime 89%、AnonHugePages=0/majflt=0(非 issue 归因的 THP 大页风暴; THP
 满跑外推 2.34 TiB 清零必然超物理(issue 实测孤儿 RSS 52 GiB + swap 抖动)。
 修法: 预算再按本 slice 线程数均摊(同 mmu_split_tlb_sve 口径) + 跨度改
 裸 mmap(内核按需零填充, 确定性语义不降级) + MADV_NOHUGEPAGE + 预触
-512 个访问窗(每线程 RSS 上界 ~2 MiB, 与宿主 THP 策略解耦)。
+512 个访问窗(每线程 RSS 上界 ≤ 4 MiB、期望 ~2 MiB, 与宿主 THP 策略解耦)。
 TEST_LOOP N=8192 保留(body µs 级, 修后检查点间隔实测定标)。"
 git push origin <branch>
 ```

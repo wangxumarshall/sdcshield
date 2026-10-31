@@ -34,10 +34,15 @@
  * 阳性通过后阴性结果才有意义；错值 fail loudly 而非静默 off，防 typo 无声
  * 击穿部署纪律）：
  *   -O spinlock_add_neon.selftest=stall  首个进临界区线程持锁 15s →
- *                                        通道C 应触发（需 ≥2 线程、-t ≥ 25000；
- *                                        15s > 看门狗 10s + 确认窗 1s + 裕量
- *                                        ——模拟冻结须长于两段式全检出时延，
- *                                        否则确认窗内 CAS 成功会被判为饥饿）
+ *                                        通道C 应触发（前置条件由 init 强制：
+ *                                        ≥2 线程（否则唯一线程自睡自放、绿
+ *                                        pass 假绿）、-t ≥16000ms 派生下限
+ *                                        （推荐 25000——阳性 FAIL(~11s) 与排空
+ *                                        (~15s) 须落标称窗口内），不满足 fail
+ *                                        loudly；15s > 看门狗 10s + 确认窗 1s
+ *                                        + 裕量——模拟冻结须长于两段式全检出
+ *                                        时延，否则确认窗内 CAS 成功会被判
+ *                                        为饥饿、阳性击穿）
  *   -O spinlock_add_neon.selftest=data   init 毒化各 slot golden →
  *                                        通道A 应触发（单线程即可，cpu 无关）
  *
@@ -66,6 +71,9 @@
  */
 
 #include "sandstone.h"
+#include "sandstone_p.h" /* selftest=stall 前置条件校验须读生效测试时长
+                          * sApp->current_test_duration（公开 API 无时长
+                          * 访问器；mce_check/smi_count 同款先例） */
 #include <cerrno>   /* errno：logverif 打开失败降级路径使用；不依赖框架头链
                      * 传递包含（PR#328 三轮检视 :368——上游 include 整理时
                      * 偶然可见性会静默破碎） */
@@ -88,6 +96,9 @@
 #define SPINLOCK_ADD_NEON_STALL_SECONDS 10.0 /* sbsa-gwdt 同阈值 */
 #define SPINLOCK_ADD_NEON_CONFIRM_SECONDS 1.0 /* 超时后的冻结确认窗（两段式判定，见 acquire） */
 #define SPINLOCK_ADD_NEON_STALL_SLEEP_SECONDS 15 /* 自检持锁秒数：须 > 看门狗+确认窗+裕量 */
+#define SPINLOCK_ADD_NEON_STALL_MIN_TEST_MS ((SPINLOCK_ADD_NEON_STALL_SLEEP_SECONDS + 1) * 1000)
+                                                 /* selftest=stall 的 -t 下限：阳性 FAIL(~11s)
+                                                  * 与持锁排空(~15s) 须落在标称窗口内 */
 #define SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX 3 /* 饥饿重置上限：跨 3+1 窗口无获锁 → 进展异常 FAIL */
 #define SPINLOCK_ADD_NEON_LOG_MAX 10000      /* 每线程逐次日志行上限 */
 #define SPINLOCK_ADD_NEON_MAGIC 0x5A5AC0DE5A5AC0DEull
@@ -404,6 +415,48 @@ static int spinlock_add_neon_init(struct test *test)
     }
     d->stall_armed = 0;
     d->log_fd = -1;
+
+    /* selftest=stall 前置条件 fail loudly（PR#328 四轮检视 :219）：通道 C
+     * 阳性需要第二个线程在 10s 看门狗 + 1s 确认窗下等待——单线程时唯一
+     * 线程自己持锁睡 15s 后自行 release、循环至 -t 耗尽绿 pass，通道 C
+     * 永不触发（假绿，与 selftest 错值静默 off 同一纪律缺口：前置条件
+     * 只写在注释里 = 本文件 :288 自己批判的「纪律被静默击穿」形态）；
+     * 时长不足时阳性 FAIL(~11s) 与持锁排空(~15s) 落在标称窗口之外，
+     * 外部超时包装下证据丢失。线程数取 thread_count()（公开 API，
+     * mce_check 先例；fork/slice 子进程 init 前 sApp->thread_count 已
+     * 归一为本 slice 实际 worker 数），时长取 sApp->current_test_duration
+     * （run_one_test 在 init_internal 前设置，含 -t/每测试覆盖/上下限裁剪
+     * 与 --inject-idle 折算后的生效值）。 */
+    if (d->selftest == 1) {
+        if (thread_count() < 2) {
+            log_error("spinlock_add_neon: selftest=stall needs >=2 test threads to "
+                      "watch the lock (channel C: a second thread must spin under the "
+                      "10s watchdog while the holder sleeps %ds) — got %d thread(s); "
+                      "a single thread would sleep, self-release, and green-pass to "
+                      "-t with channel C never firing; failing loudly instead of "
+                      "producing that false green (use -n >=2 / --cpuset with >=2 "
+                      "cpus, or selftest=data which is single-thread safe)",
+                      SPINLOCK_ADD_NEON_STALL_SLEEP_SECONDS, thread_count());
+            free(d);
+            return EXIT_FAILURE;
+        }
+        if (sApp->current_test_duration
+                < std::chrono::milliseconds(SPINLOCK_ADD_NEON_STALL_MIN_TEST_MS)) {
+            log_error("spinlock_add_neon: selftest=stall needs a test duration >= "
+                      "%dms so the positive FAIL (~%ds: watchdog + confirm window) "
+                      "and the holder drain (~%ds) land inside the nominal window — "
+                      "got %dms; failing loudly instead of producing a late FAIL "
+                      "that external timeout wrappers may kill (recommended: "
+                      "-t 25000)",
+                      SPINLOCK_ADD_NEON_STALL_MIN_TEST_MS,
+                      (int)(SPINLOCK_ADD_NEON_STALL_SECONDS
+                            + SPINLOCK_ADD_NEON_CONFIRM_SECONDS),
+                      SPINLOCK_ADD_NEON_STALL_SLEEP_SECONDS,
+                      (int)sApp->current_test_duration.count());
+            free(d);
+            return EXIT_FAILURE;
+        }
+    }
 
     const size_t floats_total = (size_t)SPINLOCK_ADD_NEON_SLOTS * SPINLOCK_ADD_NEON_FLOATS;
     d->inputs = static_cast<float *>(aligned_alloc(64, floats_total * sizeof(float)));

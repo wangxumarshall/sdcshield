@@ -426,12 +426,39 @@ issue 生命周期 + agent 派发收割）。
 - **PR 开出后路由到 `/pr-loop` 阶段 2–6**（wait → collect → 批判性处置
   → 循环 → merge 提醒），零重复实现。
 
-## 10. 验收记录（待填）
+## 10. 验收记录（实测，2026-10-31）
 
-TODO（PR 合入并切换 cron 后记录）：首个真实任务全周期时间线——issue →
-agent 派发 → PR → bot 循环 → merge 提醒；异常结局（如 ESCALATED/
-HUMAN_CLOSED 路径）如实记录。切换后观察首个 tick：
-`tail -5 ~/.local/state/sdcshield-task-loop/cron.log`。
+**部署切换时间线（全部真实事件，本机观测）**：
+
+- 2026-10-30 18:58（本地）：PR #317 squash 合入 main（`8010e60e`）。
+- 合入后旧 cron 行（`ci_triage.py scan`）**零人工干预**完成过渡：autoci
+  克隆经 tick 内 heal 对齐新 main 后，模块别名薄壳自动切到 task_loop；
+  state 目录迁移就位（`state.json`+`agent.env` 拷贝、v1→v2 归一，5 条
+  存量条目全部续接，旧目录保留归档）。过渡期两引擎短暂并存（旧引擎最后
+  一次写旧目录 2026-10-30 19:00 本地，此后仅新目录推进，无双写损坏）。
+- 无人值守稳态运行约 19 小时（10-30 19:00 → 10-31 13:00 本地）：每
+  30min tick 正常，cron.log 全程「扫描到 0 个红 run」+ heal 对齐 +
+  车道 B 判定，无异常、无 PAUSED。
+- **首个真实收尾周期（继承条目，车道 B 全程零人工）**：条目 #304
+  （ci 源 Sanitizer run 40596064101，迁移时 PR_OPEN，PR #305）→
+  2026-10-31 11:30 PR #305 squash 合入 main（`45b2ad70`）→ 引擎下个
+  tick（12:00）判定 PR CLOSED → issue #304 收尾 + 条目 DONE
+  （`updated_at=2026-10-31T04:00:30Z`），state 与 GitHub 侧一致。
+- 2026-10-31 13:16（本地）：crontab 切换为 §3.1 终态两行（scan `*/30`
+  + audit `17 */6` 含 `timeout 7500`；备份 `~/crontab.backup.20261031`）。
+  此后 tick 输出写入新目录 `cron.log`。
+
+**待观察项（如实记录，后续追加）**：
+
+- audit 线首跑：cron 切换后首次触发 18:17（本地），首跑按 24h 回看窗口
+  审查（`audit_cursor` 为空）——首个 audit 周期结果待记录。
+- 首个**新任务**（非继承条目）全周期：issue → agent 派发 → PR → bot
+  循环 → merge 提醒；异常结局（ESCALATED/HUMAN_CLOSED 路径）如实记录。
+  此项同时是 PR-5（删薄壳）的前置条件。
+
+观测命令：`tail -5 ~/.local/state/sdcshield-task-loop/cron.log`（scan）、
+`tail -5 ~/.local/state/sdcshield-task-loop/audit.log`（audit）、
+`python3 scripts/task_loop.py status`（队列总览）。
 
 ## 11. 延伸阅读
 

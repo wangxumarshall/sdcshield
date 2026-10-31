@@ -18,7 +18,8 @@
 - 受影响行为实测（规则 2b）：-O0 单 TU 符号发射对比（修复前 W → 修复后 t/消失）+ 受影响测试 release 实跑。
 - 回归（规则 2c）：`-e zstd19 -t 2000 -n 1` → `exit: pass`。
 - commit 尾注仅 `Signed-off-by: wangxu <wangxumarshall@qq.com>`，禁止 Co-Authored-By；只 push feature 分支。
-- **不修**：`fma.cpp:28` / `fma_sve.cpp:32` 的 `struct TestData {};`（token 级一致、零使用的死声明，ODR 合规）；token 级一致的同名族（SpinLock/movbe_data/MrnRmwData/MrnRmwSveData/aes_xcbc_sse_data）；已在匿名 namespace 内的族（TestData 64 文件、crt_data、sleef_test_data）。
+- **不修**：`fma.cpp:28` / `fma_sve.cpp:32` 的 `struct TestData {};`（token 级一致、零使用的死声明，ODR 合规）；token 级一致的同名族（SpinLock/movbe_data/MrnRmwData/MrnRmwSveData/aes_xcbc_sse_data）；已在匿名 namespace 内的族（TestData 64 文件、crt_data、sleef_test_data、eigen_test_data 7 文件）。
+- **framework `class Topology` 三变体（cpu/idxd/gpu 头文件同名不同布局）不构成同类隐患**：`framework/meson.build` 的 `device_type` 为互斥 if/elif（cpu|gpu|idxd 三选一，默认 cpu），任何单一构建只编译一个变体，永不共存于同一链接目标；ARM64 构建实测 `builddir/framework/device/` 仅含 `cpu`。单一定义的 COMDAT（如 `W Topology::~Topology()`）ODR 合法。（检视轮次 1 提出质疑，机械核实为误报，记录于此堵未来审计再问。）
 
 ---
 

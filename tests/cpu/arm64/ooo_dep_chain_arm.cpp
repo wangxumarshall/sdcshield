@@ -79,6 +79,7 @@ static inline uint64_t dep_load64(const void *a) { uint64_t v; std::memcpy(&v,a,
 static inline void dep_store64(void *a, uint64_t v) { std::memcpy(a,&v,8); }
 #endif
 
+namespace { /* ODR: per-TU OooDepData (2-file same-name hazard) */
 struct OooDepData {
     // Permutation chain array (CHAIN_LEN entries). chain[i] holds the index
     // of the next node when visiting node i. The node's *value* is stored in
@@ -88,6 +89,7 @@ struct OooDepData {
     // The RW-hazard store addresses (distinct cache lines).
     std::vector<uint64_t> rw_addrs; // ROB_DEPTH entries
 };
+}
 
 // Build a pseudo-random permutation of 0..N-1 using a high-Hamming LCG so
 // successive visited addresses toggle maximally. Writes the permutation as

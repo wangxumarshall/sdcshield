@@ -119,12 +119,14 @@
 // FMOPA accumulation steps per iteration (SVL-independent).
 static constexpr size_t MOPA_STEPS = 256;
 
+namespace { /* ODR: per-TU SmeFmopaData (2-file same-name hazard) */
 struct SmeFmopaData {
     size_t tile_cols;               // SVL/32 f32 columns per tile row
     std::vector<float> a_stream;    // operand windows, [s*cols + i]
     std::vector<float> b_stream;
     std::vector<float> golden_readout; // expected mova readout after chain
 };
+}
 
 #ifdef __aarch64__
 

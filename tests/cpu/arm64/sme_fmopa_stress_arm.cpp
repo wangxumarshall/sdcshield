@@ -86,6 +86,7 @@ static constexpr long kTileNMax = 32;   /* SVL=1024bit upper bound */
 /* Outer-product rounds per TEST_LOOP iteration (serial chain depth). */
 static constexpr long kFmopaRounds = 64;
 
+namespace { /* ODR: per-TU SmeFmopaData (2-file same-name hazard) */
 struct SmeFmopaData {
     /* f32 lanes per slice at the runtime SVL (4..32). */
     long n;
@@ -94,6 +95,7 @@ struct SmeFmopaData {
     /* Shared byte-exact golden tile, layout [row * n + col]. */
     std::vector<float> golden;
 };
+}
 
 #if defined(__aarch64__) && defined(__clang__)
 struct SmeFmopaParams {

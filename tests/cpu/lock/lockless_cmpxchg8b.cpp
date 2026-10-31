@@ -10,11 +10,13 @@
 
 // 使用 uint64_t 表示 8 字节原子数据
 // 低 32 位：counter，高 32 位：version
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     alignas(8) std::atomic<uint64_t> data;   // 8 字节原子对象
     std::atomic<uint64_t> thread_idx;        // 线程 ID 分配器
     uint64_t local_sums[MAX_THREADS];        // 每个线程的本地增量总和
 };
+}
 
 // 辅助函数：从 64 位中提取 counter 和 version
 static inline void unpack_64(uint64_t val, uint32_t &counter, uint32_t &version) {

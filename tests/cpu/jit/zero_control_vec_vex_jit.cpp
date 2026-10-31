@@ -58,11 +58,13 @@ static void gen_vex_test(uint8_t *code) {
 }
 #endif
 
+namespace { /* ODR: per-TU ZeroControlData (3-file same-name hazard) */
 struct ZeroControlData {
     jit_func_t func;
     void *jit_mem;
     size_t jit_size;
 };
+}
 
 static int zero_control_vec_vex_jit_init(struct test *test) {
 #if !defined(__x86_64__)

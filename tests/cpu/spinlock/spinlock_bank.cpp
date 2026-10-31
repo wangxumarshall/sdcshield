@@ -42,11 +42,13 @@ static inline void spin_unlock(std::atomic<uint64_t> &lock) {
     lock.store(0, std::memory_order_release);
 }
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     Bank banks[NUM_BANKS];
     std::atomic<uint64_t> thread_idx;
     uint64_t local_sums[MAX_THREADS];
 };
+}
 
 static int spinlock_bank_init(struct test *test) {
     auto *sd = new SharedData;

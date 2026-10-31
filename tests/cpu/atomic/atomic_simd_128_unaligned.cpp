@@ -10,6 +10,7 @@
 #include <arm_neon.h>
 
 // 数据块：偏移 1 字节以确保非对齐（可能跨缓存行）
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct alignas(16) SharedData {
     uint8_t padding[1];            // 偏移 1 字节
     uint8x16_t data;               // 非对齐地址
@@ -19,6 +20,7 @@ struct alignas(16) SharedData {
      * of the 128 bits is detectable (was all-0/all-1). */
     uint8x16_t pattern;
 };
+}
 
 static int atomic_simd_128_unaligned_init(struct test *test) {
     auto *sd = new SharedData;

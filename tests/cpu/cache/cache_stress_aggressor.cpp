@@ -16,11 +16,13 @@ static constexpr size_t CACHE_LINE_SIZE = 64;
 // 共享数据：stop/计数/fail 汇总为进程级共享；victim 数据不在此——
 // 每个 per-CPU worker 的 victim 槽是 thread_local 独占缓存行（见 run），
 // 消除多 worker 线程交叉写同一 victim_value 的数据竞争
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct alignas(CACHE_LINE_SIZE) SharedData {
     std::atomic<bool> stop;
     std::atomic<uint64_t> iteration_count;
     std::atomic<bool> victim_failed;   // victim 检出不一致 → run 收尾时 report_fail
 };
+}
 
 // x86 clflush 的 ARM64 等价原语：dc civac（按虚拟地址 clean & invalidate 到
 // 点一致性 PoC）——脏行先写回再失效，下次访问强制从 L2/L3 重取，产生真实

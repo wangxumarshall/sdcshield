@@ -29,6 +29,7 @@
 #define CMAC_96_DIGEST_SIZE   (12)
 #define CMAC_FULL_DIGEST_SIZE (16)
 
+namespace { /* ODR: per-TU aes_cmac_avx_data (2-file same-name hazard) */
 struct aes_cmac_avx_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
@@ -38,6 +39,7 @@ struct aes_cmac_avx_data {
     uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_mac[CMAC_96_DIGEST_SIZE];
 };
+}
 
 static void aes_cmac_96(const uint8_t *key, const uint8_t *msg, size_t len, uint8_t *out) {
     CMAC_CTX *ctx = s_CMAC_CTX_new();

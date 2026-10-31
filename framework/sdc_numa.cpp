@@ -117,12 +117,12 @@ static struct sdc_numa_topology probe_uncached(void)
         }
         closedir(d);
     }
-    FILE *onl = fopen("/sys/devices/system/cpu/online", "r");
-    if (onl) {
+    FILE *online = fopen("/sys/devices/system/cpu/online", "r");
+    if (online) {
         char buf[256] = "";
-        if (fgets(buf, sizeof buf, onl))
+        if (fgets(buf, sizeof buf, online))
             topo.total_cpus = count_cpu_list(buf);
-        fclose(onl);
+        fclose(online);
     }
     return topo;
 }

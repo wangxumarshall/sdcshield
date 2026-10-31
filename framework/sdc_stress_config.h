@@ -144,12 +144,12 @@ static inline void sdc_cgroup_self(char *v1base, size_t v1bsz, char *v1rel, size
         const char *c2 = c1 ? strchr(c1 + 1, ':') : nullptr;
         if (!c1 || !c2 || c2 <= c1 + 1)
             continue;
-        size_t clen = (size_t)(c2 - c1 - 1);
+        size_t ctrl_len = (size_t)(c2 - c1 - 1);
         char ctrls[128];
-        if (clen >= sizeof ctrls)
+        if (ctrl_len >= sizeof ctrls)
             continue;
-        memcpy(ctrls, c1 + 1, clen);
-        ctrls[clen] = '\0';
+        memcpy(ctrls, c1 + 1, ctrl_len);
+        ctrls[ctrl_len] = '\0';
         /* 逗号边界的 token 精确匹配 "memory"(非子串; 手写遍历避免
          * strtok 的静态状态)。 */
         const char *p = ctrls;

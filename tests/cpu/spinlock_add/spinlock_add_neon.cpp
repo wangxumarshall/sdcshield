@@ -507,15 +507,23 @@ static int spinlock_add_neon_init(struct test *test)
     if (d->logverif) {
         char path[128];
         snprintf(path, sizeof(path), "/var/tmp/spinlock_add_neon_%d.log", (int)getpid());
-        /* O_NOFOLLOW：/var/tmp 为 1777 粘滞目录，防预植同名符号链接把追加
-         * 写引导到任意文件（命中时 ELOOP 走下方降级路径）。
-         * O_TRUNC：pid 复用时新轮从 0 写起，防跨轮追加混淆（<pid>.log 的
-         * 单轮语义）——同轮内多线程 O_APPEND 原子追加不受影响 */
-        d->log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_TRUNC | O_NOFOLLOW, 0644);
+        /* O_CREAT|O_EXCL：/var/tmp 为 1777 粘滞目录、pid 可预测，O_NOFOLLOW
+         * 只拦预植符号链接（ELOOP）、拦不住预植普通文件（chmod 666 绕过，
+         * 受害进程 O_TRUNC 后 O_APPEND 写入 = 攻击者可实时读/注入伪 PASS
+         * 行稀释真 FAIL）——O_EXCL 存在即拒绝（EEXIST）闭合两者：预植
+         * symlink 同样 EEXIST（open(2)：O_CREAT|O_EXCL 遇 symlink 失败），
+         * O_NOFOLLOW 保留作纵深防御。代价：pid 复用遇上一轮遗留同名日志
+         * 也 EEXIST——诊断附属按下方降级路径禁用日志继续跑（log_warning
+         * 告知操作员可清理），取证文件不被清空、跨轮追加混淆亦不复存在
+         * （原 O_TRUNC 截断方案由此移除：O_EXCL 保证文件必为本轮新建，
+         * 截断无对象）。O_APPEND 保留：同轮多线程共享 fd 的原子追加。 */
+        d->log_fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW, 0644);
         if (d->log_fd < 0) {
             /* logverif 是 opt-in 诊断附属、不是检测契约：环境不可用（只读
-             * /var/tmp、SELinux 拒绝、O_NOFOLLOW 命中预植 symlink 的 ELOOP）
-             * 时降级为禁用日志继续跑——检测通道 A/B/C 不受影响，环境问题
+             * /var/tmp、SELinux 拒绝、O_NOFOLLOW/O_EXCL 命中预植 symlink/
+             * 普通文件的 ELOOP/EEXIST，pid 复用或 -f no 调试模式同进程多
+             * fracture 遇上一轮遗留同名日志的 EEXIST——后者 rm 旧文件即可
+             * 恢复）时降级为禁用日志继续跑——检测通道 A/B/C 不受影响，环境问题
              * 不与 SDC 检出共享退出码、不污染战役自动分诊（cpufreq/thermal
              * 缺失优雅降级同哲学，PR#328 二轮检视 :326）。用 log_warning
              * 而非 log_error：后者会把本用例标 Failed（message_common_check

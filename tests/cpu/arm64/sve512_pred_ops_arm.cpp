@@ -504,14 +504,21 @@ static ffr_hole_state ffr_hole_probe(const ffr_hole &h, int *probe_errno)
  * data half tripped): the image is the FFR predicate datapath
  * (bit-for-bit memcmp on the materialized bitmap, not popcount — a
  * bare count passes any count-conserving corruption), the readback is
- * the load datapath. <false> never returns nonzero (failures are
- * recorded in all_passed); <true> returns EXIT_FAILURE only as the
- * unreachable tail after the noreturn report. */
+ * the load datapath. Returns void (round-6 #16: the old int return
+ * was vestigial — every reachable path returned EXIT_SUCCESS, the
+ * EXIT_FAILURE tails sat unreachable behind the noreturn report, and a
+ * fallback value on a path that cannot return is a lie waiting for
+ * the noreturn contract to break). all_passed is live ONLY in <false>
+ * (the aggregate mode records into it); the <true> instantiation never
+ * reads or writes it — one shared body is the anti-drift design
+ * (round-4 #26/#32), and the parameter stays so the two call shapes
+ * cannot diverge. */
 template <bool Immediate>
-static int ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
-                                 const uint8_t *m_img,
-                                 const double *readback, const double *golden,
-                                 long m_bits, bool &all_passed)
+static void ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
+                                  const uint8_t *m_img,
+                                  const double *readback,
+                                  const double *golden, long m_bits,
+                                  bool &all_passed)
 {
     const char *tag = Immediate ? " (re-loop)" : "";
     if (memcmp(m_img, m_gold, 8 * vl) != 0) {
@@ -520,27 +527,26 @@ static int ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
                             "mapped LDFF1%s (count=%ld, expected %zu, first "
                             "wrong bit %ld)", tag, m_bits, 8 * vl,
                             ffr_first_diff(m_img, m_gold, 8 * vl));
-            return EXIT_FAILURE;
+        } else {
+            log_warning("sve512_pred_ops_arm: FFR not all-true after mapped "
+                        "LDFF1%s (count=%ld, expected %zu, first wrong bit "
+                        "%ld)", tag, m_bits, 8 * vl,
+                        ffr_first_diff(m_img, m_gold, 8 * vl));
+            all_passed = false;
         }
-        log_warning("sve512_pred_ops_arm: FFR not all-true after mapped "
-                    "LDFF1%s (count=%ld, expected %zu, first wrong bit %ld)",
-                    tag, m_bits, 8 * vl,
-                    ffr_first_diff(m_img, m_gold, 8 * vl));
-        all_passed = false;
     }
     if (memcmp(readback, golden, vl * 8) != 0) {
         if constexpr (Immediate) {
             report_fail_msg("sve512_pred_ops_arm: mapped LDFF1 readback "
                             "mismatch%s (load datapath — distinct from the "
                             "FFR image face)", tag);
-            return EXIT_FAILURE;
+        } else {
+            log_warning("sve512_pred_ops_arm: mapped LDFF1 readback "
+                        "mismatch%s (load datapath — distinct from the FFR "
+                        "image face)", tag);
+            all_passed = false;
         }
-        log_warning("sve512_pred_ops_arm: mapped LDFF1 readback mismatch%s "
-                    "(load datapath — distinct from the FFR image face)",
-                    tag);
-        all_passed = false;
     }
-    return EXIT_SUCCESS;
 }
 
 /* Faulting + accumulation face verification + the environment-
@@ -600,18 +606,23 @@ static int ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
  * implies every earlier face of the iteration already passed, so
  * all_passed is true by construction; report_fail_msg kills the worker
  * on the first broken face. Both return ffr_faces_outcome: faces_ok, or
- * env_interference for the caller to re-arm on. */
+ * env_interference for the caller to re-arm on. The Immediate branches
+ * carry NO return of their own (round-6 #16): report_fail_msg is
+ * noreturn (sandstone.h), so an if/else with no Immediate-side return
+ * states that structurally — no unreachable fallback value exists that
+ * could lie about the outcome if the noreturn contract ever broke. */
 template <bool Immediate>
 static ffr_faces_outcome ffr_check_fault_acc_faces(const ffr_hole &hole,
                                                    size_t vl,
-                                     bool &all_passed,
-                                     const uint8_t *m_gold,
-                                     const uint8_t *f_gold,
-                                     const uint8_t *f_img,
-                                     const double *f_back,
-                                     const double *f_exp,
-                                     const uint8_t *a_img, long fault_bits,
-                                     long acc_bits)
+                                                   bool &all_passed,
+                                                   const uint8_t *m_gold,
+                                                   const uint8_t *f_gold,
+                                                   const uint8_t *f_img,
+                                                   const double *f_back,
+                                                   const double *f_exp,
+                                                   const uint8_t *a_img,
+                                                   long fault_bits,
+                                                   long acc_bits)
 {
     const bool ffr_bad = memcmp(f_img, f_gold, 8 * vl) != 0;
     const bool data_bad = memcmp(f_back, f_exp, vl * 8) != 0;
@@ -659,14 +670,14 @@ static ffr_faces_outcome ffr_check_fault_acc_faces(const ffr_hole &hole,
                             "first wrong bit %ld — clear must start at the "
                             "first faulting lane)", tag, fault_bits,
                             ffr_first_diff(f_img, f_gold, 8 * vl));
-            return ffr_faces_outcome::faces_ok;   /* unreachable */
+        } else {
+            log_warning("sve512_pred_ops_arm: FFR partial-clear wrong after "
+                        "faulting LDFF1%s (count=%ld, expected 8, first "
+                        "wrong bit %ld — clear must start at the first "
+                        "faulting lane)", tag, fault_bits,
+                        ffr_first_diff(f_img, f_gold, 8 * vl));
+            all_passed = false;
         }
-        log_warning("sve512_pred_ops_arm: FFR partial-clear wrong after "
-                    "faulting LDFF1%s (count=%ld, expected 8, first wrong "
-                    "bit %ld — clear must start at the first faulting "
-                    "lane)", tag, fault_bits,
-                    ffr_first_diff(f_img, f_gold, 8 * vl));
-        all_passed = false;
     }
     if (data_bad) {
         if constexpr (Immediate) {
@@ -674,12 +685,12 @@ static ffr_faces_outcome ffr_check_fault_acc_faces(const ffr_hole &hole,
                             "wrong%s (count=%ld — prefix must load, tail "
                             "must zero from the first fault)", tag,
                             fault_bits);
-            return ffr_faces_outcome::faces_ok;   /* unreachable */
+        } else {
+            log_warning("sve512_pred_ops_arm: faulting LDFF1 data wrong%s "
+                        "(count=%ld — prefix must load, tail must zero "
+                        "from the first fault)", tag, fault_bits);
+            all_passed = false;
         }
-        log_warning("sve512_pred_ops_arm: faulting LDFF1 data wrong%s "
-                    "(count=%ld — prefix must load, tail must zero from "
-                    "the first fault)", tag, fault_bits);
-        all_passed = false;
     }
     if (acc_bad) {
         if constexpr (Immediate) {
@@ -688,13 +699,14 @@ static ffr_faces_outcome ffr_check_fault_acc_faces(const ffr_hole &hole,
                             "first wrong bit %ld — accumulation broken)",
                             tag, acc_bits,
                             ffr_first_diff(a_img, f_gold, 8 * vl));
-            return ffr_faces_outcome::faces_ok;   /* unreachable */
+        } else {
+            log_warning("sve512_pred_ops_arm: mapped LDFF1 touched the FFR "
+                        "outside a fault%s (count=%ld, expected 8, first "
+                        "wrong bit %ld — accumulation broken)", tag,
+                        acc_bits,
+                        ffr_first_diff(a_img, f_gold, 8 * vl));
+            all_passed = false;
         }
-        log_warning("sve512_pred_ops_arm: mapped LDFF1 touched the FFR "
-                    "outside a fault%s (count=%ld, expected 8, first wrong "
-                    "bit %ld — accumulation broken)", tag, acc_bits,
-                    ffr_first_diff(a_img, f_gold, 8 * vl));
-        all_passed = false;
     }
     return ffr_faces_outcome::faces_ok;
 }
@@ -945,9 +957,9 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         /* mapped face through the single parameterized checker shared
            with the re-loop (round-4 #26/#32 — aggregate semantics here:
            failures are recorded in all_passed, execution continues) */
-        (void)ffr_check_mapped_face<false>(vl, m_gold, m_img,
-                                           ffr_back.data(), ffr_mem.data(),
-                                           ffr_bits, all_passed);
+        ffr_check_mapped_face<false>(vl, m_gold, m_img,
+                                     ffr_back.data(), ffr_mem.data(),
+                                     ffr_bits, all_passed);
         /* Faulting face: element 0 mapped, element 1 on the unmapped
            hole. The fault must be SUPPRESSED and converted into an FFR
            clear from lane 1 onward: expected count is exactly element
@@ -1061,14 +1073,11 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                                                       ffr_back.data(), m_img);
         /* mapped face through the same single parameterized checker as
            Section 4 (immediate semantics: the first broken face kills
-           the worker; the two DISTINCT failure faces and their
-           non-self-contradicting messages live in that one body) */
-        const int mr = ffr_check_mapped_face<true>(vl, m_gold, m_img,
-                                                   ffr_back.data(),
-                                                   ffr_mem.data(), ffr_bits,
-                                                   all_passed);
-        if (mr != EXIT_SUCCESS)
-            return mr;
+           the worker inside the checker via the noreturn report —
+           control never returns from a broken face, so no early-out
+           is needed here) */
+        ffr_check_mapped_face<true>(vl, m_gold, m_img, ffr_back.data(),
+                                    ffr_mem.data(), ffr_bits, all_passed);
         /* faulting + accumulation captures as the combined wrapper —
            two adjacent noinline capture calls and nothing else in
            between (the cross-capture discipline is mechanical; the

@@ -30,6 +30,14 @@ struct TestData {
 
 // 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
 // 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(FP 用例是唯一大内存消费者)。
+// 边界声明(R4,#308 意见16,根治跟踪 issue #357):本目标默认取物理内存
+// 45%(或 env 显式指定),但整轮时长预算由 auto-fracture 迭代预算承担
+// (test_time_condition 每次调用消耗 1 次,fracture_loop_count==0 时默认
+// 40;逐块检查约 40 块即截断填充并触发 fracture 重启重新 init 重填,故
+// 只能按轮次/自旋节流配给),等待方耐心因此远紧于 -t 墙钟。填充时长一旦
+// 超过等待耐心(本机实测缓冲 ≳1 MiB 即命中),该轮退化为只剩写侧激励、
+// 无读侧检出的空转 pass——mesh 家族既有退化路径(merge-base 同结构,旧
+// 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR 引入。
 static size_t mesh_target_bytes() {
     const char *e = getenv("SDC_MESH_BUFFER_BYTES");
     if (e) {

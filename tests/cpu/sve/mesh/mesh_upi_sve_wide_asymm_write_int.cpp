@@ -75,7 +75,13 @@ static int mesh_upi_sve_wide_asymm_write_int_init(struct test *test) {
      * 去封顶必须配套 64 位块索引:next_block 若仍是 uint32,块数 ≥ 2^32 时
      * fetch_add 越过 0xFFFFFFFF 回绕到 0,低块被重复认领重写——求和族
      * global_sum 重复累计→假 FAIL,break 式认领循环每 2^32 次认领仅一张
-     * 退出票。该回绕在旧封顶下不可触发(拿到 0xFFFFFFFF 的线程必 break);
+     * 退出票。该回绕在旧封顶下仅剩一个角落可触发:计算块数 ≥ 2^32 时
+     * 封顶恰把 num_blocks 钉在 0xFFFFFFFF(本用例 2^32 块 = 256 GiB 缓冲可
+     * 分配即命中:默认 45% 物存路径需 ≥569 GiB 主机,env 显式指定亦可;
+     * 计算块数贴边 2^32 − 线程数以上的窄带同理),拿到 0xFFFFFFFF 的
+     * 线程 break 后计数器回绕到 0,其余写者重新认领低块重写,退出票每
+     * 2^32 次认领仅一张、N 线程需 N 张,写阶段无法在测试时限内自然终
+     * 止;计算块数 ≤ 2^32 − 线程数的常态下认领总数 < 2^32+1,不可达;
      * 历史假 FAIL 的真因是首轮已修的偏移乘法回绕:旧 size_t offset =
      * block * BLOCK_ELEMENTS 是 32 位乘法,元素偏移 ≥ 2^32(缓冲 ≥ 16 GiB)时
      * 低偏移被回绕索引重复写入,缓冲上半段地址从未被写。 */

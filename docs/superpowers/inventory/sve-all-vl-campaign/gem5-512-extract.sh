@@ -82,6 +82,20 @@ else
 fi
 : "${md5:=unavailable}" "${ver:=unknown}"
 
+# Tick-floor identity binding (PR #307 #34): tick_floor below was measured
+# against THIS gem5 binary (the campaign's Task 5 final 9-stub build) — a
+# different binary shifts both the honest-skip floor and the lightest-real
+# reference (different startup/round costs), so an unanchored floor must not
+# classify rc=0 rows. Fail loudly (fail-closed, consistent with the
+# missing-tick rule); 'unavailable' (binary missing off-host) fails the
+# binding too — judging with an unverifiable identity is exactly the
+# laundering these guards exist to prevent.
+floor_anchor_md5="3f9011f40dbe80ec1df478c62ddb0b06"
+if [ "$md5" != "$floor_anchor_md5" ]; then
+    echo "ERROR: tick_floor 5900000000 is anchored to gem5 md5 $floor_anchor_md5, but this extraction's identity resolved to '$md5' — re-measure the honest-skip vs lightest-real ticks with the current binary (see the tick_floor comment in the awk below) and re-anchor both the constant and this binding before classifying; refusing to judge rc=0 rows with an unanchored floor" >&2
+    exit 2
+fi
+
 {
     echo "# gem5 SE 512-bit leg — per-test verdict summary (mechanical extraction)"
     echo "# gem5 binary: $G5  md5=$md5"

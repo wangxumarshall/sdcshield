@@ -127,6 +127,10 @@ bytes = 物理内存 × mem_fraction / consumers
 ```
 
 `consumers` 是同时运行的大内存用例数（如 2 路 mesh 战役），用于均摊。
+须按 per-slice 真实驻留份数如实上报（函数内部再自动乘并发 slice 数补全
+全机口径）："init 共享 1 份 + run 每线程 1 份副本"结构（如 arm64_sdc_sve）
+应报 `1 + thread_count()`——报常数 2 会使 n 线程实际提交需求放大 n 倍
+（issue #365：`-n 8` 即 146 GiB 进 swap 抖动）。
 
 ### 5.3 arena 类（openssl sha/sha3）：`arena_bytes`
 
@@ -198,7 +202,7 @@ arena 越大，golden/被测元素的随机落点跨度越大（覆盖更多 cac
 | knob | 含义 | 范围 | 缺省 |
 |---|---|---|---|
 | `agu_stress_2src_sve.count` / `agu_stress_store_only_sve.count` | 每缓冲 u64 元素数 | 1024~32M | 自适应 60% |
-| `arm64_sdc_sve.buffer_bytes` | 扫描缓冲字节 | 64KiB~1TiB | 物理内存 60%÷2 |
+| `arm64_sdc_sve.buffer_bytes` | 扫描缓冲字节 | 64KiB~1TiB | 自适应 60%÷(1+线程数) |
 | `mem_disambig_alu_sve.buffer_bytes` | 消歧地址跨度字节 | 4096~1TiB | 物理内存 60%÷2 |
 | `mmu_split_tlb_sve.pressure_pages` | 每线程 mmap 压力页数 | 8192~1M | 自适应按页折算 |
 | `ooo_dep_chain_sve.chain_len` / `.rob_depth` | 依赖链节点数 / ROB 槽数 | 4096~16M / 2048~4M | 自适应 60% |

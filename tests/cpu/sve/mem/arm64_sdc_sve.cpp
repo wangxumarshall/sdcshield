@@ -153,7 +153,29 @@ static int arm64_sdc_sve_run(struct test *test, int cpu)
     uint8_t *test_buffer = static_cast<uint8_t *>(aligned_alloc_safe(64, buffer_bytes));
     uint32_t crc32_result; uint64_t crc64_result; uint32_t checksum_result;
 
-    TEST_LOOP(test, 128) {
+    /* Loop granularity: the body is one full buffer refresh + a
+     * byte-at-a-time software CRC pass — memcpy(test_buffer, ...) +
+     * sdc_sve_detect's svld1 batches feeding the scalar CRC32/CRC64
+     * table lookups (~hundreds of MB/s, the body's critical path) +
+     * the 3-signature compare — so one body is bound by the table
+     * CRC scan of the whole buffer, not by bandwidth. buffer_bytes
+     * is memory-adaptive (sdc_target_workset_bytes: 600 permille of
+     * RAM across 2 consumers), which makes one body ~1 s at a
+     * 128 MiB buffer and far more at the multi-GiB default. TEST_LOOP
+     * only checks the -t deadline every N bodies
+     * (framework/sandstone.h): the N = 128 was sized for the
+     * original fixed 64 KiB buffer (tens-of-milliseconds checkpoints) —
+     * with adaptive sizing the first deadline check slid past
+     * 90 s even at a knob-limited 128 MiB buffer (measured at -n 8
+     * on a 128-core/SVE-256 host; at the default sizing it
+     * extrapolates to hours), so any realistic -t reads as
+     * "Timed Out" (issue #360, same failure class as #326 / #349).
+     * N = 4 bounds the exit latency to 4 bodies while keeping the
+     * auto-fracture segment (default 40 checks = 160 bodies) long
+     * enough that per-segment re-entry (test_buffer re-alloc)
+     * stays negligible. (The per-thread full-size buffer copy is a
+     * separate sizing concern, tracked in its own issue.) */
+    TEST_LOOP(test, 4) {
         memcpy(test_buffer, data->test_buffer, buffer_bytes);
         if (sdc_sve_detect(test_buffer, buffer_bytes,
                            &crc32_result, &crc64_result, &checksum_result) == 0) {

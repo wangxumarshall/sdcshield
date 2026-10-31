@@ -189,7 +189,27 @@ static int arm0102_fma_f32_sve_run(struct test *test, int cpu) {
     float *temp = static_cast<float *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(float)));
     float *dst  = static_cast<float *>(aligned_alloc_safe(64, (size_t)(count + svcntw()) * sizeof(float)));
 
-    TEST_LOOP(test, 1 << 13) {
+    /* Loop granularity: the body is a full sweep of all count
+     * elements — 3 source loads (srcA, srcB, srcC) + the str z/ldr
+     * z/str z amplifier (temp write, temp reload, dst write) + the
+     * golden memcmp (dst + expected reads) — so one body moves
+     * ~8 x count x 4 B of memory per thread. count is
+     * memory-adaptive (sdc_auto_linear_count: 600 permille of RAM
+     * across 6 arrays, clamped to 64M elements = 256 MiB), which
+     * makes one body hundreds of milliseconds and more under
+     * bandwidth contention. TEST_LOOP only checks the -t deadline
+     * every N bodies (framework/sandstone.h): the N = 1<<13 was
+     * sized for the original fixed 1024-element buffer
+     * (ARM0102_FMA_F32_SVE_COUNT, millisecond-scale checkpoints) —
+     * with adaptive sizing the first deadline check slid past the
+     * minute scale (measured on the kreg_logic sibling: no
+     * checkpoint within 60 s at -n 8 on a 128-core/SVE-256 host), so
+     * any realistic -t reads as "Timed Out" (issue #360, same
+     * failure class as #326 / #349). N = 4 bounds the exit latency
+     * to 4 bodies (~seconds) while keeping the auto-fracture
+     * segment (default 40 checks = 160 bodies) long enough that
+     * per-segment re-entry (temp/dst re-alloc) stays negligible. */
+    TEST_LOOP(test, 4) {
         for (int base = 0; base < count; base += svcntw()) {
             const int n = (count - base < svcntw())
                               ? count - base : svcntw();

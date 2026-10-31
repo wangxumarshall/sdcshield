@@ -160,7 +160,25 @@ static int sve_rot_ldr_at_top_run(struct test *test, int cpu) {
     uint8_t *temp = static_cast<uint8_t *>(aligned_alloc_safe(64, buf));
     uint8_t *dst  = static_cast<uint8_t *>(aligned_alloc_safe(64, buf));
 
-    TEST_LOOP(test, 1 << 13) {
+    /* Loop granularity: the body is a full sweep of all vl_slots —
+     * 3 vector loads (scratch + srcA + srcB) + 2 stores (temp, dst) +
+     * the golden memcmp (dst + expected reads) — so one body moves
+     * ~7 x vl_slots x vl_bytes of memory per thread. vl_slots is
+     * memory-adaptive (sdc_auto_linear_count: 600 permille of RAM
+     * across 6 VL-wide buffers, clamped to 1M slots), which makes one
+     * body tens of milliseconds and more under bandwidth contention.
+     * TEST_LOOP only checks the -t deadline every N bodies
+     * (framework/sandstone.h): the N = 1<<13 was inherited from the
+     * fixed-geometry NEON ancestor (1024 x 16 B buffers kept one
+     * checkpoint under ~0.9 GiB of traffic) — with adaptive sizing
+     * the first deadline check slid past the minute scale (measured:
+     * no checkpoint within 60 s at -n 8 on a 128-core/SVE-256 host),
+     * so any realistic -t reads as "Timed Out" (issue #360, same
+     * failure class as #326 / #349). N = 4 bounds the exit latency to
+     * 4 bodies (~sub-second) while keeping the auto-fracture segment
+     * (default 40 checks = 160 bodies) long enough that per-segment
+     * re-entry (temp/dst re-alloc) stays negligible. */
+    TEST_LOOP(test, 4) {
         for (int i = 0; i < data->vl_slots; i++) {
             const size_t off = (size_t)i * data->vl_bytes;
 

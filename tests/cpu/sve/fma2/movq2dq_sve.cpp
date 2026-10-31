@@ -77,7 +77,26 @@ static int movq2dq_sve_run(struct test *test, int cpu)
     auto *data = static_cast<Movq2dqSveData *>(test->data);
     const size_t count = data->count;
 
-    TEST_LOOP(test, 1 << 13) {
+    /* Loop granularity: the body iterates over all count elements —
+     * one svdup_u64 broadcast + a predicated svst1 to a stack buffer
+     * + a low-lane compare per element — so one body is count
+     * scalar-pace iterations (the 8 B source read is cache-resident
+     * across the loop; the cost is the per-element dup/st/cmp chain,
+     * not bandwidth). count is memory-adaptive
+     * (sdc_auto_linear_count: 600 permille of RAM across one 8 B
+     * element array, clamped to 64M), which makes one body tens of
+     * milliseconds. TEST_LOOP only checks the -t deadline every N
+     * bodies (framework/sandstone.h): the N = 1<<13 was sized for
+     * the original fixed 1024-element buffer (MOVQ2DQ_SVE_COUNT,
+     * millisecond-scale checkpoints) — with adaptive sizing the first
+     * deadline check slid past the minute scale (measured: no
+     * checkpoint within 60 s at -n 8 on a 128-core/SVE-256 host), so
+     * any realistic -t reads as "Timed Out" (issue #360, same
+     * failure class as #326 / #349). N = 4 bounds the exit latency
+     * to 4 bodies while keeping the auto-fracture segment (default
+     * 40 checks = 160 bodies) long enough that per-segment re-entry
+     * stays negligible. */
+    TEST_LOOP(test, 4) {
         for (size_t i = 0; i < count; i++) {
             /* GPR → SVE 向量: svdup 广播 */
             svuint64_t v = svdup_u64(data->values[i]);

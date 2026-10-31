@@ -99,7 +99,30 @@ static int gmp_bigadd_sve_run(struct test *test, int cpu)
     std::vector<uint64_t> result(LIMBS);
     const int lanes = svcntd();
 
-    TEST_LOOP(test, 1 << 13) {
+    /* Loop granularity: the body is one full big-integer add —
+     * the svadd sweep over all LIMBS (2 source loads; the vsum
+     * spill/reload is stack-resident and does not count) + the
+     * serial per-limb carry fold (result write + source re-read for
+     * the carry check) + the golden memcmp (result + golden reads) —
+     * so one body moves ~6 x LIMBS x 8 B of buffer memory per
+     * thread, and the scalar carry fold keeps the sweep off
+     * pure-stream throughput. LIMBS is memory-adaptive
+     * (sdc_auto_linear_count: 600 permille of RAM across 4 limb
+     * arrays, clamped to 1M limbs = 8 MiB per array). TEST_LOOP only
+     * checks the -t deadline every N bodies (framework/sandstone.h):
+     * the N = 1<<13 was sized for the original fixed 256-limb
+     * (2048-bit) operand (GMP_SVE_LIMBS, millisecond-scale checkpoints) —
+     * with adaptive sizing the first deadline check slid to ~45 s
+     * (measured: -t 30ms self-exit took 47 s at -n 8 on a
+     * 128-core/SVE-256 host, the whole first checkpoint; full-core
+     * contention pushes it past the campaign's external kill), so a
+     * realistic -t cannot be honored and reads as "Timed Out"
+     * (issue #360, same failure class as #326 / #349). N = 4 bounds
+     * the exit latency to 4 bodies (~tens of milliseconds) while
+     * keeping the auto-fracture segment (default 40 checks = 160
+     * bodies) long enough that per-segment re-entry (result vector
+     * re-alloc) stays negligible. */
+    TEST_LOOP(test, 4) {
         /* SVE 进位链 (GMP mpz_add 的 SVE 替代): svadd 批 + 串行进位折叠 */
         uint64_t carry = 0;
         for (size_t base = 0; base < LIMBS; base += lanes) {

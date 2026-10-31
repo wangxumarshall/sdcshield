@@ -2,9 +2,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#ifdef __aarch64__
+#include <random>
 #include <arm_neon.h>
-#endif
 
 // 打印向量（最多 8 个元素）
 static void print_vector(const char* label, const float* v, int len) {
@@ -27,20 +26,13 @@ static void print_vector(const char* label, const double* v, int len) {
 }
 
 static int vmovnt1_vex_init(struct test *test) {
-#ifndef __aarch64__
-    (void)test;
-    log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): ARM NEON required for this memory test");
-    return EXIT_SKIP;
-#else
     (void)test;
     return EXIT_SUCCESS;
-#endif
 }
 
 static int vmovnt1_vex_run(struct test *test, int cpu) {
     (void)cpu;
-#ifdef __aarch64__
+
     // ARM64 上 NEON 默认可用，无需检测
 
     // 线程局部数据（对齐至 16 字节，NEON 对齐要求）
@@ -51,16 +43,14 @@ static int vmovnt1_vex_run(struct test *test, int cpu) {
     alignas(16) double store_f64[4];
     alignas(16) double reload_f64[4];
 
-    /* randomization hardening (B3-007): framework RNG (per-thread stream,
-     * -s reproducible) replaces std::mt19937; ranges [-1.0f, 1.0f) and
-     * [-1.0, 1.0) mapped from frandom's [0,1). */
-    auto fdist = []() { return frandomf_scale((float)(1.0f) - (float)(-1.0f)) + (float)(-1.0f); };
-    auto ddist = []() { return frandom_scale((double)(1.0) - (double)(-1.0)) + (double)(-1.0); };
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> fdist(-1.0f, 1.0f);
+    std::uniform_real_distribution<double> ddist(-1.0, 1.0);
 
     do {
         // 生成随机数据
-        for (int i = 0; i < 8; ++i) src_f32[i] = fdist();
-        for (int i = 0; i < 4; ++i) src_f64[i] = ddist();
+        for (int i = 0; i < 8; ++i) src_f32[i] = fdist(rng);
+        for (int i = 0; i < 4; ++i) src_f64[i] = ddist(rng);
 
         // ---- 测试 256-bit 单精度（两个 128 位向量） ----
         float32x4_t vf0 = vld1q_f32(src_f32);
@@ -118,12 +108,6 @@ static int vmovnt1_vex_run(struct test *test, int cpu) {
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
-#else
-    (void)test;
-    log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): ARM NEON required for this memory test");
-    return EXIT_SKIP;
-#endif
 }
 
 static int vmovnt1_vex_finish(struct test *test) {

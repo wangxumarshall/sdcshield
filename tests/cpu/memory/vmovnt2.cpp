@@ -2,9 +2,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#ifdef __aarch64__
+#include <random>
 #include <arm_neon.h>
-#endif
 
 // 打印整数向量（最多 8 个元素）
 static void print_vector(const char* label, const int32_t* v, int len) {
@@ -27,20 +26,13 @@ static void print_vector(const char* label, const int64_t* v, int len) {
 }
 
 static int vmovnt2_init(struct test *test) {
-#ifndef __aarch64__
-    (void)test;
-    log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): ARM NEON required for this memory test");
-    return EXIT_SKIP;
-#else
     (void)test;
     return EXIT_SUCCESS;
-#endif
 }
 
 static int vmovnt2_run(struct test *test, int cpu) {
     (void)cpu;
-#ifdef __aarch64__
+
     // ARM64 上 NEON 默认可用，无需检测
 
     // 线程局部数据（对齐至 16 字节，NEON 对齐要求）
@@ -59,16 +51,14 @@ static int vmovnt2_run(struct test *test, int cpu) {
     alignas(16) int64_t store_i64_512[8];
     alignas(16) int64_t reload_i64_512[8];
 
-    /* randomization hardening (B3-007): framework RNG (per-thread stream,
-     * -s reproducible) replaces std::mt19937; ranges [-10000, 10000] and
-     * [-1000000, 1000000]. */
-    auto i32dist = []() { return (int32_t)((-10000) + (int64_t)(random64() % (uint64_t)((10000) - (-10000) + 1))); };
-    auto i64dist = []() { return (int64_t)((-1000000LL) + (int64_t)(random64() % (uint64_t)((1000000LL) - (-1000000LL) + 1))); };
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<int32_t> i32dist(-10000, 10000);
+    std::uniform_int_distribution<int64_t> i64dist(-1000000LL, 1000000LL);
 
     do {
         // ---- 生成随机数据（256 位） ----
-        for (int i = 0; i < 8; ++i) src_i32[i] = i32dist();
-        for (int i = 0; i < 4; ++i) src_i64[i] = i64dist();
+        for (int i = 0; i < 8; ++i) src_i32[i] = i32dist(rng);
+        for (int i = 0; i < 4; ++i) src_i64[i] = i64dist(rng);
 
         // ---- 测试 256-bit int32 (两个 128 位向量) ----
         int32x4_t v_i32_0 = vld1q_s32(src_i32);
@@ -94,6 +84,7 @@ static int vmovnt2_run(struct test *test, int cpu) {
             report_fail_msg("vmovntdq (256-bit, int32) mismatch");
             return EXIT_FAILURE;
         }
+        fprintf(stderr, "\033[32mvmovntdq (256-bit, int32) PASS\033[0m\n");
 
         // ---- 测试 256-bit int64 (两个 128 位向量) ----
         int64x2_t v_i64_0 = vld1q_s64(src_i64);
@@ -119,10 +110,11 @@ static int vmovnt2_run(struct test *test, int cpu) {
             report_fail_msg("vmovntdq (256-bit, int64) mismatch");
             return EXIT_FAILURE;
         }
+        fprintf(stderr, "\033[32mvmovntdq (256-bit, int64) PASS\033[0m\n");
 
         // ---- 测试 512-bit 版本（4 个 128 位向量） ----
-        for (int i = 0; i < 16; ++i) src_i32_512[i] = i32dist();
-        for (int i = 0; i < 8; ++i) src_i64_512[i] = i64dist();
+        for (int i = 0; i < 16; ++i) src_i32_512[i] = i32dist(rng);
+        for (int i = 0; i < 8; ++i) src_i64_512[i] = i64dist(rng);
 
         // int32 512-bit
         int32x4_t vi32_512[4];
@@ -150,6 +142,7 @@ static int vmovnt2_run(struct test *test, int cpu) {
             report_fail_msg("vmovntdq (512-bit, int32) mismatch");
             return EXIT_FAILURE;
         }
+        fprintf(stderr, "\033[32mvmovntdq (512-bit, int32) PASS\033[0m\n");
 
         // int64 512-bit
         int64x2_t vi64_512[4];
@@ -177,16 +170,11 @@ static int vmovnt2_run(struct test *test, int cpu) {
             report_fail_msg("vmovntdq (512-bit, int64) mismatch");
             return EXIT_FAILURE;
         }
+        fprintf(stderr, "\033[32mvmovntdq (512-bit, int64) PASS\033[0m\n");
 
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
-#else
-    (void)test;
-    log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): ARM NEON required for this memory test");
-    return EXIT_SKIP;
-#endif
 }
 
 static int vmovnt2_finish(struct test *test) {

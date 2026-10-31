@@ -2,39 +2,31 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#ifdef __aarch64__
+#include <random>
 #include <arm_neon.h>      // NEON 指令
-#endif
 
 static constexpr size_t BLOCK_SIZE = 64;
 
 static int memcpy_variations_dyn_init(struct test *test) {
-#ifndef __aarch64__
-    (void)test;
-    log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): ARM NEON required for this memory test");
-    return EXIT_SKIP;
-#else
     (void)test;
     // ARM64 平台上 NEON 默认可用，无需检测
     return EXIT_SUCCESS;
-#endif
 }
 
 static int memcpy_variations_dyn_run(struct test *test, int cpu) {
     (void)cpu;
-#ifdef __aarch64__
 
     alignas(16) uint8_t src[BLOCK_SIZE];   // NEON 要求 16 字节对齐
     alignas(16) uint8_t dst[BLOCK_SIZE];
     alignas(16) uint8_t store_buf[BLOCK_SIZE];
 
-    auto word_dist = []() { return (uint16_t)((0) + (int64_t)(random64() % (uint64_t)((65535) - (0) + 1))); };
-    auto byte_dist = []() { return (uint8_t)((0) + (int64_t)(random64() % (uint64_t)((255) - (0) + 1))); };
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<uint16_t> word_dist(0, 65535);
+    std::uniform_int_distribution<uint8_t> byte_dist(0, 255);
 
     do {
         for (size_t i = 0; i < BLOCK_SIZE; ++i) {
-            src[i] = byte_dist();
+            src[i] = byte_dist(rng);
         }
 
         // ---------- 16 字节复制 (NEON 单向量) ----------
@@ -69,7 +61,7 @@ static int memcpy_variations_dyn_run(struct test *test, int cpu) {
         bool ok_memcpy = (memcmp(dst, src, BLOCK_SIZE) == 0);
 
         // ---------- KMOV 模拟 (16 位掩码读写) ----------
-        uint16_t val = word_dist();
+        uint16_t val = word_dist(rng);
         uint16_t mask = val;          // 模拟写入掩码寄存器
         uint16_t readback = mask;     // 模拟读回
         bool ok_kmov = (readback == val);
@@ -96,12 +88,6 @@ static int memcpy_variations_dyn_run(struct test *test, int cpu) {
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
-#else
-    (void)test;
-    log_skip(CpuNotSupportedSkipCategory,
-             "to be implemented (placeholder): ARM NEON required for this memory test");
-    return EXIT_SKIP;
-#endif
 }
 
 static int memcpy_variations_dyn_finish(struct test *test) {

@@ -160,7 +160,27 @@ static int movmskpspd_sve_run(struct test *test, int cpu)
     auto *data = static_cast<MovmskpspdSveData *>(test->data);
     const size_t count = data->count;
 
-    TEST_LOOP(test, 1 << 13) {
+    /* Loop granularity: the body runs two full passes over all count
+     * rows — the MOVMSKPS pass (predicated 4-lane f32 load + sign
+     * compare + svsel + svst1 + scalar mask pack) and the MOVMSKPD
+     * pass (2-lane f64 form) — so one body is 2 x count scalar-pace
+     * row operations (the row reads are cache-resident across the
+     * loop; the cost is the per-row predicate chain, not bandwidth).
+     * count is memory-adaptive (sdc_auto_linear_count: 600 permille
+     * of RAM across the 32 B per-row sizing model (~40 B actual
+     * footprint), clamped to 64M), which makes one body hundreds of
+     * milliseconds. TEST_LOOP only checks
+     * the -t deadline every N bodies (framework/sandstone.h): the
+     * N = 1<<13 was sized for the original fixed 1024-row buffer
+     * (MOVMSK_COUNT, millisecond-scale checkpoints) — with adaptive
+     * sizing the first deadline check slid past the minute scale
+     * (measured: no checkpoint within 60 s at -n 8 on a 128-core/
+     * SVE-256 host), so any realistic -t reads as "Timed Out"
+     * (issue #360, same failure class as #326 / #349). N = 4 bounds
+     * the exit latency to 4 bodies (~seconds) while keeping the
+     * auto-fracture segment (default 40 checks = 160 bodies) long
+     * enough that per-segment re-entry stays negligible. */
+    TEST_LOOP(test, 4) {
         for (size_t i = 0; i < count; i++) {
             uint32_t fmask = do_movmskps_sve(&data->fvalues[i * FPS_LANES]);
             if (fmask != data->fexpected[i]) {

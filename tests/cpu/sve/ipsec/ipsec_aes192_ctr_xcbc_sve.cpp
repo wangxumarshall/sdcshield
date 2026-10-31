@@ -201,7 +201,29 @@ static int aes_xcbc_avx_run(struct test *test, int cpu) {
         return EXIT_SKIP;
     }
     long iter = 0;
-    TEST_LOOP(test, 256) {
+    /* Loop granularity: the body is two full data_size round trips —
+     * the frozen-replay round (encrypt + ciphertext/tag memcmp +
+     * decrypt + plaintext memcmp) and the re-roll round (fresh
+     * plaintext + same-code golden recompute + the same
+     * encrypt/verify/decrypt chain) — so one body moves ~20 x
+     * data_size of cipher traffic per thread. data_size is
+     * memory-adaptive (sdc_auto_linear_count: 600 permille of RAM
+     * across 4 buffers at 1.5 rss ratio, clamped to 16 MiB), which
+     * makes one body tens of milliseconds on the AES paths and
+     * seconds-scale on the 3DES paths. TEST_LOOP only checks the -t
+     * deadline every N bodies (framework/sandstone.h): the N = 256
+     * was sized for the original hardcoded 1024 B payloads
+     * (millisecond-scale checkpoints) — with adaptive sizing the first
+     * deadline check slid to ~10 s on AES-192-GCM and past 90 s on
+     * 3DES (measured at -n 8 on a 128-core host; full-core cipher
+     * contention pushes both further out), so a realistic -t cannot
+     * be honored and reads as "Timed Out" (issue #360, same failure
+     * class as #326 / #349). N = 4 bounds the exit latency to 4
+     * bodies (sub-second on AES, seconds on 3DES) while keeping the
+     * auto-fracture segment (default 40 checks = 160 bodies) long
+     * enough that per-segment re-entry (per-thread buffer re-alloc)
+     * stays negligible. */
+    TEST_LOOP(test, 4) {
         if (iter & 1) {
             /* frozen replay round (PR #244 review): init's shared
              * cross-core golden — the reroll path recomputes golden

@@ -104,7 +104,26 @@ static int neon_add_sve_run(struct test *test, int cpu)
         const size_t buf_size = count * sizeof(uint32_t);
         uint32_t *res = static_cast<uint32_t *>(aligned_alloc_safe(64, buf_size));
 
-        TEST_LOOP(test, 1 << 13) {
+        /* Loop granularity: the body is one full buffer refresh —
+         * memset(res) + the SVE add sweep (2 source loads + 1 store)
+         * + the golden memcmp (2 reads) — so one body moves ~6 x
+         * count x 4 B of memory per thread. count is memory-adaptive
+         * (sdc_auto_linear_count: 600 permille of RAM across 4
+         * arrays, clamped to 64M elements = 256 MiB), which makes
+         * one body hundreds of milliseconds and more under bandwidth
+         * contention. TEST_LOOP only checks the -t deadline every N
+         * bodies (framework/sandstone.h): the N = 1<<13 was sized
+         * for the original fixed 1024-element buffer
+         * (SVE_ADD_ELEMENTS, millisecond-scale checkpoints) — with
+         * adaptive sizing the first deadline check slid past the
+         * minute scale (measured: no checkpoint within 60 s at -n 8
+         * on a 128-core/SVE-256 host), so any realistic -t reads as
+         * "Timed Out" (issue #360, same failure class as #326 /
+         * #349). N = 4 bounds the exit latency to 4 bodies
+         * (~seconds) while keeping the auto-fracture segment
+         * (default 40 checks = 160 bodies) long enough that
+         * per-segment re-entry (res re-alloc) stays negligible. */
+        TEST_LOOP(test, 4) {
                 memset(res, 0, buf_size);
                 prv_do_add(na->a, na->b, res, count);
                 memcmp_or_fail(res, na->golden, count);

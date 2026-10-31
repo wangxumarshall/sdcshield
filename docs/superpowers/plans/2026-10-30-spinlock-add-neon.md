@@ -34,7 +34,7 @@
 **设计定案（实现者须逐条遵守）：**
 - 锁行结构 `alignas(64)` 恰 64B：`lock_word(0=free/1=held) | epoch | holder | magic | pad[4]`——dump 格式对齐五案"8 字节窗口、同行其余字段完好"指纹
 - 内核：4 组 × 4 向量 × 4 轮 vfma 链（`a=vfmaq(a,b,c)` 轮换），输入 |x|≤1 时输出理论上界 ~3e20（<<FLT_MAX、有限、确定性、无 NaN 路径；探针实测 10^6 slot max|out|≈1.36e20——原稿 ~1806 系错误数学，首轮检视 :304 已修正代码注释，此处同步）
-- 输入映射：`(float)((int32)random32() / 2147483648.0)` ∈ [-1,1)，init 一次性生成 SLOTS(128)×64 float，所有线程只读共享
+- 输入映射：`(float)((int32)random32() / 2147483648.0)` ∈ [-1,+1]（double→float 就近舍入：商 ∈ (1-2^-25, 1) 的 64 个整数产生 +1.0f、概率 2^-26，-1 仅 INT32_MIN 精确取得——PR#328 四轮检视 :329，本机全量探针实证 x ∈ [2147483584, 2147483647]；原稿 [-1,1) 数学不精确，golden 同源预计算与 |x|≤1 输出界分析不受影响），init 一次性生成 SLOTS(128)×64 float，所有线程只读共享
 - 获锁：`__atomic_compare_exchange_n(..., __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)` 自旋 + `yield`；等待 >10.0s（对齐 sbsa-gwdt）后进入 1s 确认窗两段式判定（PR#328 四轮检视 :157）：确认窗内锁行 epoch 停走且 CAS 持续失败 = 确认冻结 → dump 全行 + report_fail；epoch 增长或 CAS 成功 = 锁在正常流转、本线程被调度饥饿 → log 告警 + 重置等待预算继续争用（不 FAIL，防共享机高负载假阳性），跨 3 个窗口仍无获锁以进展异常 FAIL（真冻结时 epoch 必停走——其唯一递增路径在持锁者临界区内，不引入新假阴性）
 - 释放：临界区内 `shared_counter++/local_counts[slot]++/holder/epoch++` 后 `__atomic_store_n(lock_word,0,__ATOMIC_RELEASE)`
 - 多核逻辑安全：slot=cpu%128 输入只读、内核纯函数、out 线程栈私有、计数对（shared/local）同在临界区（窗口 < locks.cpp 先例）、日志 O_APPEND 单 write()

@@ -476,7 +476,13 @@ static int spinlock_add_neon_init(struct test *test)
     for (int s = 0; s < SPINLOCK_ADD_NEON_SLOTS; ++s) {
         float *dst = d->inputs + (size_t)s * SPINLOCK_ADD_NEON_FLOATS;
         for (int i = 0; i < SPINLOCK_ADD_NEON_FLOATS; ++i)
-            dst[i] = (float)((int32_t)random32() / 2147483648.0); /* [-1, 1) */
+            /* 值域实为 [-1, +1]：double→float 就近舍入使商 ∈ (1-2^-25, 1) 的
+             * 64 个整数（x ∈ [2147483584, 2147483647]，含 2^31-64 平局点
+             * ties-to-even）产生 +1.0f，概率 2^-26；-1 仅 x=INT32_MIN 精确
+             * 取得。本机全量探针实证（正 int32 域逐值扫描，2026-10-31）。
+             * golden 同源预计算（同 kernel 同输入）与输出界分析（按 |x|<=1，
+             * :35/:78）均按闭区间陈述、不受影响（PR#328 四轮检视 :329）。 */
+            dst[i] = (float)((int32_t)random32() / 2147483648.0); /* [-1, +1] */
         /* golden：同源内核预计算（同机字节确定） */
         spinlock_add_neon_kernel(dst, d->golden + (size_t)s * SPINLOCK_ADD_NEON_FLOATS);
     }

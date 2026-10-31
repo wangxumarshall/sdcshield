@@ -293,6 +293,9 @@ tests_set_base.add(
 # aarch64 inline asm (ldr %q0) and <arm_neon.h> with no x86 counterpart, so
 # they are built and registered only on aarch64 (x86-64 untouched), like the
 # ist/ block above.
+# neon_rot_ldr_rand_thread: issue #339 fix — the board-local wangxu draft
+# carved ALL buffers from one pool with independent random offsets (false-SDC
+# overlap); this variant partitions the pool into disjoint init/thread zones.
 # The arm-0102/ subdir holds trigger-format variants of existing test files
 # (kreg7/8, etc.) applying the verified core-179 trigger recipe.
 # The 2026-10-31 bulk registration (71 files) imports the remaining
@@ -388,6 +391,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/neon_rot_ldr_at_top_str4.cpp',
             'misc/neon_rot_ldr_at_top_sub.cpp',
             'misc/neon_rot_ldr_at_top_tlbstress.cpp',
+            'misc/neon_rot_ldr_rand_thread.cpp',
             'misc/neon_rot_nop_gap.cpp',
             'misc/neon_rot_stale_reload.cpp',
             'misc/neon_rot_store_only.cpp',

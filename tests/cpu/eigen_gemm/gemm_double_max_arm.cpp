@@ -17,7 +17,9 @@
  * iteration (same-lineage fill + one multiply, probed per tier in the body
  * TU) at a 200 s table-AR budget via the two-point power-law fit — clamped
  * to [1024, 4096]. The preinit no longer sizes the matrix at all: it only
- * writes a desired_duration UPPER bound from the same memory ceiling, and
+ * writes a desired_duration UPPER bound from the same memory ceiling —
+ * or from the explicit knob/env, which the child applies VERBATIM and
+ * therefore must scale the duration too (issue #352) — and
  * sizing in the child also fixes exec_each_test children, whose
  * freshly-exec'd image never ran the preinit and previously sized every
  * run at the un-initialised 1024. The old parent-side formula
@@ -159,7 +161,12 @@ static int solve_once_gemm(int n)
  * FULL-CORE single-iteration time at the memory ceiling: child n <= n_hi
  * keeps dur at or above the child's real iteration, which is what the
  * do-while and the derived timeout test_timeout() = 5×duration + 30 s
- * (300 s floor) expect. (Correction of an earlier comment that claimed
+ * (300 s floor) expect — EXCEPT for an explicit knob/env, which the
+ * child applies VERBATIM (dim = knob, no min against n_hi, issue #352
+ * mirror of the SVD fix): the duration model must follow the knob too,
+ * or any knob above n_hi times out at the 300 s hard grace and the
+ * child is SIGQUIT-killed mid-iteration.
+ * (Correction of an earlier comment that claimed
  * a host with fewer threads "only shrinks n_hi — the safe direction":
  * that was backwards. A hard-coded 127 makes the child's n_mem
  * denominator SMALLER than n_hi's on sub-127-worker hosts, so child n
@@ -200,8 +207,21 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
     int n_hi = (int)std::sqrt(budget_kb / ((double)workers * c_kb));
     if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
     if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;
+
+    /* 显式 knob/env 档(issue #352, 与 SVD 修复同构): child 对显式 mdim
+     * 逐字采用(dim = knob, 不与 n_hi 取 min), duration 模型必须跟着
+     * knob 缩放, 否则 knob > n_hi 的显式档落在 300 s 硬宽限被 SIGQUIT
+     * 误杀。读取通道与 clamp 范围与 child 完全一致, 两处取值恒相同。 */
+    int n_model = n_hi;
+    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
+    if (knob == 0)
+        sdc_env_knob_int_clamped("eigen_gemm_double_max_arm", "mdim", &knob,
+                                 MDIM_MIN, MDIM_MAX);
+    if (knob > 0)
+        n_model = (int)knob;
+
     double ar = sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe());
-    double iter_s = ar * 2.0 * GEMM_T1024_S * std::pow((double)n_hi / 1024.0, 3.0);
+    double iter_s = ar * 2.0 * GEMM_T1024_S * std::pow((double)n_model / 1024.0, 3.0);
     test->desired_duration = (int)(iter_s * 1000.0 * 0.95);   /* ms, -5% margin */
     return EXIT_SUCCESS;
 }
@@ -348,11 +368,12 @@ DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, 
   .test_run = eigen_gemm_double_max_arm_run,
   /* desired_duration is written by test_preinit (parent, before the
    * framework computes test_duration for the first run) as an UPPER-BOUND
-   * estimate from the memory ceiling + measured GEMM iteration model
-   * (T6: the child sizes the dimension itself via the joint solver; this
-   * only keeps the parent's timing expectation at or above the child's
-   * choice, so the derived timeout (5*duration+30s, 300s floor) scales
-   * along). */
+   * estimate from the memory ceiling + measured GEMM iteration model —
+   * or from the explicit knob, which the child applies verbatim
+   * (issue #352) — (T6: the child sizes the dimension itself via the
+   * joint solver; this only keeps the parent's timing expectation at or
+   * above the child's choice, so the derived timeout (5*duration+30s,
+   * 300s floor) scales along). */
   .desired_duration = 0,
   .quality_level = TEST_QUALITY_PROD,
     .arm64_requires = ARM64_REQUIRES_SVE,

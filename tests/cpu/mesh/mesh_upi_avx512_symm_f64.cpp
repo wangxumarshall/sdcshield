@@ -95,14 +95,19 @@ static inline double fma_chain_scalar(double v)
 // 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
 // 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(两者跑同一份 mesh
 // 清单，FP 用例是唯一的大内存消费者)，给 OS 留出余量。返回目标字节数。
-// 边界声明(R4,#308 意见16,根治跟踪 issue #357):本目标默认取物理内存
-// 45%(或 env 显式指定),但整轮时长预算由 auto-fracture 迭代预算承担
-// (test_time_condition 每次调用消耗 1 次,fracture_loop_count==0 时默认
-// 40;逐块检查约 40 块即截断填充并触发 fracture 重启重新 init 重填,故
-// 只能按轮次/自旋节流配给),等待方耐心因此远紧于 -t 墙钟。填充时长一旦
-// 超过等待耐心(本机实测缓冲 ≳1 MiB 即命中),该轮退化为只剩写侧激励、
-// 无读侧检出的空转 pass——mesh 家族既有退化路径(merge-base 同结构,旧
-// 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR 引入。
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例全线程并行认领填充(while(true),循环体无任何
+// test_time_condition)——整轮时长既不受 -t 约束也不受迭代预算约束;
+// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。写阶段「一致性测试」是
+// store_buf 自比较(不回读 td->data,零数据检出),真检出只在读阶段的
+// 期望和逐位比较(read_sum == expected_sum,双侧精确)——而等待每自旋
+// 查预算(耐心 ~40 自旋),预算耗尽即 break 跳过读阶段:大缓冲轮次
+// 零检出。默认 ≈27.7 GB(61 GiB 主机)整轮撞宽限悬崖(同族 sym 实测
+// 324.3 s timed out;小缓冲宽限内填完时零校验空转 pass,同日 asymm_int
+// 实测 245.5 s pass)——两态均零读侧检出。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes() {
     const char *e = getenv("SDC_MESH_BUFFER_BYTES");
     if (e) {

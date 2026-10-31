@@ -35,14 +35,23 @@ struct TestData {
 // SDC_MESH_UPI_SVE_WIDE_SYMM_INT_BUFFER_BYTES 环境变量 /
 // 自适应 = 物理内存 90% 在 2 路 mesh 战役间均摊(与 mesh_upi_avx_sym 的
 // SDC_MESH_BUFFER_BYTES 语义一致, 但走统一配置链)
-// 边界声明(R4,#308 意见16,根治跟踪 issue #357):本目标默认取物理内存
-// 45%(或 env 显式指定),但整轮时长预算由 auto-fracture 迭代预算承担
-// (test_time_condition 每次调用消耗 1 次,fracture_loop_count==0 时默认
-// 40;逐块检查约 40 块即截断填充并触发 fracture 重启重新 init 重填,故
-// 只能按轮次/自旋节流配给),等待方耐心因此远紧于 -t 墙钟。填充时长一旦
-// 超过等待耐心(本机实测缓冲 ≳1 MiB 即命中),该轮退化为只剩写侧激励、
-// 无读侧检出的空转 pass——mesh 家族既有退化路径(merge-base 同结构,旧
-// 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR 引入。
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例全线程并行认领填充(while(true),循环体无任何
+// test_time_condition)——整轮时长既不受 -t 墙钟约束,也不受 auto-fracture
+// 迭代预算约束(每线程 40 次预算只消耗在填充后的等待/屏障自旋,等待
+// 每自旋查预算,末位写者决定能否赶在预算耗尽前进读阶段);唯一硬界是
+// 父进程宽限 max(5×-t+30s, 300s)(SIGQUIT→timed out/exit: invalid)。
+// 本机 61 GiB 实测(2026-10-31,-t 3000 -n 4):默认目标 ≈27.7 GB 时
+// 同构的 mesh_upi_sve_sym 324.3 s timed out/exit: invalid;缓冲小到
+// 填充能在宽限内完成时则是零校验空转 pass(同日 mesh_upi_sve_asymm_int
+// 默认配置 245.5 s pass,零校验行)——结局随机器负载两态,均零读侧
+// 检出。读侧校验(跨线程求和+一致性)在合法 knob 配置下可达但随尺寸
+// 衰减:本用例实测 1 MiB 26 行;默认 27.7 GB 远超等待耐心且整轮撞宽限
+// 悬崖。写侧无 data 回读比较(依赖读阶段兜底)——读阶段被跳过的轮次
+// 即零检出。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes(struct test *test)
 {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,

@@ -33,14 +33,19 @@ struct TestData {
 // SDC_MESH_UPI_SVE_WIDE_ASYMM_WRITE_ONLY_INT_BUFFER_BYTES 环境变量 /
 // 自适应 = 物理内存 90% 在 2 路 mesh 战役间均摊(与 mesh_upi_avx_sym 的
 // SDC_MESH_BUFFER_BYTES 语义一致, 但走统一配置链)
-// 边界声明(R4,#308 意见16,根治跟踪 issue #357):本目标默认取物理内存
-// 45%(或 env 显式指定),但整轮时长预算由 auto-fracture 迭代预算承担
-// (test_time_condition 每次调用消耗 1 次,fracture_loop_count==0 时默认
-// 40;逐块检查约 40 块即截断填充并触发 fracture 重启重新 init 重填,故
-// 只能按轮次/自旋节流配给),等待方耐心因此远紧于 -t 墙钟。填充时长一旦
-// 超过等待耐心(本机实测缓冲 ≳1 MiB 即命中),该轮退化为只剩写侧激励、
-// 无读侧检出的空转 pass——mesh 家族既有退化路径(merge-base 同结构,旧
-// 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR 引入。
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例多写者(除读核心外全部线程)while(true) 无界认领填充
+// (循环体无任何 test_time_condition)——整轮时长既不受 -t 约束也不受
+// 迭代预算约束;唯一硬界是父进程宽限 max(5×-t+30s, 300s)(SIGQUIT→
+// timed out/exit: invalid)。块级 block_ok 立即回读检查存在(同线程
+// Store/Load 窗口的真检出)。读核心等待每自旋查预算(耐心 ~40 自旋)
+// → 读侧校验在全部合法 knob 配置(下限 1 MiB)实测不可达(1 MiB 零
+// 校验行)。默认目标 ≈27.7 GB(61 GiB 主机)整轮撞宽限悬崖(同族
+// mesh_upi_sve_asymm_int 实测 245.5 s 空转 pass/sym 324.3 s timed
+// out 两态)——两态均零读侧检出。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes(struct test *test)
 {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,

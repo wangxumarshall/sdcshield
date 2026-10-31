@@ -35,14 +35,19 @@ struct TestData {
 // SDC_MESH_UPI_SVE_ASYMM_DISTRIB_WRITE_INT_BUFFER_BYTES 环境变量 /
 // 自适应 = 物理内存 90% 在 2 路 mesh 战役间均摊(与 mesh_upi_avx_sym 的
 // SDC_MESH_BUFFER_BYTES 语义一致, 但走统一配置链)
-// 边界声明(R4,#308 意见16,根治跟踪 issue #357):本目标默认取物理内存
-// 45%(或 env 显式指定),但整轮时长预算由 auto-fracture 迭代预算承担
-// (test_time_condition 每次调用消耗 1 次,fracture_loop_count==0 时默认
-// 40;逐块检查约 40 块即截断填充并触发 fracture 重启重新 init 重填,故
-// 只能按轮次/自旋节流配给),等待方耐心因此远紧于 -t 墙钟。填充时长一旦
-// 超过等待耐心(本机实测缓冲 ≳1 MiB 即命中),该轮退化为只剩写侧激励、
-// 无读侧检出的空转 pass——mesh 家族既有退化路径(merge-base 同结构,旧
-// 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR 引入。
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例与 mesh_upi_sve_asymm_write_int 是 mesh 17 文件中唯二
+// 「填充每认领一次即查预算」的:每轮 ~40 认领即耗尽 auto-fracture 迭代
+// 预算,截断填充并触发 fracture 重启重新 init 重填(R4 注释的这句仅对
+// 本唯二文件为真,其余 15 文件填充循环无预算检查、永不截断);整轮
+// 时长因此受预算+fracture 约束,不撞父进程宽限悬崖。读者等待
+// allocated_blocks ≥ num_blocks,而写者每轮仅认领 ~40×(N−1) 块 ≪
+// num_blocks → 该条件结构性永不成立,读侧校验在任何 ≥1 MiB 配置
+// (knob 下限)不可达;且写侧无立即回读检查——除 num_blocks ≲
+// 40×(N−1) 的数 KiB 级 legacy env 缓冲外,全配置零检出。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes(struct test *test)
 {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,

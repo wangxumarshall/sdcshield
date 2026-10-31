@@ -20,9 +20,9 @@ struct TestData {
     alignas(16) int32_t *data;           // 16 字节对齐即可
     size_t num_blocks;                   // 运行时块数(按目标内存计算)
     size_t total_elements;               // 运行时总元素数
-    std::atomic<uint32_t> next_block;
+    std::atomic<uint64_t> next_block;
     std::atomic<uint64_t> global_sum;
-    std::atomic<uint32_t> allocated_blocks;
+    std::atomic<uint64_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
     /* sense-reversal barrier (B1-001 fix, ported from NEON-side 2731971d):
      * the original iter/round_done protocol deadlocked from round 1 (the
@@ -39,6 +39,23 @@ struct TestData {
 // SDC_MESH_UPI_SVE_ASYMM_INT_BUFFER_BYTES 环境变量 /
 // 自适应 = 物理内存 90% 在 2 路 mesh 战役间均摊(与 mesh_upi_avx_sym 的
 // SDC_MESH_BUFFER_BYTES 语义一致, 但走统一配置链)
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例轮转单写者以顺序 for 循环填充全部块——循环体无任何
+// test_time_condition,整轮时长既不受 -t 约束也不受迭代预算约束(每线程
+// 40 次预算只绑读者等待/屏障自旋);唯一硬界是父进程宽限
+// max(5×-t+30s, 300s)(SIGQUIT→timed out/exit: invalid)。本机 61 GiB
+// 实测(2026-10-31,-t 3000 -n 4):默认目标 ≈27.7 GB 串行填充 245.5 s
+// 后空转 pass(超 -t 预算 82 倍,零校验行;检视轮同配置 331 s timed
+// out/exit: invalid)——结局随负载两态,均零读侧检出。读侧校验可达窗口
+// 仅剩 legacy SDC_MESH_BUFFER_BYTES(<1 MiB,不设钳制)小缓冲路径:
+// 实测 16 KiB 1050 行/64 KiB 53 行/256 KiB 25 行/512 KiB 11 行;
+// knob/env-knob 通道钳制区间恰为 [1 MiB, 16 TiB],而 1 MiB 串行填充
+// (~12 ms)已超读者耐心(40×1024 自旋,数 ms)→ 合法 knob 配置全域零
+// 读侧校验;写侧逐 lane 回读比较又被显式丢弃(见 run 内 (void)cmp)
+// ——默认配置写读两侧皆零校验,是 #357 根治的第一优先形态。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes(struct test *test)
 {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,
@@ -76,7 +93,14 @@ static int mesh_upi_sve_asymm_int_init(struct test *test) {
     size_t target = mesh_target_bytes(test);
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
-    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    /* 块索引空间 64 位(R2):num_blocks 不再封顶(target 经 floor 除法而来,
+     * num_blocks × block_bytes ≤ target ≤ SIZE_MAX,乘法无 size_t 溢出)。
+     * 去封顶必须配套 64 位块索引:本用例写者是顺序 for 计数器(不经
+     * next_block.fetch_add 认领),block 若仍是 uint32_t,块数 ≥ 2^32 时
+     * 计数器截断回绕,block < num_blocks 永真,无限重写低块。历史假 FAIL
+     * 的真因是首轮已修的偏移乘法回绕:旧 size_t offset = block *
+     * BLOCK_ELEMENTS 是 32 位乘法,元素偏移 ≥ 2^32(缓冲 ≥ 16 GiB)时低偏移被
+     * 回绕索引重复写入,缓冲上半段地址从未被写。 */
     td->total_elements = td->num_blocks * BLOCK_ELEMENTS;
     size_t total_bytes = td->total_elements * elem_bytes;
 
@@ -145,8 +169,12 @@ static int mesh_upi_sve_asymm_int_run(struct test *test, int cpu) {
             // ---------- 写者：写入所有块 ----------
             // （本轮状态已由上一轮 sense-reversal 屏障的最后到达线程重置；
             //   第一轮的状态由 init 重置）
-            for (uint32_t block = 0; block < td->num_blocks; ++block) {
-                size_t offset = block * BLOCK_ELEMENTS;
+            for (uint64_t block = 0; block < td->num_blocks; ++block) {
+                // 块号 64 位,与偏移乘法同宽:首轮修 32 位乘法偏移回绕(元素偏移
+                // ≥ 2^32 时低偏移被回绕索引重复写入,缓冲上半段从未被写);R2 去封顶后
+                // 顺序计数器也须 64 位,否则块数 ≥ 2^32 时 uint32 计数器截断回绕,
+                // block < num_blocks 永真,无限重写低块。
+                size_t offset = (size_t)block * BLOCK_ELEMENTS;
                 int32_t vals[BLOCK_ELEMENTS];
                 uint64_t local_sum = 0;
                 for (int j = 0; j < BLOCK_ELEMENTS; ++j) {

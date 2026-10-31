@@ -80,11 +80,15 @@ static int mesh_upi_sve_sym_init(struct test *test) {
     size_t target = mesh_target_bytes(test);
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
-    /* 块索引空间 64 位(R2 修复):旧 32 位封顶 × uint32 next_block 的
-     * fetch_add 在块数 ≥ 2^32 时越过 0xFFFFFFFF 回绕到 0,低块被重复
-     * 认领重写——求和族假 FAIL、认领循环每 2^32 次认领才一次可退出。
-     * num_blocks 不再封顶:target 经 floor 除法而来,num_blocks ×
-     * block_bytes ≤ target ≤ SIZE_MAX,后续乘法无 size_t 溢出。 */
+    /* 块索引空间 64 位(R2):num_blocks 不再封顶(target 经 floor 除法而来,
+     * num_blocks × block_bytes ≤ target ≤ SIZE_MAX,乘法无 size_t 溢出)。
+     * 去封顶必须配套 64 位块索引:next_block 若仍是 uint32,块数 ≥ 2^32 时
+     * fetch_add 越过 0xFFFFFFFF 回绕到 0,低块被重复认领重写——求和族
+     * global_sum 重复累计→假 FAIL,break 式认领循环每 2^32 次认领仅一张
+     * 退出票。该回绕在旧封顶下不可触发(拿到 0xFFFFFFFF 的线程必 break);
+     * 历史假 FAIL 的真因是首轮已修的偏移乘法回绕:旧 size_t offset =
+     * block * BLOCK_ELEMENTS 是 32 位乘法,元素偏移 ≥ 2^32(缓冲 ≥ 16 GiB)时
+     * 低偏移被回绕索引重复写入,缓冲上半段地址从未被写。 */
     td->total_elements = td->num_blocks * BLOCK_ELEMENTS;
     size_t total_bytes = td->total_elements * elem_bytes;
 
@@ -147,8 +151,10 @@ static int mesh_upi_sve_sym_run(struct test *test, int cpu) {
         while (true) {
             uint64_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block >= td->num_blocks) break;
-            // block 已 64 位(R2 修复):块索引空间与偏移乘法同宽——旧 uint32 索引
-            // 在块数 ≥ 2^32 时 fetch_add 回绕,低块被重复认领重写(见 init 封顶注释)。
+            // 块号 64 位,与偏移乘法同宽:首轮修 32 位乘法偏移回绕(元素偏移
+            // ≥ 2^32 时低偏移被回绕索引重复写入,缓冲上半段从未被写);R2 去封顶后
+            // 块号本身也须 64 位,否则 fetch_add 在块数 ≥ 2^32 时回绕到 0,
+            // 低块被重复认领重写。
             size_t offset = (size_t)block * BLOCK_ELEMENTS;
             float vals[VECTOR_SIZE];
             double local_sum = 0.0;

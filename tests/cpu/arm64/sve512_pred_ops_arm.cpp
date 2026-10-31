@@ -166,7 +166,13 @@ struct ffr_hole {
    anonymous mmap failing means the address space is exhausted, and a
    loud failure beats a per-worker nondeterministic SKIP (the framework
    aggregates a mixed skip+pass run as test-level PASS — see
-   ffr_check_fault_acc_faces). */
+   ffr_check_fault_acc_faces). Ordering contract (round-6 #15): the
+   first arm in test_run happens BEFORE any face check runs, and
+   ffr_hole_rearm calls it only on a proven clean record (the Section-4
+   interference gate requires all_passed; the re-loop reports a broken
+   face immediately) — so a resource failure here can never arrive while
+   detected-but-unjudged SDC evidence is pending, and the resource
+   attribution is the complete story of the failure. */
 static void ffr_hole_arm(struct ffr_hole *h, const struct PredOpsData *d)
 {
     const size_t ps = d->page_bytes;
@@ -773,6 +779,25 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
     const svbool_t all = svptrue_b64();
     bool all_passed = true;
 
+    /* This worker's own fault source (see ffr_hole), armed BEFORE any
+       face check runs (round-6 #15: it used to be armed after Sections
+       1-3, and a 2-page mmap failure there killed the thread with the
+       resource message while Sections 1-3 evidence sat detected but
+       unjudged in all_passed — the final attribution read "resource
+       exhausted", masking an SDC the sections had already seen. Armed
+       first, an mmap failure is the earliest and only verdict-relevant
+       event: nothing has been checked yet, so the resource attribution
+       is the complete honest story, and a real SDC is sampled on the
+       re-run. The earlier arm also widens the hole's external-mapper
+       exposure window by the duration of Sections 1-3 — a landed mapper
+       produces exactly the no-fault signature the interference gate
+       recognizes, and the budgeted re-arm recovery handles it). Used by
+       Section 4 and the sustained re-loop below, disarmed at the end of
+       the run. */
+    ffr_hole hole;
+    ffr_hole_arm(&hole, d);
+    int hole_rearms = 0;   /* ffr_hole_rearm budget (HOLE_REARM_CAP) */
+
     // Finite FMA addend for the active lanes: a distinctive, exactly
     // representable value so the computed lanes have a deterministic
     // golden. The masked-out lanes keep the NaN SENTINEL, which the
@@ -899,13 +924,6 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
     f_exp[0] = d->src[vl - 1];
     for (size_t i = 1; i < vl; ++i)
         f_exp[i] = 0.0;
-
-    /* This worker's own fault source (see ffr_hole): armed once here,
-       used by Section 4 and the sustained re-loop below, disarmed at the
-       end of the run. */
-    ffr_hole hole;
-    ffr_hole_arm(&hole, d);
-    int hole_rearms = 0;   /* ffr_hole_rearm budget (HOLE_REARM_CAP) */
 
     // ---------------- Section 4: LDFF1 + FFR + FMAXV ----------------
     {

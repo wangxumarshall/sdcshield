@@ -1,6 +1,6 @@
 # Plan: issue #369 — quick 跑 SIGXCPU 零余量（movbe_l2 / cache_stress_civac）
 
-日期：2026-10-31 · 分支：fix/issue369-quick-sigxcpu · 状态：执行中
+日期：2026-10-31 · 分支：fix/issue369-quick-sigxcpu · 状态：已完成（本地 A/B/C 验证 + 回归全绿，见「验证」节与两 commit message）
 
 ## 现象（issue #369）
 
@@ -61,10 +61,17 @@ Neoverse-N2 云 runner）偶发 SIGXCPU：run 41199739020 上 movbe_l2
    热内环不动论证）+ 本 plan 文档。
 2. `ci(pr)`: run tests quickly 的 `ulimit -St` 120 → 600 + 定值注释。
 
-## 验证
+## 验证（已完成，128 核 Kunpeng 920 / SVE-256）
 
-- 干净构建零新警告；回归 `-e zstd19 -t 2000 -n 1` → exit: pass。
-- 基线（改前）二进制实测两测试 quick -n4 的 test-runtime 与 CPU 时间，
-  修复后复测（30s → 毫秒级）。
+- 干净构建 532/532 零警告；回归 `-e zstd19 -t 2000 -n 1` → `exit: pass`。
+- **A**（改前二进制，`ulimit -St 120`，quick -n4 两测试）：双双 crash
+  code 24 'CPU time limit exceeded'——CI flake 本地复现（user 4m0.0s）。
+- **B**（改前二进制，`ulimit -St 600`）：`exit: pass`，movbe_l2 28896ms /
+  cache_stress_civac 30154ms——即每 child ~116/121s CPU，零余量算术坐实，
+  方向 3 单独有效。
+- **C**（改后二进制，`ulimit -St 120`）：`exit: pass`，总墙钟 0.096s
+  （51.7ms / 21.6ms）——方向 1 单独有效，CPU 需求缩 ~2400 倍。
+- 常规 `-t 2000 -n4`：每测试各片合计 2009/2007ms——-t 契约恢复
+  （修复前单检查点即 ~29s）；`exit: pass`。
 - 熔丝算术：修复后单测试 CPU 需求 ≪ 120（旧值亦过），600 = 结构性余量；
   PR CI quick workflow 真实跑绿（单次绿不证根治 flake，如实记录）。

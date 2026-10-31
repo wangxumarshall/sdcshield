@@ -115,7 +115,18 @@ jobs:
       - name: run tests quickly
         shell: bash
         run: |
-          ulimit -St 120
+          # CPU 熔丝:每测试在 fork 子进程里跑 ≤4 worker 线程,RLIMIT_CPU 按
+          # 线程总和计。120 是 quick 测试普遍 <1s CPU 时代的定值;PR #356 的
+          # civac 探针单测试合法需求已达 4×30s≈122s,零余量→runner 争抢即
+          # SIGXCPU(issue #369,本地已复现 crash code 24;测试侧粒度修复见
+          # 上一 commit)。600 对齐 sanitizer.yaml 同形态步骤(4 vCPU 云
+          # runner --quick -n4,eigen utime 599s 实测定值先例)。CPU 时间是
+          # 工作量函数:steal 只膨胀墙钟不膨胀 CPU,争抢的 4× 墙钟案例不
+          # 需要 4× CPU 余量,600 = 当今最大合法需求(~122s)的 ~5 倍。挂死
+          # 检测另有双兜:框架每测试墙钟看门狗 max(5×-t+30s, 300s)
+          # (sandstone.cpp test_timeout + wait_for_children)与本 job 45min
+          # 超时(实测 ~4min);4 线程满转挂死最坏 150s 墙钟触发本熔丝。
+          ulimit -St 600
           nproc=`nproc`
           nproc=$((nproc > 4 ? 4 : nproc))
           # 落盘 allquality 型日志(-o 指定的文件全过也保留);

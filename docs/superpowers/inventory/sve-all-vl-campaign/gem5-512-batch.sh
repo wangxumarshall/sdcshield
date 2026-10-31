@@ -123,9 +123,14 @@ if [ "${1:-}" = "--one" ]; then
     read -r -a extra_args <<< "${extra:-}"
     mkdir -p "$OUT/$t.d"
     start=$(date +%s)
+    # ${arr[@]+...} idiom (PR #307 #37): a bare "${extra_args[@]}" on an
+    # EMPTY array is an "unbound variable" under bash < 4.4 + set -u (4.4
+    # relaxed it; this host runs 5.2 so it never fired here). The idiom
+    # expands to nothing for unset/empty arrays on ALL bash versions — the
+    # off-host/hermetic reuse claim holds on 4.2/4.3 too.
     ( cd "$OUT/$t.d" && timeout 3600 env G5="$G5" "$RUN" "$BIN" \
         -e "$t" -t 500 -n 1 -f no --ignore-timeout \
-        "${BAKED[@]}" "${extra_args[@]}" --vl 4 ) > "$OUT/$t.log" 2>&1
+        "${BAKED[@]}" ${extra_args[@]+"${extra_args[@]}"} --vl 4 ) > "$OUT/$t.log" 2>&1
     rc=$?
     end=$(date +%s)
     exitline=$(grep -a -m1 "^exit: " "$OUT/$t.log" || true)

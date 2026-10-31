@@ -240,7 +240,10 @@ static ptrdiff_t memcmp_offset(const uint8_t *d1, const uint8_t *d2, size_t size
 bool _memcmp_or_fail_check_fmt(const char *fmt, ...)
 {
     std::string msg = va_start_and_stdprintf(fmt);
-    if (msg.contains('\n'))
+    /* C++20 only: std::string::contains is C++23 (P1679R3, libstdc++ GCC 12+)
+     * and cannot be polyfilled (member function). Debug builds on gnu++20
+     * configs (22.03/20.03 matrix) and pre-GCC12 libstdc++ fail here. */
+    if (msg.find('\n') != std::string::npos)
         log_yaml(SANDSTONE_LOG_DEBUG, ("memcmp_or_fail: " + msg).c_str());
     return true;
 }

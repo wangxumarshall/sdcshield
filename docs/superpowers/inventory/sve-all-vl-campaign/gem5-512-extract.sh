@@ -178,11 +178,16 @@ fi
     echo "# lightest clean-batch real run fma_sve = 5.942e9; floor = 5.9e9."
     echo "# LIMIT: a skip with heavy test_init can tick ABOVE the floor — audit"
     echo "# the lowest rc=0 ticks below by hand when reusing this extractor:"
+    # NOTE: do NOT use `head -10` here — head exits after 10 lines and sort
+    # then intermittently takes SIGPIPE; with pipefail + set -e that kills
+    # the script mid-block and leaves a TRUNCATED verdicts file (measured
+    # 130/300 failures; self-caught during Round-4 verification). sed reads
+    # ALL of its input, so the upstream never sees EPIPE.
     awk -F'\t' '
         $2 == "rc=0" && $5 ~ /@ tick / {
             t = $5; sub(/^.*@ tick /, "", t); sub(/ .*/, "", t)
             print t, $1
-        }' "$BATCH" | sort -n | head -10 | sed 's/^/#   /'
+        }' "$BATCH" | sort -n | sed -n '1,10s/^/#   /p'
     # provenance audit (PR #307 #18/#25): three mechanical checks —
     #   (1) wall > 3660 s: exceeds the batch script's outer timeout (3600 s
     #       + 60 s slack) — NOT a script product;

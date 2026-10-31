@@ -124,8 +124,10 @@ END_DECLARE_TEST
   feat/eigen-p0-p3-fix — also cured the full-core auto timeouts
   `eigen_svd_cdouble_sve` 321s / `eigen_svd_bidiag_sve` 343s):
   `sdc_joint_dim_slice` = min(n_mem, n_run, clamp) — n_mem from a
-  per-NUMA-node three-source budget (phys×‰ / MemAvailable×0.9 / cgroup
-  v1+v2) against measured per-family RSS coefficients (RSS_RATIO_TABLE),
+  per-NUMA-node four-source budget (phys×‰ / MemAvailable×0.9 / cgroup
+  v1+v2 / CommitLimit−Committed_AS×0.9 when vm.overcommit_memory=2 —
+  no-op otherwise, issue #310) against measured per-family RSS
+  coefficients (RSS_RATIO_TABLE),
   n_run from a probe power-law fit × the AR all-core-slowdown table
   (family×topology), refined by a VmHWM feedback loop (per-slice EMA,
   median aggregation, 0.7× table floor). Explicit `-O <test>.mdim/n`

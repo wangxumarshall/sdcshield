@@ -2,7 +2,7 @@
 #include "sdc_numa.h"
 #if defined(__aarch64__) && defined(__linux__)
 
-#include "sdc_stress_config.h"   /* sdc_budget_bytes(三源 min, spec §4.2) */
+#include "sdc_stress_config.h"   /* sdc_budget_bytes(四源 min, spec §4.2 + #310) */
 
 #include <dirent.h>
 #include <cstdio>

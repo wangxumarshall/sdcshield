@@ -225,6 +225,14 @@ fi
         | while IFS= read -r t; do
               [ -s "$DIR/gem5-512/$t.log" ] || echo "#   $t — no non-empty per-test log on disk"
           done)
+    # All logs absent (in-repo regen without the batch workspace — Ruling E
+    # keeps the big raw logs out of git; batch.tsv itself is committed since
+    # PR #307 #30): one honest note instead of N identical flag lines.
+    list_n=$(awk '{ sub(/\r$/, ""); if ($0 == "" || $0 ~ /^#/) next; sub(/\|.*/, ""); n++ } END { print n + 0 }' "$LIST")
+    miss_n=$(printf '%s\n' "$nologs" | grep -c . || true)
+    if [ "$miss_n" = "$list_n" ] && [ "$list_n" -gt 0 ]; then
+        nologs="#   (no per-test logs in this checkout — raw logs stay out of git per Ruling E; run the extractor in the batch workspace for this cross-check)"
+    fi
     if [ -n "$prov_wall" ] || [ -n "$prov_unstamped" ] || [ -n "$nologs" ]; then
         echo "#"
         echo "# provenance audit (PR #307 #18/#25): stamped rows $nstamped/$ntotal"

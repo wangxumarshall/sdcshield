@@ -1216,3 +1216,125 @@ M4 未尽项（假通过清单 ARM64 重推导、耗时尾部基线）在 v5 §1
   实际恒走 case 0（eq）, "rotating" 语义退化; logic 兄弟已改
   (base+sub)/4, mask 未跟。golden/run 同源自洽, 无 SDC 检出损失,
   非本轮意见范围; 修复需独立单元 + 独立 gem5 验证, 留待后续轮次。
+
+## 2026-10-30（全量压测复现 SDC：历史 mesh 事件定性为测试缺陷，非硬件 SDC）
+
+- **触发**: 用户目标"编译构建 sdcshield，所有用例压测本机直到复现 SDC"。
+  连续战役（sdc-excite-reproduce full，cycle 4）日志中已有 6 条事件，
+  全部为 `mesh_upi_sse_sym` / `mesh_upi_avx_sym`。
+- **定性（已实证，非硬件 SDC）**:
+  - **uint32 块偏移回绕**（4 个运行时块数用例）:
+    `size_t offset = block * BLOCK_ELEMENTS` 中 block 为 uint32_t，
+    乘法按 32 位提升 → 每 2^32 元素回绕（sse/avx 16 GiB，f64 32 GiB）。
+    169 GB 默认缓冲（550 万块）→ 高位块覆盖低地址 → 确定性假
+    sum mismatch。边界对照（-n 8）: 16 GiB+32 KiB（524289 块）
+    回退版 FAIL / 修复版 PASS；f64 32 GiB+32 KiB（1048577 块）
+    回退版 FAIL（差值 0x1.08p+15 = 33792）/ 修复版 PASS（312 s 多轮）。
+    commit c381d30c（分支 fix/mesh-block-offset-wrap）。
+  - **OOM SIGKILL**: `161830-l3_fixed_c4.yaml` 中 mesh 用例
+    `result-details: { code: 9, reason: 'Killed' }`；两个 test plan 各
+    ~169 GB RSS 并发（maxrss ~148 GB×2+），非数据故障。内存预算修正
+    留待独立单元（本案未改）。
+  - **复测链路失效**: 战役定向复测硬编码 `-n 0`，框架拒绝后按 1 线程
+    运行 → 多线程用例 SKIP，事件却记 `retest rc=0 fail/crash=0`
+    （retest1.out 实证）。已修（commit 12d5c7a5，复测沿用原命令
+    `-n/--threads`，未指定则框架默认全核）。
+  - 另证：战役二进制为 dirty 树构建（version f9046e4b22d2-dirty），
+    f64 偏移已被临时 64 位化（反汇编 `lsl x3,x5,#15`），sse 仍 32 位
+    （`lsl w0,w0,#13`）——历史"旧二进制 f64 通过"的对照因此无效，
+    改由 HEAD 回退版重测。
+- **当前状态**: 战役以修复版二进制重启（20:01，cycle 5 L1 冷机轮），
+  事件监视器在线，等待真实 SDC 事件后按流水线取证。
+  （2026-10-31 检视轮修订：上句原作「复测链路已修复」——当时 12d5c7a5
+  只修了线程维度；时长维度硬编码 -t 120s 对 169GB mesh 整轮 ~117s 相位 2
+  跑不完即沿 EXIT_SUCCESS 空过，仍会产 "retest rc=0 fail/crash=0" 假台账，
+  「已修复」是过度声明。检视轮已补齐四维条件保真：-n/-t/--cpuset/-O 沿用
+  原命令 + -t 预算 900s 封顶 + 看门狗随预算伸缩 + 台账 skip/t/elapsed
+  诚实标注，见 sdc_common.sh extract_retest_flags/retest_t_budget。）
+- **遗留悬案（如实记录）**:
+  - `tests/cpu/sve/mesh/*` **13** 个文件同款 `block * BLOCK_ELEMENTS`
+    且块数为运行时计算（原记 12，少数 1；实测清单见
+    2026-10-30-mesh-block-offset-wrap.md 检视轮修订节）——本机无 SVE
+    不可达，按 rule 2 须 gem5-fi 分档验证。**已由并行 PR #308 修复**
+    （30bcd256 同款乘法修复 + b3d77acb 块索引 64 位化，17 文件全覆盖，
+    含与本单重叠的 4 个 NEON 文件），本分支不重复修；两 PR 合并顺序
+    人工决策。
+  - mesh 用例在 `-t 60s`（L3 轮转）时相位 2 未开始即 PASS（空过）；
+    与核心缺陷正交，未在本轮改。战役引擎侧的同族条件失真（-t 120s
+    硬编码）已在检视轮修复（见上）；用例侧空过（相位 1 超时沿
+    EXIT_SUCCESS 零校验 PASS）仍为独立缺陷，与 #332 分立跟踪。
+
+## 2026-10-31（重构建暴露 openssl_sm3sm4 确定性异常——布局敏感, 非 SDC; 根因未定）
+
+- **现象**: 用 HEAD（29da76ef）重构建后, `openssl_sm3sm4` 单线程 4KB、
+  `-s LCG:435143909` 确定性 FAIL（roundtrip mismatch, 偏移 16 起）;
+  任意 seed/尺寸同败。旧战役二进制（f9046e4b22d2-dirty, 10-29 11:07
+  构建）同参数 PASS。frameworks/tests 差异 54 文件（#300-#316 同期合入）。
+- **实证链**:
+  - 代码一致: `ssl_sm3sm4_run/init`、`sm4_cbc_*`、EVP 包装、
+    `memset_random`、`sandstone_ssl_init` 归一化反汇编逐指令相同;
+    `libcrypto.a`（install 与源码目录两份）解包对象逐一 sha256 相同;
+    s_EVP_* 指针与静态符号地址一致; OPENSSL_armcap_P 两者均 0xbd
+    （无 SM4/SM3 位, 走 C 实现）。
+  - 数据/库正确: gdb 取到失败运行的真实 key/iv/plaintext, 用同一
+    libcrypto.a 独立复算 = 标准 CBC（`51ab2046…`）, 而二进制自身
+    EVP 输出为 `d91a9b71…`——SM4 各模式与 AES 各档均不匹配。
+  - 布局敏感: 在测试内加 4 行调试语句（仅失败时落盘）→ 5/5 PASS;
+    撤销后 3/3 FAIL。`OPENSSL_armcap=0` 时 FAIL 变 PASS。
+- **定性**: 确定性、可复现的软件/构建异常, 非硬件 SDC。根因未定位
+  （库/测试代码相同而结果不同, 疑与构建期状态或运行期 OpenSSL
+  分派状态被破坏有关, 待独立排查）。
+- **运行处置**: 独立全量名单剔除 `openssl_sm3sm4`（299 用例, 其余
+  全部在跑）; 战役 L3 仍会命中一次（`-F` 未开, 记 FAIL 不中断）。
+  （2026-10-31 检视轮修订：本条原文「事件按本条定性处置」构成按用例名
+  预先豁免——撤回。定性是「候选软件异常（布局敏感、确定性、根因未定位）」
+  的**待证假设**, 不是判别式: 确定性可复现不是硬件/软件判别式, 固定种子下
+  确定复现恰是 SDC 取证的常态形态。后续该用例的每笔 FAIL 仍按事件流水线
+  全量取证/复测, 按候选跟踪, 根因定位前不得按用例名整体豁免为非 SDC。）
+  旧 dirty 二进制的通过结果不可作为基线（其源码状态不可复现）。
+
+## 2026-10-31（PR #331 二轮检视处置：复测第五维/台账口径 + mesh 写侧落地 + #358 关闭）
+
+local-claude 对 head d7afaa88 提 5 条（#19-#23），全部采纳（#19 附证据
+修正），5 个工作单元 5 commit（一补丁一单元）：
+
+- **#19 复测第五维 --quality（286a041e）**: `extract_retest_flags` 原只提
+  四维，BETA 用例（arm64_sdc/arm64_sdc_sve，TEST_QUALITY_BETA=0 < 默认
+  PROD=2）的定向复测被框架运行期门控拦截（sandstone_run.cpp:1768
+  "is in BETA quality" → result: skip），与 -n 0 同族零验证。补提
+  --quality（=N/分离两形态）。实证（PR head 二进制）: 不带 → skip；
+  --quality=0 → pass。**证据修正**: power_virus* 三件均 PROD 默认集可见，
+  不受此失真影响；另发现 l5_dit 的 resolve 依默认 --list-tests 名单展开、
+  arm64_sdc 本就不可达（该阶段 --quality=0 现为空转）——战役选用例策略
+  议题，未在本轮改（待人工定夺是否让 BETA 用例进战役）。
+- **#20 台账口径（e0e68467）**: t= 恒秒（5000→5s、2min→120s、1h→
+  capped(1h)、1500ms→2s 向上取整）；elapsed 剥离 retest_guarded 前置门
+  等待（RETEST_MEMGUARD_WAIT_S，等待>0 另记 memguard_wait=Ns，实测注入
+  低内存 rc=250/wait=2 与健康 rc=0/wait=0 两态）；runbook §1.5 判读由
+  「elapsed≈t」改「elapsed≥t」并注明 t 恒秒。
+- **#22 写侧算出即丢（f1c23a65）**: sse_sym/avx_sym 写相位逐 lane 回读
+  比对结果 ok 原被空体 if 丢弃（旧注释「最终会在全量校验时捕获」对和保持
+  型损坏不成立——读相只有聚合和 + store_buf 自拷贝）。!ok 落地为
+  report_fail（对齐 avx512_sym 语义）。故障注入实证: 写后单点改写
+  data[offset+7] → result: fail 'write-phase immediate read-back mismatch'；
+  探针已回撤，净构建 256MiB pass。
+- **#23 截断空过（427e08a9，closes #358）**: 四件 mesh 用例 -t 于相位 1/
+  屏障到期时零校验 EXIT_SUCCESS → validated_any 跟踪，从未完成校验轮即
+  退出改 log_skip + EXIT_SKIP。实证: sse_sym 4GiB/-t 1s → result: skip
+  （逐线程理由落 yaml），avx_sym/avx512_sym 2GiB、symm_f64 4GiB 同款；
+  正常档 256MiB → pass；f64 2GiB 填充<1s 完成整轮真实 PASS 亦验证（完成
+  轮次后到期退出不受影响）。复测台账数值面闭合: 空过形态从
+  rc=0/skip=0 变 skip=1（runbook §1.5 既有判读「不得读作复测通过」）。
+- **#21 f64 阈值方向（3a07c6c1）**: plan「1048576 块 = 32 GiB，更早触发」
+  方向写反 → 更晚（f64 32 GiB 是 sse/avx 16 GiB 的两倍），按修订节惯例
+  记第 5 条。
+
+验证基线: `./scripts/build.sh -j 32` 零新警告；pytest
+test_driver_retest_flags 19 passed（新增 quality×2 + budget 归一×1）；
+mesh 四件双路径实测如上；改动均在 #ifdef __aarch64__ 内，x86-64 #else
+占位分支零触碰。test_driver_memguard 的
+test_orphan_cleanup_targets_own_user_only 在 pristine d7afaa88 上同样
+失败（环境相关既有问题，非本轮引入）。
+
+遗留: #332（mesh 读相逐字节内容校验重设计——golden 重算/双缓冲）仍
+OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。

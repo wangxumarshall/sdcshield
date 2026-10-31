@@ -116,6 +116,12 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
     #define RESET "\033[0m"
 
     uint32_t my_epoch = 0;
+    /* 本线程是否完成过至少一整轮「填充→全量读取校验」。-t 在相位 1/屏障处
+     * 到期时循环 break 落到函数尾——若从未完成任何校验轮即返回 EXIT_SUCCESS，
+     * 就是「零校验 PASS」空过（issue #358，违反 CLAUDE.md 规则 6 精神：
+     * no-op 测试报 pass 是 bug）。改为诚实 SKIP：复测台账 skip=1 即暴露
+     * 「本轮未验证任何东西」（PR #331 二轮意见 #23）。 */
+    bool validated_any = false;
     do {
         // ---------- 阶段 1：所有线程共同填充数据 ----------
         // （本轮状态已由上一轮 sense-reversal 屏障的最后到达线程重置）
@@ -124,7 +130,9 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
         while (true) {
             uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block >= td->num_blocks) break;
-            size_t offset = block * BLOCK_ELEMENTS;
+            // 64 位乘法：uint32 块号 × 块大小在 32 位内会回绕（每 16 GiB
+            // 一次；169 GB 缓冲 550 万块 → 覆盖写，假 sum mismatch）
+            size_t offset = (size_t)block * BLOCK_ELEMENTS;
             float vals[BLOCK_ELEMENTS];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
@@ -151,8 +159,23 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
                     break;
                 }
             }
+            /* 写相位立即读回是逐 lane 字节级比对，其结果必须落地为失败：
+             * 读相位的全量校验只有聚合和（和保持型损坏——如补偿性双错、
+             * lane 互换——不可见）与 store_buf 自拷贝比较（不对照写入值），
+             * 旧注释「最终会在全量校验时捕获」对这类损坏不成立（PR #331
+             * 二轮意见 #22）。avx512_sym 同款语义先例（其 135-148 行注释）。
+             * 块为本线程独占认领，写后立即回读失配 = 真实 store/load 损坏。 */
             if (!ok) {
-                // 不一致，但最终会在全量校验时捕获
+                fprintf(stderr, "mesh_upi_sse_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, block,
+                        vals[0], vals[1], vals[2], vals[3],
+                        offset,
+                        td->data[offset], td->data[offset + 1],
+                        td->data[offset + 2], td->data[offset + 3],
+                        RED, RESET);
+                fflush(stderr);
+                report_fail_msg("mesh_upi_sse_sym: write-phase immediate read-back mismatch (store/load corruption)");
+                return EXIT_FAILURE;
             }
 
             // 累加全局和（使用 double 原子操作）
@@ -219,6 +242,7 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
             report_fail_msg("mesh_upi_sse_sym: Sum mismatch or consistency failure");
             return EXIT_FAILURE;
         }
+        validated_any = true;   // 本轮全量读取校验已通过
 
         // ---------- 阶段 3：sense-reversal 屏障进入下一轮 ----------
         // 最后到达的线程在此重置下一轮状态（global_sum/next_block/
@@ -243,6 +267,13 @@ static int mesh_upi_sse_sym_run(struct test *test, int cpu) {
 
     } while (test_time_condition(test));
 
+    if (!validated_any) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "mesh_upi_sse_sym: test time expired before the first full "
+                 "validation round completed (runtime-sized buffer fill "
+                 "outlives -t); nothing was verified in this run");
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 
     #undef GREEN

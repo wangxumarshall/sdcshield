@@ -154,8 +154,23 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
                     break;
                 }
             }
+            /* 写相位立即读回是逐 lane 字节级比对，其结果必须落地为失败：
+             * 读相位的全量校验只有聚合和（和保持型损坏——如补偿性双错、
+             * lane 互换——不可见）与 store_buf 自拷贝比较（不对照写入值），
+             * 旧注释「最终会在全量校验时捕获」对这类损坏不成立（PR #331
+             * 二轮意见 #22）。avx512_sym 同款语义先例（其 135-148 行注释）。
+             * 块为本线程独占认领，写后立即回读失配 = 真实 store/load 损坏。 */
             if (!ok) {
-                // 不一致，但最终会在全量校验时捕获，这里不处理
+                fprintf(stderr, "mesh_upi_avx_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, block,
+                        vals[0], vals[1], vals[2], vals[3],
+                        offset,
+                        td->data[offset], td->data[offset + 1],
+                        td->data[offset + 2], td->data[offset + 3],
+                        RED, RESET);
+                fflush(stderr);
+                report_fail_msg("mesh_upi_avx_sym: write-phase immediate read-back mismatch (store/load corruption)");
+                return EXIT_FAILURE;
             }
 
             // 累加全局和（使用 double 原子操作）

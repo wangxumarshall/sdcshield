@@ -127,6 +127,10 @@ bytes = 物理内存 × mem_fraction / consumers
 ```
 
 `consumers` 是同时运行的大内存用例数（如 2 路 mesh 战役），用于均摊。
+须按 per-slice 真实驻留份数如实上报（函数内部再自动乘并发 slice 数补全
+全机口径）："init 共享 1 份 + run 每线程 1 份副本"结构（如 arm64_sdc_sve）
+应报 `1 + thread_count()`——报常数 2 会使 n 线程实际提交需求放大 n 倍
+（issue #365：`-n 8` 即 146 GiB 进 swap 抖动）。
 
 ### 5.3 arena 类（openssl sha/sha3）：`arena_bytes`
 

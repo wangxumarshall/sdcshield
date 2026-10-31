@@ -32,8 +32,12 @@
  *   1. -O arm64_sdc_sve.buffer_bytes=N / 配置文件同名条目
  *   2. 环境变量 SDC_ARM64_SDC_SVE_BUFFER_BYTES
  *   3. 自适应: 字节数直给(参照 mesh_upi_sve_read_L3_int 模式),
- *      占物理内存 60%, 2 个大内存消费者均摊(共享检测缓冲 +
- *      每线程 run 副本)。CRC 表 [256] 与本旋钮无关, 不动。 */
+ *      占物理内存 60%, 按 per-slice 真实驻留份数均摊: 1 份 init 共享
+ *      检测缓冲 + 每线程 1 份 run 副本 = 1 + thread_count() 个消费者
+ *      (sdc_target_workset_bytes 内部再乘并发 slice 数补全全机口径)。
+ *      修复 #365: 旧值 2 只在单线程成立 — n 线程实际提交需求 =
+ *      (1+n) × 份大小, -n 8 即 146 GiB 进 swap 抖动, 128 线程外推
+ *      2.3 TiB。CRC 表 [256] 与本旋钮无关, 不动。 */
 static size_t sdc_sve_buffer_bytes(struct test *test)
 {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0, 64 << 10,
@@ -43,7 +47,11 @@ static size_t sdc_sve_buffer_bytes(struct test *test)
                                  64 << 10, 1ll << 40);
     if (v > 0)
         return (size_t)v;
-    return (size_t)sdc_target_workset_bytes(600, 2, nullptr);
+    int threads = thread_count();
+    if (threads < 1)
+        threads = 1;
+    return (size_t)sdc_target_workset_bytes(600, 1 + threads, nullptr,
+                                            "arm64_sdc_sve", "buffer_bytes");
 }
 #endif
 
@@ -160,8 +168,11 @@ static int arm64_sdc_sve_run(struct test *test, int cpu)
      * the 3-signature compare — so one body is bound by the table
      * CRC scan of the whole buffer, not by bandwidth. buffer_bytes
      * is memory-adaptive (sdc_target_workset_bytes: 600 permille of
-     * RAM across 2 consumers), which makes one body ~1 s at a
-     * 128 MiB buffer and far more at the multi-GiB default. TEST_LOOP
+     * RAM across 1 + thread_count() consumers — issue #365: the
+     * run-side per-thread full-size copy makes the real concurrent
+     * footprint 1 shared + n per-thread buffers), which makes one
+     * body ~1 s at a 128 MiB buffer and far more at the multi-GiB
+     * default. TEST_LOOP
      * only checks the -t deadline every N bodies
      * (framework/sandstone.h): the N = 128 was sized for the
      * original fixed 64 KiB buffer (tens-of-milliseconds checkpoints) —
@@ -173,8 +184,9 @@ static int arm64_sdc_sve_run(struct test *test, int cpu)
      * N = 4 bounds the exit latency to 4 bodies while keeping the
      * auto-fracture segment (default 40 checks = 160 bodies) long
      * enough that per-segment re-entry (test_buffer re-alloc)
-     * stays negligible. (The per-thread full-size buffer copy is a
-     * separate sizing concern, tracked in its own issue.) */
+     * stays negligible. (The per-thread full-size buffer copy's
+     * OOM amplification is fixed in the sizing itself: consumers
+     * = 1 + thread_count(), issue #365.) */
     TEST_LOOP(test, 4) {
         memcpy(test_buffer, data->test_buffer, buffer_bytes);
         if (sdc_sve_detect(test_buffer, buffer_bytes,

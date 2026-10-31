@@ -103,7 +103,7 @@ su -c "systemctl stop sdc-collector@percore sdc-collector@pmu sdc-collector@ras"
 
 ```
 驱动 handle_failure（提取式取证 yaml_extract/stdout_summary/context + 定向复测×3
-  ——条件四维（-n/-t/--cpuset/-O）沿用原命令，-t 预算 900s 封顶，看门狗随预算伸缩
+  ——条件五维（-n/-t/--cpuset/-O/--quality）沿用原命令，-t 预算 900s 封顶，看门狗随预算伸缩
   + 台账行 + enqueue_repro + snapshot.request——战役不中断）
 → sdc-eventd：sdc_mismatch 事件（red）入 spool/events.jsonl
 → sdc-controller：RED（freeze_ring 自动 + snapshot_root + enqueue_reproduction + hold_profile）

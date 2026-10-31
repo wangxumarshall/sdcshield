@@ -5,8 +5,9 @@ COMMON = os.path.join(os.path.dirname(__file__), "..", "..", "..",
 DRIVER = os.path.join(os.path.dirname(__file__), "..", "..", "..",
                       "scripts", "sdc-excite-reproduce", "sdc-excite-reproduce.sh")
 
-# 定向复测条件保真（PR #331 检视轮，2026-10-31）：复测命令的四维条件旗标
-# （线程 -n / 每测试时长 -t / CPU 拓扑 --cpuset / 测试旋钮 -O）必须沿用原命令。
+# 定向复测条件保真（PR #331 检视轮，2026-10-31）：复测命令的条件旗标
+# （线程 -n / 每测试时长 -t / CPU 拓扑 --cpuset / 测试旋钮 -O / 质量门控
+#  --quality）必须沿用原命令。
 # 历史条件失真 → 假通过台账的两次实证：
 #   - 硬编码 -n 0（2026-10-30 retest1.out）：多线程用例 SKIP 却记 rc=0 fail/crash=0；
 #   - 硬编码 -t 120s（同日 mesh 事件检视）：169GB 缓冲整轮 ~117s，相位 2 跑不完即沿
@@ -70,6 +71,19 @@ def test_extract_total_time_not_confused():
     # -T（总时长）是不同选项：大小写敏感，不得误提（cold_c4 事件命令形态）
     assert _flags("/b/sdcshield -T 1800s -t 60s --strict-runtime -e memcpy_rewr,cachebounce") \
         == "-t 60s"
+
+def test_extract_quality_gate():
+    # 第五维 --quality（PR #331 二轮意见 #19）：丢弃它则 BETA 用例（arm64_sdc，
+    # TEST_QUALITY_BETA=0 < 默认 PROD=2）的定向复测被框架运行期门控拦截
+    # （sandstone_run.cpp "is in BETA quality" → result: skip）——三轮零验证。
+    assert _flags("/b/sdcshield --quality=0 -e arm64_sdc -t 60s -vvv") \
+        == "--quality=0 -t 60s"
+    # SKIP 级（--quality=-1）与分离写法（"--quality 0"）同样沿用
+    assert _flags("/b/sdcshield -e x --quality=-1 -n 4") == "--quality=-1 -n 4"
+    assert _flags("/b/sdcshield --quality 0 -e x -t 30s") == "--quality=0 -t 30s"
+
+def test_extract_quality_invalid_dropped():
+    assert _flags("/b/sdcshield --quality=abc -e x") == ""
 
 def test_extract_drops_invalid_and_absent():
     assert _flags("/b/sdcshield -e zstd19 -vvv") == ""            # 无条件旗标

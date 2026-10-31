@@ -93,14 +93,17 @@ extract_fail_seed() {    # $1=stdout_summary 路径 → 首个 fail 块内的 AE
 
 # ---------------- 复测条件保真提取（handle_failure 定向复测命令构造）----------------
 # 定向复测的命令条件必须沿用原命令（v5 §7 复测契约「同条件复现」）——线程、每测试
-# 时长、CPU 拓扑、测试旋钮四维。历史教训（条件失真 → 假通过台账）：
+# 时长、CPU 拓扑、测试旋钮、质量门控五维。历史教训（条件失真 → 假通过台账）：
 #   - 硬编码 -n 0（2026-10-30 retest1.out）：多线程用例 SKIP 却记
 #     "retest rc=0 fail/crash=0"；
 #   - 硬编码 -t 120s（同日 mesh 事件检视）：169GB 缓冲整轮 ~117s，120s 预算下
 #     相位 2 跑不完即沿 EXIT_SUCCESS 空过（相位 1 等待循环超时 break → 零校验
 #     PASS），复测永远无法证伪；
 #   - --cpuset（l5_dom 阶段）与 -O 旋钮（l3/l5_numa/dwell 阶段）被丢弃：cpuset
-#     受限相位的复测跑成全核，有效线程集与跨核拓扑均已改变。
+#     受限相位的复测跑成全核，有效线程集与跨核拓扑均已改变；
+#   - --quality 被丢弃（PR #331 二轮意见 #19）：BETA 级用例（arm64_sdc 等）的
+#     事件定向复测在默认 quality 下被框架运行期门控拦截（sandstone_run.cpp
+#     "is in BETA quality" → result: skip），三轮复测零验证价值——与 -n 0 同族。
 flag_time_to_s() { # $1=时长 token → 秒数（stdout）；形态非法 → 空输出 rc=1
     # 与框架 string_to_millisecs 同口径（framework/sandstone_chrono.cpp:30）：
     # 裸数=毫秒；ms/s/m/min/h 后缀各按其单位。ms→s 向上取整（看门狗宁长勿短）。
@@ -116,8 +119,9 @@ flag_time_to_s() { # $1=时长 token → 秒数（stdout）；形态非法 → �
 }
 
 extract_retest_flags() { # $1=原命令串 → stdout 单行空格分隔的规整条件旗标
-    # 提取四类：-n/--threads（线程）、-t/--test-time/--time（每测试时长）、
-    #           --cpuset（CPU 拓扑）、-O/--test-option（测试旋钮，可多次）。
+    # 提取五类：-n/--threads（线程）、-t/--test-time/--time（每测试时长）、
+    #           --cpuset（CPU 拓扑）、-O/--test-option（测试旋钮，可多次）、
+    #           --quality（质量门控——0 含 BETA / -1 含 SKIP 级，见上）。
     # 三种写法通吃：分离（"-n 8"）/短参附着（"-n8"）/长参等号（"--threads=8"）。
     # 输出规范形单行（如 "-O a.b=1 -n 8 -t 1350s"），调用方
     # read -ra flags <<< "$(extract_retest_flags "$cmd")" 重组（read 只读一行，
@@ -135,6 +139,7 @@ extract_retest_flags() { # $1=原命令串 → stdout 单行空格分隔的规�
             -t|--test-time|--time)  name=t;      val="${words[$((k+1))]:-}" ;;
             --cpuset)               name=cpuset; val="${words[$((k+1))]:-}" ;;
             -O|--test-option)       name=O;      val="${words[$((k+1))]:-}" ;;
+            --quality)              name=quality; val="${words[$((k+1))]:-}" ;;
             -n[0-9]*)               name=n;      val="${w#-n}" ;;
             -t[0-9]*)               name=t;      val="${w#-t}" ;;
             -O[!-]*)                name=O;      val="${w#-O}" ;;
@@ -142,6 +147,7 @@ extract_retest_flags() { # $1=原命令串 → stdout 单行空格分隔的规�
             --test-time=*|--time=*) name=t;      val="${w#*=}" ;;
             --cpuset=*)             name=cpuset; val="${w#--cpuset=}" ;;
             --test-option=*)        name=O;      val="${w#--test-option=}" ;;
+            --quality=*)            name=quality; val="${w#--quality=}" ;;
         esac
         [ -n "$name" ] || continue
         case "$name" in
@@ -149,6 +155,7 @@ extract_retest_flags() { # $1=原命令串 → stdout 单行空格分隔的规�
             t)      [[ "$val" =~ ^[0-9]+(ms|s|min|m|h)?$ ]] && out+="-t $val " ;;
             cpuset) [ -n "$val" ] && out+="--cpuset=$val " ;;
             O)      [[ "$val" =~ ^[^[:space:]=]+=.+$ ]] && out+="-O $val " ;;
+            quality) [[ "$val" =~ ^-?[0-9]+$ ]] && out+="--quality=$val " ;;
         esac
     done
     [ -n "$out" ] && printf '%s\n' "${out% }"

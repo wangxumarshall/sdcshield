@@ -189,11 +189,12 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     local i rcf
     # 复测条件保真（v5 §7「同条件复现」）：从原命令沿用 -n/--threads（线程）、
     # -t/--test-time（每测试时长）、--cpuset（CPU 拓扑）、-O/--test-option（测试
-    # 旋钮）四维条件旗标（提取器见 sdc_common.sh extract_retest_flags）。
+    # 旋钮）、--quality（质量门控）五维条件旗标（提取器见 sdc_common.sh
+    # extract_retest_flags）。
     # 旧实现只提取 -n 且硬编码 -t 120s：169GB mesh 事件整轮 ~117s，120s 预算下
     # 相位 2 跑不完即沿 EXIT_SUCCESS 空过，台账记 "retest rc=0 fail/crash=0"
     # 假通过；-n 0 退化单线程 SKIP 假通过（2026-10-30 retest1.out 实证）是同族
-    # 条件失真——本单把时长/拓扑/旋钮三维一并修齐。
+    # 条件失真——本单把时长/拓扑/旋钮/质量门控四维一并修齐。
     local all_cond=() cond_flags=() orig_t="" k
     read -ra all_cond <<< "$(extract_retest_flags "$cmd")"
     for ((k=0; k<${#all_cond[@]}; k++)); do

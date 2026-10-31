@@ -472,16 +472,43 @@ static int ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
  * round-4 #24 caught was this drift made real). The gate maps the hole
  * probe (ffr_hole_probe — see there for the TOCTOU boundary) to
  * verdicts with the detector's bias (round-3 #18, round-4 #23/#24/#25/
- * #31):
- *   - remapped hole AND no hole-independent failure pending: the three
- *     mismatches are fully explained by the environment (the fault
- *     never happened, ALL THREE goldens break at once) — honest
- *     TestResourceIssue SKIP.
- *   - remapped hole AND a hole-independent failure already on record
- *     (all_passed == false — the mapped face and sections 1-3 never
- *     touch the hole): SKIP is FORBIDDEN, it would swallow real SDC
- *     evidence (round-4 #24). The hole is logged as context; the SDC
- *     verdict takes precedence.
+ * #31, round-5 hardening):
+ *
+ * The environment can only ever produce the NO-FAULT signature. An
+ * external mapper that lands in the hole either leaves the page
+ * NON-RESIDENT (LDFF1 suppresses the demand-paging minor fault too —
+ * measured, round 3: goldens hold, the bad set is EMPTY, the gate is
+ * never entered) or makes it RESIDENT, in which case the faulting load
+ * hits no fault at all: its FFR image is ALL-ONES — byte-identical to
+ * the MAPPED face's golden m_gold, not the partial f_gold — and the
+ * immediately-following accumulation capture, a mapped load that must
+ * not touch the FFR, reads the same all-ones. The data face is
+ * unconstrained (a resident zero-filled page loads a zeroed tail and
+ * stays green; a dirty page breaks it), so it is NOT part of the
+ * witness. Conversely, every other bad shape is IMPOSSIBLE to explain
+ * by the hole and must never be downgraded:
+ *   - acc face alone (its load is from heap ffr_mem, hole-independent;
+ *     an image below all-ones means the mapped load CLEARED FFR bits —
+ *     the write-on-success defect this face exists to catch),
+ *   - data face alone (the FFR partial-clear held, so the fault DID
+ *     happen and the tail was architecturally zeroed — a wrong tail is
+ *     a load-datapath SDC),
+ *   - a partial-but-wrong FFR image (bits were cleared, so the fault
+ *     happened — the deviation is FFR-datapath corruption).
+ * The old gate (round-3 dbadd354) matched ANY bad face against a
+ * proven re-map and SKIPped — round-5 measured that a NON-RESIDENT
+ * refill makes msync return 0 (VMA existence, not residency), so
+ * "acc face alone + non-resident mapper" was reachable and a real
+ * acc-face SDC was swallowed by a message claiming the fault source
+ * was invalidated (the fault face was green). The signature check
+ * closes exactly that class: SKIP requires both FFR images to equal
+ * m_gold bit-for-bit, on top of the round-4 guards.
+ *   - remapped hole + no-fault signature + no hole-independent failure
+ *     pending (all_passed): environment — TestResourceIssue SKIP.
+ *   - remapped hole + a hole-independent failure already on record:
+ *     SKIP is FORBIDDEN, it would swallow real SDC evidence (round-4
+ *     #24). The hole is logged as context; the SDC verdict takes
+ *     precedence.
  *   - unknown errno: neither proven — a possible SDC is NOT downgraded
  *     into a SKIP; the mismatch is reported with the indeterminacy
  *     logged (round-4 #23/#31).
@@ -494,6 +521,7 @@ static int ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
 template <bool Immediate>
 static int ffr_check_fault_acc_faces(const ffr_hole &hole, size_t vl,
                                      bool &all_passed,
+                                     const uint8_t *m_gold,
                                      const uint8_t *f_gold,
                                      const uint8_t *f_img,
                                      const double *f_back,
@@ -507,12 +535,24 @@ static int ffr_check_fault_acc_faces(const ffr_hole &hole, size_t vl,
     if (ffr_bad || data_bad || acc_bad) {
         int probe_errno = 0;
         const ffr_hole_state probe_state = ffr_hole_probe(hole, &probe_errno);
-        if (probe_state == ffr_hole_state::remapped && all_passed) {
+        /* The no-fault witness: BOTH FFR images equal the all-ones
+           mapped golden bit-for-bit — the faulting capture behaved
+           exactly like a mapped load and the accumulation capture
+           agreed. This is the ONLY shape the environment can produce;
+           anything else keeps the SDC path even under a proven
+           re-map (see the header comment for the per-face
+           impossibility arguments). */
+        const bool no_fault_signature =
+                memcmp(f_img, m_gold, 8 * vl) == 0
+                && memcmp(a_img, m_gold, 8 * vl) == 0;
+        if (probe_state == ffr_hole_state::remapped && all_passed
+                && no_fault_signature) {
             log_skip(TestResourceIssueSkipCategory,
                      "sve512_pred_ops_arm: the unmapped hole for the "
                      "faulting-LDFF1 face was re-mapped by an external "
-                     "mapper%s — fault source invalidated by the "
-                     "environment, not an SDC (hole probed AFTER the "
+                     "mapper%s and both FFR images read all-ones — the "
+                     "fault never happened, fault source invalidated by "
+                     "the environment, not an SDC (hole probed AFTER the "
                      "capture; capture-time state is unobservable — see "
                      "ffr_hole_probe)",
                      Immediate ? " (re-loop)" : "");
@@ -523,11 +563,18 @@ static int ffr_check_fault_acc_faces(const ffr_hole &hole, size_t vl,
                         "indeterminate (msync errno=%d) — a re-mapped "
                         "hole cannot be proven, the mismatch is "
                         "reported as a possible SDC", probe_errno);
-        } else if (!all_passed) {
-            log_warning("sve512_pred_ops_arm: the hole was re-mapped, "
-                        "but a hole-independent failure is already on "
-                        "record — the SDC verdict takes precedence over "
-                        "the environment SKIP");
+        } else if (probe_state == ffr_hole_state::remapped) {
+            if (!all_passed)
+                log_warning("sve512_pred_ops_arm: the hole was re-mapped, "
+                            "but a hole-independent failure is already "
+                            "on record — the SDC verdict takes precedence "
+                            "over the environment SKIP");
+            else
+                log_warning("sve512_pred_ops_arm: the hole was re-mapped, "
+                            "but the failure signature is not the no-fault "
+                            "signature (both FFR images all-ones) — the "
+                            "fault DID happen, the hole cannot explain "
+                            "the mismatch; reported as a possible SDC");
         }
     }
     const char *tag = Immediate ? " (re-loop)" : "";
@@ -848,8 +895,8 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            recorded in all_passed, the caller issues the verdict at the
            end; EXIT_SKIP = proven environment interference) */
         const int fr = ffr_check_fault_acc_faces<false>(
-                hole, vl, all_passed, f_gold, f_img, f_back, f_exp, a_img,
-                fault_bits, acc_bits);
+                hole, vl, all_passed, m_gold, f_gold, f_img, f_back, f_exp,
+                a_img, fault_bits, acc_bits);
         if (fr != EXIT_SUCCESS) {
             ffr_hole_disarm_own(&hole);
             return fr;
@@ -948,8 +995,8 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            reaching here means the FMA and mapped faces of this iteration
            already passed, so no hole-independent failure can be pending */
         const int fr = ffr_check_fault_acc_faces<true>(
-                hole, vl, all_passed, f_gold, f_img, f_back, f_exp, a_img,
-                fault_bits, acc_bits);
+                hole, vl, all_passed, m_gold, f_gold, f_img, f_back, f_exp,
+                a_img, fault_bits, acc_bits);
         if (fr != EXIT_SUCCESS) {
             ffr_hole_disarm_own(&hole);
             return fr;

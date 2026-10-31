@@ -40,11 +40,16 @@ pos = []
 i = 0
 while i < len(args):
     if args[i] == "--vl":
-        # guard the parse (PR #307 #26): a trailing --vl used to raise a raw
-        # IndexError and a non-numeric value a raw ValueError, bypassing the
-        # designed error paths below. AssertionError (not sys.exit) so the
-        # failure rides gem5's clean config-error path like the asserts below.
-        if i + 1 >= len(args) or not args[i + 1].isdigit():
+        # guard the parse (PR #307 #26/#31): a trailing --vl used to raise a
+        # raw IndexError and a non-numeric value a raw ValueError, bypassing
+        # the designed error paths below. ASCII-strict: str.isdigit() alone
+        # accepts Unicode digits ('²' passes isdigit but breaks int();
+        # '٤' passes BOTH and silently int()s to 4). AssertionError (not
+        # sys.exit) so the failure rides gem5's clean config-error path.
+        if (
+            i + 1 >= len(args)
+            or not (args[i + 1].isascii() and args[i + 1].isdigit())
+        ):
             raise AssertionError(
                 "--vl requires a numeric quadword argument (1=128, 2=256, "
                 "4=512, 8=1024 bit); got "

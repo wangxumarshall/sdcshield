@@ -289,6 +289,146 @@ static bool ffr_hole_intact(const PredOpsData *d)
     return errno == ENOMEM;              // ENOMEM == still unmapped
 }
 
+/* Mapped-face verification — the SINGLE source of truth for both call
+ * sites (round-4 #26/#32: Section 4 and the re-loop used to carry two
+ * isomorphic hand copies of this check, and they had already drifted —
+ * check order and message prefixes differed; the drift disease this PR
+ * has removed three times now, #10, #19, here). Immediate=false:
+ * Section 4 aggregate semantics — log_warning + all_passed=false,
+ * execution continues so the remaining faces still run and the caller
+ * issues the verdict. Immediate=true: re-loop semantics —
+ * report_fail_msg kills the worker on the first broken face. Two
+ * DISTINCT failure faces, reported separately so a message never
+ * contradicts itself (a combined `||` once printed "ffr_bits=16,
+ * expected 16" — equal numbers in an SDC claim — whenever only the
+ * data half tripped): the image is the FFR predicate datapath
+ * (bit-for-bit memcmp on the materialized bitmap, not popcount — a
+ * bare count passes any count-conserving corruption), the readback is
+ * the load datapath. <false> never returns nonzero (failures are
+ * recorded in all_passed); <true> returns EXIT_FAILURE only as the
+ * unreachable tail after the noreturn report. */
+template <bool Immediate>
+static int ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
+                                 const uint8_t *m_img,
+                                 const double *readback, const double *golden,
+                                 long m_bits, bool &all_passed)
+{
+    const char *tag = Immediate ? " (re-loop)" : "";
+    if (memcmp(m_img, m_gold, 8 * vl) != 0) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: FFR not all-true after "
+                            "mapped LDFF1%s (count=%ld, expected %zu, first "
+                            "wrong bit %ld)", tag, m_bits, 8 * vl,
+                            ffr_first_diff(m_img, m_gold, 8 * vl));
+            return EXIT_FAILURE;
+        }
+        log_warning("sve512_pred_ops_arm: FFR not all-true after mapped "
+                    "LDFF1%s (count=%ld, expected %zu, first wrong bit %ld)",
+                    tag, m_bits, 8 * vl,
+                    ffr_first_diff(m_img, m_gold, 8 * vl));
+        all_passed = false;
+    }
+    if (memcmp(readback, golden, vl * 8) != 0) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: mapped LDFF1 readback "
+                            "mismatch%s (load datapath — distinct from the "
+                            "FFR image face)", tag);
+            return EXIT_FAILURE;
+        }
+        log_warning("sve512_pred_ops_arm: mapped LDFF1 readback mismatch%s "
+                    "(load datapath — distinct from the FFR image face)",
+                    tag);
+        all_passed = false;
+    }
+    return EXIT_SUCCESS;
+}
+
+/* Faulting + accumulation face verification + the environment-
+ * interference gate — the SINGLE source of truth for both call sites
+ * (round-4 #26/#32: two isomorphic hand copies differing in message
+ * text AND failure semantics; the mapped-face behavior inconsistency
+ * round-4 #24 caught was this drift made real). The gate (round-3
+ * #18): if the unmapped hole got mapped by an external mapper, the
+ * fault never happened, ALL THREE fault/acc goldens break at once, and
+ * reporting SDC would be false — skip honestly. Immediate=false:
+ * Section 4 aggregate semantics (log_warning + all_passed=false, all
+ * three faces checked, the caller issues the verdict; returns
+ * EXIT_SUCCESS or EXIT_SKIP). Immediate=true: re-loop semantics —
+ * reaching the gate there implies every earlier face of the iteration
+ * already passed, so no hole-independent failure can be pending;
+ * report_fail_msg kills the worker on the first broken face. */
+template <bool Immediate>
+static int ffr_check_fault_acc_faces(const PredOpsData *d, size_t vl,
+                                     bool &all_passed,
+                                     const uint8_t *f_gold,
+                                     const uint8_t *f_img,
+                                     const double *f_back,
+                                     const double *f_exp,
+                                     const uint8_t *a_img, long fault_bits,
+                                     long acc_bits)
+{
+    const bool ffr_bad = memcmp(f_img, f_gold, 8 * vl) != 0;
+    const bool data_bad = memcmp(f_back, f_exp, vl * 8) != 0;
+    const bool acc_bad = memcmp(a_img, f_gold, 8 * vl) != 0;
+    if (ffr_bad || data_bad || acc_bad) {
+        if (!ffr_hole_intact(d)) {
+            log_skip(TestResourceIssueSkipCategory,
+                     "sve512_pred_ops_arm: the unmapped hole for the "
+                     "faulting-LDFF1 face was re-mapped by an external "
+                     "mapper%s — fault source invalidated by the "
+                     "environment, not an SDC",
+                     Immediate ? " (re-loop)" : "");
+            return EXIT_SKIP;
+        }
+    }
+    const char *tag = Immediate ? " (re-loop)" : "";
+    if (ffr_bad) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: FFR partial-clear wrong "
+                            "after faulting LDFF1%s (count=%ld, expected 8, "
+                            "first wrong bit %ld — clear must start at the "
+                            "first faulting lane)", tag, fault_bits,
+                            ffr_first_diff(f_img, f_gold, 8 * vl));
+            return EXIT_FAILURE;
+        }
+        log_warning("sve512_pred_ops_arm: FFR partial-clear wrong after "
+                    "faulting LDFF1%s (count=%ld, expected 8, first wrong "
+                    "bit %ld — clear must start at the first faulting "
+                    "lane)", tag, fault_bits,
+                    ffr_first_diff(f_img, f_gold, 8 * vl));
+        all_passed = false;
+    }
+    if (data_bad) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: faulting LDFF1 data "
+                            "wrong%s (count=%ld — prefix must load, tail "
+                            "must zero from the first fault)", tag,
+                            fault_bits);
+            return EXIT_FAILURE;
+        }
+        log_warning("sve512_pred_ops_arm: faulting LDFF1 data wrong%s "
+                    "(count=%ld — prefix must load, tail must zero from "
+                    "the first fault)", tag, fault_bits);
+        all_passed = false;
+    }
+    if (acc_bad) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: mapped LDFF1 touched the "
+                            "FFR outside a fault%s (count=%ld, expected 8, "
+                            "first wrong bit %ld — accumulation broken)",
+                            tag, acc_bits,
+                            ffr_first_diff(a_img, f_gold, 8 * vl));
+            return EXIT_FAILURE;
+        }
+        log_warning("sve512_pred_ops_arm: mapped LDFF1 touched the FFR "
+                    "outside a fault%s (count=%ld, expected 8, first wrong "
+                    "bit %ld — accumulation broken)", tag, acc_bits,
+                    ffr_first_diff(a_img, f_gold, 8 * vl));
+        all_passed = false;
+    }
+    return EXIT_SUCCESS;
+}
+
 static int sve512_pred_ops_arm_init(struct test *test)
 {
 #ifndef __aarch64__
@@ -534,20 +674,12 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
                                                       ffr_back.data(),
                                                       m_img);
-        if (memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
-            log_warning("sve512_pred_ops: LDFF1 readback mismatch");
-            all_passed = false;
-        }
-        // FFR must be all-true in every predicate bit after a mapped
-        // LDFF1 — compared BIT-FOR-BIT on the materialized image (a bare
-        // popcount would pass any count-conserving corruption)
-        if (memcmp(m_img, m_gold, 8 * vl) != 0) {
-            log_warning("sve512_pred_ops: FFR not all-true after mapped "
-                        "LDFF1 (count=%ld, expected %zu, first wrong bit "
-                        "%ld)", ffr_bits, 8 * vl,
-                        ffr_first_diff(m_img, m_gold, 8 * vl));
-            all_passed = false;
-        }
+        /* mapped face through the single parameterized checker shared
+           with the re-loop (round-4 #26/#32 — aggregate semantics here:
+           failures are recorded in all_passed, execution continues) */
+        (void)ffr_check_mapped_face<false>(vl, m_gold, m_img,
+                                           ffr_back.data(), ffr_mem.data(),
+                                           ffr_bits, all_passed);
         /* Faulting face: element 0 mapped, element 1 on the unmapped
            hole. The fault must be SUPPRESSED and converted into an FFR
            clear from lane 1 onward: expected count is exactly element
@@ -576,42 +708,15 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         long fault_bits, acc_bits;
         ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
                               ffr_back.data(), a_img, fault_bits, acc_bits);
-        /* Environment-interference gate (round-3 review #18): before any
-           fault/acc face verdict, discriminate the re-mapped-hole case —
-           if the unmapped hole got mapped by an external mapper, the
-           fault never happened, ALL THREE fault/acc goldens break at
-           once, and reporting SDC would be false. Skip honestly. */
-        if ((memcmp(f_img, f_gold, 8 * vl) != 0 ||
-             memcmp(f_back, f_exp, vl * 8) != 0 ||
-             memcmp(a_img, f_gold, 8 * vl) != 0) && !ffr_hole_intact(d)) {
-            log_skip(TestResourceIssueSkipCategory,
-                     "sve512_pred_ops_arm: the unmapped hole for the "
-                     "faulting-LDFF1 face was re-mapped by an external "
-                     "mapper — fault source invalidated by the "
-                     "environment, not an SDC");
-            return EXIT_SKIP;
-        }
-        if (memcmp(f_img, f_gold, 8 * vl) != 0) {
-            log_warning("sve512_pred_ops: FFR partial-clear wrong after "
-                        "faulting LDFF1 (count=%ld, expected 8, first "
-                        "wrong bit %ld — clear must start at the first "
-                        "faulting lane)", fault_bits,
-                        ffr_first_diff(f_img, f_gold, 8 * vl));
-            all_passed = false;
-        }
-        if (memcmp(f_back, f_exp, vl * 8) != 0) {
-            log_warning("sve512_pred_ops: faulting LDFF1 data wrong "
-                        "(prefix must load, tail must zero from the "
-                        "first fault)");
-            all_passed = false;
-        }
-        if (memcmp(a_img, f_gold, 8 * vl) != 0) {
-            log_warning("sve512_pred_ops: mapped LDFF1 touched the FFR "
-                        "outside a fault (count=%ld, expected 8, first "
-                        "wrong bit %ld — accumulation broken)", acc_bits,
-                        ffr_first_diff(a_img, f_gold, 8 * vl));
-            all_passed = false;
-        }
+        /* faulting + accumulation faces and the interference gate through
+           the single parameterized checker (aggregate semantics: failures
+           recorded in all_passed, the caller issues the verdict at the
+           end; EXIT_SKIP = proven environment interference) */
+        const int fr = ffr_check_fault_acc_faces<false>(
+                d, vl, all_passed, f_gold, f_img, f_back, f_exp, a_img,
+                fault_bits, acc_bits);
+        if (fr != EXIT_SUCCESS)
+            return fr;
         // FMAXV over the whilelt(k=vl/2) masked prefix: exact max
         {
             size_t k = vl / 2;
@@ -682,27 +787,16 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // FMA-part allocations, and the memcmp below all sit outside it.
         const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
                                                       ffr_back.data(), m_img);
-        // Two DISTINCT failure faces, reported separately so the message
-        // never contradicts itself (a combined `||` printed
-        // "ffr_bits=16, expected 16" — equal numbers in an SDC claim —
-        // whenever only the data half tripped): the FFR image faces the
-        // predicate datapath (bit-for-bit, not popcount — a bare count
-        // passes any count-conserving corruption), the memcmp faces the
-        // load datapath.
-        if (memcmp(m_img, m_gold, 8 * vl) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: FFR SDC detected "
-                            "(re-loop: first wrong bit %ld, count=%ld, "
-                            "expected %zu after mapped LDFF1)",
-                            ffr_first_diff(m_img, m_gold, 8 * vl), ffr_bits,
-                            8 * vl);
-            return EXIT_FAILURE;
-        }
-        if (memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: LDFF1 data SDC detected "
-                            "(re-loop: FFR intact at %ld bits, readback "
-                            "mismatch)", ffr_bits);
-            return EXIT_FAILURE;
-        }
+        /* mapped face through the same single parameterized checker as
+           Section 4 (immediate semantics: the first broken face kills
+           the worker; the two DISTINCT failure faces and their
+           non-self-contradicting messages live in that one body) */
+        const int mr = ffr_check_mapped_face<true>(vl, m_gold, m_img,
+                                                   ffr_back.data(),
+                                                   ffr_mem.data(), ffr_bits,
+                                                   all_passed);
+        if (mr != EXIT_SUCCESS)
+            return mr;
         /* faulting + accumulation captures as the combined always-inline
            unit — the between-captures zero-call discipline is mechanical
            (the partially-cleared FFR is live state a libc call, memcpy
@@ -710,40 +804,15 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         long fault_bits, acc_bits;
         ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
                               ffr_back.data(), a_img, fault_bits, acc_bits);
-        /* re-mapped-hole discrimination as in Section 4: interference
-           skips honestly, only an intact hole earns an SDC verdict */
-        if ((memcmp(f_img, f_gold, 8 * vl) != 0 ||
-             memcmp(f_back, f_exp, vl * 8) != 0 ||
-             memcmp(a_img, f_gold, 8 * vl) != 0) && !ffr_hole_intact(d)) {
-            log_skip(TestResourceIssueSkipCategory,
-                     "sve512_pred_ops_arm: the unmapped hole for the "
-                     "faulting-LDFF1 face was re-mapped by an external "
-                     "mapper (re-loop) — fault source invalidated by the "
-                     "environment, not an SDC");
-            return EXIT_SKIP;
-        }
-        if (memcmp(f_img, f_gold, 8 * vl) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: FFR partial-clear SDC "
-                            "detected (re-loop: first wrong bit %ld, "
-                            "count=%ld, expected 8 after faulting LDFF1)",
-                            ffr_first_diff(f_img, f_gold, 8 * vl),
-                            fault_bits);
-            return EXIT_FAILURE;
-        }
-        if (memcmp(f_back, f_exp, vl * 8) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: faulting LDFF1 data SDC "
-                            "detected (re-loop: FFR partial-clear intact at "
-                            "%ld bits, prefix/tail mismatch)", fault_bits);
-            return EXIT_FAILURE;
-        }
-        if (memcmp(a_img, f_gold, 8 * vl) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: FFR accumulation SDC "
-                            "detected (re-loop: first wrong bit %ld, "
-                            "count=%ld, expected 8 unchanged after a "
-                            "mapped LDFF1)",
-                            ffr_first_diff(a_img, f_gold, 8 * vl), acc_bits);
-            return EXIT_FAILURE;
-        }
+        /* faulting + accumulation faces + the interference gate through
+           the single parameterized checker (immediate semantics);
+           reaching here means the FMA and mapped faces of this iteration
+           already passed, so no hole-independent failure can be pending */
+        const int fr = ffr_check_fault_acc_faces<true>(
+                d, vl, all_passed, f_gold, f_img, f_back, f_exp, a_img,
+                fault_bits, acc_bits);
+        if (fr != EXIT_SUCCESS)
+            return fr;
     }
 
     return EXIT_SUCCESS;

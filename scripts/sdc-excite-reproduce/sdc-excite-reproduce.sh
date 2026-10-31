@@ -211,11 +211,14 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
     local retest_t="${tb[0]}" retest_t_src="${tb[1]}" retest_guard_s="${tb[2]}"
     : > "$evdir/retests.txt"
     # 台账行语义（消费者判读口径，operations-runbook §1.5）：rc/fail/crash 是框架
-    # 判定；skip>0 = 复测对象被跳过（如线程数不足），本轮复测未验证任何东西，
-    # 不得读作复测通过；t=...(来源) 标注 -t 预算——inherited=沿用原命令/
-    # capped=超上限封顶/default=原命令未给；elapsed≈t = 跑满时限（「时限内未
-    # 复现」的证据，对内部相位可被 -t 截短的用例不构成「完整验证通过」）。
-    local t0
+    # 判定；skip>0 = 复测对象被跳过（如线程数不足或 BETA 质量门），本轮复测未验证
+    # 任何东西，不得读作复测通过；t=...(来源) 标注 -t 预算（恒秒口径——原始 token
+    # 的毫秒/min/h 形态已由 retest_t_budget 归一）——inherited=沿用原命令/
+    # capped=超上限封顶/default=原命令未给；elapsed（秒）已扣除 retest_guarded
+    # 前置内存门的等待（等待 >0 时另记 memguard_wait=Ns），elapsed≥t = 预算跑满
+    # （「时限内未复现」的证据，对内部相位可被 -t 截短的用例不构成「完整验证
+    # 通过」）。
+    local t0 elaps mgw_s
     if [ -n "$failed_test" ] && [ -n "$seed_ok" ]; then
         for i in 1 2 3; do
             sleep 5; check_pause
@@ -225,7 +228,9 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
                 "${FLAGS[@]}" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
             rcf=$?
             [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记
-            echo "retest$i(targeted) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null) skip=$(grep -Ec 'result: *skip' "$evdir/retest$i.yaml" 2>/dev/null) t=$retest_t($retest_t_src) elapsed=$((SECONDS - t0))s" >> "$evdir/retests.txt"
+            elaps=$((SECONDS - t0 - RETEST_MEMGUARD_WAIT_S))
+            mgw_s=""; [ "$RETEST_MEMGUARD_WAIT_S" -gt 0 ] && mgw_s=" memguard_wait=${RETEST_MEMGUARD_WAIT_S}s"
+            echo "retest$i(targeted) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null) skip=$(grep -Ec 'result: *skip' "$evdir/retest$i.yaml" 2>/dev/null) t=$retest_t($retest_t_src) elapsed=${elaps}s${mgw_s}" >> "$evdir/retests.txt"
         done
     else
         for i in 1 2 3; do
@@ -235,7 +240,9 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
                 "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
             rcf=$?
             [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记
-            echo "retest$i(wholecmd) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null) skip=$(grep -Ec 'result: *skip' "$evdir/retest$i.yaml" 2>/dev/null) elapsed=$((SECONDS - t0))s" >> "$evdir/retests.txt"
+            elaps=$((SECONDS - t0 - RETEST_MEMGUARD_WAIT_S))
+            mgw_s=""; [ "$RETEST_MEMGUARD_WAIT_S" -gt 0 ] && mgw_s=" memguard_wait=${RETEST_MEMGUARD_WAIT_S}s"
+            echo "retest$i(wholecmd) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null) skip=$(grep -Ec 'result: *skip' "$evdir/retest$i.yaml" 2>/dev/null) elapsed=${elaps}s${mgw_s}" >> "$evdir/retests.txt"
         done
     fi
     echo "$(date '+%F %T'),$label,rc=$rc,test=${failed_test:-?},seed=${fail_seed:-none},$(tr '\n' ';' < "$evdir/retests.txt"),$evdir" >> "$EVENTS_DIR/ledger.csv"

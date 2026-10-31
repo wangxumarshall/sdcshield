@@ -117,11 +117,14 @@ su -c "systemctl stop sdc-collector@percore sdc-collector@pmu sdc-collector@ras"
 retest1(targeted) rc=0 fail/crash=0 skip=1 t=120s(default) elapsed=35s
 ```
 
-- `skip>0`：复测对象被跳过（如线程数不足）——本轮复测**未验证任何东西**，
-  不得读作复测通过（旧 -n 0 退化单线程假通过即此形态）；
-- `t=<预算>(<来源>)`：inherited=沿用原命令 / capped=超 900s 上限封顶 /
-  default=原命令未给 -t；
-- `elapsed≈t`：跑满时限——是「时限内未复现」的证据，对内部相位可被 -t
+- `skip>0`：复测对象被跳过（如线程数不足或 BETA 质量门）——本轮复测**未验证
+  任何东西**，不得读作复测通过（旧 -n 0 退化单线程假通过即此形态）；
+- `t=<秒>s(<来源>)`：-t 预算，**恒秒口径**（原命令 token 的毫秒/min/h 形态已
+  归一，ms 向上取整——`-t 5000`(=5s) 记 `t=5s(inherited)`，勿再按毫秒读）；
+  inherited=沿用原命令 / capped=超 900s 上限封顶 / default=原命令未给 -t；
+- `elapsed`（秒）为纯运行时长，已扣除 retest_guarded 前置内存门等待（等待>0
+  时另记 `memguard_wait=Ns`——不扣除时内存紧张期 elapsed 可虚高 60s+）；
+  `elapsed≥t` = 预算跑满——是「时限内未复现」的证据，对内部相位可被 -t
   截短的用例（mesh 相位 1 超时空过类，独立缺陷）不构成「完整验证通过」；
   判读存疑时看 retest*.yaml 的逐测试 result 与 retest*.out 的用例自打印。
 

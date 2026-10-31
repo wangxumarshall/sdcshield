@@ -169,12 +169,22 @@ retest_t_budget() { # $1=原命令 -t 值（空=原命令未给） → stdout: "
     # RETEST_T_DEFAULT_S(默认120s)。看门狗 = 预算秒 + RETEST_GUARD_MARGIN_S
     # (默认90s，覆盖 init/teardown——169GB 级缓冲 init 的 memset 自身就超 30s，
     # 旧 150s 硬编码只对 120s 预算成立)，下限 150s。
+    # 预算 token 一律归一化为 "<秒>s"（PR #331 二轮意见 #20）：框架 chrono 裸数
+    # =毫秒（framework/sandstone_chrono.cpp:30），台账 t= 若沿用 "5000"/"2min"
+    # 原始形态而 elapsed 为秒，"elapsed≈t" 判读对不同单位形态系统性失真。
+    # 折算用 flag_time_to_s（ms 向上取整——覆盖度宁多勿少，1.5s→2s 只增不减）；
+    # 时长数值不变（"5000"→"5s" 对框架语义等价），仅表述归一。
     local orig_t="$1" retest_t src tsec
     if [ -n "$orig_t" ]; then
-        retest_t="$orig_t"; src=inherited
+        src=inherited
         tsec=$(flag_time_to_s "$orig_t")
-        if [ -n "$tsec" ] && [ "$tsec" -gt "${RETEST_T_CAP_S:-900}" ]; then
-            retest_t="${RETEST_T_CAP_S:-900}s"; src="capped(${orig_t})"
+        if [ -n "$tsec" ]; then
+            retest_t="${tsec}s"
+            if [ "$tsec" -gt "${RETEST_T_CAP_S:-900}" ]; then
+                retest_t="${RETEST_T_CAP_S:-900}s"; src="capped(${orig_t})"
+            fi
+        else
+            retest_t="$orig_t"   # 理论不可达（提取器已校验形态）；原样沿用不猜
         fi
     else
         retest_t="${RETEST_T_DEFAULT_S:-120}s"; src=default
@@ -242,6 +252,11 @@ cleanup_orphans() { # 清本用户 control 孤儿切片；-u 限定当前用户�
 
 _cur_memavail_kb() { mem_avail_kb; }   # 取数钩子：测试 monkeypatch 覆写以注入内存值
 
+# 最近一次 retest_guarded 前置门实际等待的秒数（无等待=0）。台账 elapsed 扣除
+# 该值后再与 t= 比对（PR #331 二轮意见 #20：前置门 sleep 计入 elapsed 会使
+# 内存紧张期 elapsed 虚高 60s+，「elapsed≈t=跑满时限」判读失真）。
+RETEST_MEMGUARD_WAIT_S=0
+
 retest_guarded() { # <label> <retests.txt> <timeout时长> <命令...> → 命令 rc；250=内存门拦截
     # 前置门：MemAvailable < 6GB → 等 MEMGUARD_WAIT_S(默认60s) 重取，仍低 → 记 skipped 返回 250
     # 看门狗：运行期每 MEMWATCH_POLL_S(默认5s) 查 < 2.5GB → KILL 复测进程组并记 killed
@@ -255,9 +270,12 @@ retest_guarded() { # <label> <retests.txt> <timeout时长> <命令...> → 命�
     # 期间自然退出（假阳性窗口），不记；zombie 仍在表则记（实证 5/5 不漏）
     local label="$1" rtxt="$2" tmo="$3"; shift 3
     local ma cpid rpid hit
+    RETEST_MEMGUARD_WAIT_S=0
     ma=$(_cur_memavail_kb)
     if mem_below "$ma" 6291456; then            # < 6GB：等一手再判（可能只是事件余波）
+        local w0=$SECONDS
         sleep "${MEMGUARD_WAIT_S:-60}"
+        RETEST_MEMGUARD_WAIT_S=$((SECONDS - w0))
         ma=$(_cur_memavail_kb)
         if mem_below "$ma" 6291456; then
             echo "$label skipped(memguard ma=${ma}kB)" >> "$rtxt"

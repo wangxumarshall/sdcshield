@@ -5,9 +5,8 @@ COMMON = os.path.join(os.path.dirname(__file__), "..", "..", "..",
 DRIVER = os.path.join(os.path.dirname(__file__), "..", "..", "..",
                       "scripts", "sdc-excite-reproduce", "sdc-excite-reproduce.sh")
 
-# 定向复测条件保真（PR #331 检视轮，2026-10-31）：复测命令的条件旗标
-# （线程 -n / 每测试时长 -t / CPU 拓扑 --cpuset / 测试旋钮 -O / 质量门控
-#  --quality）必须沿用原命令。
+# 定向复测条件保真（PR #331 检视轮，2026-10-31）：复测命令的四维条件旗标
+# （线程 -n / 每测试时长 -t / CPU 拓扑 --cpuset / 测试旋钮 -O）必须沿用原命令。
 # 历史条件失真 → 假通过台账的两次实证：
 #   - 硬编码 -n 0（2026-10-30 retest1.out）：多线程用例 SKIP 却记 rc=0 fail/crash=0；
 #   - 硬编码 -t 120s（同日 mesh 事件检视）：169GB 缓冲整轮 ~117s，相位 2 跑不完即沿
@@ -90,7 +89,7 @@ def test_extract_drops_invalid_and_absent():
     assert _flags("/b/sdcshield -n abc -t xyz -O nokey -e zstd19") == ""  # 值非法 → 丢弃
 
 
-# ---------------- retest_t_budget：预算三档 + 看门狗伸缩 ----------------
+# ---------------- retest_t_budget：预算三档 + 看门狗伸缩 + 秒归一 ----------------
 
 def test_budget_inherited_under_cap():
     out = _bash("retest_t_budget 480s").stdout.split()
@@ -116,6 +115,15 @@ def test_budget_env_overrides():
     p = _bash("RETEST_T_DEFAULT_S=60 retest_t_budget ''")
     assert p.stdout.split() == ["60s", "default", "150"]
 
+def test_budget_token_normalized_to_seconds():
+    # PR #331 二轮意见 #20：框架 chrono 裸数=毫秒，台账 t= 若沿用原始 token
+    # 而 elapsed 为秒，「elapsed≈t」判读对毫秒/min 形态系统性失真——预算 token
+    # 一律归一为 "<秒>s"（时长数值等价，仅表述归一；ms 向上取整宁多勿少）。
+    assert _bash("retest_t_budget 5000").stdout.split() == ["5s", "inherited", "150"]
+    assert _bash("retest_t_budget 2min").stdout.split() == ["120s", "inherited", "210"]
+    assert _bash("retest_t_budget 1h").stdout.split() == ["900s", "capped(1h)", "990"]
+    assert _bash("retest_t_budget 1500").stdout.split() == ["2s", "inherited", "150"]
+
 
 # ---------------- 驱动接线（源码级守护，同 test_driver_memguard 风格）----------------
 
@@ -135,8 +143,14 @@ def test_driver_wires_condition_fidelity():
     assert 'retest_guarded "retest$i" "$evdir/retests.txt" 150s' not in src
 
 def test_driver_ledger_line_honest_labels():
-    # 台账行三要素：skip 计数（SKIP 不得读作复测通过）、t=预算(来源)、elapsed
+    # 台账行要素：skip 计数（SKIP 不得读作复测通过）、t=预算(来源，恒秒)、
+    # elapsed（纯运行秒——扣除 memguard 前置门等待，等待>0 另记 memguard_wait）
     src = open(DRIVER).read()
     assert "skip=$(grep -Ec 'result: *skip'" in src
     assert "t=$retest_t($retest_t_src)" in src
-    assert "elapsed=$((SECONDS - t0))s" in src
+    # elapsed 扣除 memguard 前置门等待后才是纯运行时长；等待>0 另记 memguard_wait
+    assert "elaps=$((SECONDS - t0 - RETEST_MEMGUARD_WAIT_S))" in src
+    assert "elapsed=${elaps}s${mgw_s}" in src
+    assert 'mgw_s=" memguard_wait=${RETEST_MEMGUARD_WAIT_S}s"' in src
+    # 台账不再记未扣除等待的毛 elapsed（意见 #20：等待可虚高 60s+）
+    assert "elapsed=$((SECONDS - t0))s" not in src

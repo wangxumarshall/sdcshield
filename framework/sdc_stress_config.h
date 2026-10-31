@@ -981,7 +981,7 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
      * 显式 -O/配置文件/env 值完全旁路联合求解(时间校准/自适应都不跑,
      * 用户自担), 此前无任何内存预期提示。早退前按本函数的模型口径算
      *   预期合计 = 全机线程 × c × n² + slices × shared
-     * 与全局三源预算 sdc_budget_bytes(permille) 比对: 超出 → [内存越界],
+     * 与全局四源预算 sdc_budget_bytes(permille) 比对: 超出 → [内存越界],
      * 不足一半 → [欠压力], 中间档安静。口径:
      *   - threads 用 sdc_total_threads()(全局): 显式 knob 在 init 查询
      *     时 thread_count() 是 slice 口径, 预算按全机分摊(与

@@ -215,8 +215,10 @@ All 21 eigen tests size their matrix dimension through `sdc_joint_dim_slice()`
 ```
 sdc_numa_probe()   nodes-with-memory + per-node MemFree + cpulist
       ↓
-sdc_budget_bytes() three-source min: phys×‰ / MemAvailable×0.9 /
-                   cgroup v1+v2 headroom; per-node share by MemFree
+sdc_budget_bytes() four-source min: phys×‰ / MemAvailable×0.9 /
+                   cgroup v1+v2 headroom / CommitLimit−Committed_AS×0.9
+                   (commit source only when vm.overcommit_memory=2,
+                   no-op otherwise — issue #310); per-node share by MemFree
       ↓            (zero-memory nodes fold into the fallback node —
                     on a node0-only host this degrades exactly to
                     the global model)

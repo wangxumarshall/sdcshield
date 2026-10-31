@@ -81,7 +81,7 @@ static int gemm_mdim(struct test *test)
         return (int)v;
 #if defined(__aarch64__) && defined(__linux__)
     /* 联合求解(T9, 同 T6 gemm_double_max_arm / T8 SVD 族模式): 一次
-     * sdc_joint_dim_slice 同时约束内存(per-NUMA-node 三源预算 vs RSS
+     * sdc_joint_dim_slice 同时约束内存(per-NUMA-node 四源预算 vs RSS
      * 表 GEMM_F64 实测系数)与时间(全核单迭代预算 × AR 幂律外推)。
      *   - legacy 三元组 (8,4,6.0) 是 fam 失配时的防御性 fallback,
      *     fam 命中 RSS 表后忽略;

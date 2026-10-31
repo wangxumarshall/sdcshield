@@ -215,7 +215,7 @@ uint64_t sdc_node_budget_bytes(int permille, int cpu)
      *   漂移为已披露边界(spec §8, 本机 node0-only 不可验)。 */
     const struct sdc_numa_topology *t = sdc_numa_probe();
     /* 探测失败(无节点内存信息): 诚实退化全局模型 —— 全局预算本身已含
-     * 三源 min 上界, 退化不会放大可用量。 */
+     * 四源 min 上界, 退化不会放大可用量。 */
     if (t->nodes_with_mem <= 0)
         return sdc_budget_bytes(permille);
     int node = sdc_effective_node(t, cpu);

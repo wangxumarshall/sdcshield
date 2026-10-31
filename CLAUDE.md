@@ -63,7 +63,7 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 # Fresh clone: run the vendored build.sh first (openssl/openblas/sleef/isa-l/
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
-./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent: ~478 on an SVE1 host, 297 on a no-SVE Kunpeng 920 (2026-10-27)
+./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent: ~480 on an SVE1 host, 298 on a no-SVE Kunpeng 920 (2026-10-31 re-measured: 297 on 2026-10-27 + spinlock_add_neon, which registers with no spec gate — prediction confirmed)
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
 ./builddir/sdcshield --quality=-1 -e <test>   # include SKIP-level tests

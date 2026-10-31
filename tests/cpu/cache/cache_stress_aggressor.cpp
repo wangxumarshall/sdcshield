@@ -46,8 +46,9 @@ static void aggressor_thread(SharedData *data, float32x4_t *slot) {
 }
 
 static void victim_thread(SharedData *data, float32x4_t *slot) {
-    // 每迭代重掷随机浮点数向量（框架 RNG 按线程独立流；frandomf_scale
-    // 返回 [0, scale)，取 [-1, 1) 区间做跨符号值）
+    // 每迭代重掷随机浮点数向量（框架 RNG 按线程独立流——含裸 std::thread：
+    // framework/random.cpp 为未走框架初始化的线程惰性播种私有引擎，
+    // issue #348；frandomf_scale 返回 [0, scale)，取 [-1, 1) 区间做跨符号值）
     while (!data->stop.load(std::memory_order_relaxed)) {
         // 构建向量：4 个独立随机 float
         float32x4_t val = {frandomf_scale(2.0f) - 1.0f,

@@ -7,6 +7,7 @@
 #include "sandstone_p.h"
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <new>
 #include <random>
@@ -125,9 +126,62 @@ static thread_rng *rng_for_thread(int thread_num)
     return &rngs[thread_num + 1];
 }
 
+// -- per-thread engine binding (issue #348) --
+// Every thread caches its engine slot in tls_engine. Framework threads run
+// one of the framework's init paths before any RNG use:
+//   - main thread / re-initing child: random_init_global() binds below;
+//   - per-CPU workers, parallel AND sequential scheduling alike:
+//     random_init_thread() (sandstone_run.cpp) binds the slot;
+//   - the test-init aux thread runs with thread_num == -1
+//     (sandstone_run.cpp), which thread_local_rng() resolves to the global
+//     engine slot, as it always did.
+// Threads spawned by test code with a raw std::thread run NONE of those:
+// their thread_num TLS is zero-initialized to 0, which used to alias
+// framework worker 0's slot (rngs[1]) -- up to thread_count() such threads
+// doing non-atomic read-modify-write on one engine state = a data race
+// (C++ UB, issue #348). Those threads now get a private, lazily-seeded
+// engine instead.
+static thread_local thread_rng *tls_engine = nullptr;
+
+// engine storage for raw (non-framework) threads, seeded on first RNG use
+static thread_local thread_rng tls_raw_engine_storage;
+
+// salt so a raw thread's mixin never equals a worker's mixin_from_device_info
+// scramble() for plausible topologies (a collision would only duplicate one
+// stream, never corrupt one)
+constexpr uint32_t kRawThreadMixinSalt = UINT32_C(0x52617721);    // "Raw!"
+
+// hands each raw thread a distinct mixin
+static std::atomic<uint32_t> raw_thread_mixin_counter{0};
+
+static thread_rng *raw_thread_engine()
+{
+    // Seed from the global engine's CURRENT state so the stream still depends
+    // on `-s <engine>:<seed>`. The global slot is only written between test
+    // executions (random_advance_seed, sandstone_run.cpp, runs after all
+    // worker threads joined) and during random_init_global itself (no test
+    // threads exist yet) -- reads here are race-free by that schedule.
+    uint32_t mixin = kRawThreadMixinSalt
+            ^ raw_thread_mixin_counter.fetch_add(1, std::memory_order_relaxed);
+    sApp->random_engine->seedThread(&tls_raw_engine_storage, mixin);
+    tls_engine = &tls_raw_engine_storage;
+    return tls_engine;
+}
+
 static thread_rng *thread_local_rng()
 {
-    return rng_for_thread(thread_num);
+    if (thread_rng *r = tls_engine)
+        return r;
+    if (thread_num == -1) {
+        // main thread and test-init aux thread: the global engine slot,
+        // exactly as before (thread_num is set to -1 before any RNG use)
+        tls_engine = rng_for_thread(-1);
+        return tls_engine;
+    }
+    // unbound and not a -1 thread: a raw thread spawned by test code
+    // (framework workers bind in random_init_thread before any test code
+    // runs on them)
+    return raw_thread_engine();
 }
 
 template <typename E> struct EngineWrapper : public RandomEngineWrapper
@@ -641,6 +695,14 @@ void random_init_global(const char *seed_from_user)
         read_from_seed(sseq);
         sApp->random_engine->seedGlobalEngine(sseq);
     }
+
+    // Bind the initializing thread to the global engine slot. Load-bearing
+    // for the exec'd child (exec_mode_run calls this with fresh TLS, where
+    // thread_num is still zero-initialized to 0 and never set to -1): without
+    // this, that thread would be misclassified as a raw thread and its
+    // random_advance_seed() calls would advance a private engine instead of
+    // the global one (issue #348, same zero-init defect family).
+    tls_engine = rng_for_thread(-1);
 }
 
 std::string random_format_seed()
@@ -665,6 +727,10 @@ void random_init_thread(int thread_num)
 {
     // nothing should be modifying the global engine now
     sApp->random_engine->seedThread(rng_for_thread(thread_num), mixin_from_device_info(thread_num));
+    // bind this worker's engine slot: test code running on this thread --
+    // and any raw std::thread it spawns -- can never alias another
+    // thread's slot (issue #348)
+    tls_engine = rng_for_thread(thread_num);
 }
 
 template <typename FP> static inline FP random_template(FP scale)

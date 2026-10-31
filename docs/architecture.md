@@ -181,8 +181,25 @@ link without symbol clash), `tests_set_sve` (aarch64 SVE, `-DEigen=EigenSVE`).
 `haveAes()`; list via `-s help`). The AES engine uses `#pragma GCC target`
 per-arch: x86 `_mm_aesenc_si128`, aarch64 `vaesmcq_u8(vaeseq_u8(...))` via
 `+crypto`. RNG state is per-thread (`thread_rng` union, 64-byte aligned). The
-framework **overrides libc seeding functions** (`framework/random.cpp:781-883`
+framework **overrides libc seeding functions** (`framework/random.cpp:850-952`
 `extern "C"` block — `srand` aborts, etc.).
+
+Threads spawned by test code with a raw `std::thread` never run the
+framework's init paths; their `thread_num` TLS is zero-initialized to 0,
+which used to alias worker 0's slot (`rngs[1]`) — a data race when several
+such threads call the RNG (issue #348, proven by ThreadSanitizer on
+`cache_stress_aggressor`). Since 2026-10-31 such threads get a private,
+lazily-seeded `thread_local` engine instead (`tls_engine` /
+`raw_thread_engine()`): the mixin is a fixed salt ^ a process-wide atomic
+counter and the seed material is the global engine's current state, so raw
+streams still depend on `-s`. Framework threads bind the exact slots they
+always used (`random_init_global` / `random_init_thread` / the
+`thread_num == -1` first-use fallback), so their streams stay bit-exact
+under `-s`. Caveat: which raw thread gets which counter value depends on
+scheduling, so per-raw-thread replay across runs is not guaranteed; and a
+detached raw thread whose *first* RNG call happens after the test finished
+could race the scheduler's `random_advance_seed()` on the global slot —
+join raw threads before `test_run`/`test_cleanup` returns.
 
 ## Eigen 5.0 SVE double packets (vendored)
 

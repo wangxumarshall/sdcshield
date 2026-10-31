@@ -13,7 +13,14 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifndef __SANITIZE_ADDRESS__
+// Sanitizer builds must skip this override entirely (mirrors the existing
+// ASan guard): the sanitizer runtime calls malloc through dlsym during its
+// own initialization, which would land in this instrumented override and
+// re-enter the still-uninitialized sanitizer runtime (SIGSEGV in
+// __tsan_func_entry before main, observed 2026-10-31 on a TSan build).
+// GCC-only macro, same as the ASan guard below it; a clang TSan build would
+// need __has_feature(thread_sanitizer) instead (this repo builds with GCC).
+#if !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
 
 // For Sandstone, we'd like to always return zeroed memory to our tests, to
 // ensure they are deerministic regardless of refactorings that may have added
@@ -128,4 +135,4 @@ void *realloc(void *ptr, size_t size)
         bzero_block(reinterpret_cast<uint8_t *>(newptr) + oldsize, bytestoclear);
     return newptr;
 }
-#endif // __SANITIZE_ADDRESS__
+#endif // !__SANITIZE_ADDRESS__ && !__SANITIZE_THREAD__

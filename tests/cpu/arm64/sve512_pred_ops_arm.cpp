@@ -55,9 +55,11 @@
  *    issued back-to-back with the LDFF1,
  *    and the LDFF1 back-to-back with the SETFFR, with no function call
  *    anywhere in that window — each capture is encapsulated in the
- *    single always-inline unit ffr_ldff1_capture, and the (b)+(c) pair
- *    (whose between-captures gap must equally stay call-free) in the
- *    combined always-inline unit ffr_fault_acc_capture (see there): the arm64
+ *    single small noinline function ffr_ldff1_capture (whose call
+ *    boundary doubles as the mechanical CSE killer for RDFFR
+ *    freshness), and the (b)+(c) pair (whose between-captures gap must
+ *    contain nothing but the two capture calls) in the combined
+ *    wrapper ffr_fault_acc_capture (see there): the arm64
  *    Linux syscall ABI discards live
  *    SVE state at syscall entry (measured on a 6.6 kernel: FFR is
  *    zeroed, Z/P preserved; kernel sve_flush_{z,p,ffr} macros exist and
@@ -144,15 +146,19 @@ struct PredOpsData {
 
 #ifdef __aarch64__
 
-/* The whole LDFF1/FFR capture window as ONE always-inline unit — the
- * mechanical guard for the zero-call invariant this test depends on.
+/* The whole LDFF1/FFR capture window as ONE small NOINLINE function —
+ * the mechanical guard for the TWO invariants this test depends on
+ * (round-4 #27/#30 switched this from always-inline to noinline; see
+ * invariant 2 for why).
  *
- * Everything from the SETFFR to the FFR bit count landing in a GPR (and
- * the loaded data in memory) lives in this single template body, which
- * contains no function call and inlines into the caller even at -O0, so
- * the window can never silently grow one: any future call has to be
- * inserted into this one small body, right under this comment, where the
- * constraint is stated. The window must stay call-free end to end:
+ * Invariant 1, the zero-call window: everything from the SETFFR to the
+ * FFR bit count landing in a GPR (and the loaded data in memory) lives
+ * in this single template body, which itself contains no call, so the
+ * window can never silently grow one: any future call has to be
+ * inserted into this one small body, right under this comment, where
+ * the constraint is stated (the body is one contiguous instruction run
+ * at every -O level, exactly because it is a function of its own). The
+ * window must stay call-free end to end:
  *
  *  - the arm64 Linux syscall ABI discards live FFR state at syscall entry
  *    (measured on a 6.6 kernel: FFR reads 0 after a syscall while Z/P are
@@ -170,10 +176,27 @@ struct PredOpsData {
  * only at the scalar count would still leave the loaded Z data exposed on
  * a Z-flushing kernel, so the svst1 is inside the unit too. PrimeFFR=false
  * (accumulation face) additionally requires its capture to follow the
- * previous one with NO call in between: the partially-cleared FFR it
- * observes is live state that memcpy would already have destroyed — that
- * cross-capture discipline is mechanized by the ffr_fault_acc_capture
- * wrapper right below, which inlines both captures into one unit.
+ * previous one with NOTHING but the two capture calls in between: the
+ * partially-cleared FFR it observes is live state that a foreign call
+ * would already have destroyed — that cross-capture discipline is
+ * mechanized by the ffr_fault_acc_capture wrapper right below.
+ *
+ * Invariant 2, fresh RDFFR: GCC 12 does not model the FFR effects of
+ * svldff1/svsetffr/svrdffr for optimization purposes (measured on
+ * 12.3.1: an unused svldff1 is DCE'd outright, and an svrdffr result
+ * gets CSE'd into a stale earlier value — the gem5 dual kernel measured
+ * the same CSE even across calls, which is why its captures have been
+ * noinline since round 3). A compiler that modeled svrdffr as a pure
+ * read could therefore substitute an earlier capture's value for a
+ * later one's, and the golden comparison would NOT catch it: the acc
+ * face's golden equals the fault face's, and the mapped face expects
+ * all-ones every iteration, so both substitutions are silent. The
+ * noinline call boundary is the mechanical kill: the intrinsic is
+ * spelled only inside this function, so there is no caller-level
+ * expression to CSE, and this function writes memory through its
+ * pointer arguments, so it is not pure — two calls can neither be
+ * merged nor hoisted out of the re-loop. Every face's RDFFR executes,
+ * on every toolchain that honors noinline.
  *
  * Count EVERY predicate bit, not just the per-element first bit: CNTP with
  * a b64 pattern tests only bit 0 of each 8-bit slice, so a stuck bit
@@ -213,22 +236,25 @@ struct PredOpsData {
  * the file's own guard, so any future restructure that lifts the
  * DECLARE_TEST pattern would have tripped on it first. */
 template <bool PrimeFFR>
-static inline __attribute__((always_inline)) long
+static __attribute__((noinline)) long
 ffr_ldff1_capture(const double *from, double *to, uint8_t *ffr_image)
 {
     /* Zero-instruction compiler barrier — emits nothing, NOT a call (the
-     * window below stays one contiguous call-free instruction run; see
-     * the objdump evidence in the commit). GCC 12 does not model the
-     * FFR effects of svldff1/svsetffr for optimization purposes
-     * (measured on 12.3.1: an unused svldff1 is DCE'd outright, and
-     * svrdffr results get CSE'd across captures — a stale spill slot is
-     * reloaded where a fresh RDFFR is required). Every value this unit
-     * loads is consumed (stored to a buffer the caller memcmps), so the
-     * LDFF1 cannot be deleted; this barrier additionally forbids
-     * substituting an EARLIER capture's RDFFR value for this one's. The
-     * per-iteration golden comparison makes any staleness fail loudly
-     * rather than silently — but a false SDC costs a CI triage round
-     * (this PR's own origin), so the constraint is fixed here. */
+     * window below stays one contiguous call-free instruction run). Its
+     * role is ORDERING, not CSE prevention, and that is all it is
+     * claimed to do (round-4 #27/#30): a memory clobber constrains
+     * memory accesses only — by GCC semantics it does not forbid
+     * reusing a register-resident value computed earlier, so the
+     * barrier alone cannot guarantee a fresh RDFFR. That guarantee is
+     * the noinline call boundary of this function (invariant 2 in the
+     * comment above): the caller never spells the intrinsic, and this
+     * function writes memory through its pointer arguments so its calls
+     * can be neither merged nor hoisted. The barrier keeps the window's
+     * loads and stores from being reordered across the window start
+     * under aggressive scheduling, and mirrors the gem5 dual kernel's
+     * capture_img, which carries the same barrier inside its own
+     * noinline body. Every value this unit loads is consumed (stored to
+     * a buffer the caller memcmps), so the LDFF1 cannot be deleted. */
     __asm__ volatile ("" : : : "memory");
     if constexpr (PrimeFFR)
         svsetffr();
@@ -243,15 +269,21 @@ ffr_ldff1_capture(const double *from, double *to, uint8_t *ffr_image)
 
 /* The CROSS-capture discipline as one unit. The accumulation face
  * observes the partially-cleared FFR the faulting capture just left —
- * live state that any call in between would destroy (measured: this
- * host's glibc memcpy zeroes the FFR). ffr_ldff1_capture's own
- * always-inline body only closes the window WITHIN one capture; this
- * wrapper closes the gap BETWEEN the two captures the same mechanical
- * way: both bodies inline into one contiguous instruction run, so a
- * future call can only enter by editing this small body, right under
- * this comment, where the constraint is stated — before round 3 the
- * between-captures gap was comment-only discipline, structurally the
- * same unprotected shape as the Sanitizer-CI bug this PR fixed. */
+ * live state that any FOREIGN call in between would destroy (measured:
+ * this host's glibc memcpy zeroes the FFR; a syscall entry flushes it).
+ * ffr_ldff1_capture's own noinline body closes the window WITHIN one
+ * capture; this wrapper closes the gap BETWEEN the two captures: with
+ * the captures noinline (round 4), the gap is exactly two adjacent
+ * calls to this same leaf, and a bl to our own leaf preserves the FFR —
+ * bl is not a syscall, the leaf is not libc, and neither writes the FFR
+ * after its own RDFFR. The gem5 dual kernel's capture_pair has run this
+ * exact two-call shape for 2000 iterations x 4 VL tiers, and every
+ * native run of this test asserts the acc-face golden on real silicon.
+ * The discipline: NOTHING but these two calls may ever sit in this
+ * body — a future call inserted between them breaks the acc face
+ * exactly like the Sanitizer-CI bug this PR fixed (before round 3 the
+ * gap was comment-only discipline, structurally the same unprotected
+ * shape as that bug). */
 static inline __attribute__((always_inline)) void
 ffr_fault_acc_capture(const double *fault_from, double *fault_to,
                       uint8_t *fault_image, const double *acc_from,
@@ -729,10 +761,11 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // *clears* the FFR bit of each faulting element — it never sets a
         // bit — so without SETFFR the readback is the previous,
         // undefined FFR state, not the set of successfully-loaded lanes),
-        // then capture through the single always-inline window unit: the
+        // then capture through the single noinline capture function: the
         // call-free [SETFFR, image-and-data-in-memory] discipline, the b8
-        // full-bit count and the bit-for-bit image materialization live
-        // in ffr_ldff1_capture's one body. The readback buffers are
+        // full-bit count, the bit-for-bit image materialization and the
+        // call-boundary RDFFR-freshness guarantee all live in
+        // ffr_ldff1_capture's one body. The readback buffers are
         // allocated BEFORE the window so no call can land between the
         // capture and the store even on a Z-flushing kernel.
         const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
@@ -764,11 +797,12 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            and clears one only on a fault, so the count must still be 8
            and not snap back to all-ones (or to 0). Catches an FFR
            write-on-success defect the all-true face cannot see. Its
-           capture follows the faulting one INSIDE the combined
-           always-inline unit ffr_fault_acc_capture — the between-captures
-           zero-call discipline is mechanical, not comment-only (the
-           partially-cleared FFR is live state, and a libc call — memcpy,
-           measured — would clobber it). */
+           capture follows the faulting one through the combined wrapper
+           ffr_fault_acc_capture — two adjacent noinline capture calls
+           and NOTHING else in between (see there: the cross-capture
+           discipline is mechanical, not comment-only; the
+           partially-cleared FFR is live state, and a foreign call —
+           memcpy, measured — would clobber it). */
         long fault_bits, acc_bits;
         ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
                               ffr_back.data(), a_img, fault_bits, acc_bits);
@@ -844,10 +878,11 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // the LDFF1/FFR path gets a single sampling opportunity and a
         // marginal SDC that only shows under sustained stress escapes
         // (AGENTS.md: timed continuous stress, short-run pass proves
-        // nothing). The capture goes through the same single
-        // always-inline window unit as Section 4 — the zero-call
-        // invariant is enforced in ffr_ldff1_capture's one body, not
-        // re-maintained by hand here: test_time_condition() above, the
+        // nothing). The capture goes through the same single noinline
+        // capture function as Section 4 — the zero-call window and the
+        // call-boundary RDFFR-freshness invariants are enforced in
+        // ffr_ldff1_capture's one body, not re-maintained by hand here:
+        // test_time_condition() above, the
         // FMA-part allocations, and the memcmp below all sit outside it.
         const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
                                                       ffr_back.data(), m_img);
@@ -861,10 +896,11 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
                                                    all_passed);
         if (mr != EXIT_SUCCESS)
             return mr;
-        /* faulting + accumulation captures as the combined always-inline
-           unit — the between-captures zero-call discipline is mechanical
-           (the partially-cleared FFR is live state a libc call, memcpy
-           measured, would clobber) */
+        /* faulting + accumulation captures as the combined wrapper —
+           two adjacent noinline capture calls and nothing else in
+           between (the cross-capture discipline is mechanical; the
+           partially-cleared FFR is live state a foreign call, memcpy
+           measured, would clobber — see ffr_fault_acc_capture) */
         long fault_bits, acc_bits;
         ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
                               ffr_back.data(), a_img, fault_bits, acc_bits);

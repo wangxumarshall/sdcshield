@@ -71,7 +71,7 @@ bash scripts/run/sdc_detect.sh
 
 1. **一直跑不停** = 本轮全过；`-T forever` 自动进入下一轮，继续挂着（检出率随时间积累）。
 2. **停下且有 FAIL**：先看挂在哪个测试——
-   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**——per-thread 同源 golden（每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；多机满核多 seed 长窗 + gem5-fi 双线程验证全绿，完整验证记录见 CLAUDE.md 平台怪癖条目）。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑可作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。检出通道口径：eigen 族的同源重算比对检出**非确定性缺陷**（同输入不同位）；对**确定性核缺陷**存在结构性盲区（golden 与重算走同一错误路径、位级一致地错）——全套件没有 Eigen 分解路径的固定 golden 测试，这是**已披露的覆盖空洞**（旧共享 golden 的概率性检出通道被主动换弃以消除满核假阳）。
+   - 挂在 `eigen_svd_double` / `eigen_sparse`（**本条仅适用于含 2026-10-24 修复的构建**，即 feat/eigen-svd-multithread 合入后的源码构建；2026-09-12 预构建旧二进制见上节警示）：**2026-10-24 已修复**——per-thread 同源 golden（每 worker 独立生成输入并在同线程重算 golden，跨线程 Eigen SIMD 路径分歧不再产生假 mismatch；多机满核多 seed 长窗 + gem5-fi 双线程验证全绿，完整验证记录见 CLAUDE.md 平台怪癖条目）。2026-10-27 起（feat/eigen-p0-p3-fix）全族 sizing 改走 `sdc_joint_dim_slice` 联合求解——内存×时间双上限 + AR 全核慢化表（族×拓扑）估算的结构约束：对绝大多数族已实证留有裕度，但 GEMM 等族的 AR 表存在已知低估边界（本宿主类实测有效 AR≈15 vs 表值 5，3×），低估时按预算 200s 选出的单次迭代实际可跑 ~600s、超过 300s 硬宽限——AR 表足迹感知重标定是已登记的后续项。**满核挂 = SDC 嫌疑**，与其他测试同等进入定位流程；`-e <测试名> -t 5000 -n 1` 单线程复跑可作交叉对照（单线程也挂 = 高嫌疑），但不再是"良性抖动"判定。检出通道口径：eigen 族的同源重算比对检出**非确定性缺陷**（同输入不同位）；对**确定性核缺陷**存在结构性盲区（golden 与重算走同一错误路径、位级一致地错）——全套件没有 Eigen 分解路径的固定 golden 测试，这是**已披露的覆盖空洞**（旧共享 golden 的概率性检出通道被主动换弃以消除满核假阳）。
    - 挂在其他任何测试：**SDC 嫌疑**。保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现），进入定位流程。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 known_benign_ulp / full_core_only / transient / sdc_suspect + 可复现嫌疑自动逐核二分定位）。
@@ -226,9 +226,9 @@ PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ 新增�
 
 PR 检视共 **五个 bot**：四个外部 SaaS（codex、CodeRabbit、PR-Agent、Greptile——配置 `AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、`.greptile/`，均内嵌 SDC 激发专属检视要点：激发强度与覆盖、数据模式与缺陷激活、golden 字节比对、x86-64 非回归、占位诚实性、SVE/NEON VL、失败现场留证、多样性与检出率口径）+ 第 5 个**本地无头 claude 对抗检视**（`scripts/pr_local_review.py`，PR 检视-修复闭环引擎 `scripts/pr_loop.py` 的组成部分，本地触发无需 GitHub 使能）。`bot-coverage.yml` 做**非阻塞**覆盖度校验：有界轮询四个外部 bot 是否已检视，结果写入 step summary 并评论告警，**恒 exit 0、绝不阻塞合并**。四个外部机器人均已生效（Greptile 于 2026-10-13 完成安装授权，PR #238 首次实测产出检视）。生效核查方法（`gh` 命令与账号对照）、Greptile 安装记录与 SDC 检视要点汇总见 [docs/build-deploy-pr-ci/pr-review-bots.md](docs/build-deploy-pr-ci/pr-review-bots.md)；五 bot 检视-修复闭环全流程见 [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)。
 
-### CI 无人值守分诊（main CI 红 → 修复 PR 闭环）
+### task-loop：无人值守任务闭环（issue 驱动开发闭环）
 
-`scripts/ci_triage.py`（pr_loop 姊妹件，cron 每 30 分钟驱动 `scan`）：main 分支 CI 红 run 自动开跟踪 issue → headless agent 在独立克隆里修复 → push `fix/ci-<runid>` 分支 → `auto-pr.yml` 自动开 PR → 复用 pr-loop 检视闭环 → READY_TO_MERGE 时 @人工 merge。**merge 永远在人**；双车道（修复派发 / PR 收割）、flock 单实例、PAUSED kill switch 等运维细节见 [docs/build-deploy-pr-ci/ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)。
+`scripts/task_loop.py`（统一任务编排引擎，`ci_triage.py` 的泛化后继——后者现为过渡薄壳；cron 每 30 分钟驱动 `scan`、每 6 小时驱动 `audit`）：四类触发源——main 分支 CI 红 run、main 增量对抗审查（audit）、会话 enqueue（`/dev-loop` 命令）、GitHub 手建 issue——统一进入 `agent-task` 标签 issue 队列，单飞 headless agent 在独立克隆里修复/实现 → push `fix|feat/issue-<N>` 分支 → agent 自开 PR（`Closes #N`）→ 复用 pr-loop 五 bot 检视闭环 → READY_TO_MERGE 时 @人工 merge。**merge 永远在人**；标签协议/队列对账/单飞/熔断/kill switch/状态目录迁移等运维细节见 [docs/build-deploy-pr-ci/task-loop.md](docs/build-deploy-pr-ci/task-loop.md)；前代 CI 分诊手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)（历史保留）。
 
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
@@ -505,8 +505,8 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `zstd1` / `zstd19` | `.maxbuffersize` | 4096.. | 按变体 | 每迭代缓冲上限（level 固定 1 / 19，无 level knob） |
 | `zlib*`（NEON 家族） | `.level` / `.maxbuffersize` | 1..9 / 按变体 | 按变体 | zlib 压缩级别 / 缓冲上限（`zfuzz` 为随机 level 的 fuzz 往返、无 knob） |
 | `eigen_gemm_*`（NEON 家族） | `.mdim` | 16..4096（按变体，clamp） | 内存自适应 | 矩阵维度（覆盖自适应选择） |
-| `eigen_gemm_double_max_arm` | `.mdim` | 1024..4096 | 内存自适应 | SVE GEMM 逐档变体的矩阵维度 |
-| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000（clamp） | **内存自适应** | 强制矩阵维度（覆盖自适应选择） |
+| `eigen_gemm_double_max_arm` | `.mdim` | 1024..4096（clamp） | **按内存×时间联合自适应** | SVE GEMM 逐档变体的矩阵维度（覆盖自适应选择） |
+| `eigen_svd_cdouble_sve` | `.mdim` | 300..6000（clamp） | **按内存×时间联合自适应** | 强制矩阵维度（覆盖自适应选择；预期内存警告 `[内存越界]` 目前覆盖 SVD 模板族，本用例显式路径在调用方短路、暂无警告——T11b 将统一路由） |
 | `eigen_svd_bidiag_sve` | `.mdim` | 64..2048（clamp） | 自适应 | 自写 Householder 双对角化负载维度 |
 | `eigen_sparse` | `.n` | 64..8192（clamp） | 自适应 | 稀疏 Cholesky 规模 |
 | `openssl_sha` / `openssl_sha3` | `.arena_bytes` | 1MiB..4GiB（clamp） | 内存自适应 | 哈希数据竞技场字节数（SHA-2 加法链 / Keccak 置换的工作集） |
@@ -538,7 +538,7 @@ SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite
 ## 延伸
 
 - [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md) — 会话内 agent 自动化：push 自动开 PR → 五 bot 检视（四外部 SaaS + 本地无头 claude）→ subagent 批判性处置修复 → 循环闭环 → 人工 merge（引擎 `scripts/pr_loop.py` + `scripts/pr_local_review.py`，双端入口 `/pr-loop` 与 `.trae/rules/pr-loop.md`）
-- [CI 无人值守分诊手册](docs/build-deploy-pr-ci/ci-triage.md) — main CI 红 → issue → headless agent 修复 → fix/ci-* PR → 检视闭环 → 人工 merge（引擎 `scripts/ci_triage.py`，cron 每 30 分钟，双车道/熔断/kill switch）
+- [task-loop 无人值守任务闭环手册](docs/build-deploy-pr-ci/task-loop.md) — CI 红/main 审查/会话/手建 issue → agent-task 队列 → headless agent 修复/实现 → PR → 检视闭环 → 人工 merge（引擎 `scripts/task_loop.py`，cron scan */30 + audit 每 6h，标签协议/单飞/熔断/kill switch；会话命令 `/dev-loop`；`ci_triage.py` 为过渡薄壳，历史手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)）
 - [编写测试指南](docs/coding/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
 - [离线构建依赖与排坑](docs/build-deploy-pr-ci/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
 - [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据

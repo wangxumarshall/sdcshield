@@ -74,6 +74,15 @@ awk '{
 }' "$TMP/baked26.txt" > "$TMP/knob_baked.tsv"
 
 # ---- 512 腿额外降容（gem5-overrides.txt，<test>|-O <test>.<k>=<v>）→ 同形 TSV。
+# 键唯一契约（PR #307 #32）：本生成器与 gem5-512-batch.sh 统一拒绝重复键
+# （批量取首行 vs 本处旧语义取末行——重复键曾会使 512 列标签与实际执行
+# 命令的 knob 脱钩）；契约 = 一测试一行，修订改原行不追加。
+ovrdup=$(awk -F'|' '$0 ~ /^[A-Za-z0-9_]+\|/ { print $1 }' "$GOVR" | sort | uniq -d)
+if [ -n "$ovrdup" ]; then
+    echo "ERROR: duplicate test keys in gem5-overrides.txt (contract: one line per test — edit the line, do not append):" >&2
+    echo "$ovrdup" >&2
+    exit 2
+fi
 awk -F'|' '$0 ~ /^[A-Za-z0-9_]+\|/ {
     opt = $2; sub(/^-O [^.]+\./, "", opt); print $1 "\t" opt
 }' "$GOVR" > "$TMP/knob_extra.tsv"
@@ -117,7 +126,7 @@ fileno == 6 {
 }
 # 输入 7: 26 项 baked knob（128/256 两列共用；512 列以此为底）
 fileno == 7 { knob[$1] = $2; knob512[$1] = $2; next }
-# 输入 8: gem5 extras（16 条；同键后值覆盖前值 → 512 列取最终生效值；
+# 输入 8: gem5 extras（16 条；键唯一由前置守卫断言 → 512 列取该键唯一值；
 #   extra 单独留档用于 §5 有界格分解统计）
 fileno == 8 { knob512[$1] = $2; extra[$1] = $2; next }
 
@@ -252,7 +261,7 @@ END {
     printf "- **128 列 = %d pass + %d SKIP(legal)** —— 对账 triage-128 §5（189 直绿 × 2 seed + 1 合法 SKIP：fmmla@128，两 seed 同格同理）；其中 %d 格为腿内 baked 有界（triage-128 §1 的 26 项 -O 覆盖的测试）。\n", p128 + q128, s128, q128 > M
     printf "- **256 列 = %d pass** —— 对账 triage-256 §7（seed1 165 腿内直绿 + 25 格 §5 有界重跑 = 190/190；seed2 190 腿内直绿）；%d 个有界格 = %d 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿）+ %d 格 baked 直绿（acl dim=512，Ruling B / triage-256 §1）。\n", p256 + q256, q256, n_to, q256 - n_to > M
     printf "- **512 列 = %d pass + %d BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；%d 个有界格 = baked 26 项中绿 %d（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 %d（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 %d（acl：baked 512 被 extras 覆盖为 128）。\n", p512 + q512, y512, q512, bg, eg, bo > M
-    printf "- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（同键后值覆盖前值）。\n" > M
+    printf "- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。\n" > M
 }
 ' "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$TMP/knob_baked.tsv" "$TMP/knob_extra.tsv" \
   || { echo "ERROR: matrix generation assertions failed" >&2; exit 1; }

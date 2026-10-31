@@ -308,4 +308,4 @@ pass 仅构成「同条件可跑绿」证据，**不构成基线洁净性证据*
 - **128 列 = 189 pass + 1 SKIP(legal)** —— 对账 triage-128 §5（189 直绿 × 2 seed + 1 合法 SKIP：fmmla@128，两 seed 同格同理）；其中 26 格为腿内 baked 有界（triage-128 §1 的 26 项 -O 覆盖的测试）。
 - **256 列 = 190 pass** —— 对账 triage-256 §7（seed1 165 腿内直绿 + 25 格 §5 有界重跑 = 190/190；seed2 190 腿内直绿）；26 个有界格 = 25 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿）+ 1 格 baked 直绿（acl dim=512，Ruling B / triage-256 §1）。
 - **512 列 = 181 pass + 9 BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；39 个有界格 = baked 26 项中绿 25（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 15（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 1（acl：baked 512 被 extras 覆盖为 128）。
-- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（同键后值覆盖前值）。
+- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。

@@ -169,6 +169,18 @@ if [ -n "$dups" ]; then
     exit 2
 fi
 
+# gem5-overrides.txt duplicate-key guard (PR #307 #32): this script consumes
+# the FIRST line per key (awk exit) while matrix-gen.sh resolves the single
+# effective value — a duplicate key would label the matrix with a knob the
+# run never used. Contract (file header): one line per test, edit don't
+# append; both consumers reject duplicates.
+ovrdup=$(awk -F'|' '/^[A-Za-z0-9_]+\|/ { print $1 }' "$OVR" 2>/dev/null | sort | uniq -d)
+if [ -n "$ovrdup" ]; then
+    echo "ERROR: duplicate test keys in $OVR (contract: one line per test — edit the line, do not append):" >&2
+    echo "$ovrdup" >&2
+    exit 2
+fi
+
 echo "batch start: $(date '+%F %T')  P=$P  list=$(wc -l < "$OUT/list.effective") tests"
 new_md5=$(md5sum "$G5" | cut -d' ' -f1)
 echo "gem5: $G5  md5=$new_md5"

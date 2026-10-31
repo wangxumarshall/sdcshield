@@ -1,6 +1,11 @@
 # gem5-overrides.txt — gem5 SE 512 腿额外降容表（Task 6 标定产物）。
 # 格式：<test>|<额外参数>（追加到 baked 26 项 -O 之后；同键 -O 后值覆盖前值：
 # framework/test_knobs.cpp TestKnobSingleton::set_knob 查找既有键则改值）。
+# 键唯一契约（PR #307 #32）：<test> 键在本文件内必须唯一——重复键被两个
+# 消费者（gem5-512-batch.sh 批量启动守卫 / matrix-gen.sh 前置断言）拒绝。
+# 修订降容值请**改原行**，不要追加新行（历史上的 dim=512→256→128 修订
+# 即以改行完成；运行期同键 -O 的覆盖语义由框架 set_knob 承担，与本文件
+# 的行级唯一性是两回事）。
 #
 # 标定依据（详见 triage-512.md 标定表）：gem5 nofork 下 -t 时限预算被 shmem
 # 叠印结构性禁用（inner_loop_count ↔ current_test_endtime 碰撞，DWARF 实测），

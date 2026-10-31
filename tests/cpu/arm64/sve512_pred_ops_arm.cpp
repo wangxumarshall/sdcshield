@@ -249,7 +249,24 @@ enum class ffr_faces_outcome { faces_ok, env_interference };
  * that re-maps every fresh hole: 8 proofs in one run mean the
  * first-fault face cannot be stressed there, and silently dropping the
  * face would be a coverage lie — report_fail, message states it is not
- * an SDC. */
+ * an SDC.
+ *
+ * Disclosure boundary (round-6 #13): this log_warning is the only
+ * trace a budget-bounded re-arm leaves, and in -Dlogging_format=
+ * no_output builds log_warning compiles to (void)0 (no_output is a
+ * first-class meson option; SANDSTONE_NO_LOGGING, sandstone.h) — the
+ * event is invisible there BY THAT BUILD'S DESIGN: every test's
+ * log_warning is silent in no_output (mmu_split_tlb_arm,
+ * sve512_fcmla_arm, ... disclose their non-fatal anomalies through the
+ * same channel), and no CI job builds no_output. The result-level
+ * channels were evaluated and rejected: FAIL would cry SDC on a
+ * proven-environmental event; EXIT_SKIP re-enters the mixed-aggregation
+ * trap this function exists to escape (a mid-run per-worker skip
+ * aggregates into test-level PASS — round-5 measured) and Skipped
+ * semantics would understate a run that in fact stressed every face.
+ * The cap's 9th occurrence IS result-level visible in every build:
+ * report_fail marks the thread failed through the framework state
+ * machine, not through logging. */
 static void ffr_hole_rearm(struct ffr_hole &hole,
                            const struct PredOpsData *d, int &rearms)
 {

@@ -47,10 +47,8 @@ head 148acebe。六条意见证据核实结论与修法。导出件 /tmp/pr305-r
 5. dbadd354 #18 msync 判别器 + 风险注释（干扰路径端到端实证为诚实 SKIP）
 6. 本文件 docs 提交
 
-#20 维持（.codespellrc 不动）：onl/clen 为 origin/main 存量
-（sdc_numa.cpp:120 / sdc_stress_config.h:147），本 PR 基点 43c1f42e 早于
-其落地，CI 在 pull/305/merge ref 跑 codespell 才波及本 PR；与 #328/#308
-同款处置，回复如实承认全局 ignore-words-list 残余盲区。
+#20 的处置与依据见上文「证据核实结论」节（单一权威陈述——round-4 #28
+去重：原文在此重复了一遍 #20 维持的完整依据）。
 
 ## 过程中发现（超出检视意见本身的实测事实）
 

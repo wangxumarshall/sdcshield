@@ -55,9 +55,11 @@
  *    issued back-to-back with the LDFF1,
  *    and the LDFF1 back-to-back with the SETFFR, with no function call
  *    anywhere in that window — each capture is encapsulated in the
- *    single always-inline unit ffr_ldff1_capture, and the (b)+(c) pair
- *    (whose between-captures gap must equally stay call-free) in the
- *    combined always-inline unit ffr_fault_acc_capture (see there): the arm64
+ *    single small noinline function ffr_ldff1_capture (whose call
+ *    boundary doubles as the mechanical CSE killer for RDFFR
+ *    freshness), and the (b)+(c) pair (whose between-captures gap must
+ *    contain nothing but the two capture calls) in the combined
+ *    wrapper ffr_fault_acc_capture (see there): the arm64
  *    Linux syscall ABI discards live
  *    SVE state at syscall entry (measured on a 6.6 kernel: FFR is
  *    zeroed, Z/P preserved; kernel sve_flush_{z,p,ffr} macros exist and
@@ -101,49 +103,204 @@ static constexpr uint64_t SENTINEL = 0x7FF8DEADBEEF0000ULL;
 struct PredOpsData {
     size_t vl_d;
     std::vector<double> src;            // exact operands: src[j] = (j%4)-1.5
-    /* Page pair for the faulting-LDFF1 face: [base, base+ps) mapped and
-       filled with src at its tail, [base+ps, base+2*ps) punched out
-       (munmap) so element 1 of ffr_fault_k1 lands on an unmapped page.
-       The hole is made with munmap, not mprotect(PROT_NONE): gem5 SE
-       maps mprotect to a no-op (ignoreFunc in the ArmLinux64 syscall
-       table), and the fault source must behave identically on hardware
-       and in the gem5-fi dual-kernel validation.
-       Honest residual risk (round-3 review #18): munmap keeps no
-       reservation, so the kernel may legally hand [base+ps, base+2*ps)
-       to a LATER <=1-page mmap request — with the default top-down
-       allocator this hole sits directly below the mapping that preceded
-       ours, i.e. exactly at the allocation frontier, so it IS the first
-       candidate. If that happens mid-run the fault never occurs, the
-       fault/acc goldens both break, and a naive check would cry SDC.
-       Probability is low (in-process anonymous mmaps during a test run
-       are glibc thread stacks at 8MB and malloc arenas far above the
-       128KB mmap threshold — a 1-page anonymous mmap has no ordinary
-       producer), and even a landed mapper only breaks the goldens if
-       its page is RESIDENT: LDFF1 suppresses the demand-paging minor
-       fault of a freshly-mapped anonymous page too (measured: a
-       MAP_FIXED refilled-but-untouched hole still fault-clears the FFR
-       tail exactly like the punched hole), so the interference needs a
-       pre-faulted page. Not zero either way, so the fault/acc failure
-       paths carry the ffr_hole_intact() discriminator: a re-mapped hole
-       is reported as environment interference (TestResourceIssue SKIP),
-       never as SDC. */
-    void *ffr_pages = nullptr;          // mmap base (2 pages)
-    size_t ffr_pages_bytes = 0;         // full original mapping (cleanup)
-    double *ffr_mapped = nullptr;       // src at the page-1 tail (mapped)
-    const double *ffr_fault_k1 = nullptr; // elem0 = last mapped double
+    size_t page_bytes = 0;              // page size, gated in init
+                                        // (>= 8*vl_d), reused by every
+                                        // worker's ffr_hole_arm
 };
 
 #ifdef __aarch64__
 
-/* The whole LDFF1/FFR capture window as ONE always-inline unit — the
- * mechanical guard for the zero-call invariant this test depends on.
+/* Per-WORKER page pair for the faulting-LDFF1 face (round-5: the pair used
+ * to live in PredOpsData — one hole shared by every worker of the forked
+ * child; per-worker ownership removes that cross-thread lifetime coupling
+ * and is the precondition for the interference recovery in
+ * ffr_check_fault_acc_faces, which swaps in a fresh pair without racing a
+ * sibling's capture): [pages, pages+ps) mapped and filled with src at its
+ * tail, [pages+ps, pages+2*ps) punched out (munmap) so element 1 of
+ * fault_k1 lands on an unmapped page. The hole is made with munmap, not
+ * mprotect(PROT_NONE): gem5 SE maps mprotect to a no-op (ignoreFunc in
+ * the ArmLinux64 syscall table), and the fault source must behave
+ * identically on hardware and in the gem5-fi dual-kernel validation.
  *
- * Everything from the SETFFR to the FFR bit count landing in a GPR (and
- * the loaded data in memory) lives in this single template body, which
- * contains no function call and inlines into the caller even at -O0, so
- * the window can never silently grow one: any future call has to be
- * inserted into this one small body, right under this comment, where the
- * constraint is stated. The window must stay call-free end to end:
+ * Honest residual risk (round-3 review #18): munmap keeps no reservation,
+ * so the kernel may legally hand the hole page to a LATER <=1-page mmap
+ * request — with the default top-down allocator the hole sits directly
+ * below the mapping that preceded it, i.e. exactly at the allocation
+ * frontier, so it IS the first candidate. If that happens mid-run the
+ * fault never occurs, the fault/acc goldens break, and a naive check
+ * would cry SDC. Probability is low (in-process anonymous mmaps during a
+ * test run are glibc thread stacks at 8MB and malloc arenas far above the
+ * 128KB mmap threshold — a 1-page anonymous mmap has no ordinary
+ * producer; the per-worker arms are 2-page requests and cannot land in a
+ * 1-page hole), and even a landed mapper only breaks the goldens if its
+ * page is RESIDENT: LDFF1 suppresses the demand-paging minor fault of a
+ * freshly-mapped anonymous page too (measured: a MAP_FIXED
+ * refilled-but-untouched hole still fault-clears the FFR tail exactly
+ * like the punched hole). Not zero either way, so the fault/acc failure
+ * paths carry the ffr_hole_probe() discriminator — see there for the
+ * three probe states, the TOCTOU boundary, and the verdict mapping. */
+struct ffr_hole {
+    void *pages = nullptr;            // mmap base (2 pages)
+    size_t page_bytes = 0;            // ONE page: disarm unmaps ONLY page
+                                      // 1 (round-4 #22 — the hole page may
+                                      // have been re-mapped by an external
+                                      // mapper by disarm time, and
+                                      // munmapping it would destroy a
+                                      // mapping the test does not own;
+                                      // process exit reclaims the rest)
+    const double *fault_k1 = nullptr; // elem0 = last mapped double
+};
+
+/* Arm a fresh pair: mmap 2 pages, punch out page 2, fill the page-1 tail
+   with the exact src operands. The governing predicate of the faulting
+   capture is all-true, so element 0 (the FIRST active element) must be
+   mapped — a fault there would be DELIVERED (first-fault loads only
+   suppress faults on elements after the first active one; measured on
+   hardware and in gem5) — while element 1 sits on the unmapped page and
+   its fault is suppressed into an FFR clear from lane 1 onward. Needs
+   8*vl bytes of mapped tail, i.e. 8*vl <= page size (128 <= 4096 at the
+   widest supported VL — gated in init, fail closed, not by arithmetic
+   luck). Runs OUTSIDE every capture window: the syscall ban is only
+   inside ffr_ldff1_capture's [SETFFR, RDFFR] body and the two-call gap
+   around ffr_fault_acc_capture. Fails closed via report_fail — a 2-page
+   anonymous mmap failing means the address space is exhausted, and a
+   loud failure beats a per-worker nondeterministic SKIP (the framework
+   aggregates a mixed skip+pass run as test-level PASS — see
+   ffr_check_fault_acc_faces). Ordering contract (round-6 #15): the
+   first arm in test_run happens BEFORE any face check runs, and
+   ffr_hole_rearm calls it only on a proven clean record (the Section-4
+   interference gate requires all_passed; the re-loop reports a broken
+   face immediately) — so a resource failure here can never arrive while
+   detected-but-unjudged SDC evidence is pending, and the resource
+   attribution is the complete story of the failure. */
+static void ffr_hole_arm(struct ffr_hole *h, const struct PredOpsData *d)
+{
+    const size_t ps = d->page_bytes;
+    void *pg = mmap(nullptr, 2 * ps, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (pg == MAP_FAILED || munmap((char *)pg + ps, ps) != 0) {
+        report_fail_msg("sve512_pred_ops_arm: cannot arm the "
+                        "faulting-LDFF1 page pair (errno=%d)", errno);
+        return;   /* unreachable: report_fail_msg kills the thread */
+    }
+    h->pages = pg;
+    h->page_bytes = ps;
+    h->fault_k1 = (const double *)((char *)pg + ps - 8);
+    double *tail = (double *)((char *)pg + ps - 8 * d->vl_d);
+    for (size_t j = 0; j < d->vl_d; ++j)
+        tail[j] = d->src[j];
+}
+
+/* Disarm: unmap ONLY page 1 — the one page this worker owns
+   unconditionally (the round-4 #22 rule, now per-worker: no sibling can
+   be mid-capture on this pair because nobody else ever held it). If the
+   hole page is still unmapped, leaving it alone changes nothing; if a
+   foreign mapper landed in it, munmapping the full range would destroy
+   that mapping and SIGSEGV its owner far from the cause. A worker that
+   died to report_fail leaves its pair mapped — the forked child exits
+   right after the test and the kernel reclaims everything. */
+static void ffr_hole_disarm_own(struct ffr_hole *h)
+{
+    if (h->pages)
+        munmap(h->pages, h->page_bytes);
+}
+
+/* How many fresh pairs one worker arms after PROVEN environment
+ * interference before declaring the host pathologically re-mapping every
+ * hole (see ffr_hole_rearm). */
+static constexpr int HOLE_REARM_CAP = 8;
+
+/* Outcome of ffr_check_fault_acc_faces: faces_ok = every face either
+ * passed, was recorded in all_passed (<false>), or was reported with
+ * report_fail (<true>, which never returns); env_interference = proven
+ * no-fault-signature re-map, the caller must re-arm via ffr_hole_rearm
+ * and continue. There is deliberately NO skip outcome: test_run never
+ * returns EXIT_SKIP mid-run (see ffr_hole_rearm for why). */
+enum class ffr_faces_outcome { faces_ok, env_interference };
+
+/* Recover from PROVEN environment interference (round-5, replacing the
+ * round-3 per-worker TestResourceIssue SKIP): warn, drop the
+ * invalidated pair (own page 1 only), arm a fresh one, KEEP STRESSING.
+ *
+ * Why not SKIP: the framework books a worker's mid-run EXIT_SKIP as
+ * thread_skipped, and the parent reports test-level Skipped only when
+ * EVERY thread skipped (logging.cpp: pc == sc); a mixed skip+pass run
+ * reports test-level PASS — measured on this PR's head with one worker
+ * forced to skip mid-run in a 4-thread run: exit: pass, the skip
+ * visible only inside the log, and the fracture loop even re-ran the
+ * test 147x (a Passed — unlike Skipped — state keeps re-running). A
+ * skipped worker also silently truncates its own sustained stress.
+ * Why not FAIL either: the no-fault signature plus the msync-proven
+ * re-map make the environment attribution sound — failing would cry SDC
+ * on a proven-environmental event, the exact flake class round-3 #18
+ * built the discriminator to defuse. Re-arming is the honest middle:
+ * full stress coverage continues, the event is loudly logged, and — the
+ * detection dividend — the fresh hole RE-TESTS the attribution: a
+ * no-fault signature that reproduces on a PROVEN-INTACT fresh hole is
+ * reported as SDC (the probe no longer says remapped, so no
+ * environment attribution is possible). The forward-TOCTOU swallow of
+ * round-4 #25 therefore now requires the mapper to ALSO land in the
+ * fresh hole before the very next capture — a compounded, far narrower
+ * window than "before the probe". This is NOT the re-capture
+ * convergence round-4 #25 rejected: that scheme re-ran a capture and
+ * cancelled an ALREADY-REPORTED failure on a pass (swallow polarity);
+ * re-arm replaces the fault SOURCE and reports anything the fresh
+ * source still produces (detection polarity). The cap handles a host
+ * that re-maps every fresh hole: 8 proofs in one run mean the
+ * first-fault face cannot be stressed there, and silently dropping the
+ * face would be a coverage lie — report_fail, message states it is not
+ * an SDC.
+ *
+ * Disclosure boundary (round-6 #13): this log_warning is the only
+ * trace a budget-bounded re-arm leaves, and in -Dlogging_format=
+ * no_output builds log_warning compiles to (void)0 (no_output is a
+ * first-class meson option; SANDSTONE_NO_LOGGING, sandstone.h) — the
+ * event is invisible there BY THAT BUILD'S DESIGN: every test's
+ * log_warning is silent in no_output (mmu_split_tlb_arm,
+ * sve512_fcmla_arm, ... disclose their non-fatal anomalies through the
+ * same channel), and no CI job builds no_output. The result-level
+ * channels were evaluated and rejected: FAIL would cry SDC on a
+ * proven-environmental event; EXIT_SKIP re-enters the mixed-aggregation
+ * trap this function exists to escape (a mid-run per-worker skip
+ * aggregates into test-level PASS — round-5 measured) and Skipped
+ * semantics would understate a run that in fact stressed every face.
+ * The cap's 9th occurrence IS result-level visible in every build:
+ * report_fail marks the thread failed through the framework state
+ * machine, not through logging. */
+static void ffr_hole_rearm(struct ffr_hole &hole,
+                           const struct PredOpsData *d, int &rearms)
+{
+    if (++rearms > HOLE_REARM_CAP)
+        report_fail_msg("sve512_pred_ops_arm: the faulting-LDFF1 hole was "
+                        "re-mapped %d times this run — the environment "
+                        "persistently invalidates the fault source, the "
+                        "first-fault faces cannot be stressed on this host "
+                        "(not an SDC)", rearms);
+    log_warning("sve512_pred_ops_arm: the unmapped hole for the "
+                "faulting-LDFF1 face was re-mapped by an external mapper "
+                "and both FFR images read all-ones — the fault never "
+                "happened, the fault source was invalidated by the "
+                "environment, not an SDC (hole probed AFTER the capture; "
+                "capture-time state is unobservable — see ffr_hole_probe); "
+                "re-arming a fresh page pair (%d/%d) and continuing the "
+                "stress", rearms, HOLE_REARM_CAP);
+    ffr_hole_disarm_own(&hole);
+    ffr_hole_arm(&hole, d);
+}
+
+/* The whole LDFF1/FFR capture window as ONE small NOINLINE function —
+ * the mechanical guard for the TWO invariants this test depends on
+ * (round-4 #27/#30 switched this from always-inline to noinline; see
+ * invariant 2 for why).
+ *
+ * Invariant 1, the zero-call window: everything from the SETFFR to the
+ * FFR bit count landing in a GPR (and the loaded data in memory) lives
+ * in this single template body, which itself contains no call, so the
+ * window can never silently grow one: any future call has to be
+ * inserted into this one small body, right under this comment, where
+ * the constraint is stated (the body is one contiguous instruction run
+ * at every -O level, exactly because it is a function of its own). The
+ * window must stay call-free end to end:
  *
  *  - the arm64 Linux syscall ABI discards live FFR state at syscall entry
  *    (measured on a 6.6 kernel: FFR reads 0 after a syscall while Z/P are
@@ -161,10 +318,27 @@ struct PredOpsData {
  * only at the scalar count would still leave the loaded Z data exposed on
  * a Z-flushing kernel, so the svst1 is inside the unit too. PrimeFFR=false
  * (accumulation face) additionally requires its capture to follow the
- * previous one with NO call in between: the partially-cleared FFR it
- * observes is live state that memcpy would already have destroyed — that
- * cross-capture discipline is mechanized by the ffr_fault_acc_capture
- * wrapper right below, which inlines both captures into one unit.
+ * previous one with NOTHING but the two capture calls in between: the
+ * partially-cleared FFR it observes is live state that a foreign call
+ * would already have destroyed — that cross-capture discipline is
+ * mechanized by the ffr_fault_acc_capture wrapper right below.
+ *
+ * Invariant 2, fresh RDFFR: GCC 12 does not model the FFR effects of
+ * svldff1/svsetffr/svrdffr for optimization purposes (measured on
+ * 12.3.1: an unused svldff1 is DCE'd outright, and an svrdffr result
+ * gets CSE'd into a stale earlier value — the gem5 dual kernel measured
+ * the same CSE even across calls, which is why its captures have been
+ * noinline since round 3). A compiler that modeled svrdffr as a pure
+ * read could therefore substitute an earlier capture's value for a
+ * later one's, and the golden comparison would NOT catch it: the acc
+ * face's golden equals the fault face's, and the mapped face expects
+ * all-ones every iteration, so both substitutions are silent. The
+ * noinline call boundary is the mechanical kill: the intrinsic is
+ * spelled only inside this function, so there is no caller-level
+ * expression to CSE, and this function writes memory through its
+ * pointer arguments, so it is not pure — two calls can neither be
+ * merged nor hoisted out of the re-loop. Every face's RDFFR executes,
+ * on every toolchain that honors noinline.
  *
  * Count EVERY predicate bit, not just the per-element first bit: CNTP with
  * a b64 pattern tests only bit 0 of each 8-bit slice, so a stuck bit
@@ -204,22 +378,35 @@ struct PredOpsData {
  * the file's own guard, so any future restructure that lifts the
  * DECLARE_TEST pattern would have tripped on it first. */
 template <bool PrimeFFR>
-static inline __attribute__((always_inline)) long
+static __attribute__((noinline)) long
 ffr_ldff1_capture(const double *from, double *to, uint8_t *ffr_image)
 {
     /* Zero-instruction compiler barrier — emits nothing, NOT a call (the
-     * window below stays one contiguous call-free instruction run; see
-     * the objdump evidence in the commit). GCC 12 does not model the
-     * FFR effects of svldff1/svsetffr for optimization purposes
-     * (measured on 12.3.1: an unused svldff1 is DCE'd outright, and
-     * svrdffr results get CSE'd across captures — a stale spill slot is
-     * reloaded where a fresh RDFFR is required). Every value this unit
-     * loads is consumed (stored to a buffer the caller memcmps), so the
-     * LDFF1 cannot be deleted; this barrier additionally forbids
-     * substituting an EARLIER capture's RDFFR value for this one's. The
-     * per-iteration golden comparison makes any staleness fail loudly
-     * rather than silently — but a false SDC costs a CI triage round
-     * (this PR's own origin), so the constraint is fixed here. */
+     * window below stays one contiguous call-free instruction run). Its
+     * role is ORDERING, not CSE prevention, and that is all it is
+     * claimed to do (round-4 #27/#30): a memory clobber constrains
+     * memory accesses only — by GCC semantics it does not forbid
+     * reusing a register-resident value computed earlier, so the
+     * barrier alone cannot guarantee a fresh RDFFR. That guarantee is
+     * the noinline call boundary of this function (invariant 2 in the
+     * comment above): the caller never spells the intrinsic, and this
+     * function writes memory through its pointer arguments so its calls
+     * can be neither merged nor hoisted. The barrier keeps the window's
+     * loads and stores from being reordered across the window start
+     * under aggressive scheduling, and mirrors the gem5 dual kernel's
+     * capture_img, which carries the same barrier inside its own
+     * noinline body. The LDFF1 cannot be deleted because its result
+     * feeds the svst1 through the caller-supplied *to pointer — a
+     * store to memory that escapes this function, which no optimizer
+     * may remove. (Round-6 #14, stated honestly: for the <false>
+     * accumulation capture that store's destination is NOT golden-
+     * checked afterwards — the caller memcmps the FFR image, not the
+     * acc data. The acc capture's load is the same all-true-predicate
+     * mapped load from ffr_mem whose data plane the mapped face
+     * byte-checks on every iteration, and the FFR start state has no
+     * architectural path into a load's data return — FFR is an output
+     * of LDFF1, never an input — so the unchecked acc data plane is a
+     * declared boundary, not an oversight.) */
     __asm__ volatile ("" : : : "memory");
     if constexpr (PrimeFFR)
         svsetffr();
@@ -234,15 +421,21 @@ ffr_ldff1_capture(const double *from, double *to, uint8_t *ffr_image)
 
 /* The CROSS-capture discipline as one unit. The accumulation face
  * observes the partially-cleared FFR the faulting capture just left —
- * live state that any call in between would destroy (measured: this
- * host's glibc memcpy zeroes the FFR). ffr_ldff1_capture's own
- * always-inline body only closes the window WITHIN one capture; this
- * wrapper closes the gap BETWEEN the two captures the same mechanical
- * way: both bodies inline into one contiguous instruction run, so a
- * future call can only enter by editing this small body, right under
- * this comment, where the constraint is stated — before round 3 the
- * between-captures gap was comment-only discipline, structurally the
- * same unprotected shape as the Sanitizer-CI bug this PR fixed. */
+ * live state that any FOREIGN call in between would destroy (measured:
+ * this host's glibc memcpy zeroes the FFR; a syscall entry flushes it).
+ * ffr_ldff1_capture's own noinline body closes the window WITHIN one
+ * capture; this wrapper closes the gap BETWEEN the two captures: with
+ * the captures noinline (round 4), the gap is exactly two adjacent
+ * calls to this same leaf, and a bl to our own leaf preserves the FFR —
+ * bl is not a syscall, the leaf is not libc, and neither writes the FFR
+ * after its own RDFFR. The gem5 dual kernel's capture_pair has run this
+ * exact two-call shape for 2000 iterations x 4 VL tiers, and every
+ * native run of this test asserts the acc-face golden on real silicon.
+ * The discipline: NOTHING but these two calls may ever sit in this
+ * body — a future call inserted between them breaks the acc face
+ * exactly like the Sanitizer-CI bug this PR fixed (before round 3 the
+ * gap was comment-only discipline, structurally the same unprotected
+ * shape as that bug). */
 static inline __attribute__((always_inline)) void
 ffr_fault_acc_capture(const double *fault_from, double *fault_to,
                       uint8_t *fault_image, const double *acc_from,
@@ -265,22 +458,284 @@ static ptrdiff_t ffr_first_diff(const uint8_t *image, const uint8_t *golden,
     return -1;
 }
 
-/* Failure-path-only discriminator for the munmap hole (see PredOpsData):
- * is the punched-out page STILL unmapped? msync(MS_ASYNC) on an anonymous
+/* Failure-path-only discriminator for the munmap hole (see ffr_hole):
+ * is the punched-out page mapped NOW? msync(MS_ASYNC) on an anonymous
  * mapping is a no-op flush, so success vs ENOMEM is exactly "mapped vs
- * unmapped" (measured on this host: hole -> -1/ENOMEM, mapped -> 0).
- * Runs only AFTER a fault/acc check has already tripped, long after the
- * capture completed — a syscall here cannot touch the captured state.
+ * unmapped" (measured on this host: hole -> -1/ENOMEM, mapped -> 0; the
+ * page-aligned exactly-one-page probe shape has no other errno reachable
+ * here — but a seccomp/LSM filter can turn any syscall into -1/EPERM, so
+ * the third state exists and must be handled). THREE states, and the
+ * verdict mapping in ffr_check_fault_acc_faces carries the detector's
+ * bias (round-4 #23/#31): remapped is PROVEN interference (msync
+ * succeeded on a page the test never mapped), intact is PROVEN
+ * still-hole, and unknown proves NEITHER — only a proven re-map (plus
+ * the no-fault signature, round-5) may attribute a mismatch to the
+ * environment, and the attribution is re-tested on a fresh hole rather
+ * than ending the worker (ffr_hole_rearm); an unknown probe is reported
+ * as a possible SDC instead of being folded into an environment
+ * verdict. Runs only AFTER a fault/acc check has already tripped, long
+ * after the capture completed — a syscall here cannot touch the
+ * captured state.
+ *
+ * TOCTOU, stated honestly (round-4 #25): the probe observes the hole at
+ * PROBE time, not at capture time, and userspace has no atomic
+ * capture+probe. Both directions are real: forward (hole intact at
+ * capture — the golden break is a true SDC — then a mapper lands in the
+ * hole before the probe -> SKIP swallows a real SDC) and reverse (hole
+ * occupied at capture — no fault, goldens broken — then the mapper
+ * unmaps before the probe -> intact -> false SDC). Both are strictly
+ * narrower than the flake class this probe exists to kill: each needs a
+ * <=1-page anonymous mapper to land in (and for the reverse, fully
+ * vacate) this exact page inside the few-hundred-instruction
+ * capture-to-probe window, on a host where the residual-risk note above
+ * already bounds the mapper itself as having no ordinary producer. A
+ * re-capture-based convergence ("capture again and SKIP if it now
+ * passes") was evaluated and REJECTED: a clean re-capture is equally
+ * consistent with a genuine transient SDC, and an SDC detector must not
+ * swallow an observed mismatch on a re-run. Round-5's re-arm is the
+ * detection-polarity version of that idea — it replaces the fault
+ * SOURCE and reports anything the fresh source still produces; see
+ * ffr_hole_rearm for why this is not the rejected shape. The re-arm
+ * warning states the probe timing so a triager knows the classification
+ * boundary, and the forward window is further narrowed by the re-test:
+ * the mapper must also land in the fresh hole before the next capture.
  * gem5 boundary: the repo test never runs under gem5 SE (whose syscall
  * table maps msync to unimplementedFunc, i.e. fatal); the dual kernel
  * mirrors only the healthy-path goldens and does not exercise this. */
-static bool ffr_hole_intact(const PredOpsData *d)
+enum class ffr_hole_state { intact, remapped, unknown };
+
+static ffr_hole_state ffr_hole_probe(const ffr_hole &h, int *probe_errno)
 {
-    const size_t half = d->ffr_pages_bytes / 2;   // the hole: 1 page
+    const size_t ps = h.page_bytes;   // the hole: page 2 of the pair
     errno = 0;
-    if (msync((char *)d->ffr_pages + half, half, MS_ASYNC) == 0)
-        return false;                    // someone re-mapped the hole
-    return errno == ENOMEM;              // ENOMEM == still unmapped
+    if (msync((char *)h.pages + ps, ps, MS_ASYNC) == 0)
+        return ffr_hole_state::remapped;  // someone re-mapped the hole
+    *probe_errno = errno;
+    if (errno == ENOMEM)
+        return ffr_hole_state::intact;    // ENOMEM == still unmapped
+    return ffr_hole_state::unknown;       // seccomp/LSM/...: neither proven
+}
+
+/* Mapped-face verification — the SINGLE source of truth for both call
+ * sites (round-4 #26/#32: Section 4 and the re-loop used to carry two
+ * isomorphic hand copies of this check, and they had already drifted —
+ * check order and message prefixes differed; the drift disease this PR
+ * has removed three times now, #10, #19, here). Immediate=false:
+ * Section 4 aggregate semantics — log_warning + all_passed=false,
+ * execution continues so the remaining faces still run and the caller
+ * issues the verdict. Immediate=true: re-loop semantics —
+ * report_fail_msg kills the worker on the first broken face. Two
+ * DISTINCT failure faces, reported separately so a message never
+ * contradicts itself (a combined `||` once printed "ffr_bits=16,
+ * expected 16" — equal numbers in an SDC claim — whenever only the
+ * data half tripped): the image is the FFR predicate datapath
+ * (bit-for-bit memcmp on the materialized bitmap, not popcount — a
+ * bare count passes any count-conserving corruption), the readback is
+ * the load datapath. Returns void (round-6 #16: the old int return
+ * was vestigial — every reachable path returned EXIT_SUCCESS, the
+ * EXIT_FAILURE tails sat unreachable behind the noreturn report, and a
+ * fallback value on a path that cannot return is a lie waiting for
+ * the noreturn contract to break). all_passed is live ONLY in <false>
+ * (the aggregate mode records into it); the <true> instantiation never
+ * reads or writes it — one shared body is the anti-drift design
+ * (round-4 #26/#32), and the parameter stays so the two call shapes
+ * cannot diverge. */
+template <bool Immediate>
+static void ffr_check_mapped_face(size_t vl, const uint8_t *m_gold,
+                                  const uint8_t *m_img,
+                                  const double *readback,
+                                  const double *golden, long m_bits,
+                                  bool &all_passed)
+{
+    const char *tag = Immediate ? " (re-loop)" : "";
+    if (memcmp(m_img, m_gold, 8 * vl) != 0) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: FFR not all-true after "
+                            "mapped LDFF1%s (count=%ld, expected %zu, first "
+                            "wrong bit %ld)", tag, m_bits, 8 * vl,
+                            ffr_first_diff(m_img, m_gold, 8 * vl));
+        } else {
+            log_warning("sve512_pred_ops_arm: FFR not all-true after mapped "
+                        "LDFF1%s (count=%ld, expected %zu, first wrong bit "
+                        "%ld)", tag, m_bits, 8 * vl,
+                        ffr_first_diff(m_img, m_gold, 8 * vl));
+            all_passed = false;
+        }
+    }
+    if (memcmp(readback, golden, vl * 8) != 0) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: mapped LDFF1 readback "
+                            "mismatch%s (load datapath — distinct from the "
+                            "FFR image face)", tag);
+        } else {
+            log_warning("sve512_pred_ops_arm: mapped LDFF1 readback "
+                        "mismatch%s (load datapath — distinct from the FFR "
+                        "image face)", tag);
+            all_passed = false;
+        }
+    }
+}
+
+/* Faulting + accumulation face verification + the environment-
+ * interference gate — the SINGLE source of truth for both call sites
+ * (round-4 #26/#32: two isomorphic hand copies differing in message
+ * text AND failure semantics; the mapped-face behavior inconsistency
+ * round-4 #24 caught was this drift made real). The gate maps the hole
+ * probe (ffr_hole_probe — see there for the TOCTOU boundary) to
+ * verdicts with the detector's bias (round-3 #18, round-4 #23/#24/#25/
+ * #31, round-5 hardening):
+ *
+ * The environment can only ever produce the NO-FAULT signature. An
+ * external mapper that lands in the hole either leaves the page
+ * NON-RESIDENT (LDFF1 suppresses the demand-paging minor fault too —
+ * measured, round 3: goldens hold, the bad set is EMPTY, the gate is
+ * never entered) or makes it RESIDENT, in which case the faulting load
+ * hits no fault at all: its FFR image is ALL-ONES — byte-identical to
+ * the MAPPED face's golden m_gold, not the partial f_gold — and the
+ * immediately-following accumulation capture, a mapped load that must
+ * not touch the FFR, reads the same all-ones. The data face is
+ * unconstrained (a resident zero-filled page loads a zeroed tail and
+ * stays green; a dirty page breaks it), so it is NOT part of the
+ * witness. Conversely, every other bad shape is IMPOSSIBLE to explain
+ * by the hole and must never be downgraded:
+ *   - acc face alone (its load is from heap ffr_mem, hole-independent;
+ *     an image below all-ones means the mapped load CLEARED FFR bits —
+ *     the write-on-success defect this face exists to catch),
+ *   - data face alone (the FFR partial-clear held, so the fault DID
+ *     happen and the tail was architecturally zeroed — a wrong tail is
+ *     a load-datapath SDC),
+ *   - a partial-but-wrong FFR image (bits were cleared, so the fault
+ *     happened — the deviation is FFR-datapath corruption).
+ * The old gate (round-3 dbadd354) matched ANY bad face against a
+ * proven re-map and SKIPped — round-5 measured that a NON-RESIDENT
+ * refill makes msync return 0 (VMA existence, not residency), so
+ * "acc face alone + non-resident mapper" was reachable and a real
+ * acc-face SDC was swallowed by a message claiming the fault source
+ * was invalidated (the fault face was green). The signature check
+ * closes exactly that class: SKIP requires both FFR images to equal
+ * m_gold bit-for-bit, on top of the round-4 guards.
+ *   - remapped hole + no-fault signature + no hole-independent failure
+ *     pending (all_passed): environment — the caller re-arms a fresh
+ *     hole and continues the stress (ffr_hole_rearm; there is no SKIP
+ *     out of test_run anymore — the framework aggregates a mixed
+ *     skip+pass run as test-level PASS, which hid both the interference
+ *     and the skipped worker's truncated stress: round-5).
+ *   - remapped hole + a hole-independent failure already on record:
+ *     SKIP is FORBIDDEN, it would swallow real SDC evidence (round-4
+ *     #24). The hole is logged as context; the SDC verdict takes
+ *     precedence.
+ *   - unknown errno: neither proven — a possible SDC is NOT downgraded
+ *     into a SKIP; the mismatch is reported with the indeterminacy
+ *     logged (round-4 #23/#31).
+ * Immediate=false: Section 4 aggregate semantics (log_warning +
+ * all_passed=false, all three faces checked, the caller issues the
+ * verdict). Immediate=true: re-loop semantics — reaching the gate there
+ * implies every earlier face of the iteration already passed, so
+ * all_passed is true by construction; report_fail_msg kills the worker
+ * on the first broken face. Both return ffr_faces_outcome: faces_ok, or
+ * env_interference for the caller to re-arm on. The Immediate branches
+ * carry NO return of their own (round-6 #16): report_fail_msg is
+ * noreturn (sandstone.h), so an if/else with no Immediate-side return
+ * states that structurally — no unreachable fallback value exists that
+ * could lie about the outcome if the noreturn contract ever broke. */
+template <bool Immediate>
+static ffr_faces_outcome ffr_check_fault_acc_faces(const ffr_hole &hole,
+                                                   size_t vl,
+                                                   bool &all_passed,
+                                                   const uint8_t *m_gold,
+                                                   const uint8_t *f_gold,
+                                                   const uint8_t *f_img,
+                                                   const double *f_back,
+                                                   const double *f_exp,
+                                                   const uint8_t *a_img,
+                                                   long fault_bits,
+                                                   long acc_bits)
+{
+    const bool ffr_bad = memcmp(f_img, f_gold, 8 * vl) != 0;
+    const bool data_bad = memcmp(f_back, f_exp, vl * 8) != 0;
+    const bool acc_bad = memcmp(a_img, f_gold, 8 * vl) != 0;
+    if (ffr_bad || data_bad || acc_bad) {
+        int probe_errno = 0;
+        const ffr_hole_state probe_state = ffr_hole_probe(hole, &probe_errno);
+        /* The no-fault witness: BOTH FFR images equal the all-ones
+           mapped golden bit-for-bit — the faulting capture behaved
+           exactly like a mapped load and the accumulation capture
+           agreed. This is the ONLY shape the environment can produce;
+           anything else keeps the SDC path even under a proven
+           re-map (see the header comment for the per-face
+           impossibility arguments). */
+        const bool no_fault_signature =
+                memcmp(f_img, m_gold, 8 * vl) == 0
+                && memcmp(a_img, m_gold, 8 * vl) == 0;
+        if (probe_state == ffr_hole_state::remapped && all_passed
+                && no_fault_signature)
+            return ffr_faces_outcome::env_interference;   // caller re-arms
+        if (probe_state == ffr_hole_state::unknown) {
+            log_warning("sve512_pred_ops_arm: hole discriminator "
+                        "indeterminate (msync errno=%d) — a re-mapped "
+                        "hole cannot be proven, the mismatch is "
+                        "reported as a possible SDC", probe_errno);
+        } else if (probe_state == ffr_hole_state::remapped) {
+            if (!all_passed)
+                log_warning("sve512_pred_ops_arm: the hole was re-mapped, "
+                            "but a hole-independent failure is already "
+                            "on record — the SDC verdict takes precedence "
+                            "over the environment SKIP");
+            else
+                log_warning("sve512_pred_ops_arm: the hole was re-mapped, "
+                            "but the failure signature is not the no-fault "
+                            "signature (both FFR images all-ones) — the "
+                            "fault DID happen, the hole cannot explain "
+                            "the mismatch; reported as a possible SDC");
+        }
+    }
+    const char *tag = Immediate ? " (re-loop)" : "";
+    if (ffr_bad) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: FFR partial-clear wrong "
+                            "after faulting LDFF1%s (count=%ld, expected 8, "
+                            "first wrong bit %ld — clear must start at the "
+                            "first faulting lane)", tag, fault_bits,
+                            ffr_first_diff(f_img, f_gold, 8 * vl));
+        } else {
+            log_warning("sve512_pred_ops_arm: FFR partial-clear wrong after "
+                        "faulting LDFF1%s (count=%ld, expected 8, first "
+                        "wrong bit %ld — clear must start at the first "
+                        "faulting lane)", tag, fault_bits,
+                        ffr_first_diff(f_img, f_gold, 8 * vl));
+            all_passed = false;
+        }
+    }
+    if (data_bad) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: faulting LDFF1 data "
+                            "wrong%s (count=%ld — prefix must load, tail "
+                            "must zero from the first fault)", tag,
+                            fault_bits);
+        } else {
+            log_warning("sve512_pred_ops_arm: faulting LDFF1 data wrong%s "
+                        "(count=%ld — prefix must load, tail must zero "
+                        "from the first fault)", tag, fault_bits);
+            all_passed = false;
+        }
+    }
+    if (acc_bad) {
+        if constexpr (Immediate) {
+            report_fail_msg("sve512_pred_ops_arm: mapped LDFF1 touched the "
+                            "FFR outside a fault%s (count=%ld, expected 8, "
+                            "first wrong bit %ld — accumulation broken)",
+                            tag, acc_bits,
+                            ffr_first_diff(a_img, f_gold, 8 * vl));
+        } else {
+            log_warning("sve512_pred_ops_arm: mapped LDFF1 touched the FFR "
+                        "outside a fault%s (count=%ld, expected 8, first "
+                        "wrong bit %ld — accumulation broken)", tag,
+                        acc_bits,
+                        ffr_first_diff(a_img, f_gold, 8 * vl));
+            all_passed = false;
+        }
+    }
+    return ffr_faces_outcome::faces_ok;
 }
 
 static int sve512_pred_ops_arm_init(struct test *test)
@@ -310,16 +765,13 @@ static int sve512_pred_ops_arm_init(struct test *test)
         for (size_t j = 0; j < data->vl_d; ++j)
             data->src[j] = (double)(j % 4) - 1.5;   // exact values
 
-        /* Faulting-LDFF1 plumbing: 2 pages, punch out the second. The
-           governing predicate is all-true, so element 0 (the FIRST active
-           element) must be mapped — a fault there would be DELIVERED
-           (first-fault loads only suppress faults on elements after the
-           first active one; measured on hardware and in gem5) — while
-           element 1 sits on the unmapped page and its fault is suppressed
-           into an FFR clear from lane 1 onward. Needs 8*vl bytes of
-           mapped tail, i.e. 8*vl <= page size (128 <= 4096 at the widest
-           supported VL, but gate anyway: fail closed, not by arithmetic
-           luck). */
+        /* Page-size gate for the faulting-LDFF1 face (the per-worker
+           ffr_hole_arm reuses this): 8*vl bytes of mapped tail must fit
+           in one page (128 <= 4096 at the widest supported VL, but gate
+           anyway: fail closed, not by arithmetic luck). Init-time SKIPs
+           are deterministic and all-worker — the honest shape the
+           framework supports (a per-worker mid-run SKIP aggregates into
+           a test-level PASS when mixed with passes). */
         const long ps = sysconf(_SC_PAGESIZE);
         if (ps <= 0 || (size_t)ps < 8 * data->vl_d) {
             log_skip(TestResourceIssueSkipCategory,
@@ -328,26 +780,7 @@ static int sve512_pred_ops_arm_init(struct test *test)
                      ps, 8 * data->vl_d);
             return EXIT_SKIP;
         }
-        void *pg = mmap(nullptr, 2 * (size_t)ps, PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (pg == MAP_FAILED) {
-            log_skip(TestResourceIssueSkipCategory,
-                     "sve512_pred_ops_arm init: mmap for the "
-                     "faulting-LDFF1 page pair failed");
-            return EXIT_SKIP;
-        }
-        if (munmap((char *)pg + ps, (size_t)ps) != 0) {
-            munmap(pg, 2 * (size_t)ps);
-            log_skip(TestResourceIssueSkipCategory,
-                     "sve512_pred_ops_arm init: munmap hole punch failed");
-            return EXIT_SKIP;
-        }
-        data->ffr_pages = pg;
-        data->ffr_pages_bytes = 2 * (size_t)ps;
-        data->ffr_mapped = (double *)((char *)pg + ps - 8 * data->vl_d);
-        data->ffr_fault_k1 = (const double *)((char *)pg + ps - 8);
-        for (size_t j = 0; j < data->vl_d; ++j)
-            data->ffr_mapped[j] = data->src[j];
+        data->page_bytes = (size_t)ps;
 
         test->data = data.release();
         return EXIT_SUCCESS;
@@ -384,6 +817,25 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
     const size_t vl = d->vl_d;
     const svbool_t all = svptrue_b64();
     bool all_passed = true;
+
+    /* This worker's own fault source (see ffr_hole), armed BEFORE any
+       face check runs (round-6 #15: it used to be armed after Sections
+       1-3, and a 2-page mmap failure there killed the thread with the
+       resource message while Sections 1-3 evidence sat detected but
+       unjudged in all_passed — the final attribution read "resource
+       exhausted", masking an SDC the sections had already seen. Armed
+       first, an mmap failure is the earliest and only verdict-relevant
+       event: nothing has been checked yet, so the resource attribution
+       is the complete honest story, and a real SDC is sampled on the
+       re-run. The earlier arm also widens the hole's external-mapper
+       exposure window by the duration of Sections 1-3 — a landed mapper
+       produces exactly the no-fault signature the interference gate
+       recognizes, and the budgeted re-arm recovery handles it). Used by
+       Section 4 and the sustained re-loop below, disarmed at the end of
+       the run. */
+    ffr_hole hole;
+    ffr_hole_arm(&hole, d);
+    int hole_rearms = 0;   /* ffr_hole_rearm budget (HOLE_REARM_CAP) */
 
     // Finite FMA addend for the active lanes: a distinctive, exactly
     // representable value so the computed lanes have a deterministic
@@ -519,29 +971,22 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // *clears* the FFR bit of each faulting element — it never sets a
         // bit — so without SETFFR the readback is the previous,
         // undefined FFR state, not the set of successfully-loaded lanes),
-        // then capture through the single always-inline window unit: the
+        // then capture through the single noinline capture function: the
         // call-free [SETFFR, image-and-data-in-memory] discipline, the b8
-        // full-bit count and the bit-for-bit image materialization live
-        // in ffr_ldff1_capture's one body. The readback buffers are
+        // full-bit count, the bit-for-bit image materialization and the
+        // call-boundary RDFFR-freshness guarantee all live in
+        // ffr_ldff1_capture's one body. The readback buffers are
         // allocated BEFORE the window so no call can land between the
         // capture and the store even on a Z-flushing kernel.
         const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
                                                       ffr_back.data(),
                                                       m_img);
-        if (memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
-            log_warning("sve512_pred_ops: LDFF1 readback mismatch");
-            all_passed = false;
-        }
-        // FFR must be all-true in every predicate bit after a mapped
-        // LDFF1 — compared BIT-FOR-BIT on the materialized image (a bare
-        // popcount would pass any count-conserving corruption)
-        if (memcmp(m_img, m_gold, 8 * vl) != 0) {
-            log_warning("sve512_pred_ops: FFR not all-true after mapped "
-                        "LDFF1 (count=%ld, expected %zu, first wrong bit "
-                        "%ld)", ffr_bits, 8 * vl,
-                        ffr_first_diff(m_img, m_gold, 8 * vl));
-            all_passed = false;
-        }
+        /* mapped face through the single parameterized checker shared
+           with the re-loop (round-4 #26/#32 — aggregate semantics here:
+           failures are recorded in all_passed, execution continues) */
+        ffr_check_mapped_face<false>(vl, m_gold, m_img,
+                                     ffr_back.data(), ffr_mem.data(),
+                                     ffr_bits, all_passed);
         /* Faulting face: element 0 mapped, element 1 on the unmapped
            hole. The fault must be SUPPRESSED and converted into an FFR
            clear from lane 1 onward: expected count is exactly element
@@ -562,50 +1007,26 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
            and clears one only on a fault, so the count must still be 8
            and not snap back to all-ones (or to 0). Catches an FFR
            write-on-success defect the all-true face cannot see. Its
-           capture follows the faulting one INSIDE the combined
-           always-inline unit ffr_fault_acc_capture — the between-captures
-           zero-call discipline is mechanical, not comment-only (the
-           partially-cleared FFR is live state, and a libc call — memcpy,
-           measured — would clobber it). */
+           capture follows the faulting one through the combined wrapper
+           ffr_fault_acc_capture — two adjacent noinline capture calls
+           and NOTHING else in between (see there: the cross-capture
+           discipline is mechanical, not comment-only; the
+           partially-cleared FFR is live state, and a foreign call —
+           memcpy, measured — would clobber it). */
         long fault_bits, acc_bits;
-        ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
+        ffr_fault_acc_capture(hole.fault_k1, f_back, f_img, ffr_mem.data(),
                               ffr_back.data(), a_img, fault_bits, acc_bits);
-        /* Environment-interference gate (round-3 review #18): before any
-           fault/acc face verdict, discriminate the re-mapped-hole case —
-           if the unmapped hole got mapped by an external mapper, the
-           fault never happened, ALL THREE fault/acc goldens break at
-           once, and reporting SDC would be false. Skip honestly. */
-        if ((memcmp(f_img, f_gold, 8 * vl) != 0 ||
-             memcmp(f_back, f_exp, vl * 8) != 0 ||
-             memcmp(a_img, f_gold, 8 * vl) != 0) && !ffr_hole_intact(d)) {
-            log_skip(TestResourceIssueSkipCategory,
-                     "sve512_pred_ops_arm: the unmapped hole for the "
-                     "faulting-LDFF1 face was re-mapped by an external "
-                     "mapper — fault source invalidated by the "
-                     "environment, not an SDC");
-            return EXIT_SKIP;
-        }
-        if (memcmp(f_img, f_gold, 8 * vl) != 0) {
-            log_warning("sve512_pred_ops: FFR partial-clear wrong after "
-                        "faulting LDFF1 (count=%ld, expected 8, first "
-                        "wrong bit %ld — clear must start at the first "
-                        "faulting lane)", fault_bits,
-                        ffr_first_diff(f_img, f_gold, 8 * vl));
-            all_passed = false;
-        }
-        if (memcmp(f_back, f_exp, vl * 8) != 0) {
-            log_warning("sve512_pred_ops: faulting LDFF1 data wrong "
-                        "(prefix must load, tail must zero from the "
-                        "first fault)");
-            all_passed = false;
-        }
-        if (memcmp(a_img, f_gold, 8 * vl) != 0) {
-            log_warning("sve512_pred_ops: mapped LDFF1 touched the FFR "
-                        "outside a fault (count=%ld, expected 8, first "
-                        "wrong bit %ld — accumulation broken)", acc_bits,
-                        ffr_first_diff(a_img, f_gold, 8 * vl));
-            all_passed = false;
-        }
+        /* faulting + accumulation faces and the interference gate through
+           the single parameterized checker (aggregate semantics: failures
+           recorded in all_passed, the caller issues the verdict at the
+           end; env_interference = proven environment, re-arm and let the
+           sustained re-loop below re-drive all three faces on the fresh
+           hole) */
+        if (ffr_check_fault_acc_faces<false>(
+                    hole, vl, all_passed, m_gold, f_gold, f_img, f_back,
+                    f_exp, a_img, fault_bits, acc_bits)
+                == ffr_faces_outcome::env_interference)
+            ffr_hole_rearm(hole, d, hole_rearms);
         // FMAXV over the whilelt(k=vl/2) masked prefix: exact max
         {
             size_t k = vl / 2;
@@ -669,77 +1090,45 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
         // the LDFF1/FFR path gets a single sampling opportunity and a
         // marginal SDC that only shows under sustained stress escapes
         // (AGENTS.md: timed continuous stress, short-run pass proves
-        // nothing). The capture goes through the same single
-        // always-inline window unit as Section 4 — the zero-call
-        // invariant is enforced in ffr_ldff1_capture's one body, not
-        // re-maintained by hand here: test_time_condition() above, the
+        // nothing). The capture goes through the same single noinline
+        // capture function as Section 4 — the zero-call window and the
+        // call-boundary RDFFR-freshness invariants are enforced in
+        // ffr_ldff1_capture's one body, not re-maintained by hand here:
+        // test_time_condition() above, the
         // FMA-part allocations, and the memcmp below all sit outside it.
         const long ffr_bits = ffr_ldff1_capture<true>(ffr_mem.data(),
                                                       ffr_back.data(), m_img);
-        // Two DISTINCT failure faces, reported separately so the message
-        // never contradicts itself (a combined `||` printed
-        // "ffr_bits=16, expected 16" — equal numbers in an SDC claim —
-        // whenever only the data half tripped): the FFR image faces the
-        // predicate datapath (bit-for-bit, not popcount — a bare count
-        // passes any count-conserving corruption), the memcmp faces the
-        // load datapath.
-        if (memcmp(m_img, m_gold, 8 * vl) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: FFR SDC detected "
-                            "(re-loop: first wrong bit %ld, count=%ld, "
-                            "expected %zu after mapped LDFF1)",
-                            ffr_first_diff(m_img, m_gold, 8 * vl), ffr_bits,
-                            8 * vl);
-            return EXIT_FAILURE;
-        }
-        if (memcmp(ffr_back.data(), ffr_mem.data(), vl * 8) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: LDFF1 data SDC detected "
-                            "(re-loop: FFR intact at %ld bits, readback "
-                            "mismatch)", ffr_bits);
-            return EXIT_FAILURE;
-        }
-        /* faulting + accumulation captures as the combined always-inline
-           unit — the between-captures zero-call discipline is mechanical
-           (the partially-cleared FFR is live state a libc call, memcpy
-           measured, would clobber) */
+        /* mapped face through the same single parameterized checker as
+           Section 4 (immediate semantics: the first broken face kills
+           the worker inside the checker via the noreturn report —
+           control never returns from a broken face, so no early-out
+           is needed here) */
+        ffr_check_mapped_face<true>(vl, m_gold, m_img, ffr_back.data(),
+                                    ffr_mem.data(), ffr_bits, all_passed);
+        /* faulting + accumulation captures as the combined wrapper —
+           two adjacent noinline capture calls and nothing else in
+           between (the cross-capture discipline is mechanical; the
+           partially-cleared FFR is live state a foreign call, memcpy
+           measured, would clobber — see ffr_fault_acc_capture) */
         long fault_bits, acc_bits;
-        ffr_fault_acc_capture(d->ffr_fault_k1, f_back, f_img, ffr_mem.data(),
+        ffr_fault_acc_capture(hole.fault_k1, f_back, f_img, ffr_mem.data(),
                               ffr_back.data(), a_img, fault_bits, acc_bits);
-        /* re-mapped-hole discrimination as in Section 4: interference
-           skips honestly, only an intact hole earns an SDC verdict */
-        if ((memcmp(f_img, f_gold, 8 * vl) != 0 ||
-             memcmp(f_back, f_exp, vl * 8) != 0 ||
-             memcmp(a_img, f_gold, 8 * vl) != 0) && !ffr_hole_intact(d)) {
-            log_skip(TestResourceIssueSkipCategory,
-                     "sve512_pred_ops_arm: the unmapped hole for the "
-                     "faulting-LDFF1 face was re-mapped by an external "
-                     "mapper (re-loop) — fault source invalidated by the "
-                     "environment, not an SDC");
-            return EXIT_SKIP;
-        }
-        if (memcmp(f_img, f_gold, 8 * vl) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: FFR partial-clear SDC "
-                            "detected (re-loop: first wrong bit %ld, "
-                            "count=%ld, expected 8 after faulting LDFF1)",
-                            ffr_first_diff(f_img, f_gold, 8 * vl),
-                            fault_bits);
-            return EXIT_FAILURE;
-        }
-        if (memcmp(f_back, f_exp, vl * 8) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: faulting LDFF1 data SDC "
-                            "detected (re-loop: FFR partial-clear intact at "
-                            "%ld bits, prefix/tail mismatch)", fault_bits);
-            return EXIT_FAILURE;
-        }
-        if (memcmp(a_img, f_gold, 8 * vl) != 0) {
-            report_fail_msg("sve512_pred_ops_arm: FFR accumulation SDC "
-                            "detected (re-loop: first wrong bit %ld, "
-                            "count=%ld, expected 8 unchanged after a "
-                            "mapped LDFF1)",
-                            ffr_first_diff(a_img, f_gold, 8 * vl), acc_bits);
-            return EXIT_FAILURE;
+        /* faulting + accumulation faces + the interference gate through
+           the single parameterized checker (immediate semantics);
+           reaching here means the FMA and mapped faces of this iteration
+           already passed, so no hole-independent failure can be pending;
+           env_interference = proven environment, re-arm and re-drive the
+           faces on the fresh hole from the next iteration */
+        if (ffr_check_fault_acc_faces<true>(
+                    hole, vl, all_passed, m_gold, f_gold, f_img, f_back,
+                    f_exp, a_img, fault_bits, acc_bits)
+                == ffr_faces_outcome::env_interference) {
+            ffr_hole_rearm(hole, d, hole_rearms);
+            continue;
         }
     }
 
+    ffr_hole_disarm_own(&hole);
     return EXIT_SUCCESS;
 #endif
 }
@@ -747,10 +1136,12 @@ static int sve512_pred_ops_arm_run(struct test *test, int cpu)
 static int sve512_pred_ops_arm_cleanup(struct test *test)
 {
 #ifdef __aarch64__
-    auto *d = static_cast<PredOpsData *>(test->data);
-    if (d && d->ffr_pages)
-        munmap(d->ffr_pages, d->ffr_pages_bytes);  // hole inside: legal
-    delete d;
+    /* The per-worker page pairs live and die inside test_run
+       (ffr_hole_arm / ffr_hole_disarm_own) — round-5 moved the fault
+       source out of this shared struct, so cleanup only releases the
+       init-time data. A worker that died to report_fail leaves its pair
+       to process exit (the forked child exits right after the test). */
+    delete static_cast<PredOpsData *>(test->data);
 #else
     (void)test;
 #endif

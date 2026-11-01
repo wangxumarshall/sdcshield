@@ -19,9 +19,9 @@ struct TestData {
     alignas(16) float *data;             // 共享数据数组，16 字节对齐
     size_t num_blocks;                   // 运行时块数(按目标内存计算)
     size_t total_elements;               // 运行时总元素数
-    std::atomic<uint32_t> next_block;
+    std::atomic<uint64_t> next_block;
     std::atomic<double> global_sum;      // 用 double 累加，减少误差
-    std::atomic<uint32_t> allocated_blocks;
+    std::atomic<uint64_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
     /* sense-reversal barrier (G2'/G3' fix): the original iter/read_done/
      * round_done protocol deadlocked from round 1 (read_done was never
@@ -35,6 +35,24 @@ struct TestData {
 
 // 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
 // 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(FP 用例是唯一大内存消费者)。
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例全线程并行认领填充(while(true),循环体无任何
+// test_time_condition)——整轮时长既不受 -t 约束也不受迭代预算约束;
+// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。R6 勘误(意见24):R5 版
+// 「(block_ok/ok → FAIL)是唯一的真检出」与本文件代码不符——写侧立即
+// 回读算出 ok 后在空体 if 中被丢弃,不产生任何 FAIL(姊妹 PR #331 commit
+// f1c23a65 已在其分支把 avx_sym/sse_sym 的 !ok 接通为 report_fail,本分支
+// 未含该修复)。本用例 FAIL 能力的数据校验只在读阶段:聚合和
+// read_sum == expected_sum(写侧累加 vs 读侧全量重读——非逐字节,补偿性
+// 双错等和保持型损坏不可见)+ store_buf 自一致性(读路径 store/reload
+// 自比较,不对照写入值);等待每自旋查预算(耐心 ~40 自旋)→ 预算耗尽
+// 即 break 跳过读阶段,该轮零校验。默认 ≈27.7 GB(61 GiB 主机)本机实测
+// 首轮 26.7 s(超 -t 3 s 预算 ~9 倍;R4 检视轮同配置 53.9 s、18 倍)后
+// 空转 pass;更慢负载下撞宽限悬崖 → timed out/exit: invalid——两态
+// 结局的该轮均零校验。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes() {
     const char *e = getenv("SDC_MESH_BUFFER_BYTES");
     if (e) {
@@ -62,7 +80,20 @@ static int mesh_upi_avx_sym_init(struct test *test) {
     size_t target = mesh_target_bytes();
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
-    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    /* 块索引空间 64 位(R2):num_blocks 不再封顶(target 经 floor 除法而来,
+     * num_blocks × block_bytes ≤ target ≤ SIZE_MAX,乘法无 size_t 溢出)。
+     * 去封顶必须配套 64 位块索引:next_block 若仍是 uint32,块数 ≥ 2^32 时
+     * fetch_add 越过 0xFFFFFFFF 回绕到 0,低块被重复认领重写——求和族
+     * global_sum 重复累计→假 FAIL,break 式认领循环每 2^32 次认领仅一张
+     * 退出票。该回绕在旧封顶下仅剩一个角落可触发:计算块数 ≥ 2^32 时
+     * 封顶恰把 num_blocks 钉在 0xFFFFFFFF,拿到 0xFFFFFFFF 的线程 break
+     * 后计数器回绕到 0,其余写者重新认领低块重写,退出票每 2^32 次认领
+     * 仅一张、N 线程需 N 张,写阶段无法在测试时限内自然终止;但本用例
+     * 2^32 块 = 128 TiB,init 分配必败,该角落实际不可达(计算块数 ≤
+     * 2^32 − 线程数的常态亦不可达);
+     * 历史假 FAIL 的真因是首轮已修的偏移乘法回绕:旧 size_t offset =
+     * block * BLOCK_ELEMENTS 是 32 位乘法,元素偏移 ≥ 2^32(缓冲 ≥ 16 GiB)时
+     * 低偏移被回绕索引重复写入,缓冲上半段地址从未被写。 */
     td->total_elements = td->num_blocks * BLOCK_ELEMENTS;
     size_t total_bytes = td->total_elements * elem_bytes;
 
@@ -117,15 +148,22 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
     #define RESET "\033[0m"
 
     uint32_t my_epoch = 0;
+    /* 本线程是否完成过至少一整轮「填充→全量读取校验」——同 sse_sym
+     * （issue #358 / PR #331 二轮意见 #23：-t 截断空过改诚实 SKIP）。 */
+    bool validated_any = false;
     do {
         // ---------- 阶段 1：所有线程共同填充数据 ----------
         // （本轮状态已由上一轮 sense-reversal 屏障的最后到达线程重置）
 
         // 所有线程竞争分配块并写入随机浮点数据（每块 BLOCK_ELEMENTS 个元素）
         while (true) {
-            uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
+            uint64_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block >= td->num_blocks) break;
-            size_t offset = block * BLOCK_ELEMENTS;
+            // 块号 64 位,与偏移乘法同宽:首轮修 32 位乘法偏移回绕(元素偏移
+            // ≥ 2^32 时低偏移被回绕索引重复写入,缓冲上半段从未被写);R2 去封顶后
+            // 块号本身也须 64 位,否则 fetch_add 在块数 ≥ 2^32 时回绕到 0,
+            // 低块被重复认领重写。
+            size_t offset = (size_t)block * BLOCK_ELEMENTS;
             float vals[BLOCK_ELEMENTS];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_ELEMENTS; ++j) {
@@ -152,8 +190,23 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
                     break;
                 }
             }
+            /* 写相位立即读回是逐 lane 字节级比对，其结果必须落地为失败：
+             * 读相位的全量校验只有聚合和（和保持型损坏——如补偿性双错、
+             * lane 互换——不可见）与 store_buf 自拷贝比较（不对照写入值），
+             * 旧注释「最终会在全量校验时捕获」对这类损坏不成立（PR #331
+             * 二轮意见 #22）。avx512_sym 同款语义先例（其 135-148 行注释）。
+             * 块为本线程独占认领，写后立即回读失配 = 真实 store/load 损坏。 */
             if (!ok) {
-                // 不一致，但最终会在全量校验时捕获，这里不处理
+                fprintf(stderr, "mesh_upi_avx_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, block,
+                        vals[0], vals[1], vals[2], vals[3],
+                        offset,
+                        td->data[offset], td->data[offset + 1],
+                        td->data[offset + 2], td->data[offset + 3],
+                        RED, RESET);
+                fflush(stderr);
+                report_fail_msg("mesh_upi_avx_sym: write-phase immediate read-back mismatch (store/load corruption)");
+                return EXIT_FAILURE;
             }
 
             // 累加全局和（使用 double 原子操作）
@@ -218,6 +271,7 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
             report_fail_msg("mesh_upi_avx_sym: Sum mismatch or consistency failure");
             return EXIT_FAILURE;
         }
+        validated_any = true;   // 本轮全量读取校验已通过
 
         // ---------- 阶段 3：sense-reversal 屏障进入下一轮 ----------
         // 最后到达的线程在此重置下一轮状态（global_sum/next_block/
@@ -242,6 +296,13 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
 
     } while (test_time_condition(test));
 
+    if (!validated_any) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "mesh_upi_avx_sym: test time expired before the first full "
+                 "validation round completed (runtime-sized buffer fill "
+                 "outlives -t); nothing was verified in this run");
+        return EXIT_SKIP;
+    }
     return EXIT_SUCCESS;
 
     #undef GREEN

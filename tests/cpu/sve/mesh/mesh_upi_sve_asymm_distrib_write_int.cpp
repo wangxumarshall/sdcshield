@@ -20,9 +20,9 @@ struct TestData {
     alignas(16) int32_t *data;           // 16 字节对齐即可
     size_t num_blocks;                   // 运行时块数(按目标内存计算)
     size_t total_elements;               // 运行时总元素数
-    std::atomic<uint32_t> next_block;
+    std::atomic<uint64_t> next_block;
     std::atomic<uint64_t> global_sum;
-    std::atomic<uint32_t> allocated_blocks;
+    std::atomic<uint64_t> allocated_blocks;
     std::atomic<uint32_t> thread_idx;
     std::atomic<uint32_t> round_done;
     std::atomic<uint64_t> iter;
@@ -35,6 +35,19 @@ struct TestData {
 // SDC_MESH_UPI_SVE_ASYMM_DISTRIB_WRITE_INT_BUFFER_BYTES 环境变量 /
 // 自适应 = 物理内存 90% 在 2 路 mesh 战役间均摊(与 mesh_upi_avx_sym 的
 // SDC_MESH_BUFFER_BYTES 语义一致, 但走统一配置链)
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例与 mesh_upi_sve_asymm_write_int 是 mesh 17 文件中唯二
+// 「填充每认领一次即查预算」的:每轮 ~40 认领即耗尽 auto-fracture 迭代
+// 预算,截断填充并触发 fracture 重启重新 init 重填(R4 注释的这句仅对
+// 本唯二文件为真,其余 15 文件填充循环无预算检查、永不截断);整轮
+// 时长因此受预算+fracture 约束,不撞父进程宽限悬崖。读者等待
+// allocated_blocks ≥ num_blocks,而写者每轮仅认领 ~40×(N−1) 块 ≪
+// num_blocks → 该条件结构性永不成立,读侧校验在任何 ≥1 MiB 配置
+// (knob 下限)不可达;且写侧无立即回读检查——除 num_blocks ≲
+// 40×(N−1) 的数 KiB 级 legacy env 缓冲外,全配置零检出。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes(struct test *test)
 {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,
@@ -72,7 +85,23 @@ static int mesh_upi_sve_asymm_distrib_write_int_init(struct test *test) {
     size_t target = mesh_target_bytes(test);
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
-    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    /* 块索引空间 64 位(R2):num_blocks 不再封顶(target 经 floor 除法而来,
+     * num_blocks × block_bytes ≤ target ≤ SIZE_MAX,乘法无 size_t 溢出)。
+     * 去封顶必须配套 64 位块索引:next_block 若仍是 uint32,块数 ≥ 2^32 时
+     * fetch_add 越过 0xFFFFFFFF 回绕到 0,低块被重复认领重写——求和族
+     * global_sum 重复累计→假 FAIL,break 式认领循环每 2^32 次认领仅一张
+     * 退出票。该回绕在旧封顶下仅剩一个角落可触发:计算块数 ≥ 2^32 时
+     * 封顶恰把 num_blocks 钉在 0xFFFFFFFF(本用例 2^32 块 = 128 GiB;该
+     * 角落对本用例任何配置均不可达——填充每认领一次即查预算,每轮
+     * ~40 认领即截断并触发 fracture 重启重置 next_block,认领计数器
+     * 永不积累到 2^32;计算块数贴边 2^32 − 线程数以上的窄带同理),
+     * 拿到 0xFFFFFFFF 的
+     * 线程 break 后计数器回绕到 0,其余写者重新认领低块重写,退出票每
+     * 2^32 次认领仅一张、N 线程需 N 张,写阶段无法在测试时限内自然终
+     * 止;计算块数 ≤ 2^32 − 线程数的常态下认领总数 < 2^32+1,不可达;
+     * 历史假 FAIL 的真因是首轮已修的偏移乘法回绕:旧 size_t offset =
+     * block * BLOCK_ELEMENTS 是 32 位乘法,元素偏移 ≥ 2^32(缓冲 ≥ 16 GiB)时
+     * 低偏移被回绕索引重复写入,缓冲上半段地址从未被写。 */
     td->total_elements = td->num_blocks * BLOCK_ELEMENTS;
     size_t total_bytes = td->total_elements * elem_bytes;
 
@@ -116,9 +145,13 @@ static int mesh_upi_sve_asymm_distrib_write_int_run(struct test *test, int cpu) 
         if (!is_reader) {
             // 写核心：循环分配块并写入
             while (test_time_condition(test)) {
-                uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
+                uint64_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
                 if (block < td->num_blocks) {
-                    size_t offset = block * BLOCK_ELEMENTS;
+                    // 块号 64 位,与偏移乘法同宽:首轮修 32 位乘法偏移回绕(元素偏移
+                    // ≥ 2^32 时低偏移被回绕索引重复写入,缓冲上半段从未被写);R2 去封顶后
+                    // 块号本身也须 64 位,否则 fetch_add 在块数 ≥ 2^32 时回绕到 0,
+                    // 低块被重复认领重写。
+                    size_t offset = (size_t)block * BLOCK_ELEMENTS;
                     // 生成随机数据（8个 int32）
                     int32_t vals[BLOCK_ELEMENTS];
                     uint64_t local_sum = 0;

@@ -10,11 +10,13 @@
 
 // 使用 unsigned __int128 表示 16 字节原子数据
 // 低 64 位：counter，高 64 位：version
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     alignas(16) std::atomic<unsigned __int128> data;  // 16 字节原子对象
     std::atomic<uint64_t> thread_idx;                 // 线程 ID 分配器
     uint64_t local_sums[MAX_THREADS];                 // 每个线程的本地增量总和
 };
+}
 
 // 辅助函数：从 128 位中提取 counter 和 version
 static inline void unpack_128(unsigned __int128 val, uint64_t &counter, uint64_t &version) {

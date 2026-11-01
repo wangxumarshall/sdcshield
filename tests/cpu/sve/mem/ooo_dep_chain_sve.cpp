@@ -115,6 +115,7 @@ static inline uint64_t dep_load64(const void *a) { uint64_t v; std::memcpy(&v,a,
 static inline void dep_store64(void *a, uint64_t v) { std::memcpy(a,&v,8); }
 #endif
 
+namespace { /* ODR: per-TU OooDepData (2-file same-name hazard) */
 struct OooDepData {
     size_t chain_len;    // pointer-chase steps (运行时, 从统一配置链解析)
     size_t rob_depth;    // RW-hazard 槽数 == 长 ALU 链深度 (运行时)
@@ -126,6 +127,7 @@ struct OooDepData {
     // The RW-hazard store addresses (distinct cache lines).
     std::vector<uint64_t> rw_addrs; // rob_depth entries
 };
+}
 
 // Build a pseudo-random permutation of 0..N-1 using a high-Hamming LCG so
 // successive visited addresses toggle maximally. Writes the permutation as

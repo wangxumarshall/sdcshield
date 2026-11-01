@@ -53,8 +53,9 @@ The x86-64 implementation is the reference; ARM64 is a parallel port. Gating is
 
 - Placeholder tests for unimplemented-on-ARM features **must skip** with reason
   `"to be implemented (placeholder)"` (`EXIT_SKIP` from `test_init`, never
-  `EXIT_SUCCESS`). Examples: `tests/cpu/ist/ist.c`,
-  `tests/common/smi_count/smi_count.cpp`.
+  `EXIT_SUCCESS`). Example: `tests/cpu/ist/ist.c`.
+  (`tests/common/smi_count/smi_count.cpp` was one until the ARM64
+  CNTVCT_EL0 gap probe landed — 2026-10-31, issue #7.)
 - Real features get real implementations; truly-absent hardware (ARM has no
   CPU microcode/PPIN/MSR) stays a documented stub, not faked.
   `tests/common/mce_check/mce_check.cpp` is a *real* EDAC-backed test on ARM64.
@@ -159,8 +160,14 @@ Arch gating is **inside files** (`#ifdef __x86_64__` / `__aarch64__`) and
 `InterruptMonitorWorks` is `true` on linux x86-64 + aarch64. x86 counts MCE/TRM
 lines from `/proc/interrupts`; aarch64 counts EDAC `ce_count` + `ue_count`
 (controller-wide, placed at index 0). `count_smi_events()` uses `read_msr`
-(x86-only MSR 0x34 — no ARM equivalent, returns nullopt). `mce_check` is a
-special always-inserted test.
+(x86-only MSR 0x34 — no ARM equivalent, returns nullopt). The ARM64
+`smi_count` test therefore bypasses InterruptMonitor entirely — it is a
+CNTVCT_EL0 read-gap probe implemented inside the test itself, because no
+sampleable firmware-preemption counter exists on bare-metal ARM64 (see
+`tests/common/smi_count/smi_count.cpp` for the measured basis and the
+semantic boundary: the probe reports a per-CPU timing-noise map and cannot
+attribute gaps to firmware vs. hypervisor vs. kernel scheduling).
+`mce_check` is a special always-inserted test.
 
 ## Tests directory layout
 
@@ -181,8 +188,25 @@ link without symbol clash), `tests_set_sve` (aarch64 SVE, `-DEigen=EigenSVE`).
 `haveAes()`; list via `-s help`). The AES engine uses `#pragma GCC target`
 per-arch: x86 `_mm_aesenc_si128`, aarch64 `vaesmcq_u8(vaeseq_u8(...))` via
 `+crypto`. RNG state is per-thread (`thread_rng` union, 64-byte aligned). The
-framework **overrides libc seeding functions** (`framework/random.cpp:781-883`
+framework **overrides libc seeding functions** (`framework/random.cpp:850-952`
 `extern "C"` block — `srand` aborts, etc.).
+
+Threads spawned by test code with a raw `std::thread` never run the
+framework's init paths; their `thread_num` TLS is zero-initialized to 0,
+which used to alias worker 0's slot (`rngs[1]`) — a data race when several
+such threads call the RNG (issue #348, proven by ThreadSanitizer on
+`cache_stress_aggressor`). Since 2026-10-31 such threads get a private,
+lazily-seeded `thread_local` engine instead (`tls_engine` /
+`raw_thread_engine()`): the mixin is a fixed salt ^ a process-wide atomic
+counter and the seed material is the global engine's current state, so raw
+streams still depend on `-s`. Framework threads bind the exact slots they
+always used (`random_init_global` / `random_init_thread` / the
+`thread_num == -1` first-use fallback), so their streams stay bit-exact
+under `-s`. Caveat: which raw thread gets which counter value depends on
+scheduling, so per-raw-thread replay across runs is not guaranteed; and a
+detached raw thread whose *first* RNG call happens after the test finished
+could race the scheduler's `random_advance_seed()` on the global slot —
+join raw threads before `test_run`/`test_cleanup` returns.
 
 ## Eigen 5.0 SVE double packets (vendored)
 
@@ -192,13 +216,75 @@ making `eigen_svd_cdouble_sve` run vectorized SVD (~0.7 s at M_DIM 300 vs
 >10 min scalar). **Runtime-VL rule**: size-specific SVE code requires the
 process vector length to equal the compile-time `-msve-vector-bits`.
 Whether a host has SVE at all is per-machine: probe it (CLAUDE.md rule 2)
-instead of assuming — on a host without SVE the SVD SVE test cleanly skips,
-and on SVE hosts with VL≠128 it needs a `prctl(PR_SVE_SET_VL, 16)` pin (see
-`scripts/eigen-sve-double/` and `arm64_sve_pin_vl()`). All-VL Phase 2 P5:
-the Eigen pair (`eigen_svd_cdouble_sve`, `eigen_gemm_double_max_arm`) self-pins
-each worker thread inside `test_run` via `arm64_sve_pin_vl(16)` — no external
-launcher needed anymore (Eigen's SVE packets are compile-time fixed-width; VLA
-is un-compilable at the C++ language level per the twice-confirmed spike, so
-the 128-bit lock stays; a failed pin skips honestly). `sleef_sve` and the
-sve_rot probe family migrated to the true-VLA `tests_sve_vla` library (no
-`-msve-vector-bits`) — all-VL 128..1024-bit.
+instead of assuming — on a host without SVE the SVD SVE test cleanly skips.
+Tier dispatch (2026-10-27, replaces the earlier 128-bit lock): Eigen packets
+are compile-time fixed-width (VLA is un-compilable at the C++ language level,
+twice-confirmed spike), so the Eigen SVE pair is built **once per tier** under
+its own Eigen namespace and a vector-length-agnostic dispatcher picks the
+variant matching the framework-pinned worker VL (complex SVD has no 1024-bit
+variant — Eigen's SVE complex `ptranspose` has an upstream defect reading
+past `buf[N][NC]`). Each per-tier run wrapper re-pins the worker to the
+framework-chosen
+tier and verifies the readback (a refused pin skips, a mismatch fails).
+`sleef_sve` and the sve_rot probe family live in the true-VLA `tests_sve_vla`
+library (no `-msve-vector-bits`) — all-VL 128..1024-bit.
+
+## Eigen sizing: NUMA-aware joint solve (arm64)
+
+All 21 eigen tests size their matrix dimension through `sdc_joint_dim_slice()`
+(`framework/sdc_stress_config.h`, design
+`docs/superpowers/specs/2026-10-27-eigen-p0-p3-fix-design.md`):
+`n = min(n_mem, n_run, clamp)`. Data flow, in order:
+
+```
+sdc_numa_probe()   nodes-with-memory + per-node MemFree + cpulist
+      ↓
+sdc_budget_bytes() four-source min: phys×‰ / MemAvailable×0.9 /
+                   cgroup v1+v2 headroom / CommitLimit−Committed_AS×0.9
+                   (commit source only when vm.overcommit_memory=2,
+                   no-op otherwise — issue #310); per-node share by MemFree
+      ↓            (zero-memory nodes fold into the fallback node —
+                    on a node0-only host this degrades exactly to
+                    the global model)
+sdc_joint_dim_slice()  n_mem: node budget vs RSS_RATIO_TABLE
+                       (measured per-family c, KB/n²/thread)
+                       n_run: probe power-law fit (fixed overhead
+                       subtracted, 100 ms probe threshold) × AR
+                       all-core-slowdown table (family×topology)
+      ↓
+VmHWM feedback     per-slice MemFeedback slots in shmem (written at
+                   run_one_test_inner tail, no_fork excluded): EMA
+                   α=0.5, median aggregation, 0.7× table floor —
+                   c corrections feed the *next* fracture/test
+```
+
+`eigen_svd_cdouble_sve` / `eigen_gemm_double_max_arm` moved sizing from
+preinit into the child `test_init` (also fixing an exec-mode divergence
+where the exec'd image never saw the preinit-computed dim);
+`eigen_svd_bidiag_sve` already sized in child init. Explicit
+`-O <test>.mdim` bypasses sizing; an `[内存越界]`/`[欠压力]`
+expected-memory warning fires only for callers whose knob query routes
+through the joint layer's early-exit (the ten SVD template-family users
+via `calibrated_auto_dim`). The GEMM/sparse/SVE/bidiag callers still
+short-circuit the knob in their own init (`if (v > 0) return v;` before
+the arch guard) — their explicit paths carry no warning yet (T11b
+follow-up; 10/21 eigen cases covered).
+
+x86-64 keeps the old sizing behavior via the **callers'** `#else` chains
+(e.g. `calibrated_auto_dim`'s legacy two-step memory+2 s-calibration
+chain, `gemm_mdim`'s `sdc_auto_square_dim` path) — rule 5. The `#else`
+branch inside `sdc_joint_dim_slice` itself is the defensive definition
+of the same legacy semantics; no live x86 caller reaches it today (all
+call sites are `#if defined(__aarch64__) && defined(__linux__)`-gated),
+it exists so a future cross-arch caller gets defined, loudly-logged
+behavior instead of a compile error.
+
+One rule-5 exception is disclosed here (approved): the `sdc_calibrated_dim`
+probe threshold was raised 1 ms → 100 ms (M3 — a 1 ms probe is dominated by
+fixed setup overhead and pollutes the power-law fit). That helper is
+deliberately global shared code, so the x86-64 eigen family's calibrated
+dims shift with it; the direction is the intended fix (fit de-distortion),
+not behavior drift. The constructive one-solve ≤ max_single_ms guarantee
+(verification probe + shrink loop) holds on x86-64 unchanged; what shifts
+is the calibrated operating point (larger, less fit-distorted dims) and
+init-time probe cost, both bounded.

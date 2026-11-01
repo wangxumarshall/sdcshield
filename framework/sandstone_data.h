@@ -129,7 +129,10 @@ static constexpr const char *type_name(DataType type)
     case BFloat16Data: return "_BFloat16";
     case Float32Data: return "float";
     case Float64Data: return "double";
-    case Float80Data: return "_Float64x";   // long double is IEEE-754 extended precision binary64
+    // long double spells _Float64x on both architectures (TS 18661-3
+    // "extended of binary64"): x87 80-bit on x86, binary128 on aarch64
+    // (issue #180; verified __FLT64X_MANT_DIG__ 64 / 113 respectively)
+    case Float80Data: return "_Float64x";
     case Float128Data: return "_Float128";
 
     //case DataIsSigned:
@@ -191,6 +194,12 @@ static constexpr size_t type_real_size(DataType type)
             return 1;
         case BFloat16Data:
             return 2;
+#ifdef __aarch64__
+        case Float80Data:
+            // long double is binary128: all 16 bytes are real data (the
+            // enum's size-1 nibble encodes the x87 10-of-16 layout only)
+            return sizeof(long double);
+#endif
         default:
             return (type & SizeMask) + 1;
     }
@@ -198,7 +207,8 @@ static constexpr size_t type_real_size(DataType type)
 
 static constexpr size_t type_size(DataType type)
 {
-    // special case: long double has 10 bytes of data but occupies 16 bytes
+    // special case: long double occupies 16 bytes everywhere; on x86 only
+    // 10 are real data (x87 80-bit), on aarch64 all 16 are (binary128)
     if (type == Float80Data)
         return sizeof(long double);
     return type_real_size(type);

@@ -42,11 +42,9 @@ using eigen_svd_jacobi_fvectors_test = EigenSVDTest<SVD, Eigen::Dynamic>;
 
 static int eigen_svd_jacobi_fvectors_init(struct test *test) {
     auto d = new eigen_svd_jacobi_fvectors_test::eigen_test_data;
-    int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 64, 2048);
-    if (v == 0)
-        sdc_env_knob_int_clamped("eigen_svd_jacobi_fvectors", "mdim", &v, 64, 2048);
-    d->dim = (v > 0) ? (int)v
-                     : eigen_svd_jacobi_fvectors_test::calibrated_auto_dim(test, 4, 6, 8.0, 650, 64, 2048);
+    /* -O/env 查询与显式短路已收进 calibrated_auto_dim(T11: arm64 显式值
+     * 经联合层 knob 早退打预期内存警告; x86 行为不变)。 */
+    d->dim = eigen_svd_jacobi_fvectors_test::calibrated_auto_dim(test, 4, 6, 8.0, 650, 64, 2048);
     test->data = d;
     return EXIT_SUCCESS;
 }
@@ -56,5 +54,16 @@ DECLARE_TEST(eigen_svd_jacobi_fvectors, "Eigen SVD (Singular Value Decomposition
   .test_init = eigen_svd_jacobi_fvectors_init,
   .test_run = eigen_svd_jacobi_fvectors_test::run,
   .test_cleanup = eigen_svd_jacobi_fvectors_test::cleanup,
+  /* SKIP 级的来由与现状(补注, 2026-10-31, issue #322):
+   * 1) 级别继承自上游 Intel OpenDCDiag——其初始提交(91e4fc86)即
+   *    TEST_QUALITY_SKIP, 今日上游 master 仍如此, 仓库内无书面理由;
+   * 2) 上游模板是 init 共享 golden + 各 worker 线程重算比对, 跨线程
+   *    Eigen SIMD/标量路径分歧(堆分配对齐引导)会让 U/V 字节比对假失配
+   *    ——BDC 家族在本 fork 实测过同型故障(2026-10-24 修复, 见
+   *    CLAUDE.md)。本 fork 的 per-thread 同源 golden(46141ed4)同样覆盖
+   *    Jacobi 四件套, 该结构性风险已消除: 2026-10-31 鲲鹏 920 实测
+   *    --quality=-1 下 -n 2 与 -n 16×30s 四用例全 pass;
+   * 3) 维持 SKIP 是待满核多 seed 晋升验证(规则 2 口径)并与上游对齐;
+   *    显式运行: --quality=-1 -e <test>。 */
   .quality_level = TEST_QUALITY_SKIP,
 END_DECLARE_TEST

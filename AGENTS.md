@@ -20,16 +20,17 @@ Corruption）**——即计算不崩溃、但产生错误比特。其检测原�
 2. **x86-64 非回归（增量式移植）**：移植必须附加式实现，使用 `#elif __aarch64__` 与按架构的
    meson 守卫；只有在**确实共享**的代码路径上，才可把 `#ifdef __x86_64__` 扩展为同时包含
    `__aarch64__`。禁止无理由地改写 x86-64 已有逻辑。
-3. **诚实性——禁止假通过**：ARM64 上尚未实现的功能，必须从 `test_init` 返回 `EXIT_SKIP`，
-   且跳过理由为 `"to be implemented (placeholder): <缺失内容>"`；**禁止**用 `EXIT_SUCCESS`
-   伪装通过（no-op 测试报 pass 是 bug）。`mce_check` 在 ARM64 是真实的 EDAC 后端测试，**必须通过**。
-   **本机能力不支持时的 gem5-fi 强制验证**：受影响行为若因当前机器芯片能力缺失（缺
-   HWCAP/HWCAP2 位如 SME、VL/SVL 档位不支持、新指令代际）而无法真机运行，仅验证 SKIP
-   路径**不构成完整验证**——必须用 gem5-fi（`/home/sdc/wangxu/gem5-fi`，CHAOS/SE，
-   `workloads/sdcshield/` 下同源 dual kernel）在受影响的 VL/SVL 档位仿真验证并引用真实
-   run 输出（档位、checksum、`SDCSHIELD_FAILS=0`）；确实无法 gem5 验证时须如实声明验证
-   边界。**禁止把「SKIP 理由不变」单独充当功能性修改的验证结论**（PR #242 先例：
-   输入公式修复由 `sme_za_tileview_dual.c` 在 SVL 128/256/512/1024-bit 四档实证）。
+3. **诚实性——禁止假通过**：
+   - ARM64 上尚未实现的功能，必须从 `test_init` 返回 `EXIT_SKIP`，且跳过理由为
+     `"to be implemented (placeholder): <缺失内容>"`；**禁止**用 `EXIT_SUCCESS` 伪装通过
+     （no-op 测试报 pass 是 bug）。`mce_check` 在 ARM64 是真实的 EDAC 后端测试，**必须通过**。
+   - **本机能力不支持时的 gem5-fi 强制验证**：受影响行为若因当前机器芯片能力缺失（缺
+     HWCAP/HWCAP2 位如 SME、VL/SVL 档位不支持、新指令代际）而无法真机运行，仅验证 SKIP
+     路径**不构成完整验证**——必须用 gem5-fi（`/home/sdc/wangxu/gem5-fi`，CHAOS/SE，
+     `workloads/sdcshield/` 下同源 dual kernel）在受影响的 VL/SVL 档位仿真验证并引用真实
+     run 输出（档位、checksum、`SDCSHIELD_FAILS=0`）；确实无法 gem5 验证时须如实声明验证
+     边界。**禁止把「SKIP 理由不变」单独充当功能性修改的验证结论**（PR #242 先例：
+     输入公式修复由 `sme_za_tileview_dual.c` 在 SVL 128/256/512/1024-bit 四档实证）。
 4. **一个补丁一个单元**：每个特性 / 修复 / 移植点单独提交，**不得捆绑**多个单元。提交遵循 DCO：
    `git commit -s`，`Signed-off-by` 为最后一行，其后不得再有内容。
 5. **文档同步**：大颗粒度修改必须同步更新 `README.md` 与 `docs/` 下对应文档，确保内容 100% 准确。
@@ -92,3 +93,5 @@ SDC 检视的独特之处在于——不仅看代码「对不对」，更看它*
 - [`docs/coding/coding_style_guide.md`](docs/coding/coding_style_guide.md) — 代码风格（C++20/C17，无警告）。
 - [`README.md`](README.md) — 快速上手、构建与部署。
 - [`docs/build-deploy-pr-ci/pr-loop.md`](docs/build-deploy-pr-ci/pr-loop.md) — PR 检视-修复闭环手册（五 bot 检视——四外部 SaaS bot + 本地 claude 对抗检视 → subagent 批判性处置 → 修复 → 循环 → 人工 merge，绝不自动 merge）；引擎 [`scripts/pr_loop.py`](scripts/pr_loop.py)（第 5 bot 引擎 [`scripts/pr_local_review.py`](scripts/pr_local_review.py)），入口 Claude Code `/pr-loop` 命令（`.claude/commands/pr-loop.md`）与 Trae 规则（`.trae/rules/pr-loop.md`，双份同源）。
+- [`docs/build-deploy-pr-ci/task-loop.md`](docs/build-deploy-pr-ci/task-loop.md) — 无人值守任务闭环手册（CI 红 / main 审查 / 会话 / 手建 issue → agent-task 队列 → headless agent → PR → 同一检视闭环 → 人工 merge）。
+- [`docs/build-deploy-pr-ci/agent-full-automation.md`](docs/build-deploy-pr-ci/agent-full-automation.md) — Agent 全流程自动化总体架构（事件源 → 编排 → agent 执行面 → 验证门禁 → 人工 merge 终门；含 v3 架构图 `agent-full-automation.png`）。

@@ -42,30 +42,77 @@ struct TestData {
 // → 战役外部 timeout(scheduler.py: timeout -k 30 <-t/1000+15>)先于
 // 框架 SIGQUIT 宽限 max(5×-t+30s, 300s) 杀进程 → Timed Out 误报;
 // 且等待自旋每圈烧 1 次迭代预算(40 次上限,µs 级耗尽,#357),填充超
-// 毫秒即整轮零校验。修法 = sizing 语义修正:默认缓冲 = 45% 物存工作集
-// ÷ 线程数(读流量总量恒定——每轮字节搬移与修复前同量级,足迹仍远超
-// LLC 走 DRAM/mesh 路径,「全线程全量读」访问模式不变),再以 1 GiB
-// 绝对上限收口低线程/超大内存主机的轮时长与分配安全;显式 knob/env
-// 不受该上限约束(大足迹压力仍可显式申请,其超时语义由 #357 族级根治
-// 跟踪)。等待侧预算节流见 run 内 131072 一档自旋(同 SVE 侧先例)。
+// 毫秒即整轮零校验。修法 = sizing 语义修正:默认缓冲 = 四源安全预算
+// (物存/MemAvailable×0.9/cgroup 限额/承诺余量,sdc_budget_bytes,
+// #310 OOM 前科——单源物存会在容器/批处理限额下超分)的 45% ÷ 线程数
+// (读流量总量恒定——每轮字节搬移与修复前同量级,「全线程全量读」访问
+// 模式不变),clamp [64 MiB, 1 GiB]:下限保默认工作集达 LLC 量级(跨核
+// 共享行的 snoop/mesh 流量正是本用例的互连压力语义,原始设计即
+// L1D-to-L1D;下限让位于预算本身,不越过 OOM 安全边界),上限收口低
+// 线程/超大内存主机的轮时长;显式 knob/env 不受该 clamp 约束(大足迹
+// 压力仍可显式申请,其超时语义由 #357 族级根治跟踪)。等待侧预算节流
+// 见 run 内 131072 一档自旋(同 SVE 侧先例)。
 static size_t mesh_target_bytes(struct test *test) {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,
                                      1 << 20, 1ll << 44);
     if (v == 0)
         sdc_env_knob_int_clamped(test->id, "buffer_bytes", &v, 1 << 20, 1ll << 44);
+    /* 旧脚本兼容: SDC_MESH_BUFFER_BYTES 直接指定字节——套与 knob/env 同款
+     * [1MiB,16TiB] clamp 与值日志(检视意见:裸通道下荒谬值会静默缩到
+     * num_blocks<1 兜底的 1 块 32 KiB,mesh 压力归零仍报 pass)。 */
+    if (v == 0) {
+        if (const char *e = getenv("SDC_MESH_BUFFER_BYTES")) {
+            char *end = nullptr;
+            unsigned long long b = strtoull(e, &end, 10);
+            if (end && *end == '\0' && b > 0) {
+                if (b < (1ull << 20)) {
+                    log_warning("%s: SDC_MESH_BUFFER_BYTES=%llu 越界 (有效 %llu..%llu), 已 clamp 为 %llu",
+                                test ? test->id : "(global)", b,
+                                1ull << 20, 1ull << 44, 1ull << 20);
+                    b = 1ull << 20;
+                } else if (b > (1ull << 44)) {
+                    log_warning("%s: SDC_MESH_BUFFER_BYTES=%llu 越界 (有效 %llu..%llu), 已 clamp 为 %llu",
+                                test ? test->id : "(global)", b,
+                                1ull << 20, 1ull << 44, 1ull << 44);
+                    b = 1ull << 44;
+                }
+                log_warning("[压力映射] %s.buffer_bytes = %llu 字节 (来源: 旧脚本兼容 env SDC_MESH_BUFFER_BYTES)",
+                            test ? test->id : "(global)", b);
+                return (size_t)b;
+            }
+        }
+    }
     if (v > 0)
         return (size_t)v;
-    /* 旧脚本兼容: SDC_MESH_BUFFER_BYTES 直接指定字节 */
-    if (const char *e = getenv("SDC_MESH_BUFFER_BYTES")) {
-        char *end = nullptr;
-        unsigned long long b = strtoull(e, &end, 10);
-        if (end && *end == '\0' && b > 0)
-            return (size_t)b;
-    }
-    /* 读流量总量恒定: 45% 物存 ÷(2 路战役均摊 × 线程数),1 GiB 轮时长上限 */
-    uint64_t budget = sdc_target_workset_bytes(900, 2 * thread_count(), nullptr);
-    constexpr uint64_t cap = 1ull << 30;
-    return budget < cap ? budget : cap;
+    /* quick 模式(CI 冒烟): 与 sdc_target_workset_bytes 的 quick 契约一致
+     * 收缩到 16 MiB,不套下方 clamp。 */
+    if (sdc_quick_run())
+        return 16ull << 20;
+    /* 读流量总量恒定: 四源安全预算(物存/MemAvailable×0.9/cgroup 限额/
+     * 承诺余量,sdc_budget_bytes,#310 OOM 前科)的 45% ÷(2 路战役均摊 ×
+     * 线程数 × 并发 slice 数)。下限 64 MiB: 默认工作集达 LLC 量级(跨核
+     * 共享行的 snoop/mesh 流量正是本用例的互连压力语义,原始设计即
+     * L1D-to-L1D)——下限让位于预算本身,不越过 OOM 安全边界;上限 1 GiB:
+     * 低线程/超大内存主机的轮时长与分配收口。 */
+    int total = total_thread_count();
+    int cur = thread_count();
+    int slices = (cur > 0 && total > cur) ? (total + cur - 1) / cur : 1;
+    int consumers = 2 * cur * slices;
+    if (consumers < 1)
+        consumers = 1;
+    uint64_t budget = sdc_budget_bytes(900);
+    uint64_t lo = 64ull << 20;
+    if (lo > budget)
+        lo = budget;
+    uint64_t b = budget / (uint64_t)consumers;
+    if (b < lo)
+        b = lo;
+    if (b > (1ull << 30))
+        b = 1ull << 30;
+    log_warning("[压力映射] %s.buffer_bytes = %llu 字节 (来源: 读流量总量恒定 45%%安全预算 ÷ %d 线程, clamp [64MiB..1GiB]) = %.1f MiB",
+                test ? test->id : "(global)", (unsigned long long)b,
+                consumers, (double)b / 1048576.0);
+    return b;
 }
 
 static int mesh_upi_avx512_sym_init(struct test *test) {

@@ -346,7 +346,7 @@ SDC_BUILD_JOBS=20 ./scripts/build.sh && ./builddir/sdcshield -e mesh_upi_avx512_
 兼容旧变量 `SDC_MESH_BUFFER_BYTES`（直接指定字节）。读流量总量恒定口径
 （issue #325）：每轮聚合读流量 = 线程数 × 缓冲，默认钉在 45% 物存。
 ```
-- [ ] 修 SVE mesh 行 `1MiB~4TiB` → `1MiB~16TiB`（代码 36 处均 `1ll<<44`，文档原值错误）。
+- [x] 修 SVE mesh 行 `1MiB~4TiB` → `1MiB~16TiB`（代码 36 处均 `1ll<<44`，文档原值错误）。
 
 ### Task 5: 全量验证 + 提交 + PR
 
@@ -367,7 +367,7 @@ git add tests/cpu/mesh/mesh_upi_avx_sym.cpp tests/cpu/mesh/mesh_upi_avx512_sym.c
 git commit -s -m "fix(mesh): avx_sym/avx512_sym 超时修复——读流量总量恒定 sizing + 等待预算节流 (Fixes #325)"
 ```
 （尾行 Signed-off-by 由 -s 生成，确认无 Co-Authored-By。）
-- [ ] push 特性分支、开 PR（`Fixes #325`）、code-review 检视、merge（若与后续 main 前进冲突，按编排卡避让纪律处理）。
+- [x] push 特性分支、开 PR（`Fixes #325`）、code-review 检视、merge（若与后续 main 前进冲突，按编排卡避让纪律处理）。
 
 ## Self-Review
 
@@ -375,3 +375,15 @@ git commit -s -m "fix(mesh): avx_sym/avx512_sym 超时修复——读流量总�
 - 占位符：无 TBD/「适当处理」；所有代码块给出完整新文本。
 - 类型一致：`mesh_target_bytes(struct test *)` 两文件签名一致；`round_aborted` 标签语义一致（落入 validated_any 检查）；knob/env 名逐文件正确。
 - 内存红线：before 取证限流 1 GiB；after 默认 ≤1 GiB（-n 128 时 216 MiB）。
+
+## 检视轮处置（PR #414，第 5 bot 本地对抗检视 2026-11-01）
+
+| 意见 | 定性 | 处置 |
+|---|---|---|
+| Important·正确性: 旧 env SDC_MESH_BUFFER_BYTES 裸通道无 clamp——`=1` 静默缩到 num_blocks 兜底 1 块 32 KiB 仍 pass，且 knob 哨兵行误导「未显式配置」 | 成立（bot 实测复现） | 已修：套 [1MiB,16TiB] clamp + 越界警告 + 值日志（两文件）；实测 `=1` → `已 clamp 为 1048576` |
+| Important·正确性: 自适应默认无下限无值日志——小内存主机工作集缩进 LLC 量级内、欠压力不可见 | 成立 | 已修：下限 64 MiB（达 LLC 量级；让位于预算不越 OOM 边界）+ [压力映射] 值日志；注释改为诚实的「达 LLC 量级（跨核共享行 snoop/mesh 流量即互连压力语义）」而非「远超 LLC」 |
+| Important·内存: 单源物存模型绕过四源预算 sdc_budget_bytes——cgroup 限额下 1 GiB cap 仍可超分 OOM（#310 前科） | 成立 | 已修：默认口径改 sdc_budget_bytes(900) 四源取 min ÷ (2×线程×slice)；实测全核默认随 MemAvailable 逐段微调（206178307→206162971 字节）。框架级 sdc_target_workset_bytes 的四源迁移波及 SVE mesh 18 文件，留 #357 族级批次 |
+| Minor·正确性: 新旧 env 解析进制分叉（base 0 八进制 vs base 10） | 成立但框架级 | 不动：sdc_env_knob_int 是全仓 knob 通道既有语义，改解析影响所有消费者，超出本卡；PR 回复中明示 |
+| Minor·可维护性: 计划文档 checkbox 与实际不同步 | 成立 | 已修：本轮补勾 |
+
+第二轮验证（构建零警告）：全核双用例 -t 10 → 0 skip、exit: pass；-t 2 边沿 / -n 2 / 回归 zstd19 全 pass；`SDC_MESH_BUFFER_BYTES=1` → clamp 警告实测；默认值日志 `= 196.6 MiB（45%安全预算 ÷ 256 线程）` + maxrss 199.6 MiB 跟随。

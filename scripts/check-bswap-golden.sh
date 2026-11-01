@@ -55,35 +55,41 @@ VALU_RE='[[:space:]](add|sub|eor|and|orr|bic|orn|mul|mla|mls|neg|abs|shl|sshll|u
 
 fail=0
 for sub in "$@"; do
-    # resolve mangled symbol + size via nm; local (t) and global (T) both fine
+    # resolve mangled symbol(s) + size via nm; local (t) and global (T) both fine.
+    # The movbe family names every per-TU init function identically (movbe_init),
+    # so one substring can match MANY distinct static symbols at different
+    # addresses — ALL of them are checked; a violation in any one is a failure.
     # nm -S fields: $1=addr $2=size $3=type $4=mangled-name
-    line=$(nm -S "$BIN" 2>/dev/null | awk -v s="$sub" '$4 ~ s && ($3 == "t" || $3 == "T") {print; exit}')
-    if [ -z "$line" ]; then
+    nmatch=0
+    for line in $(nm -S "$BIN" 2>/dev/null | awk -v s="$sub" '$4 ~ s && ($3 == "t" || $3 == "T") {print $1 ":" $2 ":" $4}'); do
+        nmatch=$((nmatch + 1))
+        addr=${line%%:*}
+        rest=${line#*:}
+        size=${rest%%:*}
+        mangled=${rest#*:}
+        end=$((0x$addr + 0x$size))
+        out=$(objdump -d "$BIN" --start-address=0x$addr --stop-address=$end 2>/dev/null)
+        insns=$(printf '%s\n' "$out" | grep -cE '^[[:space:]]+[0-9a-f]+:')
+        brev=$(printf '%s\n' "$out" | grep -cE "$BREV_RE")
+        valu=$(printf '%s\n' "$out" | grep -cE "$VALU_RE")
+        if [ "$insns" -eq 0 ]; then
+            echo "FAIL  $sub [$mangled @0x$addr]: empty disassembly (hollow-pass guard)"
+            fail=1
+        elif [ "$brev" -gt 0 ]; then
+            echo "FAIL  $sub [$mangled @0x$addr]: $brev scalar byte-reverse instruction(s) in golden path:"
+            printf '%s\n' "$out" | grep -E "$BREV_RE" | sed 's/^/        /' | head -5
+            fail=1
+        elif [ "$valu" -gt 0 ]; then
+            echo "FAIL  $sub [$mangled @0x$addr]: $valu vector-ALU instruction(s) in golden path:"
+            printf '%s\n' "$out" | grep -E "$VALU_RE" | sed 's/^/        /' | head -5
+            fail=1
+        else
+            echo "PASS  $sub [$mangled @0x$addr]: $insns insns, 0 byte-reverse, 0 vector-ALU"
+        fi
+    done
+    if [ "$nmatch" -eq 0 ]; then
         echo "FAIL  $sub: symbol not found in $BIN (wrong name, or inlined away?)"
         fail=1
-        continue
-    fi
-    size=$(echo "$line" | awk '{print $2}')
-    addr=$(echo "$line" | awk '{print $1}')
-    mangled=$(echo "$line" | awk '{print $4}')
-    end=$((0x$addr + 0x$size))
-    out=$(objdump -d "$BIN" --start-address=0x$addr --stop-address=$end 2>/dev/null)
-    insns=$(printf '%s\n' "$out" | grep -cE '^[[:space:]]+[0-9a-f]+:')
-    brev=$(printf '%s\n' "$out" | grep -cE "$BREV_RE")
-    valu=$(printf '%s\n' "$out" | grep -cE "$VALU_RE")
-    if [ "$insns" -eq 0 ]; then
-        echo "FAIL  $sub [$mangled]: empty disassembly (hollow-pass guard)"
-        fail=1
-    elif [ "$brev" -gt 0 ]; then
-        echo "FAIL  $sub [$mangled]: $brev scalar byte-reverse instruction(s) in golden path:"
-        printf '%s\n' "$out" | grep -E "$BREV_RE" | sed 's/^/        /' | head -5
-        fail=1
-    elif [ "$valu" -gt 0 ]; then
-        echo "FAIL  $sub [$mangled]: $valu vector-ALU instruction(s) in golden path:"
-        printf '%s\n' "$out" | grep -E "$VALU_RE" | sed 's/^/        /' | head -5
-        fail=1
-    else
-        echo "PASS  $sub [$mangled]: $insns insns, 0 byte-reverse, 0 vector-ALU"
     fi
 done
 

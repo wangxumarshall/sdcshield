@@ -137,12 +137,22 @@ static int gps_rowmajor_init(struct test *test) {
      * — identical to the parent (the tags flow through the ALU; e.g. an
      * eor word carries magic A^B = 0xFFFF in its top half, which the
      * offline classifier reconstructs exactly). */
-    for (int i = 0; i < GPS_ROWMAJOR_COUNT; i++) {
-        switch (i % 4) {
-            case 0: data->expected[i] = vaddq_u64(data->srcA[i], data->srcB[i]); break;
-            case 1: data->expected[i] = veorq_u64(data->srcA[i], data->srcB[i]); break;
-            case 2: data->expected[i] = vandq_u64(data->srcA[i], data->srcB[i]); break;
-            case 3: data->expected[i] = vorrq_u64(data->srcA[i], data->srcB[i]); break;
+    /* golden (issue #373): scalar independent recomputation — pure C integer
+     * ops on the scalar pipeline, never the NEON units under test. A persistent
+     * NEON datapath fault (stuck lane / unit computing deterministic wrong
+     * bits) can no longer corrupt golden and actual identically; it now
+     * surfaces as a golden-vs-actual byte difference at the memcmp. */
+    {
+        const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
+        const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB);
+        uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expected);
+        for (int e = 0; e < 2 * GPS_ROWMAJOR_COUNT; e++) {
+            switch ((e / 2) % 4) {   /* op phase: vector index % 4 */
+                case 0: ex[e] = sa[e] + sb[e]; break;
+                case 1: ex[e] = sa[e] ^ sb[e]; break;
+                case 2: ex[e] = sa[e] & sb[e]; break;
+                case 3: ex[e] = sa[e] | sb[e]; break;
+            }
         }
     }
 

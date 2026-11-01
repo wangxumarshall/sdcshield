@@ -61,20 +61,33 @@ static int neon_rot_stale_reload_init(struct test *test) {
     memset_random(data->srcA, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t));
     memset_random(data->srcB, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t));
 
-    for (int i = 0; i < NEON_ROT_STALE_RELOAD_COUNT; i++) {
-        switch (i % 4) {
-            case 0: data->srcref[i] = vaddq_u64(data->srcA[i], data->srcB[i]); break;
-            case 1: data->srcref[i] = veorq_u64(data->srcA[i], data->srcB[i]); break;
-            case 2: data->srcref[i] = vandq_u64(data->srcA[i], data->srcB[i]); break;
-            case 3: data->srcref[i] = vorrq_u64(data->srcA[i], data->srcB[i]); break;
+    /* golden (issue #373): scalar independent recomputation — pure C integer
+     * ops on the scalar pipeline, never the NEON units under test. A persistent
+     * NEON datapath fault (stuck lane / unit computing deterministic wrong
+     * bits) can no longer corrupt golden and actual identically; it now
+     * surfaces as a golden-vs-actual byte difference at the memcmp. */
+    {
+        const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
+        const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB);
+        uint64_t *rf = reinterpret_cast<uint64_t *>(data->srcref);
+        uint64_t *ex = reinterpret_cast<uint64_t *>(data->expected);
+        for (int e = 0; e < 2 * NEON_ROT_STALE_RELOAD_COUNT; e++) {
+            switch ((e / 2) % 4) {   /* op phase: vector index % 4 */
+                case 0: rf[e] = sa[e] + sb[e]; break;
+                case 1: rf[e] = sa[e] ^ sb[e]; break;
+                case 2: rf[e] = sa[e] & sb[e]; break;
+                case 3: rf[e] = sa[e] | sb[e]; break;
+            }
         }
-    }
 
-    /* dst golden: rotated by one; dst[0] = preload (= srcref[0], arbitrary
-     * but consistent with temp_buf[0] prefill in run) */
-    data->expected[0] = data->srcref[0];
-    for (int i = 1; i < NEON_ROT_STALE_RELOAD_COUNT; i++)
-        data->expected[i] = data->srcref[i - 1];
+        /* dst golden: rotated by one; dst[0] = preload (= srcref[0], arbitrary
+         * but consistent with temp_buf[0] prefill in run). One vector = two
+         * scalar elements. */
+        ex[0] = rf[0];
+        ex[1] = rf[1];
+        for (int e = 2; e < 2 * NEON_ROT_STALE_RELOAD_COUNT; e++)
+            ex[e] = rf[e - 2];
+    }
 
     test->data = data;
     return EXIT_SUCCESS;

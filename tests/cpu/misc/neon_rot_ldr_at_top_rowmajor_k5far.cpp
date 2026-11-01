@@ -126,14 +126,24 @@ static int k5far_init(struct test *test) {
     }
 
     /* golden: same rotating composition on the same NEON units */
-    for (int i = 0; i < K5FAR_COUNT; i++) {
-        const uint64x2_t a = data->src[2 * i];
-        const uint64x2_t b = data->src[2 * i + 1];
-        switch (i % 4) {
-            case 0: data->expected[i] = vaddq_u64(a, b); break;
-            case 1: data->expected[i] = veorq_u64(a, b); break;
-            case 2: data->expected[i] = vandq_u64(a, b); break;
-            case 3: data->expected[i] = vorrq_u64(a, b); break;
+    /* golden (issue #373): scalar independent recomputation — pure C integer
+     * ops on the scalar pipeline, never the NEON units under test. A persistent
+     * NEON datapath fault (stuck lane / unit computing deterministic wrong
+     * bits) can no longer corrupt golden and actual identically; it now
+     * surfaces as a golden-vs-actual byte difference at the memcmp. */
+    {
+        const uint64_t *s  = reinterpret_cast<const uint64_t *>(data->src);
+        uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expected);
+        for (int e = 0; e < 2 * K5FAR_COUNT; e++) {
+            const int i = e / 2, lane = e % 2;
+            const uint64_t a = s[2 * (2 * i)     + lane];
+            const uint64_t b = s[2 * (2 * i + 1) + lane];
+            switch (i % 4) {
+                case 0: ex[e] = a + b; break;
+                case 1: ex[e] = a ^ b; break;
+                case 2: ex[e] = a & b; break;
+                case 3: ex[e] = a | b; break;
+            }
         }
     }
 

@@ -57,7 +57,29 @@
 struct MovbeDumpGoldenSveData {
     uint32_t *input;
     uint32_t *swapped;
+    uint32_t *expected_swapped;
 };
+
+/* issue #374: identity LUT for the scalar-independent byte-swap golden.
+ * The table loads block GCC's bswap-idiom recognizer from folding the
+ * shift/or reassembly back into a REV instruction, and the scalar loop form
+ * keeps the golden off the SVE TBL/REV units under test -- so a persistent
+ * svtbl mispermutation can never corrupt golden and actual identically.
+ * Pinned by scripts/check-bswap-golden.sh (zero rev/rev16/rev32 and zero
+ * vector-ALU inside the init symbol). */
+static uint8_t g_bswap_lut[256];
+static void movbe_golden_lut_init(void)
+{
+    for (int b = 0; b < 256; ++b)
+        g_bswap_lut[b] = (uint8_t)b;
+}
+static uint32_t movbe_golden_bswap32(uint32_t x)
+{
+    return ((uint32_t)g_bswap_lut[x & 0xff] << 24) |
+           ((uint32_t)g_bswap_lut[(x >> 8) & 0xff] << 16) |
+           ((uint32_t)g_bswap_lut[(x >> 16) & 0xff] << 8) |
+           (uint32_t)g_bswap_lut[x >> 24];
+}
 
 static int movbe_dump_golden_sve_init(struct test *test)
 {
@@ -71,11 +93,20 @@ static int movbe_dump_golden_sve_init(struct test *test)
     auto *data = static_cast<MovbeDumpGoldenSveData *>(malloc(sizeof(MovbeDumpGoldenSveData)));
     data->input = static_cast<uint32_t *>(aligned_alloc_safe(64, MOVBE_DUMP_GOLDEN_SVE_BUFFER_SIZE * sizeof(uint32_t)));
     data->swapped = static_cast<uint32_t *>(aligned_alloc_safe(64, MOVBE_DUMP_GOLDEN_SVE_BUFFER_SIZE * sizeof(uint32_t)));
+    data->expected_swapped = static_cast<uint32_t *>(aligned_alloc_safe(64, MOVBE_DUMP_GOLDEN_SVE_BUFFER_SIZE * sizeof(uint32_t)));
 
     /* init 线程一次性填充; 每次迭代复用 (原版语义) */
     for (size_t i = 0; i < MOVBE_DUMP_GOLDEN_SVE_BUFFER_SIZE; ++i) {
         data->input[i] = random32();
     }
+
+    /* issue #374: independent golden for the swapped intermediate, computed
+     * once here with pure scalar LUT lookups (never the svtbl under test).
+     * 与下方落盘 golden 互补: 文件离线校验 input 侧, 此缓冲在线校验
+     * swapped 侧。 */
+    movbe_golden_lut_init();
+    for (size_t i = 0; i < MOVBE_DUMP_GOLDEN_SVE_BUFFER_SIZE; ++i)
+        data->expected_swapped[i] = movbe_golden_bswap32(data->input[i]);
 
     /* 落盘独立 golden: init 写入, 未经任何 worker 核的加载路径 */
     char path[128];
@@ -180,6 +211,25 @@ static int movbe_dump_golden_sve_run(struct test *test, int cpu)
         }
     }
 
+    /* issue #374: post-loop verification of the stored intermediate. The
+     * vector hot loop and the cold-path re-check above (which deliberately
+     * uses the tested reload in2 as its reference) are unchanged; every
+     * iteration stores the same svtbl(input) bytes to swapped, so the final
+     * content must equal the init-time scalar LUT golden. A persistent svtbl
+     * index-table mispermutation (symmetric fault: the wrong table is its
+     * own inverse, so svtbl∘svtbl == id and the vector compare passes) is
+     * caught here byte-exactly. */
+    for (size_t i = 0; i < MOVBE_DUMP_GOLDEN_SVE_BUFFER_SIZE; ++i) {
+        if (data->swapped[i] != data->expected_swapped[i]) {
+            log_error("MovBE-dump-golden-SVE: swapped-intermediate miscompare at "
+                      "index %u: input=0x%08X golden=0x%08X actual=0x%08X xor=0x%08X",
+                      (unsigned)i, data->input[i], data->expected_swapped[i],
+                      data->swapped[i], data->expected_swapped[i] ^ data->swapped[i]);
+            report_fail_msg("MovBE-SVE: swapped buffer != independent golden at index %u",
+                            (unsigned)i);
+        }
+    }
+
     return EXIT_SUCCESS;
 }
 
@@ -201,6 +251,7 @@ static int movbe_dump_golden_sve_cleanup(struct test *test)
     if (data) {
         free(data->input);
         free(data->swapped);
+        free(data->expected_swapped);
         free(data);
     }
     return EXIT_SUCCESS;

@@ -95,5 +95,9 @@ static int sched_storm_thread_run(struct test *test, int cpu) {
 
 DECLARE_TEST(sched_storm_thread, "Scheduler-storm stimulus B: short-lived-thread create->exit->join storm; every child exit drives do_task_dead->newidle_balance (the exact stack of panic case #11, the 09-12 10:00 crash); kernel errors observable via journalctl/vmcore")
     .test_run     = sched_storm_thread_run,
-    .quality_level = TEST_QUALITY_PROD,
+    /* issue #374: kernel-activity stimulus / negative control with NO
+     * SDC-detection semantics (detector is external: journalctl/vmcore).
+     * Downgraded PROD -> BETA so the default PROD set contains only tests
+     * with verification semantics (#334 grading); reachable via --beta. */
+    .quality_level = TEST_QUALITY_BETA,
 END_DECLARE_TEST

@@ -65,5 +65,9 @@ static int sched_storm_baseline_run(struct test *test, int cpu) {
 
 DECLARE_TEST(sched_storm_baseline, "Scheduler-storm NEGATIVE CONTROL: pure register-ALU spin, no sleep/exit/syscall -- the task never leaves the CPU so newidle_balance never runs; if this crashes on 179 like the stimulus variants do, the scheduler-activity root cause is refuted")
     .test_run     = sched_storm_baseline_run,
-    .quality_level = TEST_QUALITY_PROD,
+    /* issue #374: kernel-activity stimulus / negative control with NO
+     * SDC-detection semantics (detector is external: journalctl/vmcore).
+     * Downgraded PROD -> BETA so the default PROD set contains only tests
+     * with verification semantics (#334 grading); reachable via --beta. */
+    .quality_level = TEST_QUALITY_BETA,
 END_DECLARE_TEST

@@ -70,6 +70,8 @@ extern "C" {
 
 /* align to a power of 2 */
 #define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
+/* POSIX: sysconf(_SC_PAGESIZE).  On Windows (MinGW) this resolves to the
+ * sysdeps/windows/unistd.h shim, which provides getpagesize() instead. */
 #include <unistd.h>
 
 /*
@@ -85,10 +87,15 @@ extern "C++"
 #endif
 static inline unsigned sandstone_page_size(void)
 {
+#ifdef _WIN32
+    /* MinGW has no sysconf(); use getpagesize() from the sysdeps/windows shim */
+    return (unsigned)getpagesize();
+#else
     static long cached = 0;
     if (!cached)
         cached = sysconf(_SC_PAGESIZE);
     return (unsigned)cached;
+#endif
 }
 #ifdef __cplusplus
 }

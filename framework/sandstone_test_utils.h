@@ -18,6 +18,8 @@
 #ifndef SANDSTONE_TEST_UTILS_H
 #define SANDSTONE_TEST_UTILS_H
 #include <sys/mman.h>
+/* POSIX: sysconf(_SC_PAGESIZE).  On Windows (MinGW) this resolves to the
+ * sysdeps/windows/unistd.h shim, which provides getpagesize() instead. */
 #include <unistd.h>
 #include <cstdint>
 #include <map>
@@ -28,10 +30,15 @@
 #define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
 static inline unsigned sandstone_page_size()
 {
+#ifdef _WIN32
+    // MinGW has no sysconf(); use getpagesize() from the sysdeps/windows shim
+    return unsigned(getpagesize());
+#else
     static long cached = 0;
     if (!cached)
         cached = sysconf(_SC_PAGESIZE);
     return unsigned(cached);
+#endif
 }
 #define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, sandstone_page_size())
 

@@ -48,7 +48,7 @@ bash scripts/run/sdc_detect.sh
 
 | 旗标 | 作用 |
 |---|---|
-| `--quality=0` | 跑 PROD+BETA（ARM64 构建全量上界 497 = 491 PROD + 6 BETA；默认集与该集均随芯片能力过滤——SVE1 主机实测口径见「测试用例与检测能力」节；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
+| `--quality=0` | 跑 PROD+BETA（ARM64 构建全量上界 497 = 487 PROD + 10 BETA（issue #374 起 `sched_storm×4` 自 PROD 降级 BETA）；默认集与该集均随芯片能力过滤——SVE1 主机实测口径见「测试用例与检测能力」节；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）与 `sched_storm×4`（issue #374 降级，内核调度刺激无 SDC 检出语义）等 10 个用例不加此旗标会被跳过（实测 skip 并提示） |
 | `--test-list-file` | 优先序测试列表：由脚本从当前二进制动态生成（顺序即执行序，对新用例自适应） |
 | `-T forever` | 整套用例无限轮转。SDC 故障窗口极稀疏（CPU179 实测占空比 ~0.06%），长驻留是检出关键；一轮时长随用例集（数百例 × 60s ≈ 数小时） |
 | `-t 60s` | 每用例 60 秒。SEVI 实测 >80% 的首错在 10 秒内出现，60s 有 6 倍余量 |
@@ -122,7 +122,7 @@ sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断�
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
-预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（491 PROD 全量上界，选择期 spec 过滤前）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（487 PROD 全量上界，选择期 spec 过滤前；issue #374 后 sched_storm×4 在 BETA 档）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
 
 > **旧二进制判读警示**：2026-09-12 预构建二进制是满核假阳修复（2026-10-24）**之前**的构建——其上 `eigen_svd_double`/`eigen_sparse` 的满核 FAIL 按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；"满核挂 = SDC 嫌疑"的判读规则仅适用于含修复的构建。用旧二进制跑 24h 战役脚本须显式恢复旧白名单（含修复的源码构建不需要、也不应设置）：
 >
@@ -360,14 +360,14 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 
 ### ARM64 spec 策略与默认用例集（2026-10-27 起）
 
-sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `struct test::arm64_requires`（SVE/SVE2/SME/SME2 要求位，`framework/sandstone.h`）与 `arm64_min_vl_bits`（最低档位）过滤，只保留芯片能执行的用例——因此默认用例数是 **host-dependent** 的：SVE1 主机（Kunpeng 920 0xd02，SVE-256/无 SVE2/SME，gcc + 全部 vendored 依赖）实测 **490** 个 PROD（`--quality=0` 496、`--quality=-1` 500；2026-11-01 merge 树实测 = 2026-10-31 main 口径 489/495/499（含 issue #7 `smi_count` 探针 +1，期间 main 增合 SVE-all-VL 等用例）+ `spinlock_add_neon` +1；基线链＝2026-10-27 实测 479），无 SVE 的鲲鹏 920 上 299（推算＝2026-10-27 实测 297 + `spinlock_add_neon`（2026-10-31 无 SVE 主机实测复核 298）+ `smi_count`（baseline CNTVCT 探针、无 SVE 门控）+1，待无 SVE 主机实测复核）。
+sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `struct test::arm64_requires`（SVE/SVE2/SME/SME2 要求位，`framework/sandstone.h`）与 `arm64_min_vl_bits`（最低档位）过滤，只保留芯片能执行的用例——因此默认用例数是 **host-dependent** 的：SVE1 主机（Kunpeng 920 0xd02，SVE-256/无 SVE2/SME，gcc + 全部 vendored 依赖）实测 **486** 个 PROD（`--quality=0` 496、`--quality=-1` 500——两集合不因降级变化；2026-11-01 merge 树实测 490，同日 issue #374 将 `sched_storm×4`（内核调度刺激/负对照，无 SDC 检出语义）自 PROD 降级 BETA 后复核 = 2026-10-31 main 口径 489/495/499（含 issue #7 `smi_count` 探针 +1，期间 main 增合 SVE-all-VL 等用例）+ `spinlock_add_neon` +1；基线链＝2026-10-27 实测 479），无 SVE 的鲲鹏 920 上 299（推算＝2026-10-27 实测 297 + `spinlock_add_neon`（2026-10-31 无 SVE 主机实测复核 298）+ `smi_count`（baseline CNTVCT 探针、无 SVE 门控）+1，待无 SVE 主机实测复核）。
 
 - `-e` / `--test-list-file` **旁路过滤**：显式请求的用例仍会注册，能力不足时诚实 SKIP（附理由），而不是从列表里消失。
 - **控制线程**在 `test_init` 前 pin 到芯片最大档（其 aux 线程与 per-CPU worker 继承该 VL，init golden 与 run lane 档位一致，即使 sysctl 压低了默认值）；每个 SVE/SVE2 worker 重新 pin 并校验读回——pin 被拒 = SKIP，读回不符 = FAIL。
 - `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` 可压低假定的最大档（只降不升；会重新探测归一——未实现的档如 384 回退到内核实际授予值）。
 - 用例的规格声明覆盖由 `scripts/check-arm64-requires.py` 检查器保证诚实。
 
-当前 ARM64 构建默认 quality 的用例数即按上述机制**随芯片能力过滤**（源码全量上界：491 PROD + 6 BETA + 4 SKIP（= main 2026-10-31 口径 + `spinlock_add_neon` +1），gcc + 全部 vendored 依赖齐备、过滤前；`--quality=0` / `--quality=-1` 集合同样过滤）。含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建默认 quality 的用例数即按上述机制**随芯片能力过滤**（源码全量上界：487 PROD + 10 BETA + 4 SKIP（issue #374 后）（= main 2026-10-31 口径 + `spinlock_add_neon` +1），gcc + 全部 vendored 依赖齐备、过滤前；`--quality=0` / `--quality=-1` 集合同样过滤）。含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
 ### SVE 用例全 VL 验证矩阵（2026-10-30 收口）
 
@@ -402,11 +402,11 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | 级别 | 名称 | 运行条件 | 实有数量（源码全量，选择期过滤前） |
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 4 |
-| 0 | BETA | `quality >= 0` | 6 |
-| 2 | PROD（默认）| `quality >= 2` | 491 |
+| 0 | BETA | `quality >= 0` | 10 |
+| 2 | PROD（默认）| `quality >= 2` | 487 |
 | | **合计** | | **501** |
 
-> 上表为 ARM64 gcc 构建的源码全量口径（2026-11-01 merge 树复核 = main 2026-10-31 口径 500 + `spinlock_add_neon` +1；`smi_count` 自 SKIP 转为真实 PROD 探针即 issue #7，总数不变）；默认运行时实际数量随芯片 spec 过滤（SVE1 主机 2026-11-01 实测 490 PROD / `--quality=0` 496 / `--quality=-1` 500；无 SVE 鲲鹏 920 推算 299，见「ARM64 spec 策略」节）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
+> 上表为 ARM64 gcc 构建的源码全量口径（2026-11-01 merge 树复核 = main 2026-10-31 口径 500 + `spinlock_add_neon` +1；`smi_count` 自 SKIP 转为真实 PROD 探针即 issue #7，总数不变）；默认运行时实际数量随芯片 spec 过滤（SVE1 主机 2026-11-01 实测 490 PROD / `--quality=0` 496 / `--quality=-1` 500，issue #374 将 `sched_storm×4` PROD→BETA 后同日复核 486 PROD（q0/q-1 集合不变仍 496/500，四测试移入 BETA 档）；无 SVE 鲲鹏 920 推算 299，见「ARM64 spec 策略」节）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`
 - **SKIP（`--quality=-1`）**：`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`

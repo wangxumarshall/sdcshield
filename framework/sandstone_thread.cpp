@@ -19,10 +19,15 @@ struct SandstoneTestThreadAttributes
 {
     /*
      * Guard region between per-thread stacks.  MUST be at least as large as
-     * the kernel page size, otherwise mprotect() on kernels with >8 KB pages
-     * (e.g. ARM64 16 KB / 64 KB) will round the writable region start address
-     * DOWN past the guard, leaving the bottom of one thread's stack in a
-     * PROT_NONE page and causing SIGSEGV inside pthread_create's explicit_bzero.
+     * the kernel page size and, like THREAD_STACK_SIZE, be a multiple of it:
+     * every mprotect()/madvise() address below is mmap_base + N * (guard +
+     * THREAD_STACK_SIZE) [+ guard], which stays page-aligned only while that
+     * holds.  Linux REJECTS a non-page-aligned address with EINVAL -- it
+     * does NOT round it down -- so a geometry mismatch leaves the stacks
+     * stuck PROT_NONE (mprotect path) or without guards between them
+     * (madvise path), crashing the next pthread_create() inside its
+     * explicit_bzero.  A swallowed EINVAL used to hide this until issue
+     * #396; the setup calls below now abort() loudly on failure.
      */
     static size_t GuardSize()
     {
@@ -48,6 +53,24 @@ struct SandstoneTestThreadAttributes
     static unsigned char *allocate_stack_block();
     void update_with_stack_for(int thread);
 };
+
+#ifndef _WIN32
+/*
+ * Thread-stack guard setup must not fail silently: Linux rejects a
+ * non-page-aligned mprotect()/madvise() address with EINVAL (it does not
+ * round it down), so a swallowed failure leaves the stacks PROT_NONE or
+ * guard-less and the next pthread_create() crashes with no prior message
+ * (issue #396).  Report and abort instead.
+ */
+[[noreturn]] static void thread_stack_setup_failed(const char *what, const void *addr)
+{
+    const char *err = strerror_for_mmap();     // capture errno before fprintf
+    fprintf(stderr, "%s: %s(%p) failed: %s (page size %u, guard %zu)\n",
+            program_invocation_name, what, addr, err,
+            sandstone_page_size(), SandstoneTestThreadAttributes::GuardSize());
+    abort();
+}
+#endif
 } // unnamed namespace
 
 #ifndef _WIN32
@@ -67,12 +90,14 @@ unsigned char *SandstoneTestThreadAttributes::allocate_stack_block()
         // yes, let's use it
         // we mark the entire region we've allocated as read-writable, then
         // mark specific regions as guards
-        IGNORE_RETVAL(mprotect(map, size, PROT_READ | PROT_WRITE));
+        if (mprotect(map, size, PROT_READ | PROT_WRITE) != 0)
+            thread_stack_setup_failed("mprotect", map);
 
         for (int i = 0; i < thread_count(); ++i) {
             ptr += guard + THREAD_STACK_SIZE;
             // and mark the above this thread's stack (below the next's) as a guard
-            IGNORE_RETVAL(madvise(ptr, guard, MADV_GUARD_INSTALL));
+            if (madvise(ptr, guard, MADV_GUARD_INSTALL) != 0)
+                thread_stack_setup_failed("madvise(MADV_GUARD_INSTALL)", ptr);
         }
 
         return ptr;
@@ -81,7 +106,8 @@ unsigned char *SandstoneTestThreadAttributes::allocate_stack_block()
 
     for (int i = 0; i < thread_count(); ++i) {
         ptr += guard;
-        IGNORE_RETVAL(mprotect(ptr, THREAD_STACK_SIZE, PROT_READ | PROT_WRITE));
+        if (mprotect(ptr, THREAD_STACK_SIZE, PROT_READ | PROT_WRITE) != 0)
+            thread_stack_setup_failed("mprotect", ptr);
         ptr += THREAD_STACK_SIZE;
     }
     return ptr;

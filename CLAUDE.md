@@ -135,9 +135,13 @@ END_DECLARE_TEST
   n_run from a probe power-law fit × the AR all-core-slowdown table
   (family×topology), refined by a VmHWM feedback loop (per-slice EMA,
   median aggregation, 0.7× table floor). Explicit `-O <test>.mdim/n`
-  bypasses sizing with an expected-memory warning. The pre-fix "ULP-level
-  sporadic failure under full-core multithreading" advice is
-  obsolete.
+  bypasses sizing; the `[内存越界]`/`[欠压力]` expected-memory warning
+  covers only the ten SVD template-family tests (whose knob query routes
+  through the joint layer's early-exit via `calibrated_auto_dim`) —
+  gemm×8/sparse/svd_cdouble_sve/bidiag still short-circuit the knob in
+  their own init, explicit paths carry no warning yet (T11b follow-up).
+  The pre-fix "ULP-level sporadic failure under full-core multithreading"
+  advice is obsolete.
 - **Vector capability (SVE/SVE2/SME, VL/SVL tiers) is per-host — probe it,
   never assume it.** Measured lab hosts differ widely: some expose SVE with a
   pinnable VL and no SVE2/SME, some expose the full SVE2 set + SME/SME2 at a

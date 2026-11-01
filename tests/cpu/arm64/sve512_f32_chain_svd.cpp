@@ -8,10 +8,22 @@
  * SVD-format f32 FMLA chain with an SVD-scale working set and nested
  * block traversal, mirroring eigen_svd_cdouble_sve's beyond-L2 memory
  * behaviour at f32 width (4..32 lanes per vector). All-VL 128..1024-bit
- * via arm64_require_sve_vl (all-VL Phase 2 P3); the pre-P3 512-bit
- * single-value gate and its issue #182 caveat are cleared by the
- * four-tier dual-kernel evidence in gem5-fi feat/sve512-dual;
- * test_run re-checks the VL and fails closed on drift.
+ * via arm64_require_sve_vl (all-VL Phase 2 P3). The pre-P3 512-bit
+ * single-value gate and its issue #182 caveat are closed with the root
+ * cause pinned (2026-10-31): the historical VL=128 runner mismatch was
+ * the pre-ff8ddec1 operand-bias bug — f64-biased exponents 0x3FE/0x3FF
+ * shifted into f32 patterns (0x3FF<<23 = 0xFF800000 is the NaN/-Inf
+ * exponent class; 0x3FE<<23 = 0xFF000000 is a ~2^127 huge finite)
+ * saturate the chain to NaN/Inf within a few steps, combined with
+ * the IMPLEMENTATION-DEFINED NaN-payload split between the scalar-fmadd
+ * golden and SVE FMLA — an unsound byte-exact golden over such
+ * operands, NOT a VL-dependent math/alignment defect. This file's
+ * f32 x block-slab
+ * combination addressing — flagged as uncovered by the gem5 dual-kernel
+ * modes (P3 plan Ruling residual risk) — is verified on real VL!=512
+ * SVE hardware (Kunpeng 0xd02, VL=256, seeds LCG:1001..1004: pass) and
+ * in gem5 SE real-binary at 512/1024-bit; test_run re-checks the VL and
+ * fails closed on drift.
  *
  * Differs from sve512_f32_chain_arm: working set scales with the lanes
  * (5.9..47.3 MB across m and a over the 128..1024-bit tiers) vs 64 KB,
@@ -127,10 +139,13 @@ static int sve512_f32_chain_svd_init(struct test *test)
        framework-layer call (the geometry has been svcnt-dynamic all
        along; only the old single-value gate pinned one tier). The
        historical VL=128 golden mismatch on a hosted CI runner
-       (issue #182) is cleared by the four-tier dual-kernel evidence
-       (gem5-fi feat/sve512-dual, 48 runs). arm64_require_sve_vl
-       returns the VL in BYTES — f32 lanes = svl/4, range-checked
-       below (release-effective, NDEBUG-proof). */
+       (issue #182) is root-caused (2026-10-31): pre-ff8ddec1
+       NaN/Inf-saturating operands (f64-biased exponents) + the
+       IMP-DEF NaN-payload split between the scalar fmadd golden and
+       SVE FMLA — an unsound byte-exact golden over such operands,
+       not a VL-dependent defect (docblock above).
+       arm64_require_sve_vl returns the VL in BYTES — f32 lanes =
+       svl/4, range-checked below (release-effective, NDEBUG-proof). */
     const long svl = arm64_require_sve_vl(test, 128, 1024);
     if (svl < 0)
         return EXIT_SKIP;

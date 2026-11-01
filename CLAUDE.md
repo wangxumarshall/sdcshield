@@ -133,9 +133,9 @@ END_DECLARE_TEST
   median aggregation, 0.7× table floor). Explicit `-O <test>.mdim/n`
   bypasses sizing; the `[内存越界]`/`[欠压力]` expected-memory warning
   fires only for the ten SVD template-family users (knob routed
-  through the joint layer via `calibrated_auto_dim`) — gemm/sparse/sve/
-  bidiag callers still short-circuit the knob in their own init, no
-  warning yet (T11b follow-up; 10/21 eigen cases). The pre-fix
+  through the joint layer via `calibrated_auto_dim`) —
+  gemm/sparse/sve/bidiag callers still short-circuit the knob in their
+  own init, no warning yet (T11b follow-up; 10/21 eigen cases). The pre-fix
   "ULP-level sporadic failure under full-core multithreading" advice
   is obsolete.
 - **Vector capability (SVE/SVE2/SME, VL/SVL tiers) is per-host — probe it,

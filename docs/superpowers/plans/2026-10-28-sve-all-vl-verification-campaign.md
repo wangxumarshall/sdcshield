@@ -19,6 +19,15 @@
 - `git commit -s`，最后一行 `Signed-off-by: wangxu <wangxumarshall@qq.com>`，无 Co-Authored-By。提交前 `git branch --show-current`。
 - 构建入口统一 `./scripts/build.sh`（并行度 nproc/2）；**campaign 跑批与构建绝不并行**（gem5-fi 仓纪律，也适用本仓大跑批）。
 - 时间盒纪律（spec §5b/§9）：gem5 stub 链累计 ~5-6 个仍不闭合 → 停止迭代，升级到用户决策切方案 A（FS）。
+- **证据工件协议（控制器裁定 E；本计划工件清单 2026-11-01 同步，issue #403）**：原始
+  运行日志**一律不入库**——campaign 目录 `.gitignore` 屏蔽 `*.log` 与 `/gem5-512/*`
+  （仅豁免 `batch.tsv`/`identity.txt` 两个小体积溯源记录）。入库证据：native 腿 =
+  `extract-summary.sh` 机械提取的 `<leg>-LCG<seed>.summary.txt`（每用例一行 + 命令行/
+  exit 头，行数=清单校验）+ 腿 stdout 跑完即回拷的 `.stdout.txt`（含 `exit: pass` 行）；
+  512 腿 = `gem5-512-verdicts.txt`（逐测判定）+ `gem5-512/batch.tsv`。各 Task 的
+  `git add docs/superpowers/inventory/sve-all-vl-campaign/` 对被忽略 `.log` **零警告
+  静默跳过**——不入库是预期行为，勿以 `git add -f` 强塞百 MB 级原始 yaml；裁定 E
+  原文见 triage-256.md §1。
 
 ---
 
@@ -87,7 +96,9 @@ git commit -s -m "docs(campaign): SVE 全 VL 验证清单——tag∪name 枚举
 ### Task 2: native 256 腿全量跑（2 seeds）
 
 **Files:**
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/native-256-<seed>.log`（原始输出归档）
+- Create（留工作区，**不入库**——`.gitignore` `*.log`，裁定 E）: `docs/superpowers/inventory/sve-all-vl-campaign/native-256-<seed>.log`（原始 yaml 输出，Step 3 分诊源）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/native-256-<seed>.summary.txt`（`extract-summary.sh` 机械提取，行数=清单校验）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/native-256-<seed>.stdout.txt`（腿 stdout 跑完即回拷，含 `exit: pass` 行）
 - Create: `docs/superpowers/inventory/sve-all-vl-campaign/triage-256.md`（分诊表）
 
 **Interfaces:**
@@ -103,6 +114,7 @@ LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.log
 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-256-LCG1001.stdout 2>&1
 echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
 tail -5 /tmp/native-256-LCG1001.stdout
+cp /tmp/native-256-LCG1001.stdout docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.stdout.txt   # 裁定 E：stdout 跑完即回拷入库（防 /tmp 随重启丢失）
 ```
 Expected: `exit: pass`。注意：eigen_svd_cdouble_sve / eigen_svd_bidiag_sve 有全核 TIMEOUT 前科（node0 带宽，见 memory eigen-mdim-memory-measurement）；若这两格 TIMEOUT → 进 Step 3 分诊，不算本步失败。
 
@@ -128,8 +140,10 @@ git commit -s -m "docs(campaign): native 256 腿全量证据（2 seeds）+ 分�
 ### Task 3: native 128 腿全量跑（2 seeds）
 
 **Files:**
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/native-128-<seed>.log`
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/triage-128.md`
+- Create（留工作区，**不入库**——`.gitignore` `*.log`，裁定 E）: `docs/superpowers/inventory/sve-all-vl-campaign/native-128-<seed>.log`（原始 yaml 输出，分诊源）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/native-128-<seed>.summary.txt`（`extract-summary.sh` 机械提取，行数=清单校验）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/native-128-<seed>.stdout.txt`（腿 stdout 跑完即回拷，含 `exit: pass` 行）
+- Create: `docs/superpowers/inventory/sve-all-vl-campaign/triage-128.md`（分诊表）
 
 **Interfaces:**
 - Consumes: Task 1 清单。
@@ -291,7 +305,9 @@ git push -u origin feat/sve-se-prctl-stub-2026-10-28
 **Files:**
 - Create: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512-batch.sh`（批处理脚本）
 - Create: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-overrides.txt`（重负载用例的 -O 降容表，标定产物）
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/<test>.log` × 188（原始输出）
+- Create（留工作区，**不入库**——`.gitignore` `/gem5-512/*`，裁定 E）: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/<test>.log` × 188（原始输出，连同 `.d`/`.done` 一并被忽略）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/batch.tsv`（batch 脚本逐测追加的溯源记录；姊妹件 `gem5-512/identity.txt` 记批时二进制身份）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512-verdicts.txt`（`gem5-512-extract.sh` 从 batch.tsv 机械提取的逐测判定）
 
 **Interfaces:**
 - Consumes: Task 5 的可跑通 SE 二进制路径；Task 1 清单。
@@ -395,14 +411,14 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield -e <test> -t 2000 -n 1   # 
 - Create: `docs/superpowers/inventory/sve-all-vl-campaign/matrix.md`（564 格总表）
 
 **Interfaces:**
-- Consumes: Task 2/3/6 全部日志 + Task 7 修复记录。
+- Consumes: Task 2/3/6 的**入库**证据（`<leg>-LCG<seed>.summary.txt`、`gem5-512-verdicts.txt`、`gem5-overrides.txt`；裁定 E——原始 `.log` 不入库，不得作为矩阵输入）+ Task 7 修复记录。
 
 - [ ] **Step 1: 汇总矩阵**——`matrix.md` 表头 `| test | 128 | 256 | 512 | 证据 |`；每格 pass/边界（理由）/FAIL（不允许残留）。生成方式：
 ```bash
-# 以 grep 从归档日志机械生成，不许手填
-for f in docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log; do ...; done
+# 以 grep/awk 从入库 summary/verdicts 工件机械生成，不许手填
+for f in docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.summary.txt; do ...; done
 ```
-（执行者写 10 行以内的 awk/grep 管道从日志提取，脚本一并入库。）
+（执行者写 10 行以内的 awk/grep 管道从入库工件提取，脚本一并入库。）
 - [ ] **Step 2: 验收自查**——564 格全绿或有显式机制性理由；抽查 10 格回放原始日志确认引用真实。
 - [ ] **Step 3: Commit**——`docs(campaign): 564 格证据矩阵汇总（128/256/512）`。
 

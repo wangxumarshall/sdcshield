@@ -726,6 +726,31 @@ instead of assuming one tier:
   register splice golden), `tests/cpu/memory/memcpy_rewr.cpp` (arithmetic
   `i ^ C` golden for a memcpy chain), `tests/cpu/cache/cachebounce.cpp`
   (per-CPU register counts vs bounced atomics).
+- **Long accumulate chains need segmented intermediate checkpoints** (issue
+  #376 paradigm, template:
+  `docs/superpowers/plans/2026-11-01-issue376-chain-checkpoints.md`):
+  comparing only the chain-final state has an absorption blind zone. In an
+  FMA accumulate chain a mid-chain bit flip (δ = 2^j·ulp) propagates
+  deterministically until the accumulated magnitude grows 2^j past it, then
+  is ground away by rounding within a few steps — the final state returns
+  byte-identical and the fault is *invisible* (measured on the
+  `sve512_f32_chain` semantics: low-bit mid-chain flips caught 59.9% at
+  chain end vs 79.4% with 64-step checkpoints). Segment the chain instead:
+  record the golden's boundary states in the same scalar pass, spill the
+  hardware accumulator at each SEG_LEN=64-step boundary (the spill does
+  NOT break the FMA dependency chain — the register flows through the
+  store; 8 stores per 512 FMAs ≈ 1.6%), and byte-compare the segment
+  tables outside the hot loop. The last segment IS the final state, so
+  the old final-only check is subsumed. Honest boundary: a flip that is
+  already sub-ulp or absorbed within one segment (the "immediately
+  rounded" class) is not caught by any check frequency short of per-step
+  comparison — say so in the docblock instead of claiming 100%.
+  Exceptions that do NOT need segmentation (final-only is already
+  detection-complete): exact-arithmetic chains (integer operands, 1/8-grid
+  values below 2^53 — every intermediate is exactly representable, flips
+  propagate to the end). gem5-fi CHAOS acceptance pattern (single-bit
+  injection, final-only vs segmented A/B): see
+  `docs/superpowers/inventory/issue376-chain-checkpoints/verdicts.md`.)
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 

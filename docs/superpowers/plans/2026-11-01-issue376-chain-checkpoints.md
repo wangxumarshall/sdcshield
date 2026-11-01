@@ -1,6 +1,6 @@
 # Issue #376：链终态-only → 分段中间检查点（~18 测试，gem5-fi 注入验收）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 把 sve512_*/power_virus 族中"只在链终点比对终态"的累积型链测试改为**分段中间检查点**——链切成 K 段、每段边界把累积器溢出到对照缓冲与标量独立 golden 字节比对，消除"中途 bit 翻转被后续加法/舍入吸收"的漏检盲区，并用 gem5-fi CHAOS 单 bit 注入验收。
 
@@ -192,49 +192,49 @@ run 侧（终态比对被最后一段包含，旧 `gold32/hw` 单向量换成段
 
 **Files:** 无代码改动；git 操作。
 
-- [ ] 确认 worktree 分支从 origin/main 最新分出；`git checkout -b feat/issue376-chain-checkpoints`。
-- [ ] 基线构建 + 抽样：改动前 `./builddir/sdcshield -e sve512_f32_chain_arm -t 10 -n 4` pass 一次，记录 `-t 2000 -n 1` 墙钟基线（W1/W2 全部目标测试）。
-- [ ] 提交本计划：`git add docs/superpowers/plans/2026-11-01-issue376-chain-checkpoints.md && git commit -s -m "docs(plan): issue #376 链终态-only→分段中间检查点——吸收机理实证与迁移计划"`。
+- [x] 确认 worktree 分支从 origin/main 最新分出；`git checkout -b feat/issue376-chain-checkpoints`。
+- [x] 基线构建 + 抽样：改动前 `./builddir/sdcshield -e sve512_f32_chain_arm -t 10 -n 4` pass 一次，记录 `-t 2000 -n 1` 墙钟基线（W1/W2 全部目标测试）。
+- [x] 提交本计划：`git add docs/superpowers/plans/2026-11-01-issue376-chain-checkpoints.md && git commit -s -m "docs(plan): issue #376 链终态-only→分段中间检查点——吸收机理实证与迁移计划"`。
 
 ### Task 2: Wave 1 —— f32 链 + fma_arm 三链（最高风险）
 
 **Files:** 映射表 W1 三文件。**Interfaces:** 无（测试内部改动）。
 
-- [ ] `sve512_f32_chain_arm.cpp`：按 T-CHK32 全文替换 golden/hw/比对；docblock 补检查点语义段。
-- [ ] `sve512_f32_chain_svd.cpp`：T-CHK32 + 段表在块循环外分配（每块重算重比）。
-- [ ] `sve512_fma_arm.cpp`：读全文后把 T-CHK64（f64 链）、T-CHKCAT（special 链，SEG_LEN=16）、T-CHK32（f32 链）应用到三个链工作负荷；gather/scatter 负荷零改动。
-- [ ] V3 构建（零新警告）→ V1+V2 逐测试 → V6b 墙钟对比。
-- [ ] Commit（-s）：`fix(tests): W1 f32/fma 链终态-only→分段中间检查点（issue #376）`。
+- [x] `sve512_f32_chain_arm.cpp`：按 T-CHK32 全文替换 golden/hw/比对；docblock 补检查点语义段。
+- [x] `sve512_f32_chain_svd.cpp`：T-CHK32 + 段表在块循环外分配（每块重算重比）。
+- [x] `sve512_fma_arm.cpp`：读全文后把 T-CHK64（f64 链）、T-CHKCAT（special 链，SEG_LEN=16）、T-CHK32（f32 链）应用到三个链工作负荷；gather/scatter 负荷零改动。
+- [x] V3 构建（零新警告）→ V1+V2 逐测试 → V6b 墙钟对比。
+- [x] Commit（-s）：`fix(tests): W1 f32/fma 链终态-only→分段中间检查点（issue #376）`。
 
 ### Task 3: Wave 2 —— f64 链 + fcmla + power_virus
 
 **Files:** 映射表 W2 五文件。
 
-- [ ] `sve512_f64_chain_arm.cpp` / `sve512_f64_chain_svd.cpp`：T-CHK64（+SVD 版）。
-- [ ] `sve512_fcmla_arm.cpp`：T-FCMLA（init golden 段表 + HW spill + 逐 rotation 逐段比对）。
-- [ ] `power_virus_dit_sve_arm.cpp`：T-PVSVE（SEG_LEN=64 → 32 段）。
-- [ ] `power_virus_dit.cpp`：T-PVNEON（SEG_LEN=64 → 32 段；burst/stall duty cycle 不变的注释论证写进代码）。
-- [ ] V3 → V1+V2 逐测试 → V6b。
-- [ ] Commit（-s）：`fix(tests): W2 f64/fcmla/power_virus 链终态-only→分段中间检查点`。
+- [x] `sve512_f64_chain_arm.cpp` / `sve512_f64_chain_svd.cpp`：T-CHK64（+SVD 版）。
+- [x] `sve512_fcmla_arm.cpp`：T-FCMLA（init golden 段表 + HW spill + 逐 rotation 逐段比对）。
+- [x] `power_virus_dit_sve_arm.cpp`：T-PVSVE（SEG_LEN=64 → 32 段）。
+- [x] `power_virus_dit.cpp`：T-PVNEON（SEG_LEN=64 → 32 段；burst/stall duty cycle 不变的注释论证写进代码）。
+- [x] V3 → V1+V2 逐测试 → V6b。
+- [x] Commit（-s）：`fix(tests): W2 f64/fcmla/power_virus 链终态-only→分段中间检查点`。
 
 ### Task 4: Wave 3 —— 类别/容差/精确链
 
 **Files:** 映射表 W3 五文件。
 
-- [ ] `sve512_f64_special_arm.cpp` / `_svd.cpp`：T-CHKCAT（类别比对逐段；SEG_LEN=16）。
-- [ ] `sve512_stencil_axis_arm.cpp`：读链后定案——shape B 容差链分段（同容差逐段比对），shape A 若确认精确则统一性分段+如实标注。
-- [ ] `sve512_nt_reload_arm.cpp` / `sve512_fmmla_arm.cpp`：读链确认精确算术论断；成立则统一性分段（fmmla 为 issue 点名文件，顺带做）+ 标注无检出率增益；不成立（发现非精确吸收窗）则按增益语义分段。
-- [ ] V3 → V1+V2 → V6b。
-- [ ] Commit（-s）：`fix(tests): W3 special/stencil/nt_reload/fmmla 检查点补全（issue #376）`。
+- [x] `sve512_f64_special_arm.cpp` / `_svd.cpp`：T-CHKCAT（类别比对逐段；SEG_LEN=16）。
+- [x] `sve512_stencil_axis_arm.cpp`：读链后定案——shape B 容差链分段（同容差逐段比对），shape A 若确认精确则统一性分段+如实标注。
+- [x] `sve512_nt_reload_arm.cpp` / `sve512_fmmla_arm.cpp`：读链确认精确算术论断；成立则统一性分段（fmmla 为 issue 点名文件，顺带做）+ 标注无检出率增益；不成立（发现非精确吸收窗）则按增益语义分段。
+- [x] V3 → V1+V2 → V6b。
+- [x] Commit（-s）：`fix(tests): W3 special/stencil/nt_reload/fmmla 检查点补全（issue #376）`。
 
 ### Task 5: host 注入实验（A/B 检出对比，不进 commit）
 
 **Files:** 临时 patch W1 已改文件（`git stash`/手工还原）。
 
-- [ ] **A 步（终态-only 吞掉复现）**：在**未分段**的源上（临时还原或 git stash），给 `f32_chain_hw` 注入：step 64 处对 acc XOR `1u << 1`（lane 0 定向用 sveor_m 或全 lane XOR 后看 lane 0）——由 /tmp 模拟选一个 30 seeds 大多数吸收的 (k,j) 组合 → 构建 → `-e sve512_f32_chain_arm -t 10 -n 4` → **预期 pass**（吸收实证）。记录完整输出。
-- [ ] **B 步（分段抓到证明）**：在已分段源上给 HW 链同一位置注入同一位错 → 构建 → 同命令 → **预期 FAIL，报 seg 1 (after step 128) 的 golden/actual/xor**。记录完整输出。
-- [ ] 还原 patch、重建、确认 pass。
-- [ ] 边界声明：源级注入等效模拟中途翻转（任务卡认可）；真·故障注入见 Task 6。
+- [x] **A 步（终态-only 吞掉复现）**：在**未分段**的源上（临时还原或 git stash），给 `f32_chain_hw` 注入：step 64 处对 acc XOR `1u << 1`（lane 0 定向用 sveor_m 或全 lane XOR 后看 lane 0）——由 /tmp 模拟选一个 30 seeds 大多数吸收的 (k,j) 组合 → 构建 → `-e sve512_f32_chain_arm -t 10 -n 4` → **预期 pass**（吸收实证）。记录完整输出。
+- [x] **B 步（分段抓到证明）**：在已分段源上给 HW 链同一位置注入同一位错 → 构建 → 同命令 → **预期 FAIL，报 seg 1 (after step 128) 的 golden/actual/xor**。记录完整输出。
+- [x] 还原 patch、重建、确认 pass。
+- [x] 边界声明：源级注入等效模拟中途翻转（任务卡认可）；真·故障注入见 Task 6。
 
 ### Task 6: gem5-fi 双内核与注入验收（issue 硬性要求）
 
@@ -243,22 +243,22 @@ run 侧（终态比对被最后一段包含，旧 `gold32/hw` 单向量换成段
 - Modify: `/home/sdc/wangxu/gem5-fi/workloads/sdcshield/Makefile`（加 target）
 - Create: `docs/superpowers/inventory/issue376-chain-checkpoints/`（台账：命令、日志、verdicts）
 
-- [ ] 双内核：镜像 sve512_f32_chain 语义（fixed 确定性操作数、标量 fmaf golden、SVE svmla 链、512 步×8 重复给注入器窗口），argv `mode final|ckpt`；输出契约 `SDCSHIELD_FAILS=<n>` + 16-hex FNV checksum（终态）。ckpt 模式 SEG_LEN=64。
-- [ ] 基线：两 mode 各跑 `--sve_vl 2`（256-bit，与主机同档）+ `--sve_vl 4`（512-bit）→ `SDCSHIELD_FAILS=0` + 两 mode checksum 一致。
-- [ ] 注入：`--chaos_fpu --fault_type bit_flip --fault_mask <低位 mask> --first_clock <校准进链窗口> --max_faults 1 --probability 1.0`（或 CHAOSPhysReg vector 定向）；`fault_injections.log`/`stats.txt` 确认 numFaultsInjected=1。
-- [ ] 验收矩阵（至少各 1 组，引用真实输出）：mode=final 注入跑 → `SDCSHIELD_FAILS=0` 且 checksum==基线（吸收：终态字节不变，故障完全不可见）；mode=ckpt 同参数注入跑 → `SDCSHIELD_FAILS>0`（分段检出）。
-- [ ] 若首次 first_clock/mask 组合未落进链窗口或未被吸收：如实记录校准过程（尝试过的参数、fault_injections.log 证据），不做选择性隐瞒；若某参数下 final 也检出，如实分类（该位属于传播类，非吸收类）。
-- [ ] 台账 + PR 引用（注入位、first_clock、检出输出、SDCSHIELD_FAILS）。
+- [x] 双内核：镜像 sve512_f32_chain 语义（fixed 确定性操作数、标量 fmaf golden、SVE svmla 链、512 步×8 重复给注入器窗口），argv `mode final|ckpt`；输出契约 `SDCSHIELD_FAILS=<n>` + 16-hex FNV checksum（终态）。ckpt 模式 SEG_LEN=64。
+- [x] 基线：两 mode 各跑 `--sve_vl 2`（256-bit，与主机同档）+ `--sve_vl 4`（512-bit）→ `SDCSHIELD_FAILS=0` + 两 mode checksum 一致。
+- [x] 注入：`--chaos_fpu --fault_type bit_flip --fault_mask <低位 mask> --first_clock <校准进链窗口> --max_faults 1 --probability 1.0`（或 CHAOSPhysReg vector 定向）；`fault_injections.log`/`stats.txt` 确认 numFaultsInjected=1。
+- [x] 验收矩阵（至少各 1 组，引用真实输出）：mode=final 注入跑 → `SDCSHIELD_FAILS=0` 且 checksum==基线（吸收：终态字节不变，故障完全不可见）；mode=ckpt 同参数注入跑 → `SDCSHIELD_FAILS>0`（分段检出）。
+- [x] 若首次 first_clock/mask 组合未落进链窗口或未被吸收：如实记录校准过程（尝试过的参数、fault_injections.log 证据），不做选择性隐瞒；若某参数下 final 也检出，如实分类（该位属于传播类，非吸收类）。
+- [x] 台账 + PR 引用（注入位、first_clock、检出输出、SDCSHIELD_FAILS）。
 
 ### Task 7: 回归、文档同步、收尾
 
-- [ ] V6 回归 `-e zstd19 -t 2000 -n 1` → `exit: pass`。
-- [ ] V3 最终全量构建零新警告；V7 x86 目检记录。
-- [ ] 文档同步（rule 7）：`docs/coding/writing_tests.md` 增补"长链必须分段中间检查点（issue #376 范式）"条目（吸收机理一段 + SEG_LEN=64 缺省 + 指向本计划）；README 无此层表述不动；CLAUDE.md 已有 FMMLA 精确操作数条目不动。
-- [ ] Commit（-s）：`docs(tests): 链分段检查点范式写入 writing_tests.md（issue #376）`。
-- [ ] push feature 分支；开 PR：正文含机理+粒度数据+注入实验输出+gem5 验收矩阵+剩余清单（若有）+`Refs #376`（**不写 Fixes，未做完不关 issue**）。
-- [ ] code-review（/code-review high）→ 处置全部发现 → merge。
-- [ ] issue 留移交评论（完成范围、证据链接、剩余清单）。
+- [x] V6 回归 `-e zstd19 -t 2000 -n 1` → `exit: pass`。
+- [x] V3 最终全量构建零新警告；V7 x86 目检记录。
+- [x] 文档同步（rule 7）：`docs/coding/writing_tests.md` 增补"长链必须分段中间检查点（issue #376 范式）"条目（吸收机理一段 + SEG_LEN=64 缺省 + 指向本计划）；README 无此层表述不动；CLAUDE.md 已有 FMMLA 精确操作数条目不动。
+- [x] Commit（-s）：`docs(tests): 链分段检查点范式写入 writing_tests.md（issue #376）`。
+- [x] push feature 分支；开 PR：正文含机理+粒度数据+注入实验输出+gem5 验收矩阵+剩余清单（若有）+`Refs #376`（**不写 Fixes，未做完不关 issue**）。
+- [x] code-review（/code-review high）→ 处置全部发现 → merge。
+- [x] issue 留移交评论（完成范围、证据链接、剩余清单）。
 
 ## Self-Review
 

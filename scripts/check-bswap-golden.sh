@@ -74,7 +74,7 @@ for sub in "$@"; do
         out=$(objdump -d "$BIN" --start-address=0x$addr --stop-address=$end 2>/dev/null)
         insns=$(printf '%s\n' "$out" | grep -cE '^[[:space:]]+[0-9a-f]+:')
         brev=$(printf '%s\n' "$out" | grep -cE "$BREV_RE")
-        valu=$(printf '%s\n' "$out" | grep -cE "$VALU_RE")
+        vec_alu=$(printf '%s\n' "$out" | grep -cE "$VALU_RE")
         if [ "$insns" -eq 0 ]; then
             echo "FAIL  $sub [$mangled @0x$addr]: empty disassembly (hollow-pass guard)"
             fail=1
@@ -82,8 +82,8 @@ for sub in "$@"; do
             echo "FAIL  $sub [$mangled @0x$addr]: $brev scalar byte-reverse instruction(s) in golden path:"
             printf '%s\n' "$out" | grep -E "$BREV_RE" | sed 's/^/        /' | head -5
             fail=1
-        elif [ "$valu" -gt 0 ]; then
-            echo "FAIL  $sub [$mangled @0x$addr]: $valu vector-ALU instruction(s) in golden path:"
+        elif [ "$vec_alu" -gt 0 ]; then
+            echo "FAIL  $sub [$mangled @0x$addr]: $vec_alu vector-ALU instruction(s) in golden path:"
             printf '%s\n' "$out" | grep -E "$VALU_RE" | sed 's/^/        /' | head -5
             fail=1
         else

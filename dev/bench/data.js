@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793534278377,
+  "lastUpdate": 1793557081534,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -2992,6 +2992,81 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 12.186,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "committer": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "id": "fda33cbbf120788614c33272a0ba5a344075c8be",
+          "message": "fix(tests): movbe sve cleanup 补 optimize(\"O1\")——gcc-10 -O2/-O3 RTL expand ICE（每日 15 镜像 CI 10 job 红根因）\n\n根因（实证链）：fd7684f7（issue #374 W4b）新增的 4 个 cleanup post-join\nslot 校验未携带 optimize(\"O1\")，gcc-10.x（20.03 gcc-toolset-10 10.3.0 /\n22.03 系统 10.3.1）对 -O2/-O3 下该函数形态 RTL expand ICE（-O0/-O1 正常，\n24.03 gcc 12.3 不受影响）；同族 run 函数自 626f6554 起即携带该属性规避\n同族工具链脆弱性。本地 20.03-LTS 容器以最小旗标 g++ -std=gnu++20\n-march=armv8.2-a+sve -O2 于预处理源复现同位 ICE（214:12）。\n\n修复：4 处单行属性 + 缘由注释，逐字跟随 run 先例；cleanup 为冷路径\n（post-join 16 槽校验），O1/O3 语义零差异。\n\n验证：20.03-LTS + 22.03-LTS-SP3 容器全库 -k 0 编译 0 FAILED / 0 ICE\n（修复前同路径 4 FAILED）；本机 gcc 12.3 全量构建零新告警（唯一一条\nmesh_upi_sse_sym.cpp:202 格式告警系 main 既有、与本修复无关）；4 用例\n实跑 exit: pass（run + cleanup 全路径）；zstd19 回归 pass；x86 零涉及\n（tests/cpu/sve 为 aarch64 专属库）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-01T14:20:49Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/fda33cbbf120788614c33272a0ba5a344075c8be"
+        },
+        "date": 1793557080134,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 85206.403,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44224.114,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 54.293,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 31.733,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.914,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.054,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.806,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 6.217,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 29167.64,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.051,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.154,
             "unit": "s"
           }
         ]

@@ -1,11 +1,11 @@
 #include <sandstone.h>
-#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <atomic>
 #ifdef __aarch64__
 #include <arm_neon.h>
+#include "sdc_stress_config.h"
 #include <unistd.h>
 #include <cstdlib>
 #include <sys/sysinfo.h>
@@ -110,7 +110,9 @@ static size_t mesh_target_bytes(struct test *test) {
      * 紧预算环境里让位于不超分(检视轮 2:抬到整份预算会在 2×slices 个
      * 并发实例间合计超四源安全预算);budget==0(限额/承诺耗尽)返回 0,
      * 由 init 诚实 SKIP;上限 1 GiB: 低线程/超大内存主机的轮时长收口。 */
-    int total = total_thread_count();
+    /* sdc_total_threads(): total 不可见语境下的框架兜底(裸
+     * total_thread_count() 会使 slices 退化 1、consumers 低估向超分偏)。 */
+    int total = sdc_total_threads();
     int cur = thread_count();
     int slices = (cur > 0 && total > cur) ? (total + cur - 1) / cur : 1;
     int consumers = 2 * cur * slices;
@@ -126,7 +128,19 @@ static size_t mesh_target_bytes(struct test *test) {
         b = lo;
     if (b > (1ull << 30))
         b = 1ull << 30;
-    log_warning("[压力映射] %s.buffer_bytes = %llu 字节 (来源: 读流量总量恒定 45%%安全预算 ÷ 2(战役)×%d(线程)×%d(slice), clamp [64MiB..1GiB]) = %.1f MiB",
+    if (b < (64ull << 20)) {
+        /* 64 MiB 下限被战役份额截断:紧预算下工作集缩进 LLC 深内,mesh
+         * 互连压力语义退化——按框架惯例打 [欠压力] 档位警告(检视轮 3),
+         * 不静默降档。 */
+        log_warning("[欠压力] %s.buffer_bytes = %.1f MiB: 四源安全预算 %.1f MiB 撑不住 64 MiB 下限(本实例战役份额 %.1f MiB),默认工作集缩至 LLC 量级以内,mesh 互连压力语义退化,仍按 PROD 记账",
+                    test ? test->id : "(global)", (double)b / 1048576.0,
+                    (double)budget / 1048576.0,
+                    (double)share / 1048576.0);
+    }
+    /* 注意口径: b = budget(=90% 源) ÷ 2(战役) ÷ 线程 ÷ slice,即源预算
+     * 的 45%÷线程÷slice——日志按实际除法链书写,勿再把 45% 与 ÷2 并写
+     * (检视轮 3:双重计入与实打值自相矛盾)。 */
+    log_warning("[压力映射] %s.buffer_bytes = %llu 字节 (来源: 读流量总量恒定 90%%安全预算 ÷ 2(战役)×%d(线程)×%d(slice), clamp [64MiB..1GiB]) = %.1f MiB",
                 test ? test->id : "(global)", (unsigned long long)b,
                 cur, slices, (double)b / 1048576.0);
     return b;
@@ -147,7 +161,7 @@ static int mesh_upi_avx_sym_init(struct test *test) {
         log_skip(TestResourceIssueSkipCategory,
                  "%s: four-source memory budget is zero (cgroup limit / "
                  "commit headroom exhausted); cannot size a meaningful "
-                 "mesh buffer", "mesh_upi_avx_sym");
+                 "mesh buffer", test->id);
         return EXIT_SKIP;
     }
     td->num_blocks = target / block_bytes;

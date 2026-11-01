@@ -47,11 +47,14 @@ BIN=$1; shift
 [ -x "$BIN" ] || { echo "error: '$BIN' is not an executable" >&2; exit 1; }
 
 # Scalar byte-reverse mnemonics (A64): rev/rev16/rev32 with w or x
-# registers. Vector byte-permutes (rev/tbl on vN.) are covered by VALU_RE.
+# registers. Vector byte-permutes (rev/tbl on vN./zN.) are covered by VALU_RE.
 BREV_RE='[[:space:]](rev|rev16|rev32)[[:space:]]+[wx][0-9]+[[:space:]]*,'
-# Vector ALU mnemonics (A64 SIMD): op with a vN.<shape> operand.
-# Data movement (ldr/str q, mov/ins/dup v) is deliberately excluded.
-VALU_RE='[[:space:]](add|sub|eor|and|orr|bic|orn|mul|mla|mls|neg|abs|shl|sshll|ushll|sri|sli|ext|trn|zip|uzp|tbl|tbx|rev)[[:space:]]+v[0-9]+\.'
+# Vector ALU mnemonics (A64 SIMD + SVE): op with a vN.<shape> or zN.<shape>
+# operand. Covers NEON (v registers) AND SVE (z registers -- svtbl compiles
+# to `tbl z0.b, ...`), plus the suffixed forms (rev32/rev64/zip1/uzp2/...)
+# the unsuffixed-only alternation missed. Data movement (ldr/str, mov/ins/
+# dup) is deliberately excluded.
+VALU_RE='[[:space:]](add|sub|eor|and|orr|bic|orn|mul|mla|mls|neg|abs|shl|sshll2?|ushll2?|sri|sli|ext|trn1?|trn2?|zip1?|zip2?|uzp1?|uzp2?|tbl|tbx|rev16|rev32|rev64|revb|rev)[[:space:]]+[vz][0-9]+[.[]'
 
 fail=0
 for sub in "$@"; do

@@ -47,9 +47,11 @@
  * members / NumTraits sizeof — twice-confirmed spike). The payload is
  * therefore compiled once per tier under its own Eigen namespace and the
  * vector-length-agnostic dispatch TU here selects the variant matching
- * the framework-pinned worker VL (128/256/512; the 1024-bit complex
- * variant is not built because Eigen's SVE complex ptranspose reads past
- * buf[N][NC] when NC > N — upstream defect, GCC -Warray-bounds). test_init
+ * the framework-pinned worker VL (128/256/512/1024; the 1024-bit complex
+ * variant is enabled by the ptranspose scatter rewrite in vendored Eigen's
+ * arch/SVE/Complex.h — issue #410: the earlier memory-bridge form read
+ * past buf[N][NC] when NC > N, so 1024-bit was deliberately not built).
+ * test_init
  * allocates for the tier it observes and test_run re-checks the worker's
  * readback against that tier; a refused pin skips, a mismatch fails
  * closed.
@@ -73,6 +75,7 @@
 namespace svd_vl128  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); int solve_once(int); }
 namespace svd_vl256  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); int solve_once(int); }
 namespace svd_vl512  { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); int solve_once(int); }
+namespace svd_vl1024 { void *make_data(int); void cleanup(struct test *); int run_body(struct test *, int); int solve_once(int); }
 
 /* Tier chosen at init (from the chip maximum) and re-checked at run (from the
  * worker's pinned VL). They must agree: switching variants mid-test would
@@ -91,6 +94,7 @@ static int solve_once_cdouble_sve(int n)
     case 128:  return svd_vl128::solve_once(n);
     case 256:  return svd_vl256::solve_once(n);
     case 512:  return svd_vl512::solve_once(n);
+    case 1024: return svd_vl1024::solve_once(n);
     default:   return -1;   /* unreachable: tier validated before probing */
     }
 }
@@ -213,18 +217,9 @@ static int sve_probe_and_init(struct test *test)
     case 128:
     case 256:
     case 512:
+    case 1024:
         eigen_svd_cdouble_sve_tier_bits = tier;
         break;
-    case 1024:
-        /* Eigen's SVE complex ptranspose indexes buf[N][NC] with i < NC,
-           which is only in bounds when NC <= N (=4 here). At 1024-bit
-           NC = 8, so the complex payload has a genuine out-of-bounds read
-           upstream; we deliberately do not build that variant. */
-        log_skip(CpuNotSupportedSkipCategory,
-                 "%s: 1024-bit Eigen complex packets are unsound upstream "
-                 "(SVE ptranspose reads past buf[N][NC] when NC > N); "
-                 "no variant built for this tier", test->id);
-        return EXIT_SKIP;
     default:
         log_skip(CpuNotSupportedSkipCategory,
                  "%s: no Eigen SVE variant compiled for the %ld-bit tier",
@@ -311,6 +306,7 @@ static int sve_probe_and_init(struct test *test)
     case 128:  data = svd_vl128::make_data(dim);  break;
     case 256:  data = svd_vl256::make_data(dim);  break;
     case 512:  data = svd_vl512::make_data(dim);  break;
+    case 1024: data = svd_vl1024::make_data(dim); break;
     default:
         return EXIT_SKIP;   /* unreachable: tier validated above */
     }
@@ -361,12 +357,7 @@ static int eigen_svd_cdouble_sve_run(struct test *test, int cpu)
     case 128:  return svd_vl128::run_body(test, cpu);
     case 256:  return svd_vl256::run_body(test, cpu);
     case 512:  return svd_vl512::run_body(test, cpu);
-    case 1024:
-        log_skip(CpuNotSupportedSkipCategory,
-                 "%s: 1024-bit Eigen complex packets are unsound upstream "
-                 "(SVE ptranspose reads past buf[N][NC] when NC > N); "
-                 "no variant built for this tier", test->id);
-        return EXIT_SKIP;
+    case 1024: return svd_vl1024::run_body(test, cpu);
     default:
         log_skip(CpuNotSupportedSkipCategory,
                  "%s: no Eigen SVE variant compiled for the %ld-bit tier",
@@ -381,12 +372,13 @@ static int eigen_svd_cdouble_sve_cleanup(struct test *test)
     case 128:  svd_vl128::cleanup(test);  break;
     case 256:  svd_vl256::cleanup(test);  break;
     case 512:  svd_vl512::cleanup(test);  break;
+    case 1024: svd_vl1024::cleanup(test); break;
     default: break;
     }
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend with per-tier 128/256/512-bit variants selected at the framework-pinned VL, dimension sized in child init by the joint memory/time solver); counterpart of eigen_svd_cdouble")
+DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector backend with per-tier 128/256/512/1024-bit variants selected at the framework-pinned VL, dimension sized in child init by the joint memory/time solver); counterpart of eigen_svd_cdouble")
   .groups = DECLARE_TEST_GROUPS(&group_math),
   .test_preinit = size_matrix_preinit,
   .test_init = sve_probe_and_init,

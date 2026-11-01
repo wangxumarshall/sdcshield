@@ -57,9 +57,9 @@ struct TestData {
     alignas(16) double *data;             // 共享缓冲(16B 对齐)
     size_t num_blocks;                    // 运行时块数(按目标内存计算)
     size_t total_elements;                // 运行时总元素数
-    std::atomic<uint32_t> next_block;
+    std::atomic<uint64_t> next_block;
     std::atomic<uint64_t> global_sum;     // f64 位模式的精确和(见下)
-    std::atomic<uint32_t> write_done;
+    std::atomic<uint64_t> write_done;
     std::atomic<uint32_t> read_done;
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
@@ -67,7 +67,7 @@ struct TestData {
 }
 
 // 块值生成:slot j 的种子值(精确 0.5 倍数)
-static inline double block_value(uint32_t block, int j)
+static inline double block_value(uint64_t block, int j)
 {
     // 范围 [0.5, 16.0) 的精确值:0.5 * (1..32)
     return 0.5 * (double)(1 + ((block * 16 + (uint32_t)j) % 32));
@@ -95,6 +95,22 @@ static inline double fma_chain_scalar(double v)
 // 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
 // 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(两者跑同一份 mesh
 // 清单，FP 用例是唯一的大内存消费者)，给 OS 留出余量。返回目标字节数。
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例全线程并行认领填充(while(true),循环体无任何
+// test_time_condition)——整轮时长既不受 -t 约束也不受迭代预算约束;
+// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。写阶段(run 写循环内)无
+// 任何校验——不回读 td->data,也没有 store_buf 比较(R6 勘误,意见26:
+// store_buf 自比较位于读阶段,R5 版误挂到写阶段)。真检出全在读阶段:
+// 聚合和 read_sum == expected_sum(双侧精确)+ store_buf 自比较;另有
+// FMA 链对同源输入的标量 golden 逐元素比对——检 FMA 计算路径分歧,不检
+// 内存内容(两侧读同一 vals)。等待每自旋查预算(耐心 ~40 自旋),预算
+// 耗尽即 break 跳过读阶段:大缓冲轮次零检出。默认 ≈27.7 GB(61 GiB
+// 主机)整轮撞宽限悬崖(同族 sym 实测
+// 324.3 s timed out;小缓冲宽限内填完时零校验空转 pass,同日 asymm_int
+// 实测 245.5 s pass)——两态均零读侧检出。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes() {
     const char *e = getenv("SDC_MESH_BUFFER_BYTES");
     if (e) {
@@ -123,7 +139,20 @@ static int mesh_upi_avx512_symm_f64_init(struct test *test) {
     size_t target = mesh_target_bytes();
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
-    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    /* 块索引空间 64 位(R2):num_blocks 不再封顶(target 经 floor 除法而来,
+     * num_blocks × block_bytes ≤ target ≤ SIZE_MAX,乘法无 size_t 溢出)。
+     * 去封顶必须配套 64 位块索引:next_block 若仍是 uint32,块数 ≥ 2^32 时
+     * fetch_add 越过 0xFFFFFFFF 回绕到 0,低块被重复认领重写——求和族
+     * global_sum 重复累计→假 FAIL,break 式认领循环每 2^32 次认领仅一张
+     * 退出票。该回绕在旧封顶下仅剩一个角落可触发:计算块数 ≥ 2^32 时
+     * 封顶恰把 num_blocks 钉在 0xFFFFFFFF,拿到 0xFFFFFFFF 的线程 break
+     * 后计数器回绕到 0,其余写者重新认领低块重写,退出票每 2^32 次认领
+     * 仅一张、N 线程需 N 张,写阶段无法在测试时限内自然终止;但本用例
+     * 2^32 块 = 128 TiB,init 分配必败,该角落实际不可达(计算块数 ≤
+     * 2^32 − 线程数的常态亦不可达);
+     * 历史假 FAIL 的真因是首轮已修的偏移乘法回绕:旧 size_t offset =
+     * block * BLOCK_SIZE 是 32 位乘法,元素偏移 ≥ 2^32(缓冲 ≥ 32 GiB)时
+     * 低偏移被回绕索引重复写入,缓冲上半段地址从未被写。 */
     td->total_elements = td->num_blocks * BLOCK_SIZE;
     size_t total_bytes = td->total_elements * elem_bytes;
 
@@ -155,10 +184,14 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
     do {
         // ---------- 写阶段:认领块,FP 生产,NEON 存储 ----------
         while (true) {
-            uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
+            uint64_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block >= td->num_blocks) break;
 
-            size_t offset = block * BLOCK_SIZE;
+            // 块号 64 位,与偏移乘法同宽:首轮修 32 位乘法偏移回绕(元素偏移
+            // ≥ 2^32 时低偏移被回绕索引重复写入,缓冲上半段从未被写);R2 去封顶后
+            // 块号本身也须 64 位,否则 fetch_add 在块数 ≥ 2^32 时回绕到 0,
+            // 低块被重复认领重写。
+            size_t offset = (size_t)block * BLOCK_SIZE;
             double vals[BLOCK_SIZE];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_SIZE; ++j) {

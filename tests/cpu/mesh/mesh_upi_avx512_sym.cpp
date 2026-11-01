@@ -19,9 +19,9 @@ struct TestData {
     alignas(16) float *data;            // 共享数据数组（16 字节对齐）
     size_t num_blocks;                  // 运行时块数(按目标内存计算)
     size_t total_elements;              // 运行时总元素数
-    std::atomic<uint32_t> next_block;
+    std::atomic<uint64_t> next_block;
     std::atomic<uint64_t> global_sum;   // 未使用，但保留
-    std::atomic<uint32_t> write_done;
+    std::atomic<uint64_t> write_done;
     std::atomic<uint32_t> read_done;
     std::atomic<uint32_t> reset_lock;
     std::atomic<uint32_t> thread_idx;
@@ -30,6 +30,19 @@ struct TestData {
 
 // 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
 // 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(FP 用例是唯一大内存消费者)。
+// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
+// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
+// 本用例全线程并行认领填充(while(true),循环体无任何
+// test_time_condition)——整轮时长既不受 -t 约束也不受迭代预算约束;
+// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。块级立即回读检查
+// (block_ok/ok → FAIL,同线程 Store/Load 窗口)是唯一的真检出;等待
+// 每自旋查预算(耐心 ~40 自旋)→ 预算耗尽即 break 跳过读阶段,而读
+// 阶段本身仅 store_buf 自一致性比较、不对照写入值(跨线程路径零检
+// 出,merge-base 既有)。默认 ≈27.7 GB(61 GiB 主机)本机实测首轮
+// 26.7 s(超 -t 3 s 预算 ~9 倍;R4 检视轮同配置 53.9 s、18 倍)后空转
+// pass;更慢负载下撞宽限悬崖 → timed out/exit: invalid——两态的跨线程路径均零检出。
+// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
+// 引入。
 static size_t mesh_target_bytes() {
     const char *e = getenv("SDC_MESH_BUFFER_BYTES");
     if (e) {
@@ -59,7 +72,20 @@ static int mesh_upi_avx512_sym_init(struct test *test) {
     size_t target = mesh_target_bytes();
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
-    if (td->num_blocks > 0xFFFFFFFFu) td->num_blocks = 0xFFFFFFFFu;
+    /* 块索引空间 64 位(R2):num_blocks 不再封顶(target 经 floor 除法而来,
+     * num_blocks × block_bytes ≤ target ≤ SIZE_MAX,乘法无 size_t 溢出)。
+     * 去封顶必须配套 64 位块索引:next_block 若仍是 uint32,块数 ≥ 2^32 时
+     * fetch_add 越过 0xFFFFFFFF 回绕到 0,低块被重复认领重写——求和族
+     * global_sum 重复累计→假 FAIL,break 式认领循环每 2^32 次认领仅一张
+     * 退出票。该回绕在旧封顶下仅剩一个角落可触发:计算块数 ≥ 2^32 时
+     * 封顶恰把 num_blocks 钉在 0xFFFFFFFF,拿到 0xFFFFFFFF 的线程 break
+     * 后计数器回绕到 0,其余写者重新认领低块重写,退出票每 2^32 次认领
+     * 仅一张、N 线程需 N 张,写阶段无法在测试时限内自然终止;但本用例
+     * 2^32 块 = 128 TiB,init 分配必败,该角落实际不可达(计算块数 ≤
+     * 2^32 − 线程数的常态亦不可达);
+     * 历史假 FAIL 的真因是首轮已修的偏移乘法回绕:旧 size_t offset =
+     * block * BLOCK_SIZE 是 32 位乘法,元素偏移 ≥ 2^32(缓冲 ≥ 16 GiB)时
+     * 低偏移被回绕索引重复写入,缓冲上半段地址从未被写。 */
     td->total_elements = td->num_blocks * BLOCK_SIZE;
     size_t total_bytes = td->total_elements * elem_bytes;
 
@@ -99,10 +125,14 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
     do {
         // ---------- 写阶段：分配块并写入随机浮点数 ----------
         while (true) {
-            uint32_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
+            uint64_t block = td->next_block.fetch_add(1, std::memory_order_seq_cst);
             if (block >= td->num_blocks) break;
 
-            size_t offset = block * BLOCK_SIZE;
+            // 块号 64 位,与偏移乘法同宽:首轮修 32 位乘法偏移回绕(元素偏移
+            // ≥ 2^32 时低偏移被回绕索引重复写入,缓冲上半段从未被写);R2 去封顶后
+            // 块号本身也须 64 位,否则 fetch_add 在块数 ≥ 2^32 时回绕到 0,
+            // 低块被重复认领重写。
+            size_t offset = (size_t)block * BLOCK_SIZE;
             float vals[BLOCK_SIZE];
             double local_sum = 0.0;
             for (int j = 0; j < BLOCK_SIZE; ++j) {
@@ -134,8 +164,8 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
              * 只做 store_buf 自一致性比较，不对照写入值，所以 block_ok
              * 为假必须直接判失败，不能只记录。 */
             if (!block_ok) {
-                fprintf(stderr, "mesh_upi_avx512_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
-                        id, block,
+                fprintf(stderr, "mesh_upi_avx512_sym: Thread %d, block %llu immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, (unsigned long long)block,
                         vals[0], vals[1], vals[2], vals[3],
                         offset,
                         td->data[offset], td->data[offset + 1],

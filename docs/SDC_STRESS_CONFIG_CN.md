@@ -132,6 +132,13 @@ bytes = 物理内存 × mem_fraction / consumers
 应报 `1 + thread_count()`——报常数 2 会使 n 线程实际提交需求放大 n 倍
 （issue #365：`-n 8` 即 146 GiB 进 swap 抖动）。
 
+「每线程全量读」的 mesh 用例（NEON FP 对 mesh_upi_avx_sym /
+mesh_upi_avx512_sym，issue #325）另需把线程数计入分母：每轮聚合读流量
+= 线程数 × 缓冲，默认缓冲 = 工作集 ÷ 线程数（读流量总量恒定），再以
+1 GiB 绝对上限收口低线程/超大内存主机的轮时长；否则 128 线程 × 45%
+物存 = TiB 级/轮的不可打断读循环，-t 到期无法兑现 → 战役外部 timeout
+误报 Timed Out。
+
 ### 5.3 arena 类（openssl sha/sha3）：`arena_bytes`
 
 每线程 mmap 工作区 = 物理内存 × 60% / 线程数，clamp [1MiB, 4GiB]。
@@ -159,9 +166,20 @@ arena 越大，golden/被测元素的随机落点跨度越大（覆盖更多 cac
 ### SVE mesh（tests/cpu/sve/mesh 18 个文件）
 | knob | 含义 | 范围 | 缺省 |
 |---|---|---|---|
-| `buffer_bytes` | 共享缓冲目标字节 | 1MiB~4TiB | 物理内存 90% ÷ 2 |
+| `buffer_bytes` | 共享缓冲目标字节 | 1MiB~16TiB | 物理内存 90% ÷ 2 |
 
 兼容旧变量 `SDC_MESH_BUFFER_BYTES`（直接指定字节）。
+注：代码 clamp 实为 `1<<20 .. 1<<44`（16 TiB），原表 4TiB 为笔误。
+
+### NEON mesh FP 对（tests/cpu/mesh：mesh_upi_avx_sym / mesh_upi_avx512_sym）
+| knob | 含义 | 范围 | 缺省 |
+|---|---|---|---|
+| `buffer_bytes` | 共享缓冲目标字节 | 1MiB~16TiB | min(45% 物存 ÷ 线程数, 1 GiB) |
+
+兼容旧变量 `SDC_MESH_BUFFER_BYTES`（直接指定字节）。读流量总量恒定口径
+（issue #325）：每轮聚合读流量 = 线程数 × 缓冲，默认钉在 45% 物存
+（900‰ ÷ 2 路战役均摊 ÷ 线程数），1 GiB 上限只约束默认值——显式
+knob/env 可申请更大足迹（其超时语义见 #357）。
 
 ### SVE eigen / acl_gemm
 | knob | 含义 | 范围 | 缺省 |

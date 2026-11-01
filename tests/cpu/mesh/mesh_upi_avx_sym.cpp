@@ -1,4 +1,5 @@
 #include <sandstone.h>
+#include "sdc_stress_config.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -33,40 +34,43 @@ struct TestData {
 };
 }
 
-// 内存消耗目标: 环境变量 SDC_MESH_BUFFER_BYTES 显式指定(字节)；
-// 未指定时按物理内存的 ~90% 在 2 路 mesh 战役间均摊(FP 用例是唯一大内存消费者)。
-// 边界声明(R5,#308 意见20/21/22 实测推翻 R4 版本;根治跟踪 #357,空过
-// PASS 记账语义另见 #358):本目标默认取物理内存 45%(或 env 显式指定)。
-// 本用例全线程并行认领填充(while(true),循环体无任何
-// test_time_condition)——整轮时长既不受 -t 约束也不受迭代预算约束;
-// 唯一硬界是父进程宽限 max(5×-t+30s, 300s)。R6 勘误(意见24):R5 版
-// 「(block_ok/ok → FAIL)是唯一的真检出」与本文件代码不符——写侧立即
-// 回读算出 ok 后在空体 if 中被丢弃,不产生任何 FAIL(姊妹 PR #331 commit
-// f1c23a65 已在其分支把 avx_sym/sse_sym 的 !ok 接通为 report_fail,本分支
-// 未含该修复)。本用例 FAIL 能力的数据校验只在读阶段:聚合和
-// read_sum == expected_sum(写侧累加 vs 读侧全量重读——非逐字节,补偿性
-// 双错等和保持型损坏不可见)+ store_buf 自一致性(读路径 store/reload
-// 自比较,不对照写入值);等待每自旋查预算(耐心 ~40 自旋)→ 预算耗尽
-// 即 break 跳过读阶段,该轮零校验。默认 ≈27.7 GB(61 GiB 主机)本机实测
-// 首轮 26.7 s(超 -t 3 s 预算 ~9 倍;R4 检视轮同配置 53.9 s、18 倍)后
-// 空转 pass;更慢负载下撞宽限悬崖 → timed out/exit: invalid——两态
-// 结局的该轮均零校验。
-// merge-base 既有(旧 0xFFFFFFFF 块封顶同样不按耐心收口),非本 PR
-// 引入。
-static size_t mesh_target_bytes() {
-    const char *e = getenv("SDC_MESH_BUFFER_BYTES");
-    if (e) {
+// 目标字节数: -O mesh_upi_avx_sym.buffer_bytes=N /
+// SDC_MESH_UPI_AVX_SYM_BUFFER_BYTES 环境变量 / 旧脚本兼容
+// SDC_MESH_BUFFER_BYTES / 自适应默认(下)。与 SVE 侧 mesh_upi_sve_sym
+// 的同名 knob 语义一致(issue #325 修复引入)。
+//
+// 自适应默认口径(issue #325):本用例读阶段是「每线程全量读取」——每轮
+// 聚合读流量 = 线程数 × 缓冲字节数。原默认(物理内存 45%,9b7ee76c
+// knob-ize 引入)只按 2 路战役内存均摊计,不含线程数因子:128 线程 ×
+// 57.6 GiB(128 GiB 主机)= 7372 GiB/轮 ≈ 74 s,读循环内无时间检查
+// (检查频度撑不起 40 次 auto-fracture 迭代预算),-t 到期无法打断当轮
+// → 战役外部 timeout(scheduler.py: timeout -k 30 <-t/1000+15>)先于
+// 框架 SIGQUIT 宽限 max(5×-t+30s, 300s) 杀进程 → Timed Out 误报;
+// 且等待自旋每圈烧 1 次迭代预算(40 次上限,µs 级耗尽,#357),填充超
+// 毫秒即整轮零校验。修法 = sizing 语义修正:默认缓冲 = 45% 物存工作集
+// ÷ 线程数(读流量总量恒定——每轮字节搬移与修复前同量级,足迹仍远超
+// LLC 走 DRAM/mesh 路径,「全线程全量读」访问模式不变),再以 1 GiB
+// 绝对上限收口低线程/超大内存主机的轮时长与分配安全;显式 knob/env
+// 不受该上限约束(大足迹压力仍可显式申请,其超时语义由 #357 族级根治
+// 跟踪)。等待侧预算节流见 run 内 131072 一档自旋(同 SVE 侧先例)。
+static size_t mesh_target_bytes(struct test *test) {
+    int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,
+                                     1 << 20, 1ll << 44);
+    if (v == 0)
+        sdc_env_knob_int_clamped(test->id, "buffer_bytes", &v, 1 << 20, 1ll << 44);
+    if (v > 0)
+        return (size_t)v;
+    /* 旧脚本兼容: SDC_MESH_BUFFER_BYTES 直接指定字节 */
+    if (const char *e = getenv("SDC_MESH_BUFFER_BYTES")) {
         char *end = nullptr;
-        unsigned long long v = strtoull(e, &end, 10);
-        if (end && *end == '\0' && v > 0)
-            return (size_t)v;
+        unsigned long long b = strtoull(e, &end, 10);
+        if (end && *end == '\0' && b > 0)
+            return (size_t)b;
     }
-    struct sysinfo si;
-    if (sysinfo(&si) == 0 && si.totalram > 0) {
-        size_t total = (size_t)si.totalram * si.mem_unit;
-        return total / 10 * 9 / 2;
-    }
-    return (size_t)1 << 30;   // 1 GiB 兜底
+    /* 读流量总量恒定: 45% 物存 ÷(2 路战役均摊 × 线程数),1 GiB 轮时长上限 */
+    uint64_t budget = sdc_target_workset_bytes(900, 2 * thread_count(), nullptr);
+    constexpr uint64_t cap = 1ull << 30;
+    return budget < cap ? budget : cap;
 }
 
 static int mesh_upi_avx_sym_init(struct test *test) {
@@ -77,7 +81,7 @@ static int mesh_upi_avx_sym_init(struct test *test) {
 
     const size_t elem_bytes = sizeof(float);
     const size_t block_bytes = BLOCK_ELEMENTS * elem_bytes;
-    size_t target = mesh_target_bytes();
+    size_t target = mesh_target_bytes(test);
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
     /* 块索引空间 64 位(R2):num_blocks 不再封顶(target 经 floor 除法而来,
@@ -197,8 +201,8 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
              * 二轮意见 #22）。avx512_sym 同款语义先例（其 135-148 行注释）。
              * 块为本线程独占认领，写后立即回读失配 = 真实 store/load 损坏。 */
             if (!ok) {
-                fprintf(stderr, "mesh_upi_avx_sym: Thread %d, block %u immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
-                        id, block,
+                fprintf(stderr, "mesh_upi_avx_sym: Thread %d, block %llu immediate read-back mismatch, written vals[0..3]=(%.6f,%.6f,%.6f,%.6f), loaded data[0..3] at offset %zu=(%.6f,%.6f,%.6f,%.6f), result=%sFAIL%s\n",
+                        id, (unsigned long long)block,
                         vals[0], vals[1], vals[2], vals[3],
                         offset,
                         td->data[offset], td->data[offset + 1],
@@ -217,16 +221,29 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
             td->allocated_blocks.fetch_add(1, std::memory_order_seq_cst);
         }
 
-        // 等待所有线程完成写入
-        while (td->allocated_blocks.load(std::memory_order_seq_cst) < td->num_blocks &&
-               test_time_condition(test)) {
-            __asm__ volatile("yield");
+        /* 等待所有线程完成写入：131072 自旋一档节流预算检查（SVE 侧
+         * mesh_upi_sve_sym 同款，#357 病理的 NEON 侧修复）——原「每自旋
+         * 都调 test_time_condition」把 40 次 auto-fracture 迭代预算在
+         * µs 级烧穿，等待方在填充完成前提前退出，该轮校验被整轮跳过；
+         * 节流后耐心 ~40×131072 自旋（≈0.1-0.3 s），等待条件本身每自旋
+         * 都查，响应不受影响。 */
+        {
+            uint32_t spin = 0;
+            while (td->allocated_blocks.load(std::memory_order_seq_cst) < td->num_blocks) {
+                if ((++spin & 131071u) == 0) {
+                    if (!test_time_condition(test)) goto round_aborted;
+                } else {
+                    __asm__ volatile("yield");
+                }
+            }
         }
-        if (!test_time_condition(test)) break;
 
         __sync_synchronize();  // 确保写入全局可见（mfence）
 
         // ---------- 阶段 2：所有线程读取完整数组并验证 ----------
+        // （读循环内不查 test_time_condition：40 次迭代预算撑不起按向量
+        // 检查的频度，预算耗尽的假「超时」会把好轮截断成废轮；轮时长已
+        // 由默认 sizing 钉在亚秒级，显式大缓冲的超时语义由 #357 跟踪。）
         // Sum snapshot BEFORE the read loop (TOCTOU fix): a fast thread can
         // finish its read, run the reset phase and start writing the NEXT
         // iteration while this thread is still walking the buffer. Sampling
@@ -257,17 +274,18 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
 
         bool passed = (read_sum == expected_sum) && consistent;
 
-        // 输出结果（每个线程输出一次）
-        fprintf(stderr, "mesh_upi_avx_sym: Thread %d, data[0..3]=(%.4f,%.4f,%.4f,%.4f), read_sum=%f, expected_sum=%f, consistent=%d, result=%s%s%s\n",
-                id,
-                td->data[0], td->data[1], td->data[2], td->data[3],
-                read_sum, expected_sum, consistent,
-                passed ? GREEN : RED,
-                passed ? "PASS" : "FAIL",
-                RESET);
-        fflush(stderr);
-
         if (!passed) {
+            /* 失败证据（原先每轮每线程都打印 PASS 行——修复 sizing 后轮次
+             * 亚秒级、数百轮 × 全线程会把 stderr/memfd 灌成噪音，#324 在
+             * sse_sym 立案同款问题；此处改为仅失败时输出，avx512_sym 先例）。 */
+            fprintf(stderr, "mesh_upi_avx_sym: Thread %d, data[0..3]=(%.4f,%.4f,%.4f,%.4f), read_sum=%f, expected_sum=%f, consistent=%d, result=%s%s%s\n",
+                    id,
+                    td->data[0], td->data[1], td->data[2], td->data[3],
+                    read_sum, expected_sum, consistent,
+                    passed ? GREEN : RED,
+                    passed ? "PASS" : "FAIL",
+                    RESET);
+            fflush(stderr);
             report_fail_msg("mesh_upi_avx_sym: Sum mismatch or consistency failure");
             return EXIT_FAILURE;
         }
@@ -286,16 +304,21 @@ static int mesh_upi_avx_sym_run(struct test *test, int cpu) {
             td->arrived.store(0, std::memory_order_relaxed);
             td->epoch.store(my_epoch + 1, std::memory_order_release);
         } else {
-            while (td->epoch.load(std::memory_order_acquire) == my_epoch &&
-                   test_time_condition(test)) {
-                __asm__ volatile("yield");
+            /* 同款 131072 一档节流（先例 mesh_upi_sve_sym 的 epoch 等待） */
+            uint32_t spin = 0;
+            while (td->epoch.load(std::memory_order_acquire) == my_epoch) {
+                if ((++spin & 131071u) == 0) {
+                    if (!test_time_condition(test)) goto round_aborted;
+                } else {
+                    __asm__ volatile("yield");
+                }
             }
-            if (!test_time_condition(test)) break;
         }
         ++my_epoch;
 
     } while (test_time_condition(test));
 
+round_aborted:
     if (!validated_any) {
         log_skip(TestResourceIssueSkipCategory,
                  "mesh_upi_avx_sym: test time expired before the first full "

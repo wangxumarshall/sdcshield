@@ -82,8 +82,9 @@
 - 工件入库 `docs/superpowers/inventory/issue182-sve512-allvl/`：
   `repro_qnan_bias.cpp`（复现器源）+ `repro_output.txt`（实测输出）+
   `gem5-verdicts.txt`（512 复锚 + 1024 首采，gem5 身份与命令形态）。
-- 家族其余 6 文件（gather/scatter/xlswave/f64_chain_arm/f64_special_arm）同款
-  旧口径未动——超出本 issue 范围，留待后续统一刷新。
+- 家族其余 6 文件（gather_scatter_{arm,svd}/xlswave/f64_chain_arm/
+  f64_special_arm/libomp_ctx_arm）同款旧口径未动——超出本 issue 范围，留待
+  后续统一刷新。
 
 ---
 ## 2026-10-31（issue #180：Float80/long-double 框架适配 aarch64 binary128——解除 2 个 x86-only 守卫）

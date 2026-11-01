@@ -18,8 +18,10 @@
 1024    sve512_f64_chain_svd     0   pass      1201984971000
 1024    sve512_f64_special_svd   0   pass      51746798000
 #
-# 512->1024 tick ratio (scalar-golden work scales with lanes):
-#   sve512_f32_chain_svd  2390926374000 / 1199021558000 = 2.00x
-#   sve512_f64_chain_svd  1201984971000 /  604436572000 = 2.00x
+# 512->1024 tick ratio (scalar-golden work scales with lanes; fixed
+#   framework/init overhead dilutes the short tests, hence lower for them):
+#   sve512_f32_chain_svd  2390926374000 / 1199021558000 = 1.994x
+#   sve512_f64_chain_svd  1201984971000 /  604436572000 = 1.989x
+#   sve512_f32_chain_arm   11773188000 /   8467506000  = 1.391x
 # Cross-check vs campaign gem5-512-verdicts.txt (12ccda54 binary): all four
 #   rc=0 exit: pass there too — 512 tier behavior unchanged on current HEAD.

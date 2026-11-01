@@ -49,6 +49,20 @@
  *     accumulation over kRandIters is ~8e-13 relative, an order inside
  *     the tolerance).
  *
+ *     Segmented intermediate checkpoints (issue #376): shape B's
+ *     accumulation is compared at every 64-iteration boundary (128
+ *     checkpoints; the last is the legacy final compare) with a
+ *     boundary-scaled tolerance bound — early boundaries carry
+ *     proportionally tighter bounds, catching flips whose magnitude
+ *     falls between the boundary tolerance and the final tolerance
+ *     (the tolerance-absorption blind zone of a final-only compare).
+ *     Shape A is deliberately NOT segmented: its accumulation is exact
+ *     on the 1/8 grid below 2^53 (order-independent, every intermediate
+ *     exactly representable), so any mid-chain flip propagates to the
+ *     final bit-compare — final-only is already detection-complete
+ *     there, and per the issue's chain-type grading the exact/
+ *     propagating class needs no checkpoints.
+ *
  * Framework adaptations (each forced by the harness, structure-neutral):
  *   - main() -> test_init/test_run/test_cleanup; src and s_base are set
  *     up once in init and shared read-only across CPU threads;
@@ -117,6 +131,18 @@ static constexpr size_t iterations = 100'000'000;
 static constexpr size_t kRandIters = 8192;
 static constexpr double kTolRel = 1e-11;
 
+// Segmented intermediate checkpoints for shape B (issue #376): the
+// random-shape accumulation is compared at kRandSeg-step boundaries (128
+// checkpoints), not only after all 8192 iterations. The tolerance bound
+// scales with the iteration count (r_bound = iters * per-iter increment),
+// so EARLY boundaries carry proportionally TIGHTER bounds — a flip whose
+// magnitude falls between the boundary tolerance and the final tolerance
+// is absorbed by the final-only compare but caught at the boundary. The
+// boundary snapshot is a plain 2-svst1 spill of the memory-adjacent
+// accumulators; the 12-FMA kernel loop itself is untouched.
+static constexpr size_t kRandSeg = 64;
+static constexpr size_t kRandSegCount = kRandIters / kRandSeg;
+
 // Memory-resident loop counter, as in the original (file-scope, so it is
 // not register-allocated). thread_local because the framework runs one
 // test_run per CPU concurrently — a plain global would race across
@@ -132,6 +158,10 @@ static thread_local double *r_grid = nullptr;
 static thread_local double r_coeff[RADIUS + 1];
 static thread_local double r_expected[kTileMax];
 static thread_local double r_bound[kTileMax];
+/* Shape-B segment tables (issue #376): [seg * kTileMax + lane]. */
+static thread_local double r_exp_seg[kRandSegCount * kTileMax];
+static thread_local double r_bnd_seg[kRandSegCount * kTileMax];
+static thread_local double r_hw_seg[kRandSegCount * kTileMax];
 
 struct SveStencilAxisData {
     // Tile width in f64 lanes = 2*svcntd() at the runtime VL (4..32).
@@ -421,7 +451,7 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                                (std::fabs(up[r][l]) + std::fabs(dn[r][l]));
                     r_bound[l] = static_cast<double>(kRandIters) * inc;
                 }
-                for (size_t it = 0; it < kRandIters; ++it)
+                for (size_t it = 0; it < kRandIters; ++it) {
                     for (size_t r = 1; r <= RADIUS; ++r)
                         for (size_t l = 0; l < bt; ++l) {
                             r_expected[l] = std::fma(up[r][l], r_coeff[r],
@@ -429,6 +459,20 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                             r_expected[l] = std::fma(dn[r][l], r_coeff[r],
                                                      r_expected[l]);
                         }
+                    /* issue #376: record the boundary state and the
+                     * boundary-scaled tolerance bound (iters-so-far x
+                     * per-iter increment; the final boundary reproduces
+                     * the legacy r_bound exactly). */
+                    if ((it + 1) % kRandSeg == 0) {
+                        const size_t sg = (it + 1) / kRandSeg - 1;
+                        for (size_t l = 0; l < bt; ++l) {
+                            r_exp_seg[sg * kTileMax + l] = r_expected[l];
+                            r_bnd_seg[sg * kTileMax + l] =
+                                static_cast<double>(it + 1) *
+                                r_bound[l] / static_cast<double>(kRandIters);
+                        }
+                    }
+                }
             }
 
             svfloat64_t b_res0 = svdup_f64(0.0);
@@ -443,6 +487,14 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                 axis_generic_16x2(
                     r_base, coord, extent, stride, ptrue, r_coeff,
                     bt, b_res0, b_res1);
+                /* issue #376 checkpoint spill: the accumulators are
+                 * spilled to the segment table every kRandSeg kernel
+                 * calls; the kernel's 12-FMA chains are untouched. */
+                if ((j + 1) % kRandSeg == 0) {
+                    const size_t sg = (j + 1) / kRandSeg - 1;
+                    svst1(ptrue, &r_hw_seg[sg * kTileMax], b_res0);
+                    svst1(ptrue, &r_hw_seg[sg * kTileMax] + lanes, b_res1);
+                }
             }
 
             double b_result[kTileMax];
@@ -458,6 +510,26 @@ static int sve512_stencil_axis_arm_run(struct test *test, int cpu)
                         "sve512_stencil_axis_arm: random shape diverged at "
                         "lane %2zu: |%.17g - %.17g| = %.3e > tol %.3e",
                         l, b_result[l], r_expected[l], diff, tol);
+                }
+            }
+
+            /* issue #376: per-boundary tolerance compare — the last
+             * boundary is the legacy final compare above (kept for its
+             * detailed message); earlier boundaries carry tighter
+             * bounds and catch flips the final tolerance absorbs. */
+            for (size_t sg = 0; sg + 1 < kRandSegCount; ++sg) {
+                for (size_t l = 0; l < bt; ++l) {
+                    const size_t idx = sg * kTileMax + l;
+                    double diff = std::fabs(r_hw_seg[idx] - r_exp_seg[idx]);
+                    double tol = kTolRel * (r_bnd_seg[idx] + 1e-300);
+                    if (!(diff <= tol)) {
+                        report_fail_msg(
+                            "sve512_stencil_axis_arm: random shape diverged "
+                            "at segment %zu (after %zu iters) lane %2zu: "
+                            "|%.17g - %.17g| = %.3e > tol %.3e",
+                            sg, (sg + 1) * kRandSeg, l, r_hw_seg[idx],
+                            r_exp_seg[idx], diff, tol);
+                    }
                 }
             }
         }

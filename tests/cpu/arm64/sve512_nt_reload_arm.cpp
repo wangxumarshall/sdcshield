@@ -79,6 +79,11 @@ struct NtReloadData {
     std::vector<double> buf;           // in:  buf[j] = j * 1.5
     std::vector<double> out;           // stnt1d destination (same size)
     std::vector<double> golden;        // expected final res per lane
+    // Expected res of EVERY step, layout [step * vl_d + lane] (issue #376):
+    // the stnt1d region of intermediate steps was previously never
+    // verified (only the final step's vector was compared) — a transient
+    // fault in an intermediate stnt1d write escaped entirely.
+    std::vector<double> golden_step;
     int dist;                          // reload->use distance 1..4 (knob)
 };
 
@@ -266,7 +271,7 @@ static int sve512_nt_reload_arm_init(struct test *test)
         // Golden: per-lane chain over DIST_STEPS steps. prev is shared
         // across lanes (lane 0's previous result, broadcast by ld1rd), so
         // the lanes must be advanced in step-major order.
-        data->golden.assign(data->vl_d, 0.0);
+        data->golden_step.assign(DIST_STEPS * data->vl_d, 0.0);
         std::vector<double> res(data->vl_d);
         double prev = COEFF_INIT;
         for (size_t step = 0; step < DIST_STEPS; ++step) {
@@ -274,18 +279,13 @@ static int sve512_nt_reload_arm_init(struct test *test)
             for (size_t lane = 0; lane < data->vl_d; ++lane)
                 res[lane] = golden_step(prev, data->buf[off + lane], COEFF);
             prev = res[0];
+            memcpy(&data->golden_step[step * data->vl_d], res.data(),
+                   data->vl_d * sizeof(double));
         }
-        for (size_t lane = 0; lane < data->vl_d; ++lane) {
-            data->golden[lane] = res[lane];
-            // res[] now holds the FINAL step's per-lane results; copy to
-            // golden words below (double storage for memcmp clarity).
-        }
-        // (golden[] already holds the final res per lane via the loop above
-        // — res was assigned every step and lane, so golden[lane] = res of
-        // the last executed step. The explicit copy keeps intent clear:)
-        for (size_t lane = 0; lane < data->vl_d; ++lane)
-            data->golden[lane] = res[lane];
-
+        // golden[] (final step) is the tail of golden_step — kept for the
+        // final-readback compare below.
+        data->golden.assign(
+            data->golden_step.end() - data->vl_d, data->golden_step.end());
         test->data = data.release();
         return EXIT_SUCCESS;
     } catch (const std::exception &e) {
@@ -374,12 +374,29 @@ static int sve512_nt_reload_arm_run(struct test *test, int cpu)
             }
             all_passed = false;
         }
-        // stnt1d region check for the final step's vector.
-        {
-            size_t last_off = ((DIST_STEPS - 1) * vl) % BUF_ELEMS;
-            if (memcmp(&d->out[last_off], d->golden.data(),
-                       vl * sizeof(double)) != 0)
+        // stnt1d region check: EVERY step's vector (issue #376, the
+        // l2c_cross_cache_line two-pass precedent — write all, then
+        // compare; the hot loop itself is untouched). Each step's stnt1d
+        // lands at its own offset, so the whole written extent of out[]
+        // is verified against the per-step golden. Previously only the
+        // final step's vector was compared: a transient fault in an
+        // intermediate stnt1d write escaped entirely.
+        for (size_t step = 0; step < DIST_STEPS; ++step) {
+            size_t off = (step * vl) % BUF_ELEMS;
+            const double *g = &d->golden_step[step * vl];
+            if (memcmp(&d->out[off], g, vl * sizeof(double)) != 0) {
+                for (size_t lane = 0; lane < vl; ++lane) {
+                    uint64_t gw, aw;
+                    memcpy(&gw, &g[lane], 8);
+                    memcpy(&aw, &d->out[off + lane], 8);
+                    if (gw != aw)
+                        log_warning("sve512_nt_reload: step %zu lane %zu "
+                                    "stnt1d golden=0x%016" PRIx64
+                                    " actual=0x%016" PRIx64, step, lane,
+                                    gw, aw);
+                }
                 all_passed = false;
+            }
         }
 
         if (!all_passed) {

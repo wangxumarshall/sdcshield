@@ -27,6 +27,12 @@
  * Differs from sve512_f64_special_arm: working set scales with the lanes
  * (0.7..5.9 MB across sm and sa over the 128..1024-bit tiers) vs 8 KB,
  * nested block traversal vs flat stream.
+ *
+ * SDC detection (issue #376): per-lane category compare at 16-step
+ * intermediate checkpoints within each block's chain — not only at the
+ * block-final state. A mid-chain flip is compared at the next boundary
+ * while the accumulator is still in the observable (finite /
+ * pre-saturation-stable) window.
  * @endparblock
  */
 
@@ -47,6 +53,15 @@
 // per-lane dependency sequence; the lane count, not the length, scales
 // with VL).
 static constexpr size_t SPECIAL_CHAIN_STEPS = 64;
+
+// Segmented intermediate checkpoints (issue #376): the per-block chain
+// state is category-compared at SPECIAL_SEG_LEN-step boundaries, not only
+// at chain end — the category compare masks post-saturation payload
+// differences by design, so a mid-chain flip's only observable window is
+// while the accumulator is still finite; checkpoints at 16 steps compare
+// inside that window. The boundary spill does not break the chain.
+static constexpr size_t SPECIAL_SEG_LEN = 16;
+static constexpr size_t SPECIAL_SEG_COUNT = SPECIAL_CHAIN_STEPS / SPECIAL_SEG_LEN;
 static constexpr size_t SVD_ROWS = 300;
 static constexpr size_t SVD_COLS = 300;
 static constexpr size_t SVD_BLOCK_ROWS = 16;
@@ -86,7 +101,7 @@ static inline size_t block_slab_base(size_t row, size_t col, size_t lanes)
            (SPECIAL_CHAIN_STEPS * lanes);
 }
 
-static void f64_special_golden(const SveF64SpecialSvdData *d, uint64_t *out,
+static void f64_special_golden(const SveF64SpecialSvdData *d, uint64_t *seg_out,
                                size_t row, size_t col)
 {
     const size_t lanes = d->vl_d;
@@ -100,13 +115,14 @@ static void f64_special_golden(const SveF64SpecialSvdData *d, uint64_t *out,
             memcpy(&m, &d->sm_f64[base + lane], 8);
             memcpy(&a, &d->sa_f64[base + lane], 8);
             acc = std::fma(m, a, acc);
+            if ((i + 1) % SPECIAL_SEG_LEN == 0)
+                memcpy(&seg_out[((i + 1) / SPECIAL_SEG_LEN - 1) * lanes + lane],
+                       &acc, 8);
         }
-        memcpy(&accw, &acc, 8);
-        out[lane] = accw;
     }
 }
 
-static void f64_special_chain_hw(const SveF64SpecialSvdData *d, uint64_t *out,
+static void f64_special_chain_hw(const SveF64SpecialSvdData *d, uint64_t *seg_out,
                                  size_t row, size_t col)
 {
     const size_t lanes = d->vl_d;
@@ -120,8 +136,10 @@ static void f64_special_chain_hw(const SveF64SpecialSvdData *d, uint64_t *out,
         svfloat64_t a = svld1_f64(pg,
             reinterpret_cast<const double *>(&d->sa_f64[base]));
         acc = svmla_f64_x(pg, acc, m, a);
+        if ((i + 1) % SPECIAL_SEG_LEN == 0)   /* issue #376 ckpt spill */
+            svst1_f64(pg, reinterpret_cast<double *>(
+                          &seg_out[((i + 1) / SPECIAL_SEG_LEN - 1) * lanes]), acc);
     }
-    svst1_f64(pg, reinterpret_cast<double *>(out), acc);
 }
 
 static inline bool f64_lane_ok(uint64_t golden, uint64_t actual)
@@ -132,14 +150,6 @@ static inline bool f64_lane_ok(uint64_t golden, uint64_t actual)
     if (std::isinf(g)) return std::isinf(a) && ((g > 0) == (a > 0));
     if (std::isnan(a) || std::isinf(a)) return false;
     return golden == actual;
-}
-
-static void report_f64_lane_mismatch(const char *tag, size_t lane,
-                                     uint64_t golden, uint64_t actual)
-{
-    log_warning("%s: lane %zu golden=0x%016" PRIx64 " "
-                "actual=0x%016" PRIx64 " xor=0x%016" PRIx64,
-                tag, lane, golden, actual, golden ^ actual);
 }
 
 static int sve512_f64_special_svd_init(struct test *test)
@@ -205,27 +215,37 @@ static int sve512_f64_special_svd_run(struct test *test, int cpu)
        framework/device/cpu/arm64/arm64_vl.h). */
     ARM64_SVE_VL_DRIFT_CHECK_F64(test, d->vl_d);
 
-    std::vector<uint64_t> golds64(d->vl_d);
-    std::vector<uint64_t> hw(d->vl_d);
+    // Segment tables sized once (issue #376); recomputed per block. The
+    // last segment entry is the block-final state, so the old final-only
+    // compare is subsumed.
+    std::vector<uint64_t> gold_seg(SPECIAL_SEG_COUNT * d->vl_d);
+    std::vector<uint64_t> hw_seg(SPECIAL_SEG_COUNT * d->vl_d);
 
     do {
         bool all_passed = true;
         for (size_t br = 0; br < SVD_ROWS; br += SVD_BLOCK_ROWS) {
             for (size_t bc = 0; bc < SVD_COLS; bc += SVD_BLOCK_COLS) {
-                f64_special_golden(d, golds64.data(), br, bc);
-                f64_special_chain_hw(d, hw.data(), br, bc);
-                for (size_t lane = 0; lane < d->vl_d; ++lane) {
-                    if (!f64_lane_ok(golds64[lane], hw[lane])) {
-                        report_f64_lane_mismatch(
-                            "sve512_f64_special_svd", lane,
-                            golds64[lane], hw[lane]);
-                        all_passed = false;
+                f64_special_golden(d, gold_seg.data(), br, bc);
+                f64_special_chain_hw(d, hw_seg.data(), br, bc);
+                for (size_t seg = 0; seg < SPECIAL_SEG_COUNT; ++seg) {
+                    for (size_t lane = 0; lane < d->vl_d; ++lane) {
+                        const size_t idx = seg * d->vl_d + lane;
+                        if (!f64_lane_ok(gold_seg[idx], hw_seg[idx])) {
+                            log_warning("sve512_f64_special_svd: block (%zu,"
+                                        "%zu) seg %zu (after step %zu) lane "
+                                        "%zu golden=0x%016" PRIx64 " "
+                                        "actual=0x%016" PRIx64, br, bc, seg,
+                                        (seg + 1) * SPECIAL_SEG_LEN, lane,
+                                        gold_seg[idx], hw_seg[idx]);
+                            all_passed = false;
+                        }
                     }
                 }
             }
         }
         if (!all_passed) {
-            report_fail_msg("sve512_f64_special_svd: SDC detected");
+            report_fail_msg("sve512_f64_special_svd: SDC detected "
+                            "(segmented checkpoint)");
             return EXIT_FAILURE;
         }
     } while (test_time_condition(test));

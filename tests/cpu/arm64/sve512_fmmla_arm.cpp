@@ -75,6 +75,19 @@
 // Dependent FMMLA chain length per iteration.
 static constexpr size_t CHAIN_STEPS = 256;
 
+// Segmented intermediate checkpoints (issue #376): the tile state is
+// byte-compared at SEG_LEN-step boundaries, not only at chain end. The
+// operands are non-integer fractions from the finite table, so the
+// accumulator random-walks and a mid-chain bit flip is ground away by
+// rounding once the accumulated magnitude grows past it — a final-only
+// compare is blind to that class (the growth-grinding mechanism measured
+// on the f32-chain family: low-bit mid-chain flips 59.9% caught at chain
+// end vs 79.4% with 64-step checkpoints). The tile is memory-resident
+// (load-svmmla-store per step), so the boundary snapshot is a plain
+// memcpy — zero extra datapath instructions.
+static constexpr size_t SEG_LEN = 64;
+static constexpr size_t SEG_COUNT = CHAIN_STEPS / SEG_LEN;
+
 // Finite high-Hamming f64 patterns (|x| <= 2; chain can never overflow —
 // sve512_f64_chain_arm precedent).
 /* EXACT integer operands, deliberately (same doctrine as
@@ -104,8 +117,11 @@ static constexpr size_t F64_FINITE_SIZE =
 struct FmmlaData {
     size_t vl_f32_rows;    // f32 tile side = svcntw()/2
     size_t vl_f64_rows;    // f64 tile side = svcntd()/2
-    std::vector<double> golden_f64;   // expected f64 tile (row-major)
-    std::vector<float>  golden_f32;   // expected f32 tile (row-major)
+    // Expected tile at every SEG_LEN-step boundary (issue #376); the last
+    // segment IS the chain-final tile, so the old final-only golden is
+    // subsumed.
+    std::vector<double> golden_seg_f64;   // [seg * vl_d + lane]
+    std::vector<float>  golden_seg_f32;   // [seg * vl_w + lane]
 };
 
 #ifdef __aarch64__
@@ -233,9 +249,14 @@ static int sve512_fmmla_arm_init(struct test *test)
                 memcpy(&Zn[i], &F64_FINITE[(i * 7 + 1) % F64_FINITE_SIZE], 8);
                 memcpy(&Zm[i], &F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE], 8);
             }
-            for (size_t step = 0; step < CHAIN_STEPS; ++step)
+            data->golden_seg_f64.resize(SEG_COUNT * vl_d);
+            for (size_t step = 0; step < CHAIN_STEPS; ++step) {
                 fmmla_f64_step_golden(tile.data(), Zn.data(), Zm.data(), vl_d);
-            data->golden_f64 = tile;
+                if ((step + 1) % SEG_LEN == 0)
+                    memcpy(&data->golden_seg_f64
+                               [((step + 1) / SEG_LEN - 1) * vl_d],
+                           tile.data(), vl_d * 8);
+            }
         }
         // ---- golden: f32 chain (f32 view of the same finite table) ----
         {
@@ -247,9 +268,14 @@ static int sve512_fmmla_arm_init(struct test *test)
                 memcpy(&d, &F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE], 8);
                 Zm[i] = (float)d;
             }
-            for (size_t step = 0; step < CHAIN_STEPS; ++step)
+            data->golden_seg_f32.resize(SEG_COUNT * vl_w);
+            for (size_t step = 0; step < CHAIN_STEPS; ++step) {
                 fmmla_f32_step_golden(tile.data(), Zn.data(), Zm.data(), vl_w);
-            data->golden_f32 = tile;
+                if ((step + 1) % SEG_LEN == 0)
+                    memcpy(&data->golden_seg_f32
+                               [((step + 1) / SEG_LEN - 1) * vl_w],
+                           tile.data(), vl_w * 4);
+            }
         }
 
         test->data = data.release();
@@ -317,16 +343,26 @@ static int sve512_fmmla_arm_run(struct test *test, int cpu)
                 return EXIT_FAILURE;
             }
         }
-        for (size_t step = 0; step < CHAIN_STEPS; ++step)
+        std::vector<double> seg(SEG_COUNT * vl_d);
+        for (size_t step = 0; step < CHAIN_STEPS; ++step) {
             fmmla_f64_step_hw(tile.data(), Zn.data(), Zm.data(), vl_d);
-        for (size_t i = 0; i < vl_d; ++i) {
-            if (tile[i] != d->golden_f64[i]) {
-                uint64_t g, a;
-                memcpy(&g, &d->golden_f64[i], 8);
-                memcpy(&a, &tile[i], 8);
-                log_warning("sve512_fmmla: f64 lane %zu golden=0x%016" PRIx64
-                            " actual=0x%016" PRIx64, i, g, a);
-                all_passed = false;
+            if ((step + 1) % SEG_LEN == 0)   /* issue #376 ckpt snap */
+                memcpy(&seg[((step + 1) / SEG_LEN - 1) * vl_d],
+                       tile.data(), vl_d * 8);
+        }
+        for (size_t sg = 0; sg < SEG_COUNT; ++sg) {
+            for (size_t i = 0; i < vl_d; ++i) {
+                const size_t idx = sg * vl_d + i;
+                if (seg[idx] != d->golden_seg_f64[idx]) {
+                    uint64_t g, a;
+                    memcpy(&g, &d->golden_seg_f64[idx], 8);
+                    memcpy(&a, &seg[idx], 8);
+                    log_warning("sve512_fmmla: f64 seg %zu (after step %zu)"
+                                " lane %zu golden=0x%016" PRIx64
+                                " actual=0x%016" PRIx64, sg,
+                                (sg + 1) * SEG_LEN, i, g, a);
+                    all_passed = false;
+                }
             }
         }
     }
@@ -354,16 +390,26 @@ static int sve512_fmmla_arm_run(struct test *test, int cpu)
                 return EXIT_FAILURE;
             }
         }
-        for (size_t step = 0; step < CHAIN_STEPS; ++step)
+        std::vector<float> seg(SEG_COUNT * vl_w);
+        for (size_t step = 0; step < CHAIN_STEPS; ++step) {
             fmmla_f32_step_hw(tile.data(), Zn.data(), Zm.data());
-        for (size_t i = 0; i < vl_w; ++i) {
-            if (tile[i] != d->golden_f32[i]) {
-                uint32_t g, a;
-                memcpy(&g, &d->golden_f32[i], 4);
-                memcpy(&a, &tile[i], 4);
-                log_warning("sve512_fmmla: f32 lane %zu golden=0x%08" PRIx32
-                            " actual=0x%08" PRIx32, i, g, a);
-                all_passed = false;
+            if ((step + 1) % SEG_LEN == 0)   /* issue #376 ckpt snap */
+                memcpy(&seg[((step + 1) / SEG_LEN - 1) * vl_w],
+                       tile.data(), vl_w * 4);
+        }
+        for (size_t sg = 0; sg < SEG_COUNT; ++sg) {
+            for (size_t i = 0; i < vl_w; ++i) {
+                const size_t idx = sg * vl_w + i;
+                if (seg[idx] != d->golden_seg_f32[idx]) {
+                    uint32_t g, a;
+                    memcpy(&g, &d->golden_seg_f32[idx], 4);
+                    memcpy(&a, &seg[idx], 4);
+                    log_warning("sve512_fmmla: f32 seg %zu (after step %zu)"
+                                " lane %zu golden=0x%08" PRIx32
+                                " actual=0x%08" PRIx32, sg,
+                                (sg + 1) * SEG_LEN, i, g, a);
+                    all_passed = false;
+                }
             }
         }
     }
@@ -381,10 +427,17 @@ static int sve512_fmmla_arm_run(struct test *test, int cpu)
             memcpy(&Zn[i], &F64_FINITE[(i * 7 + 1) % F64_FINITE_SIZE], 8);
             memcpy(&Zm[i], &F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE], 8);
         }
-        for (size_t step = 0; step < CHAIN_STEPS; ++step)
+        std::vector<double> seg(SEG_COUNT * vl_d);
+        for (size_t step = 0; step < CHAIN_STEPS; ++step) {
             fmmla_f64_step_hw(tile.data(), Zn.data(), Zm.data(), vl_d);
-        if (memcmp(tile.data(), d->golden_f64.data(), vl_d * 8) != 0) {
-            report_fail_msg("sve512_fmmla_arm: SVE2 FMMLA f64 SDC detected");
+            if ((step + 1) % SEG_LEN == 0)   /* issue #376 ckpt snap */
+                memcpy(&seg[((step + 1) / SEG_LEN - 1) * vl_d],
+                       tile.data(), vl_d * 8);
+        }
+        if (memcmp(seg.data(), d->golden_seg_f64.data(),
+                   SEG_COUNT * vl_d * 8) != 0) {
+            report_fail_msg("sve512_fmmla_arm: SVE2 FMMLA f64 SDC detected "
+                            "(segmented checkpoint)");
             return EXIT_FAILURE;
         }
         std::vector<float> Zn32(vl_w, 0.0f), Zm32(vl_w, 0.0f), tile32(vl_w, 0.0f);
@@ -395,10 +448,17 @@ static int sve512_fmmla_arm_run(struct test *test, int cpu)
             memcpy(&dd, &F64_FINITE[(i * 5 + 3) % F64_FINITE_SIZE], 8);
             Zm32[i] = (float)dd;
         }
-        for (size_t step = 0; step < CHAIN_STEPS; ++step)
+        std::vector<float> seg32(SEG_COUNT * vl_w);
+        for (size_t step = 0; step < CHAIN_STEPS; ++step) {
             fmmla_f32_step_hw(tile32.data(), Zn32.data(), Zm32.data());
-        if (memcmp(tile32.data(), d->golden_f32.data(), vl_w * 4) != 0) {
-            report_fail_msg("sve512_fmmla_arm: SVE2 FMMLA f32 SDC detected");
+            if ((step + 1) % SEG_LEN == 0)   /* issue #376 ckpt snap */
+                memcpy(&seg32[((step + 1) / SEG_LEN - 1) * vl_w],
+                       tile32.data(), vl_w * 4);
+        }
+        if (memcmp(seg32.data(), d->golden_seg_f32.data(),
+                   SEG_COUNT * vl_w * 4) != 0) {
+            report_fail_msg("sve512_fmmla_arm: SVE2 FMMLA f32 SDC detected "
+                            "(segmented checkpoint)");
             return EXIT_FAILURE;
         }
     }

@@ -180,31 +180,69 @@ handle_failure() { # 取证 + 复测×3 + 台账（普查模式：战役不中�
         free -h
     } > "$evdir/context.txt"
     touch "$CMD_DIR/snapshot.request"   # root 监控 60s 内补 dmesg/SEL/SDR 快照
-    # ---- 复测：定向（失败测试+失败种子，120s×3）；提取失败则回退整命令（900s 封顶）----
+    # ---- 复测：定向（失败测试+失败种子，条件四维沿用原命令，-t 预算 900s 封顶）；
+    #      提取失败则回退整命令（900s 封顶）----
     # 复测前清 control 孤儿切片（RCA 附3 建议 2：孤儿抢内存/抢核正是复测拖垮机器的主因）；
     # 复测全程带内存护栏（retest_guarded：前置门 6GB + 看门狗 2.5GB）——护栏只覆盖复测，
     # 主负载的内存防线是 monitor 联锁（v5 §8.6 分工），主阶段路径零内存检查
     cleanup_orphans
     local i rcf
+    # 复测条件保真（v5 §7「同条件复现」）：从原命令沿用 -n/--threads（线程）、
+    # -t/--test-time（每测试时长）、--cpuset（CPU 拓扑）、-O/--test-option（测试
+    # 旋钮）、--quality（质量门控）五维条件旗标（提取器见 sdc_common.sh
+    # extract_retest_flags）。
+    # 旧实现只提取 -n 且硬编码 -t 120s：169GB mesh 事件整轮 ~117s，120s 预算下
+    # 相位 2 跑不完即沿 EXIT_SUCCESS 空过，台账记 "retest rc=0 fail/crash=0"
+    # 假通过；-n 0 退化单线程 SKIP 假通过（2026-10-30 retest1.out 实证）是同族
+    # 条件失真——本单把时长/拓扑/旋钮/质量门控四维一并修齐。
+    local all_cond=() cond_flags=() orig_t="" k
+    read -ra all_cond <<< "$(extract_retest_flags "$cmd")"
+    for ((k=0; k<${#all_cond[@]}; k++)); do
+        if [ "${all_cond[$k]}" = "-t" ]; then
+            orig_t="${all_cond[$((k+1))]:-}"; ((k++))   # -t 单独取用（预算策略见下）
+        else
+            cond_flags+=("${all_cond[$k]}")
+        fi
+    done
+    # -t 预算/看门狗策略见 sdc_common.sh retest_t_budget（沿用原命令值、900s
+    # 封顶、未给默认 120s；看门狗随预算伸缩）。
+    local tb=()
+    read -ra tb <<< "$(retest_t_budget "$orig_t")"
+    local retest_t="${tb[0]}" retest_t_src="${tb[1]}" retest_guard_s="${tb[2]}"
     : > "$evdir/retests.txt"
+    # 台账行语义（消费者判读口径，operations-runbook §1.5）：rc/fail/crash 是框架
+    # 判定；skip>0 = 复测对象被跳过（如线程数不足或 BETA 质量门），本轮复测未验证
+    # 任何东西，不得读作复测通过；t=...(来源) 标注 -t 预算（恒秒口径——原始 token
+    # 的毫秒/min/h 形态已由 retest_t_budget 归一）——inherited=沿用原命令/
+    # capped=超上限封顶/default=原命令未给；elapsed（秒）已扣除 retest_guarded
+    # 前置内存门的等待（等待 >0 时另记 memguard_wait=Ns），elapsed≥t = 预算跑满
+    # （「时限内未复现」的证据，对内部相位可被 -t 截短的用例不构成「完整验证
+    # 通过」）。
+    local t0 elaps mgw_s
     if [ -n "$failed_test" ] && [ -n "$seed_ok" ]; then
         for i in 1 2 3; do
             sleep 5; check_pause
-            retest_guarded "retest$i" "$evdir/retests.txt" 150s \
-                "$BIN" -e "$failed_test" -s "$fail_seed" -n 0 -t 120s --max-test-loop-count=0 \
+            t0=$SECONDS
+            retest_guarded "retest$i" "$evdir/retests.txt" "${retest_guard_s}s" \
+                "$BIN" -e "$failed_test" -s "$fail_seed" "${cond_flags[@]}" -t "$retest_t" --max-test-loop-count=0 \
                 "${FLAGS[@]}" -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
             rcf=$?
             [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记
-            echo "retest$i(targeted) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
+            elaps=$((SECONDS - t0 - RETEST_MEMGUARD_WAIT_S))
+            mgw_s=""; [ "$RETEST_MEMGUARD_WAIT_S" -gt 0 ] && mgw_s=" memguard_wait=${RETEST_MEMGUARD_WAIT_S}s"
+            echo "retest$i(targeted) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null) skip=$(grep -Ec 'result: *skip' "$evdir/retest$i.yaml" 2>/dev/null) t=$retest_t($retest_t_src) elapsed=${elaps}s${mgw_s}" >> "$evdir/retests.txt"
         done
     else
         for i in 1 2 3; do
             sleep 5; check_pause
+            t0=$SECONDS
             retest_guarded "retest$i" "$evdir/retests.txt" 900s \
                 "$BIN" $cmd -o "$evdir/retest$i.yaml" > "$evdir/retest$i.out" 2>&1
             rcf=$?
             [ "$rcf" -eq 250 ] && continue   # 内存门拦截：skipped(memguard) 行由护栏记
-            echo "retest$i(wholecmd) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null)" >> "$evdir/retests.txt"
+            elaps=$((SECONDS - t0 - RETEST_MEMGUARD_WAIT_S))
+            mgw_s=""; [ "$RETEST_MEMGUARD_WAIT_S" -gt 0 ] && mgw_s=" memguard_wait=${RETEST_MEMGUARD_WAIT_S}s"
+            echo "retest$i(wholecmd) rc=$rcf fail/crash=$(grep -Ec 'result: *(fail|crash)' "$evdir/retest$i.yaml" 2>/dev/null) skip=$(grep -Ec 'result: *skip' "$evdir/retest$i.yaml" 2>/dev/null) elapsed=${elaps}s${mgw_s}" >> "$evdir/retests.txt"
         done
     fi
     echo "$(date '+%F %T'),$label,rc=$rc,test=${failed_test:-?},seed=${fail_seed:-none},$(tr '\n' ';' < "$evdir/retests.txt"),$evdir" >> "$EVENTS_DIR/ledger.csv"

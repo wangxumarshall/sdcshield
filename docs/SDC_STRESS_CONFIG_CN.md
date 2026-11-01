@@ -132,6 +132,13 @@ bytes = 物理内存 × mem_fraction / consumers
 应报 `1 + thread_count()`——报常数 2 会使 n 线程实际提交需求放大 n 倍
 （issue #365：`-n 8` 即 146 GiB 进 swap 抖动）。
 
+「每线程全量读」的 mesh 用例（NEON FP 对 mesh_upi_avx_sym /
+mesh_upi_avx512_sym，issue #325）另需把线程数计入分母：每轮聚合读流量
+= 线程数 × 缓冲，默认缓冲 = 四源安全预算（`sdc_budget_bytes`，90% 口径）
+÷ 2×线程×slice（读流量总量恒定），clamp [64 MiB, 1 GiB]（下限不超本
+实例战役份额——被截断时打 [欠压力] 警告；预算为 0 诚实 SKIP）；否则 128 线程 × 45% 物存 = TiB 级/轮的不可
+打断读循环，-t 到期无法兑现 → 战役外部 timeout 误报 Timed Out。
+
 ### 5.3 arena 类（openssl sha/sha3）：`arena_bytes`
 
 每线程 mmap 工作区 = 物理内存 × 60% / 线程数，clamp [1MiB, 4GiB]。
@@ -159,9 +166,25 @@ arena 越大，golden/被测元素的随机落点跨度越大（覆盖更多 cac
 ### SVE mesh（tests/cpu/sve/mesh 18 个文件）
 | knob | 含义 | 范围 | 缺省 |
 |---|---|---|---|
-| `buffer_bytes` | 共享缓冲目标字节 | 1MiB~4TiB | 物理内存 90% ÷ 2 |
+| `buffer_bytes` | 共享缓冲目标字节 | 1MiB~16TiB | 物理内存 90% ÷ 2 |
 
 兼容旧变量 `SDC_MESH_BUFFER_BYTES`（直接指定字节）。
+注：代码 clamp 实为 `1<<20 .. 1<<44`（16 TiB），原表 4TiB 为笔误。
+
+### NEON mesh FP 对（tests/cpu/mesh：mesh_upi_avx_sym / mesh_upi_avx512_sym）
+| knob | 含义 | 范围 | 缺省 |
+|---|---|---|---|
+| `buffer_bytes` | 共享缓冲目标字节 | 1MiB~16TiB | 四源安全预算(90% 口径) ÷ (2×线程×slice)，clamp [64MiB, 1GiB] |
+
+兼容旧变量 `SDC_MESH_BUFFER_BYTES`（套同款 [1MiB,16TiB] clamp：负值/
+畸形串告警后走自适应，越界 clamp 并留值日志）。读流量总量恒定口径
+（issue #325）：每轮聚合读流量 = 线程数 × 缓冲，默认钉在四源安全预算
+（`sdc_budget_bytes`：物存/MemAvailable×0.9/cgroup 限额/承诺余量取
+min，#310；90% 口径）÷ 2 路战役均摊 ÷ 线程数 ÷ 并发 slice 数（= 源
+预算的 45%÷线程÷slice）；
+64 MiB 下限保工作集达 LLC 量级（不超过本实例战役份额——紧预算下让位
+于不超分；四源预算为 0 时诚实 SKIP），1 GiB 上限只约束默认值——显式
+knob/env 可申请更大足迹（其超时语义见 #357）。quick 模式 16 MiB。
 
 ### SVE eigen / acl_gemm
 | knob | 含义 | 范围 | 缺省 |

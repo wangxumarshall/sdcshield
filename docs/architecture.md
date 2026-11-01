@@ -221,9 +221,12 @@ Tier dispatch (2026-10-27, replaces the earlier 128-bit lock): Eigen packets
 are compile-time fixed-width (VLA is un-compilable at the C++ language level,
 twice-confirmed spike), so the Eigen SVE pair is built **once per tier** under
 its own Eigen namespace and a vector-length-agnostic dispatcher picks the
-variant matching the framework-pinned worker VL (complex SVD has no 1024-bit
-variant — Eigen's SVE complex `ptranspose` has an upstream defect reading
-past `buf[N][NC]`). Each per-tier run wrapper re-pins the worker to the
+variant matching the framework-pinned worker VL (complex SVD runs all four
+tiers since the vendored-Eigen ptranspose scatter rewrite, issue #410
+2026-11-01: the memory-bridge form read past `buf[N][NC]` when NC > N at
+1024-bit; the scatter form is in bounds for any N/NC and bit-identical in
+square shapes, gem5-verified at 128/256/512/1024). Each per-tier run wrapper
+re-pins the worker to the
 framework-chosen
 tier and verifies the readback (a refused pin skips, a mismatch fails).
 `sleef_sve` and the sve_rot probe family live in the true-VLA `tests_sve_vla`

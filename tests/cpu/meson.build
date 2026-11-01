@@ -1150,18 +1150,17 @@ if host_machine.cpu_family() == 'aarch64'
     # dispatch TUs below pick the matching one at run time.
     # Real-packet payloads are valid at every tier we build.
     eigen_gemm_body_sources = files('eigen_gemm/gemm_double_max_arm_body.cpp')
-    # Complex-packet payloads are NOT: Eigen's SVE complex ptranspose
-    # (third-party/eigen5/Eigen/src/Core/arch/SVE/Complex.h:293-300) indexes
-    # buf[N][NC] with i < NC, which is only in bounds when NC <= N. With the
-    # GEBP nr=4 instantiation that holds for NC = 1/2/4 (128/256/512-bit) and
-    # FAILS at 1024-bit (NC = 8): GCC's -Warray-bounds flags it, and it is a
-    # genuine out-of-bounds read. So the complex SVD payload is built for the
-    # three tiers where it is sound; the dispatcher skips 1024-bit with that
-    # reason instead of shipping a variant that reads past its buffer.
+    # Complex payloads are valid at every tier since the ptranspose scatter
+    # rewrite (issue #410): the earlier memory-bridge form indexed buf[N][NC]
+    # with i < NC — out of bounds at 1024-bit (NC = 8 > N = 4 in the GEBP
+    # nr=4 cols4 tail, GCC -Warray-bounds). The scatter form
+    # (third-party/eigen5/Eigen/src/Core/arch/SVE/Complex.h) is in bounds for
+    # any N/NC and is bit-identical to the old permutation in every square
+    # shape, so all four tiers are built.
     eigen_svd_body_sources = files('eigen_svd/svd_cdouble_sve_body.cpp')
 
     foreach spec : [['gemm', '128'], ['gemm', '256'], ['gemm', '512'], ['gemm', '1024'],
-                    ['svd', '128'], ['svd', '256'], ['svd', '512']]
+                    ['svd', '128'], ['svd', '256'], ['svd', '512'], ['svd', '1024']]
         kind = spec[0]
         tier = spec[1]
         eigen_tier_args = [

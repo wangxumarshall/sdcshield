@@ -156,8 +156,11 @@ END_DECLARE_TEST
   unimplemented tier such as 384 falls back to what the kernel grants).
   The Eigen SVE pair is tier-locked by the language (fixed-width packets) and
   is built once per tier with a runtime function-pointer dispatch; the
-  complex SVD payload has no 1024-bit variant because Eigen's SVE complex
-  `ptranspose` reads past `buf[N][NC]` when NC > N (upstream defect).
+  complex SVD payload runs all four tiers since the vendored-Eigen ptranspose
+  scatter rewrite (issue #410, 2026-11-01: the memory-bridge form read past
+  `buf[N][NC]` when NC > N — 1024-bit NC=8; the scatter form is in bounds
+  for any N/NC and bit-identical in square shapes, gem5-verified at
+  128/256/512/1024 with the 512 checksum reproducing the pre-fix value).
   `scripts/check-arm64-requires.py` keeps the tag coverage honest.
 - **`PR_SVE_SET_VL` does not survive `execve()` on this kernel** (measured
   2026-10-27: a launcher that pins to 128-bit and `execvp`s the target shows

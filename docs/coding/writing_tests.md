@@ -669,6 +669,26 @@ instead of assuming one tier:
   memcmp_or_fail against a golden recomputed for the actual VL;
   sum/xor/reduce cross-lane aggregation is forbidden (it can cancel a
   flipped bit).
+- **Golden must be independent of the datapath under test** (issue #373
+  paradigm, template: `docs/superpowers/plans/2026-11-01-issue373-scalar-golden-neon-rot.md`):
+  never compute the expected value with the same vector instructions (same
+  NEON/SVE units) as the hot loop. A persistent unit fault (stuck lane,
+  deterministic wrong-bit datapath, mercurial core) corrupts golden and
+  actual identically, the memcmp agrees, and the fault is *undetectable* —
+  only transient flips after init remain visible. Compute the golden in
+  `test_init` with pure scalar C integer ops (bit-exact equivalents:
+  `vaddq_uN`↔uintN_t `+` mod 2^N, `vbicq(a,b)`↔`a & ~b`, `vornq(a,b)`↔
+  `a | ~b`, ROR↔`(x>>n)|(x<<(w-n))`), filling the expected buffer by
+  element through `reinterpret_cast` so the byte layout and dump paths stay
+  unchanged. Keep the run-side stress skeleton untouched; the fail gate must
+  stay a plain scalar memcmp (a vector-compare gate reintroduces the blind
+  spot for persistent compare-unit faults). Verify the compiler did not
+  auto-vectorize the golden loop back onto the vector units: the switch-phase
+  dispatch is a natural barrier, and objdump of the init symbol must show
+  zero vector ALU instructions. Precedents:
+  `tests/cpu/sve/case/neon_rot_2src_sve.cpp`,
+  `neon_rot_store_only_sve.cpp`, `neon_rot_u8x16_sve.cpp`; migrated family:
+  `tests/cpu/misc/neon_rot_*.cpp` + `tests/cpu/arm64/neon_rot_2src.cpp`.
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 

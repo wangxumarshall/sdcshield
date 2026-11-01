@@ -55,6 +55,17 @@
 // dependency sequence; the lane count, not the length, scales with VL).
 static constexpr size_t CHAIN_STEPS = 512;
 
+// Segmented intermediate checkpoints (issue #376): the per-block chain
+// state is byte-compared at SEG_LEN-step boundaries, not only at chain
+// end — a mid-chain accumulator bit flip (delta = 2^j ulp) propagates
+// deterministically until the accumulated magnitude grows 2^j past it,
+// then gets ground away by rounding, which a final-only compare never
+// sees (measured on the flat f32 sibling's semantics: low-bit mid-chain
+// flips 59.9% caught at chain end vs 79.4% with 64-step checkpoints).
+// The boundary spill does not break the FMA dependency chain.
+static constexpr size_t SEG_LEN = 64;
+static constexpr size_t SEG_COUNT = CHAIN_STEPS / SEG_LEN;
+
 // SVD-scale working set: 300x300 doubles = 720 KB. With two operand
 // streams (m and a) this is 1.44 MB total — matches eigen_svd_cdouble_sve's
 // complex<double> 300x300 footprint (1.44 MB) that overflows L2.
@@ -106,7 +117,7 @@ static inline size_t block_slab_base(size_t row, size_t col, size_t lanes)
            (CHAIN_STEPS * lanes);
 }
 
-static void f64_chain_golden(const SveF64ChainSvdData *d, uint64_t *out,
+static void f64_chain_golden(const SveF64ChainSvdData *d, uint64_t *seg_out,
                              size_t row, size_t col)
 {
     const size_t lanes = d->vl_d;
@@ -120,13 +131,14 @@ static void f64_chain_golden(const SveF64ChainSvdData *d, uint64_t *out,
             memcpy(&m, &d->m_f64[base + lane], 8);
             memcpy(&a, &d->a_f64[base + lane], 8);
             acc = std::fma(m, a, acc);
+            if ((i + 1) % SEG_LEN == 0)
+                memcpy(&seg_out[((i + 1) / SEG_LEN - 1) * lanes + lane],
+                       &acc, 8);
         }
-        memcpy(&accw, &acc, 8);
-        out[lane] = accw;
     }
 }
 
-static void f64_chain_hw(const SveF64ChainSvdData *d, uint64_t *out,
+static void f64_chain_hw(const SveF64ChainSvdData *d, uint64_t *seg_out,
                          size_t row, size_t col)
 {
     const size_t lanes = d->vl_d;
@@ -140,16 +152,10 @@ static void f64_chain_hw(const SveF64ChainSvdData *d, uint64_t *out,
         svfloat64_t a = svld1_f64(pg,
             reinterpret_cast<const double *>(&d->a_f64[base]));
         acc = svmla_f64_x(pg, acc, m, a);
+        if ((i + 1) % SEG_LEN == 0)   /* issue #376 checkpoint spill */
+            svst1_f64(pg, reinterpret_cast<double *>(
+                          &seg_out[((i + 1) / SEG_LEN - 1) * lanes]), acc);
     }
-    svst1_f64(pg, reinterpret_cast<double *>(out), acc);
-}
-
-static void report_f64_lane_mismatch(const char *tag, size_t lane,
-                                     uint64_t golden, uint64_t actual)
-{
-    log_warning("%s: lane %zu golden=0x%016" PRIx64 " "
-                "actual=0x%016" PRIx64 " xor=0x%016" PRIx64,
-                tag, lane, golden, actual, golden ^ actual);
 }
 
 static int sve512_f64_chain_svd_init(struct test *test)
@@ -246,8 +252,11 @@ static int sve512_f64_chain_svd_run(struct test *test, int cpu)
        framework/device/cpu/arm64/arm64_vl.h). */
     ARM64_SVE_VL_DRIFT_CHECK_F64(test, d->vl_d);
 
-    std::vector<uint64_t> gold64(d->vl_d);
-    std::vector<uint64_t> hw(d->vl_d);
+    // Segment tables sized once (issue #376); recomputed per block. The
+    // last segment entry is the block-final state, so the old final-only
+    // compare is subsumed.
+    std::vector<uint64_t> gold_seg(SEG_COUNT * d->vl_d);
+    std::vector<uint64_t> hw_seg(SEG_COUNT * d->vl_d);
 
     do {
         bool all_passed = true;
@@ -255,14 +264,22 @@ static int sve512_f64_chain_svd_run(struct test *test, int cpu)
         // SVD-format nested block traversal.
         for (size_t br = 0; br < SVD_ROWS; br += SVD_BLOCK_ROWS) {
             for (size_t bc = 0; bc < SVD_COLS; bc += SVD_BLOCK_COLS) {
-                f64_chain_golden(d, gold64.data(), br, bc);
-                f64_chain_hw(d, hw.data(), br, bc);
-                for (size_t lane = 0; lane < d->vl_d; ++lane) {
-                    if (hw[lane] != gold64[lane]) {
-                        report_f64_lane_mismatch(
-                            "sve512_f64_chain_svd", lane,
-                            gold64[lane], hw[lane]);
-                        all_passed = false;
+                f64_chain_golden(d, gold_seg.data(), br, bc);
+                f64_chain_hw(d, hw_seg.data(), br, bc);
+                for (size_t seg = 0; seg < SEG_COUNT; ++seg) {
+                    for (size_t lane = 0; lane < d->vl_d; ++lane) {
+                        const size_t idx = seg * d->vl_d + lane;
+                        if (hw_seg[idx] != gold_seg[idx]) {
+                            log_warning("sve512_f64_chain_svd: block (%zu,"
+                                        "%zu) seg %zu (after step %zu) lane "
+                                        "%zu golden=0x%016" PRIx64 " "
+                                        "actual=0x%016" PRIx64 " xor=0x%016"
+                                        PRIx64, br, bc, seg,
+                                        (seg + 1) * SEG_LEN, lane,
+                                        gold_seg[idx], hw_seg[idx],
+                                        gold_seg[idx] ^ hw_seg[idx]);
+                            all_passed = false;
+                        }
                     }
                 }
             }
@@ -270,7 +287,8 @@ static int sve512_f64_chain_svd_run(struct test *test, int cpu)
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_f64_chain_svd: SVE f64 chain SDC detected");
+                "sve512_f64_chain_svd: SVE f64 chain SDC detected "
+                "(segmented checkpoint)");
             return EXIT_FAILURE;
         }
     } while (test_time_condition(test));

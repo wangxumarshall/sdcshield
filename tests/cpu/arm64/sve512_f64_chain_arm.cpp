@@ -27,9 +27,14 @@
  * fails closed on drift.
  *
  * SDC detection: byte-exact lane compares against the deterministic
- * software reference, with per-lane golden/actual/XOR logging on mismatch.
- * report_fail_msg on any mismatch. ARM64-native; non-SVE CPUs return a
- * clean EXIT_SKIP from init. Built only on aarch64.
+ * software reference at SEG_LEN-step intermediate checkpoints along the
+ * chain (issue #376) — not only at the chain end. A mid-chain accumulator
+ * bit flip is compared at the next boundary while it is still supra-ulp,
+ * before the accumulated-magnitude growth can grind it away by rounding
+ * (the absorption blind zone of a final-only compare). Per-segment,
+ * per-lane golden/actual/XOR logging on mismatch; report_fail_msg on any
+ * mismatch. ARM64-native; non-SVE CPUs return a clean EXIT_SKIP from init.
+ * Built only on aarch64.
  * @endparblock
  */
 
@@ -48,6 +53,20 @@
 
 // Serial FMA chain length per iteration.
 static constexpr size_t CHAIN_STEPS = 512;
+
+// Segmented intermediate checkpoints (issue #376): the chain state is
+// byte-compared at SEG_LEN-step boundaries, not only at chain end. A
+// mid-chain accumulator bit flip (delta = 2^j ulp) propagates
+// deterministically until the accumulated magnitude grows 2^j past it,
+// then gets ground away by rounding — final-only comparison is blind to
+// that class (measured on the f32 sibling's semantics, 30 seeds x 90
+// (step,bit) cells: low-bit mid-chain flips 59.9% caught at chain end vs
+// 79.4% with 64-step checkpoints; the f64 absorption window is narrower
+// but the same growth-grinding mechanism applies). The boundary spill
+// does NOT break the FMA dependency chain (acc flows on in the same
+// register past the store); it is 8 stores per 512 FMAs (1.6%).
+static constexpr size_t SEG_LEN = 64;
+static constexpr size_t SEG_COUNT = CHAIN_STEPS / SEG_LEN;
 
 // Finite high-Hamming f64 patterns: |x| <= 2, so products stay <= 4 and
 // 512-step sums stay < 2048 — the chain can never overflow or NaN, so
@@ -100,7 +119,7 @@ struct SveF64ChainData {
 // Scalar golden: identical operation order and indexing to the SVE chain
 // (stream layout is [step * lanes + lane]).
 // ---------------------------------------------------------------------------
-static void f64_chain_golden(const SveF64ChainData *d, uint64_t *out)
+static void f64_chain_golden(const SveF64ChainData *d, uint64_t *seg_out)
 {
     const size_t lanes = d->vl_d;
     for (size_t lane = 0; lane < lanes; ++lane) {
@@ -112,16 +131,17 @@ static void f64_chain_golden(const SveF64ChainData *d, uint64_t *out)
             memcpy(&m, &d->m_f64[i * lanes + lane], 8);
             memcpy(&a, &d->a_f64[i * lanes + lane], 8);
             acc = std::fma(m, a, acc);
+            if ((i + 1) % SEG_LEN == 0)
+                memcpy(&seg_out[((i + 1) / SEG_LEN - 1) * lanes + lane],
+                       &acc, 8);
         }
-        memcpy(&accw, &acc, 8);
-        out[lane] = accw;
     }
 }
 
 // ---------------------------------------------------------------------------
 // Hardware chain (SVE, full runtime VL).
 // ---------------------------------------------------------------------------
-static void f64_chain_hw(const SveF64ChainData *d, uint64_t *out)
+static void f64_chain_hw(const SveF64ChainData *d, uint64_t *seg_out)
 {
     const size_t lanes = d->vl_d;
     const svbool_t pg = svptrue_b64();
@@ -130,19 +150,10 @@ static void f64_chain_hw(const SveF64ChainData *d, uint64_t *out)
         svfloat64_t m = svld1_f64(pg, reinterpret_cast<const double *>(&d->m_f64[i * lanes]));
         svfloat64_t a = svld1_f64(pg, reinterpret_cast<const double *>(&d->a_f64[i * lanes]));
         acc = svmla_f64_x(pg, acc, m, a);
+        if ((i + 1) % SEG_LEN == 0)   /* issue #376 checkpoint spill */
+            svst1_f64(pg, reinterpret_cast<double *>(
+                          &seg_out[((i + 1) / SEG_LEN - 1) * lanes]), acc);
     }
-    svst1_f64(pg, reinterpret_cast<double *>(out), acc);
-}
-
-// ---------------------------------------------------------------------------
-// Per-lane failure logging (fsu_byteexact_arm style).
-// ---------------------------------------------------------------------------
-static void report_f64_lane_mismatch(const char *tag, size_t lane,
-                                     uint64_t golden, uint64_t actual)
-{
-    log_warning("%s: lane %zu golden=0x%016" PRIx64 " "
-                "actual=0x%016" PRIx64 " xor=0x%016" PRIx64,
-                tag, lane, golden, actual, golden ^ actual);
 }
 
 // ---------------------------------------------------------------------------
@@ -259,26 +270,35 @@ static int sve512_f64_chain_arm_run(struct test *test, int cpu)
        framework/device/cpu/arm64/arm64_vl.h). */
     ARM64_SVE_VL_DRIFT_CHECK_F64(test, d->vl_d);
 
-    // Golden, recomputed each iteration (deterministic, same op order).
-    std::vector<uint64_t> gold64(d->vl_d);
-    f64_chain_golden(d, gold64.data());
+    // Golden segment table, recomputed each iteration (deterministic,
+    // same op order). seg_out[SEG_COUNT-1] is the chain-final state.
+    std::vector<uint64_t> gold_seg(SEG_COUNT * d->vl_d);
+    std::vector<uint64_t> hw_seg(SEG_COUNT * d->vl_d);
+    f64_chain_golden(d, gold_seg.data());
 
     do {
         bool all_passed = true;
 
-        std::vector<uint64_t> hw(d->vl_d);
-        f64_chain_hw(d, hw.data());
-        for (size_t lane = 0; lane < d->vl_d; ++lane) {
-            if (hw[lane] != gold64[lane]) {
-                report_f64_lane_mismatch("sve512_f64_chain", lane,
-                                         gold64[lane], hw[lane]);
-                all_passed = false;
+        f64_chain_hw(d, hw_seg.data());
+        for (size_t seg = 0; seg < SEG_COUNT; ++seg) {
+            for (size_t lane = 0; lane < d->vl_d; ++lane) {
+                const size_t idx = seg * d->vl_d + lane;
+                if (hw_seg[idx] != gold_seg[idx]) {
+                    log_warning("sve512_f64_chain: seg %zu (after step %zu)"
+                                " lane %zu golden=0x%016" PRIx64 " "
+                                "actual=0x%016" PRIx64 " xor=0x%016" PRIx64,
+                                seg, (seg + 1) * SEG_LEN, lane,
+                                gold_seg[idx], hw_seg[idx],
+                                gold_seg[idx] ^ hw_seg[idx]);
+                    all_passed = false;
+                }
             }
         }
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_f64_chain_arm: SVE f64 FMLA chain SDC detected");
+                "sve512_f64_chain_arm: SVE f64 FMLA chain SDC detected "
+                "(segmented checkpoint)");
             return EXIT_FAILURE;
         }
 

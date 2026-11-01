@@ -46,6 +46,14 @@
  * per rotation compares golden vs hardware before the chain runs — a
  * golden bug reports as a test bug, never as SDC.
  *
+ * Segmented intermediate checkpoints (issue #376): the chain state is
+ * byte-compared at every 64-step boundary (8 segments; the last IS the
+ * chain-final state), so a mid-chain accumulator bit flip is caught at
+ * the next boundary while it is still supra-ulp — before accumulated-
+ * magnitude growth grinds it away by rounding (the absorption blind
+ * zone of a final-only compare). The chain is memory-resident (load-
+ * svcmla-store per step), so the boundary snapshot is a plain memcpy.
+ *
  * test_init gates via the framework layer (arm64_require_sve_vl:
  * HWCAP_SVE capability + 128..1024-bit range in one call, all-VL
  * Phase 2 P6) and returns a clean EXIT_SKIP on SVE-less CPUs; test_run
@@ -69,6 +77,17 @@
 
 static constexpr size_t CHAIN_STEPS = 512;
 
+// Segmented intermediate checkpoints (issue #376): the chain state is
+// byte-compared at SEG_LEN-step boundaries, not only at chain end — a
+// mid-chain accumulator bit flip (delta = 2^j ulp) propagates
+// deterministically until the accumulated magnitude grows 2^j past it,
+// then gets ground away by rounding, which a final-only compare never
+// sees. The FCMLA chain is memory-resident (load-svcmla-store per step),
+// so a boundary snapshot is a plain memcpy of the accumulator — zero
+// extra datapath instructions.
+static constexpr size_t SEG_LEN = 64;
+static constexpr size_t SEG_COUNT = CHAIN_STEPS / SEG_LEN;
+
 // Finite high-Hamming f64 patterns, |x| <= 2 (sve512_f64_chain precedent).
 static const uint64_t F64_FINITE[] = {
     0x3FF5555555555555ULL,   //  1.3333...
@@ -85,8 +104,10 @@ static constexpr size_t F64_FINITE_SIZE =
 
 struct FcmlaData {
     size_t vl_d;
-    // Expected acc after the chain, per rotation (0/90/180/270).
-    std::vector<uint64_t> golden[4];
+    // Expected accumulator at every SEG_LEN-step boundary of the chain,
+    // per rotation (0/90/180/270); the last segment IS the chain-final
+    // state (issue #376 — supersedes the final-only golden).
+    std::vector<uint64_t> golden_seg[4];
 };
 
 #ifdef __aarch64__
@@ -196,15 +217,18 @@ static int sve512_fcmla_arm_init(struct test *test)
 
         for (int rot = 0; rot < 4; ++rot) {
             std::vector<double> acc(data->vl_d, 0.0);
+            data->golden_seg[rot].resize(SEG_COUNT * data->vl_d);
             for (size_t step = 0; step < CHAIN_STEPS; ++step) {
                 for (size_t p = 0; p < pairs; ++p) {
                     fcmla_golden_pair(acc[2 * p], acc[2 * p + 1],
                                       b[2 * p], b[2 * p + 1],
                                       c[2 * p], c[2 * p + 1], rot);
                 }
+                if ((step + 1) % SEG_LEN == 0)
+                    memcpy(&data->golden_seg[rot]
+                               [((step + 1) / SEG_LEN - 1) * data->vl_d],
+                           acc.data(), data->vl_d * 8);
             }
-            data->golden[rot].resize(data->vl_d);
-            memcpy(data->golden[rot].data(), acc.data(), data->vl_d * 8);
         }
 
         test->data = data.release();
@@ -272,6 +296,7 @@ static int sve512_fcmla_arm_run(struct test *test, int cpu)
     // ---------- dependent chains, all four rotations ----------
     do {
         bool all_passed = true;
+        std::vector<uint64_t> hw_seg(SEG_COUNT * vl_d);
         for (int rot = 0; rot < 4; ++rot) {
             std::vector<double> acc(vl_d, 0.0);
             for (size_t step = 0; step < CHAIN_STEPS; ++step) {
@@ -281,16 +306,22 @@ static int sve512_fcmla_arm_run(struct test *test, int cpu)
                 case 2:  fcmla_hw_rot180(acc.data(), b.data(), c.data(), vl_d); break;
                 default: fcmla_hw_rot270(acc.data(), b.data(), c.data(), vl_d); break;
                 }
+                if ((step + 1) % SEG_LEN == 0)   /* issue #376 ckpt snap */
+                    memcpy(&hw_seg[((step + 1) / SEG_LEN - 1) * vl_d],
+                           acc.data(), vl_d * 8);
             }
-            for (size_t i = 0; i < vl_d; ++i) {
-                uint64_t g, a;
-                memcpy(&g, &d->golden[rot][i], 8);
-                memcpy(&a, &acc[i], 8);
-                if (g != a) {
-                    log_warning("sve512_fcmla: rot %d lane %zu "
-                                "golden=0x%016" PRIx64 " actual=0x%016" PRIx64,
-                                rot * 90, i, g, a);
-                    all_passed = false;
+            for (size_t seg = 0; seg < SEG_COUNT; ++seg) {
+                for (size_t i = 0; i < vl_d; ++i) {
+                    uint64_t g, a;
+                    memcpy(&g, &d->golden_seg[rot][seg * vl_d + i], 8);
+                    memcpy(&a, &hw_seg[seg * vl_d + i], 8);
+                    if (g != a) {
+                        log_warning("sve512_fcmla: rot %d seg %zu (after "
+                                    "step %zu) lane %zu golden=0x%016" PRIx64
+                                    " actual=0x%016" PRIx64, rot * 90, seg,
+                                    (seg + 1) * SEG_LEN, i, g, a);
+                        all_passed = false;
+                    }
                 }
             }
             (void)pairs;

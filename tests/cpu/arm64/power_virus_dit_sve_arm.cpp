@@ -24,11 +24,15 @@
  *   STALL: yield-hint loop draining the vector units (unchanged from
  *          the NEON version).
  *
- * SDC detection: each burst's final accumulator is compared byte-exact
- * against a scalar fma reference repeating the identical dependent
- * sequence (the load contribution is folded into the chain: every 64th
- * step's multiplier operand comes from the loaded vector, mirrored in
- * the golden in the same order).
+ * SDC detection (issue #376): each burst's accumulator is compared
+ * byte-exact against a scalar fma reference repeating the identical
+ * dependent sequence (the load contribution is folded into the chain:
+ * every 64th step's multiplier operand comes from the loaded vector,
+ * mirrored in the golden in the same order) at every 64-step boundary
+ * (32 checkpoints; the last IS the burst-final state) — so a mid-burst
+ * bit flip is caught at the next checkpoint while it is still
+ * supra-ulp, before the burst's magnitude growth grinds it away by
+ * rounding (the absorption blind zone of a final-only compare).
  *
  * Cross-core barrier: NOT used — the framework has no barrier helper
  * (known gap), so cores burst on statistically-random phases; cluster
@@ -65,6 +69,16 @@ static constexpr int STALL_INNER = 2048;
 // Load-in-burst period: base pointer re-read from a stack slot and used
 // for an SVE load every LOAD_PERIOD steps of the burst.
 static constexpr int LOAD_PERIOD = 64;
+
+// Segmented intermediate checkpoints (issue #376): the burst accumulator
+// is byte-compared at SEG_LEN-step boundaries (32 segments per 2048-step
+// burst), not only at burst end. The burst's accumulation is a growth
+// walk (acc reaches ~900), so a mid-burst low-bit flip is ground away
+// by rounding once the magnitude grows past it — a final-only compare
+// is blind to that class. The boundary spill is 32 svst1 per 2048 FMAs
+// (1.6%) and does not break the dependent chain.
+static constexpr int SEG_LEN = 64;
+static constexpr int SEG_COUNT = BURST_INNER / SEG_LEN;
 
 #ifdef __aarch64__
 
@@ -111,8 +125,11 @@ static int power_virus_dit_sve_arm_run(struct test *test, int cpu)
     // lane-uniform — even/odd lanes differ — so every lane gets its own
     // chain; svmla(pg, op1, op2, op3) = op1 + op2*op3 with per-step (m,a)
     // alternating and every LOAD_PERIOD-th step taking m from the
-    // loadbuf value the hardware loaded at that lane).
-    std::vector<double> golden(vl_d);
+    // loadbuf value the hardware loaded at that lane). Records the
+    // SEG_LEN-step boundary states (issue #376); the last entry per lane
+    // IS the burst-final state, so the old final-only compare is
+    // subsumed.
+    std::vector<double> golden_seg(SEG_COUNT * vl_d);
     {
         size_t li = 0;
         for (size_t lane = 0; lane < vl_d; ++lane) {
@@ -124,17 +141,22 @@ static int power_virus_dit_sve_arm_run(struct test *test, int cpu)
                     m = loadbuf[(li * vl_d + lane) % loadbuf.size()];
                 }
                 acc = std::fma(m, a, acc);
+                if ((k + 1) % SEG_LEN == 0)
+                    golden_seg[((k + 1) / SEG_LEN - 1) * vl_d + lane] = acc;
             }
-            golden[lane] = acc;
         }
         (void)li;
     }
 
+    std::vector<double> hw_seg_d(SEG_COUNT * vl_d);
     do {
         bool all_passed = true;
         for (int cycle = 0; cycle < 8; ++cycle) {
             // ---- BURST: dependent full-width SVE FMA chain with
-            // alternating operands and periodic stack-reload loads ----
+            // alternating operands and periodic stack-reload loads.
+            // The accumulator spills to the segment table at every
+            // SEG_LEN boundary (issue #376 checkpoint); the FMA
+            // dependency chain runs on unbroken. ----
             load_idx = 0;
             svfloat64_t acc = svdup_f64(0.0);
             svfloat64_t a0v = svdup_f64(A0);
@@ -155,18 +177,25 @@ static int power_virus_dit_sve_arm_run(struct test *test, int cpu)
                 } else {
                     acc = svmla_f64_x(pg, acc, a0v, b0v);
                 }
+                if ((k + 1) % SEG_LEN == 0)   /* issue #376 ckpt spill */
+                    svst1_f64(pg, &hw_seg_d[((k + 1) / SEG_LEN - 1) * vl_d],
+                              acc);
             }
-            std::vector<double> hw(vl_d);
-            svst1_f64(pg, hw.data(), acc);
-            for (size_t lane = 0; lane < vl_d; ++lane) {
-                if (hw[lane] != golden[lane]) {
-                    uint64_t g, a;
-                    memcpy(&g, &golden[lane], 8);
-                    memcpy(&a, &hw[lane], 8);
-                    log_warning("power_virus_dit_sve: burst %d lane %zu "
-                                "golden=0x%016" PRIx64 " actual=0x%016"
-                                PRIx64, cycle, lane, g, a);
-                    all_passed = false;
+            for (size_t seg = 0; seg < (size_t)SEG_COUNT; ++seg) {
+                for (size_t lane = 0; lane < vl_d; ++lane) {
+                    const size_t idx = seg * vl_d + lane;
+                    if (hw_seg_d[idx] != golden_seg[idx]) {
+                        uint64_t g, a;
+                        memcpy(&g, &golden_seg[idx], 8);
+                        memcpy(&a, &hw_seg_d[idx], 8);
+                        log_warning("power_virus_dit_sve: burst %d seg %zu "
+                                    "(after step %d) lane %zu "
+                                    "golden=0x%016" PRIx64 " actual=0x%016"
+                                    PRIx64, cycle, seg,
+                                    (int)((seg + 1) * SEG_LEN),
+                                    lane, g, a);
+                        all_passed = false;
+                    }
                 }
             }
             if (!all_passed)

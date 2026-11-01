@@ -13,6 +13,17 @@
  * stored and reloaded through svst1/svld1 (the vector store->load path
  * that mirrors the scalar trigger recipe's reload). Input is random
  * (framework RNG at init), reused per iteration exactly as the original.
+ *
+ * VERIFICATION BOUNDARY (issue #374): this variant's isolated variable is
+ * the ABSENCE of the vector store, so the svtbl-swapped intermediate never
+ * leaves registers and cannot be verified post-hoc without re-adding state
+ * escape (which would destroy the probe's differential design). The
+ * restore-vs-input compare below detects load-path transients; a persistent
+ * symmetric svtbl mispermutation remains undetectable HERE by construction
+ * -- that fault class is covered by the store-carrying siblings
+ * (movbe_sve, movbe_dump_sve and probes b/d/e/f/g1/g2/h/x/xn, plus the
+ * in-place c and slf_sweep variants) whose stored intermediates are
+ * verified against the init-time LUT golden.
  * @endparblock
  */
 
@@ -149,8 +160,9 @@ static int movbe_dump_probe_a_sve_cleanup(struct test *test)
 }
 
 DECLARE_TEST(movbe_dump_probe_a_sve,
-             "SVE byte-swap round-trip with dump-on-failure: svtbl [3,2,1,0] + vector "
-             "store/reload, input/golden/actual/xor byte breakdown on failure (port of movbe_dump)")
+             "SVE byte-swap round-trip probe A: no vector store (register-only intermediate — "
+             "persistent svtbl fault NOT detectable here by design, covered by store-carrying "
+             "siblings, issue #374; port of movbe_dump probe A)")
     .test_init = movbe_dump_probe_a_sve_init,
     .test_run = movbe_dump_probe_a_sve_run,
     .test_cleanup = movbe_dump_probe_a_sve_cleanup,

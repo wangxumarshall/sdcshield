@@ -38,7 +38,29 @@
 struct movbe_dump_probe_c_sve_data {
     uint32_t *input;
     uint32_t *swapped;
+    uint32_t *expected_swapped;
 };
+
+/* issue #374: identity LUT for the scalar-independent byte-swap golden.
+ * The table loads block GCC's bswap-idiom recognizer from folding the
+ * shift/or reassembly back into a REV instruction, and the scalar loop form
+ * keeps the golden off the SVE TBL/REV units under test -- so a persistent
+ * svtbl mispermutation can never corrupt golden and actual identically.
+ * Pinned by scripts/check-bswap-golden.sh (zero rev/rev16/rev32 and zero
+ * vector-ALU inside the init symbol). */
+static uint8_t g_bswap_lut[256];
+static void movbe_golden_lut_init(void)
+{
+    for (int b = 0; b < 256; ++b)
+        g_bswap_lut[b] = (uint8_t)b;
+}
+static uint32_t movbe_golden_bswap32(uint32_t x)
+{
+    return ((uint32_t)g_bswap_lut[x & 0xff] << 24) |
+           ((uint32_t)g_bswap_lut[(x >> 8) & 0xff] << 16) |
+           ((uint32_t)g_bswap_lut[(x >> 16) & 0xff] << 8) |
+           (uint32_t)g_bswap_lut[x >> 24];
+}
 
 static int movbe_dump_probe_c_sve_init(struct test *test)
 {
@@ -52,10 +74,17 @@ static int movbe_dump_probe_c_sve_init(struct test *test)
     auto *data = (movbe_dump_probe_c_sve_data *)malloc(sizeof(movbe_dump_probe_c_sve_data));
     data->input = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
     data->swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
+    data->expected_swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
 
     for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i) {
         data->input[i] = random32();
     }
+
+    /* issue #374: independent golden for the swapped intermediate, computed
+     * once here with pure scalar LUT lookups (never the svtbl under test). */
+    movbe_golden_lut_init();
+    for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i)
+        data->expected_swapped[i] = movbe_golden_bswap32(data->input[i]);
 
     test->data = data;
     return EXIT_SUCCESS;
@@ -143,6 +172,36 @@ static int movbe_dump_probe_c_sve_run(struct test *test, int cpu)
         }
     }
 
+    /* issue #374: post-loop verification of the in-place swapped private
+     * copy, in the legal-set form this probe's in-place design permits
+     * (modeled on the scalar movbe_dump_probe_c). The store-back flips the
+     * byte order of priv_input[i] in place, but each TEST_LOOP body first
+     * RESETS the private copy to the shared seed (the SVE port's
+     * per-iteration memcpy, absent in the scalar probe), so at every
+     * completed body the content is exactly bswap(seed) -- the reset pins
+     * the flip parity to odd. The legal-set form {seed, bswap(seed)} is
+     * kept (not exact equality) because it is also correct for a
+     * partially-executed final body, where each position holds either the
+     * reset seed or the flipped value. Coverage boundary (documented
+     * honestly): a persistent mispermutation P leaves P(seed[i]) outside
+     * that set for random data -- non-involutive AND involutive alike,
+     * because the per-iteration reset guarantees exactly one application
+     * of P; the scalar probe's even-parity blind spot does not exist here.
+     * The check runs in this thread, which owns the thread-local buffer;
+     * the hot loop above is unchanged. */
+    for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i) {
+        uint32_t fin = priv_input[i];
+        if (fin != data->input[i] && fin != data->expected_swapped[i]) {
+            log_error("MovBE-SVE-dump: in-place priv buffer outside legal "
+                      "{seed, bswap(seed)} set at index %u: seed=0x%08X "
+                      "legal={0x%08X,0x%08X} actual=0x%08X",
+                      (unsigned)i, data->input[i], data->input[i],
+                      data->expected_swapped[i], fin);
+            report_fail_msg("MovBE-SVE: in-place priv buffer outside legal "
+                            "{seed, bswap(seed)} set at index %u", (unsigned)i);
+        }
+    }
+
     return EXIT_SUCCESS;
 }
 #else
@@ -161,6 +220,7 @@ static int movbe_dump_probe_c_sve_cleanup(struct test *test)
     if (data) {
         free(data->input);
         free(data->swapped);
+        free(data->expected_swapped);
         free(data);
     }
     return EXIT_SUCCESS;

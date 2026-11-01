@@ -37,7 +37,39 @@
 struct movbe_dump_probe_f_sve_data {
     uint32_t *input;
     uint32_t *swapped;
+    uint32_t *expected_swapped;
 };
+
+/* issue #374: identity LUT for the scalar-independent byte-swap golden.
+ * The table loads block GCC's bswap-idiom recognizer from folding the
+ * shift/or reassembly back into a REV instruction, and the scalar loop form
+ * keeps the golden off the SVE TBL/REV units under test -- so a persistent
+ * svtbl mispermutation can never corrupt golden and actual identically.
+ * Pinned by scripts/check-bswap-golden.sh (zero rev/rev16/rev32 and zero
+ * vector-ALU inside the init symbol). */
+static uint8_t g_bswap_lut[256];
+static void movbe_golden_lut_init(void)
+{
+    for (int b = 0; b < 256; ++b)
+        g_bswap_lut[b] = (uint8_t)b;
+}
+static uint32_t movbe_golden_bswap32(uint32_t x)
+{
+    return ((uint32_t)g_bswap_lut[x & 0xff] << 24) |
+           ((uint32_t)g_bswap_lut[(x >> 8) & 0xff] << 16) |
+           ((uint32_t)g_bswap_lut[(x >> 16) & 0xff] << 8) |
+           (uint32_t)g_bswap_lut[x >> 24];
+}
+
+#if defined(__aarch64__)
+/* issue #374: PROBE F's rotating one-line store window, hoisted from
+ * function-local scope so the post-join cleanup sweep can read it. A
+ * zero-initialized static local emits no code, so moving the declaration
+ * out of the loop block leaves the hot loop's instruction stream
+ * byte-identical; it is still the single object shared by all workers
+ * (static storage), so the probe's store geometry is unchanged. */
+static uint32_t line_window[16];
+#endif
 
 static int movbe_dump_probe_f_sve_init(struct test *test)
 {
@@ -51,10 +83,17 @@ static int movbe_dump_probe_f_sve_init(struct test *test)
     auto *data = (movbe_dump_probe_f_sve_data *)malloc(sizeof(movbe_dump_probe_f_sve_data));
     data->input = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
     data->swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
+    data->expected_swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
 
     for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i) {
         data->input[i] = random32();
     }
+
+    /* issue #374: independent golden for the swapped intermediate, computed
+     * once here with pure scalar LUT lookups (never the svtbl under test). */
+    movbe_golden_lut_init();
+    for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i)
+        data->expected_swapped[i] = movbe_golden_bswap32(data->input[i]);
 
     test->data = data;
     return EXIT_SUCCESS;
@@ -99,7 +138,6 @@ static int movbe_dump_probe_f_sve_run(struct test *test, int cpu)
             /* store swapped (向量 store/reload 路径) */
             /* PROBE F: store 在单个 cache line 内轮转 (不越行) — svst1 直打窗口 */
             {
-                static uint32_t line_window[16];
                 uint32_t first = 0;
                 memcpy(&first, &vswapped, 4);   /* 取首元素 (编译器协助) */
                 svbool_t pg1 = svwhilelt_b32((uint64_t)0, (uint64_t)1);
@@ -161,8 +199,61 @@ static int movbe_dump_probe_f_sve_cleanup(struct test *test)
 {
     auto *data = (movbe_dump_probe_f_sve_data *)test->data;
     if (data) {
+#if defined(__aarch64__)
+        /* issue #374: post-join verification of the rotating store window,
+         * in the probe's own slot geometry. line_window is one static object
+         * shared by ALL workers and a slot's value depends on which vector
+         * a worker is currently processing, so the check MUST be post-join
+         * (cleanup runs after run_threads joins every worker); a run-side
+         * sweep would race with still-running workers. Every worker runs
+         * the identical base sequence and TEST_LOOP only exits between
+         * complete inner sweeps, so each worker's final write to slot s is
+         * vector v_last = total_vectors-16+s: the slot index is
+         * (base/lanes) & 15 and total_vectors = MOVBE_BUFFER_SIZE/lanes is
+         * a multiple of 16 for every legal svcntw() (4/8/16/32 ->
+         * 4096/2048/1024/512). The stored value is the FIRST element of
+         * that vector (memcpy(&first, &vswapped, 4) takes element 0 of the
+         * svtbl result), i.e. bswap32(input[v_last*lanes]), so the slot
+         * must equal expected_swapped[v_last*lanes]. lanes is recomputed
+         * via svcntw() here: the framework pins the control thread (which
+         * runs init and cleanup) and every SVE worker to the machine-max
+         * VL, so run and cleanup observe the same svcntw; the divisibility
+         * guard below skips the sweep if that assumption ever broke, rather
+         * than comparing wrong slots. The hot loop is unchanged; a
+         * persistent svtbl mispermutation (symmetric fault: applied twice
+         * it cancels in the round-trip identity) leaves every slot wrong
+         * and is caught here. */
+        const int lanes = svcntw();
+        if (lanes > 0 && MOVBE_BUFFER_SIZE % (size_t)lanes == 0
+                && (MOVBE_BUFFER_SIZE / (size_t)lanes) % 16 == 0) {
+            const size_t total_vectors = MOVBE_BUFFER_SIZE / (size_t)lanes;
+            for (size_t s = 0; s < 16; ++s) {
+                size_t v_last = total_vectors - 16 + s;
+                size_t first_elem = v_last * (size_t)lanes;
+                uint32_t actual = line_window[s];
+                if (actual != data->expected_swapped[first_elem]) {
+                    log_error("MovBE-SVE-dump: window slot miscompare at slot %u "
+                              "(last writer vector %u, element %u): input=0x%08X "
+                              "golden=0x%08X actual=0x%08X xor=0x%08X",
+                              (unsigned)s, (unsigned)v_last, (unsigned)first_elem,
+                              data->input[first_elem], data->expected_swapped[first_elem],
+                              actual, data->expected_swapped[first_elem] ^ actual);
+                    report_fail_msg("MovBE-SVE: window slot != independent golden at slot %u",
+                                    (unsigned)s);
+                }
+            }
+        } else {
+            /* Unreachable for every legal SVE VL (init gates 128..1024 bits
+             * -> lanes 4/8/16/32, all tiling 16384 into 16-multiples).
+             * log_error alone marks the thread failed in this framework, so
+             * the skip is logged as a warning to avoid a false failure. */
+            log_warning("MovBE-SVE-dump: window sweep skipped: svcntw()=%d does not "
+                        "tile MOVBE_BUFFER_SIZE into a 16-multiple vector count", lanes);
+        }
+#endif
         free(data->input);
         free(data->swapped);
+        free(data->expected_swapped);
         free(data);
     }
     return EXIT_SUCCESS;

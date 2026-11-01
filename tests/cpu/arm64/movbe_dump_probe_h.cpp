@@ -64,7 +64,28 @@ static uint32_t g_probe_h_lines = PROBE_H_MAX_LINES;      /* for logging only */
 struct movbe_data {
     uint32_t *input;
     uint32_t *swapped;
+    uint32_t *expected_swapped;
 };
+
+/* issue #374: identity LUT for the scalar-independent byte-swap golden.
+ * The table loads block GCC's bswap-idiom recognizer from folding the
+ * shift/or reassembly back into a REV instruction -- the exact unit under
+ * test -- so a persistent REV mispermutation can never corrupt golden and
+ * actual identically. Pinned by scripts/check-bswap-golden.sh (zero
+ * rev/rev16/rev32 and zero vector-ALU inside the init symbol). */
+static uint8_t g_bswap_lut[256];
+static void movbe_golden_lut_init(void)
+{
+    for (int b = 0; b < 256; ++b)
+        g_bswap_lut[b] = (uint8_t)b;
+}
+static uint32_t movbe_golden_bswap32(uint32_t x)
+{
+    return ((uint32_t)g_bswap_lut[x & 0xff] << 24) |
+           ((uint32_t)g_bswap_lut[(x >> 8) & 0xff] << 16) |
+           ((uint32_t)g_bswap_lut[(x >> 16) & 0xff] << 8) |
+           (uint32_t)g_bswap_lut[x >> 24];
+}
 
 static int movbe_init(struct test *test)
 {
@@ -82,10 +103,17 @@ static int movbe_init(struct test *test)
     movbe_data *data = (movbe_data *)malloc(sizeof(movbe_data));
     data->input = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
     data->swapped = (uint32_t *)aligned_alloc_safe(64, PROBE_H_SWAP_WORDS * sizeof(uint32_t));
+    data->expected_swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
 
     for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i) {
         data->input[i] = random32();
     }
+
+    /* issue #374: independent golden for the swapped intermediate, computed
+     * once here with pure scalar LUT lookups (never the REV under test). */
+    movbe_golden_lut_init();
+    for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i)
+        data->expected_swapped[i] = movbe_golden_bswap32(data->input[i]);
 
     test->data = data;
     return EXIT_SUCCESS;
@@ -147,8 +175,40 @@ static int movbe_cleanup(struct test *test)
 {
     movbe_data *data = (movbe_data *)test->data;
     if (data) {
+        /* issue #374: post-join verification of the stored intermediate, in
+         * the probe's own footprint geometry. The store `swapped[i & mask]`
+         * cycles mask+1 word slots (mask+1 = lines*32 divides
+         * MOVBE_BUFFER_SIZE for every legal LINES value), so slot s's last
+         * writer is element MOVBE_BUFFER_SIZE-(mask+1)+s; once every worker
+         * has finished (cleanup runs post-join) the slot content must equal
+         * that element's LUT golden. The check MUST be post-join: the slot
+         * value depends on which element a worker is currently at, so a
+         * run-side sweep would race with still-running workers. With the
+         * default LINES=512 (mask+1 == MOVBE_BUFFER_SIZE) every slot has a
+         * single element writer, so value-identity would make a run-side
+         * sweep safe too -- but non-default LINES recycles slots, and this
+         * single post-join form covers both. The hot loop is unchanged; a
+         * persistent REV mispermutation (symmetric fault: applied twice it
+         * cancels in the round-trip identity) leaves every slot wrong and
+         * is caught here. */
+        const size_t sweep_mask = g_probe_h_mask;  /* same global the run used */
+        for (size_t s = 0; s <= sweep_mask; ++s) {
+            size_t last_elem = MOVBE_BUFFER_SIZE - (sweep_mask + 1) + s;
+            uint32_t actual = data->swapped[s];
+            if (actual != data->expected_swapped[last_elem]) {
+                log_error("MovBE-probeH(lines=%u): swapped-intermediate miscompare "
+                          "at slot %u (last writer element %u): input=0x%08X "
+                          "golden=0x%08X actual=0x%08X xor=0x%08X",
+                          (unsigned)g_probe_h_lines, (unsigned)s, (unsigned)last_elem,
+                          data->input[last_elem], data->expected_swapped[last_elem],
+                          actual, data->expected_swapped[last_elem] ^ actual);
+                report_fail_msg("MovBE: swapped slot != independent golden at slot %u",
+                                (unsigned)s);
+            }
+        }
         free(data->input);
         free(data->swapped);
+        free(data->expected_swapped);
         free(data);
     }
     return EXIT_SUCCESS;

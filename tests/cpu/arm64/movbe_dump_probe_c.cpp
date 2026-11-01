@@ -52,7 +52,28 @@
 struct movbe_data {
     uint32_t *input;
     uint32_t *swapped;
+    uint32_t *expected_swapped;
 };
+
+/* issue #374: identity LUT for the scalar-independent byte-swap golden.
+ * The table loads block GCC's bswap-idiom recognizer from folding the
+ * shift/or reassembly back into a REV instruction -- the exact unit under
+ * test -- so a persistent REV mispermutation can never corrupt golden and
+ * actual identically. Pinned by scripts/check-bswap-golden.sh (zero
+ * rev/rev16/rev32 and zero vector-ALU inside the init symbol). */
+static uint8_t g_bswap_lut[256];
+static void movbe_golden_lut_init(void)
+{
+    for (int b = 0; b < 256; ++b)
+        g_bswap_lut[b] = (uint8_t)b;
+}
+static uint32_t movbe_golden_bswap32(uint32_t x)
+{
+    return ((uint32_t)g_bswap_lut[x & 0xff] << 24) |
+           ((uint32_t)g_bswap_lut[(x >> 8) & 0xff] << 16) |
+           ((uint32_t)g_bswap_lut[(x >> 16) & 0xff] << 8) |
+           (uint32_t)g_bswap_lut[x >> 24];
+}
 
 // Per-thread private input line. The shared data->input is now a read-only
 // seed; each thread copies it into its own thread_local buffer on first use
@@ -68,10 +89,17 @@ static int movbe_init(struct test *test)
     movbe_data *data = (movbe_data *)malloc(sizeof(movbe_data));
     data->input = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
     data->swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
+    data->expected_swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
 
     for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i) {
         data->input[i] = random32();
     }
+
+    /* issue #374: independent golden for the swapped intermediate, computed
+     * once here with pure scalar LUT lookups (never the REV under test). */
+    movbe_golden_lut_init();
+    for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i)
+        data->expected_swapped[i] = movbe_golden_bswap32(data->input[i]);
 
     test->data = data;
     return EXIT_SUCCESS;
@@ -133,6 +161,32 @@ static int movbe_run(struct test *test, int cpu)
         }
     }
 
+    /* issue #374: post-loop verification of the stored intermediate, in the
+     * legal-set form this probe's in-place design permits. The store-back
+     * flips the byte order of tls.input[i] on EVERY outer iteration, so the
+     * final content is bswap^N(seed[i]) with N = this thread's completed
+     * outer-iteration count -- a parity that is unknowable post-hoc. The
+     * final content must therefore be one of the two legal states {seed,
+     * bswap(seed)}; anything else is a persistent byte-swap-unit fault.
+     * Coverage boundary (documented honestly): a NON-involutive persistent
+     * mispermutation P leaves P^N(seed) outside the legal set for N >= 2 and
+     * is caught with certainty; an INVOLUTIVE mispermutation is caught only
+     * when this thread's final parity is odd (P^N(seed) == seed for even N).
+     * Per-iteration verification would require touching the SLF store->load
+     * window this probe exists to isolate, so it is not done. The hot loop
+     * above is unchanged. */
+    for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i) {
+        uint32_t fin = tls.input[i];
+        if (fin != data->input[i] && fin != data->expected_swapped[i]) {
+            log_error("MovBE-probeC: swapped-intermediate miscompare at index %u: "
+                      "seed=0x%08X legal={0x%08X,0x%08X} actual=0x%08X",
+                      (unsigned)i, data->input[i], data->input[i],
+                      data->expected_swapped[i], fin);
+            report_fail_msg("MovBE: in-place buffer outside legal {seed, bswap(seed)} "
+                            "set at index %u", (unsigned)i);
+        }
+    }
+
     return EXIT_SUCCESS;
 }
 
@@ -142,6 +196,7 @@ static int movbe_cleanup(struct test *test)
     if (data) {
         free(data->input);
         free(data->swapped);
+        free(data->expected_swapped);
         free(data);
     }
     return EXIT_SUCCESS;

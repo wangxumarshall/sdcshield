@@ -18,6 +18,16 @@
  * Compare this variant's trigger rate + XOR pattern against the baseline
  * movbe_dump to decide whether the store side-effect is part of the
  * trigger mechanism.
+ *
+ * VERIFICATION BOUNDARY (issue #374): this variant's isolated variable is
+ * the ABSENCE of the store, so the byte-swapped intermediate never leaves
+ * registers and cannot be verified post-hoc without re-adding state escape
+ * (which would destroy the probe's differential design). The volatile
+ * reload-vs-register compare below detects load-path transients; a
+ * persistent symmetric REV mispermutation remains undetectable HERE by
+ * construction -- that fault class is covered by the store-carrying
+ * siblings (movbe_dump and probes b/f/g/h/x/xn) whose swapped buffers are
+ * verified against the init-time LUT golden.
  * @endparblock
  */
 
@@ -102,7 +112,7 @@ static int movbe_cleanup(struct test *test)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(movbe_dump_probe_a, "movbe_dump probe A: no store (store side-effect removed)")
+DECLARE_TEST(movbe_dump_probe_a, "movbe_dump probe A: no store (store side-effect removed; register-only intermediate — persistent REV fault NOT detectable here by design, covered by store-carrying siblings, issue #374)")
     .test_init = movbe_init,
     .test_run = movbe_run,
     .test_cleanup = movbe_cleanup,

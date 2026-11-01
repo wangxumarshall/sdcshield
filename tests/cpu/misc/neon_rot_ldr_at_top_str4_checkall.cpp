@@ -220,7 +220,6 @@ static int neon_rot_ldr_at_top_str4_checkall_init(struct test *test) {
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_STR4_CHECKALL_COUNT * sizeof(uint64x2_t));
     memset_random(data->scratch, NEON_ROT_LDR_AT_TOP_STR4_CHECKALL_COUNT * sizeof(uint64x2_t));
 
-    /* golden: same rotating composition, computed on the same NEON units */
     /* golden (issue #373): scalar independent recomputation — pure C integer
      * ops on the scalar pipeline, never the NEON units under test. A persistent
      * NEON datapath fault (stuck lane / unit computing deterministic wrong

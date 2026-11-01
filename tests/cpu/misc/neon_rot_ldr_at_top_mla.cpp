@@ -18,7 +18,7 @@
  *   case 3: veor (parent control op, unchanged semantics)
  * 32-bit lanes chosen because mla/mls are s32-only on this ISA; sources
  * are built so products are exact (no overflow into sign bit), golden
- * precomputed in init on the same NEON units.
+ * precomputed in init via scalar independent recomputation (issue #373).
  * Same skeleton otherwise: 3rd ldr at top + 2-src loads + rotating ALU +
  * back-to-back str/str; memcmp in cold path.
  * @endparblock

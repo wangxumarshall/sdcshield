@@ -132,11 +132,6 @@ static int gps_rowmajor_init(struct test *test) {
         store_vec(&data->scratch[i], vcombine_u64(vcreate_u64(gps_tag(GPS_MAGIC_SCR, byte + 0, 0)),
                                                   vcreate_u64(gps_tag(GPS_MAGIC_SCR, byte + 8, 0))));
     }
-
-    /* golden: same rotating composition, computed on the same NEON units
-     * — identical to the parent (the tags flow through the ALU; e.g. an
-     * eor word carries magic A^B = 0xFFFF in its top half, which the
-     * offline classifier reconstructs exactly). */
     /* golden (issue #373): scalar independent recomputation — pure C integer
      * ops on the scalar pipeline, never the NEON units under test. A persistent
      * NEON datapath fault (stuck lane / unit computing deterministic wrong

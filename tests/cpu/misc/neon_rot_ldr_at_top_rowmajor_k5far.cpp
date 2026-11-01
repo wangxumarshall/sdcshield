@@ -125,7 +125,6 @@ static int k5far_init(struct test *test) {
                                                   vcreate_u64(gps_tag(K5FAR_MAGIC_SCR, byte + 8, 0))));
     }
 
-    /* golden: same rotating composition on the same NEON units */
     /* golden (issue #373): scalar independent recomputation — pure C integer
      * ops on the scalar pipeline, never the NEON units under test. A persistent
      * NEON datapath fault (stuck lane / unit computing deterministic wrong

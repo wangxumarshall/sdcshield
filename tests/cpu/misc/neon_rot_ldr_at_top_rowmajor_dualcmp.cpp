@@ -91,7 +91,6 @@ static int dualcmp_init(struct test *test) {
     memset_random(data->srcB, DUALCMP_COUNT * sizeof(uint64x2_t));
     memset_random(data->scratch, DUALCMP_COUNT * sizeof(uint64x2_t));
 
-    /* golden: same rotating composition, computed on the same NEON units */
     /* golden (issue #373): scalar independent recomputation — pure C integer
      * ops on the scalar pipeline, never the NEON units under test. A persistent
      * NEON datapath fault (stuck lane / unit computing deterministic wrong

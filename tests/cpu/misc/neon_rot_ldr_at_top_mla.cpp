@@ -17,7 +17,8 @@
  *   case 2: mls-style: acc = sub(mul)
  *   case 3: veor (parent control op, unchanged semantics)
  * 32-bit lanes chosen because mla/mls are s32-only on this ISA; sources
- * are built so products are exact (no overflow into sign bit), golden
+ * are masked to 16-bit magnitudes (products can still reach the s32 sign
+ * bit — bit-exactness comes from uint32_t mod-2^32 arithmetic), golden
  * precomputed in init via scalar independent recomputation (issue #373).
  * Same skeleton otherwise: 3rd ldr at top + 2-src loads + rotating ALU +
  * back-to-back str/str; memcmp in cold path.
@@ -53,9 +54,11 @@ static inline uint32x4_t load_vec(const void *addr) {
     return res;
 }
 
-/* keep every lane a small signed value so products never overflow s32:
- * narrowing now lives in the scalar golden loop below (issue #373) — the
- * masked values are bit-identical either way. */
+/* keep every lane a 16-bit magnitude (0x0000ffff mask) so products stay
+ * small — note they CAN still set the s32 sign bit (0xffff*0xffff =
+ * 0xFFFE0001); the golden below is bit-exact via uint32_t mod-2^32
+ * arithmetic, not via no-overflow. Narrowing lives in the scalar golden
+ * loop (issue #373) — masked values are bit-identical either way. */
 #endif
 
 static int neon_rot_ldr_at_top_mla_init(struct test *test) {
@@ -71,8 +74,11 @@ static int neon_rot_ldr_at_top_mla_init(struct test *test) {
 
     /* golden (issue #373): scalar independent recomputation — narrowing +
      * mul/add/sub/eor in pure C integer ops on the scalar pipeline, never the
-     * NEON units under test (uint32 arithmetic is bit-exact with the s32
-     * vector ops: products of 15-bit-masked lanes stay inside s32 anyway).
+     * NEON units under test. uint32_t arithmetic is bit-exact with the s32
+     * vector ops because both reduce mod 2^32 — NOT because products stay in
+     * s32 range (0xffff*0xffff = 0xFFFE0001 does set the sign bit; ~600
+     * lanes per run overflow). Keep uint32_t here: an int32_t rewrite of
+     * a*b+a would be signed-overflow UB.
      * A persistent NEON datapath fault can no longer corrupt golden and
      * actual identically; it now surfaces as a byte difference at the memcmp. */
     {

@@ -115,7 +115,9 @@ static int neon_rot_u8x16_sve_init(struct test *test)
     memset_random(data->srcA, buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK);
     memset_random(data->srcB, buffer_bytes + NEON_ROT_U8X16_SVE_LDR_SLACK);
 
-    /* golden: 逐字节同旋转, 在相同 SVE 单元上预计算 */
+    /* golden: 逐字节同旋转 — 标量独立复算（issue #373 范式）：纯 C 整数
+     * 运算走标量通路，不经被测 SVE 单元，持久 SVE 数据通路故障无法
+     * 同时污染 golden 与 actual。 */
     for (size_t j = 0; j < buffer_bytes; j++) {
         switch (j % 4) {
             case 0: data->expected[j] = data->srcA[j] + data->srcB[j]; break;

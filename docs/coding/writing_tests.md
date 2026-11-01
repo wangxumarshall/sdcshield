@@ -684,11 +684,17 @@ instead of assuming one tier:
   stay a plain scalar memcmp (a vector-compare gate reintroduces the blind
   spot for persistent compare-unit faults). Verify the compiler did not
   auto-vectorize the golden loop back onto the vector units: the switch-phase
-  dispatch is a natural barrier, and objdump of the init symbol must show
-  zero vector ALU instructions. Precedents:
+  dispatch is a natural barrier, and the init symbol must show zero vector
+  ALU instructions — pin it mechanically with
+  `scripts/check-scalar-golden.sh <binary> <init-symbol>...` (resolves the
+  C++-mangled name itself; an unresolvable symbol or empty disassembly is a
+  FAIL, not a pass — a plain `objdump --disassemble=<plain name>` silently
+  returns nothing and greps to a hollow PASS). Precedents:
   `tests/cpu/sve/case/neon_rot_2src_sve.cpp`,
   `neon_rot_store_only_sve.cpp`, `neon_rot_u8x16_sve.cpp`; migrated family:
-  `tests/cpu/misc/neon_rot_*.cpp` + `tests/cpu/arm64/neon_rot_2src.cpp`.
+  `tests/cpu/misc/neon_rot_*.cpp` (except `rowmajor_scalar64` — already
+  fully scalar, a separate scalar-vs-scalar same-code gap) +
+  `tests/cpu/arm64/neon_rot_2src.cpp`.
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 

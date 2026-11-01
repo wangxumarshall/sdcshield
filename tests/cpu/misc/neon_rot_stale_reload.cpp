@@ -65,7 +65,12 @@ static int neon_rot_stale_reload_init(struct test *test) {
      * ops on the scalar pipeline, never the NEON units under test. A persistent
      * NEON datapath fault (stuck lane / unit computing deterministic wrong
      * bits) can no longer corrupt golden and actual identically; it now
-     * surfaces as a golden-vs-actual byte difference at the memcmp. */
+     * surfaces as a golden-vs-actual byte difference at the memcmp.
+     * Boundary note: the rotation copy below (ex[e]=rf[e-2]) is pure data
+     * movement — GCC may emit ldr/str q for it (verified in the binary).
+     * That is not golden COMPUTATION: a load/store-path fault hits it and
+     * the run-side fresh ALU recompute differently, so the miscompare still
+     * fires; only the ALU op semantics needed to be scalar. */
     {
         const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
         const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB);

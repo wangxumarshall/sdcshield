@@ -295,7 +295,7 @@ static void tlbstress_compute_golden(uint64x2_t *golden, const uint64x2_t *srcA,
 - **V1 单测**：`./builddir/sdcshield -e <test> -t 10 -n 4` → 输出含 `exit: pass`。
 - **V2 同 seed 双跑**：`./builddir/sdcshield -e <test> -t 10 -n 4 -s 'AES:issue373'` 连跑两次均 pass（若 `-s` 语法报错，退化为背靠背双跑并记录；golden/actual 结构上读同一输入字节，确定性不依赖 RNG）。
 - **V3 波次构建**：`SDC_BUILD_JOBS=20 ./scripts/build.sh` 零新警告。
-- **V4 objdump 防向量化门**：对该波每个测试的 init 符号（tlbstress 为 `tlbstress_compute_golden`）反汇编，`grep -E '\b(add|sub|eor|and|orr|bic|orn|mul|mla)\b[[:space:]]+v[0-9]+\.'` 必须零命中（mov/str q 的 fill 与搬运指令允许）。若符号被内联/不可见，以 `objdump -d builddir/sdcshield | awk` 提取该函数段落检查。
+- **V4 objdump 防向量化门**：对该波每个测试的 init 符号（tlbstress 为 `tlbstress_compute_golden`）反汇编，向量 ALU 指令（add/sub/eor/and/orr/bic/orn/mul/mla 等带 `vN.` 操作数）必须零命中（mov/str q 的 fill 与纯数据搬运指令允许——搬运不是 golden 计算，load/store 通路故障对 golden 搬运与 run 侧重算的影响不同构，miscompare 仍会触发）。**必须用 `scripts/check-scalar-golden.sh <binary> <symbol>...`**：它自行解析 C++ mangled 符号名并按精确地址范围反汇编，符号解析失败或空反汇编记 FAIL。陷阱记录（2026-11-01 实测踩中）：直接 `objdump --disassemble=<未修饰名>` 对 C++ static 函数返回**空**反汇编，grep 零命中是**假阴性 PASS**；k7p_init_common 会被内联进 4 个 wrapper（查 wrapper 符号）。
 - **V5 注入实验**（一次性，W1 后做）：见 Task 6。
 - **V6 回归**：`./builddir/sdcshield -e zstd19 -t 2000 -n 1` → `exit: pass`。
 - **V7 x86 目检**：所有改动文件在 meson aarch64-only 块内；diff 只含 init golden 循环（减少 arch 代码）→ x86 非回归成立。
@@ -307,19 +307,19 @@ static void tlbstress_compute_golden(uint64x2_t *golden, const uint64x2_t *srcA,
 **Files:** 无代码改动；git 操作。
 
 - [x] 确认 worktree 分支从 origin/main 最新分出（已是）。
-- [ ] `git checkout -b feat/issue373-scalar-golden-neon-rot`。
-- [ ] 基线构建 + 基线单测抽样（neon_rot_ldr_at_top 转换前 pass 一次，确认起点干净）。
-- [ ] 提交本计划文档：`git add docs/superpowers/plans/2026-11-01-issue373-scalar-golden-neon-rot.md && git commit -s -m "docs(plan): issue #373 第一棒——neon_rot 族标量独立 golden 范式与迁移计划"`。
+- [x] `git checkout -b feat/issue373-scalar-golden-neon-rot`。
+- [x] 基线构建 + 基线单测抽样（neon_rot_ldr_at_top 转换前 pass 一次，确认起点干净）。
+- [x] 提交本计划文档：`git add docs/superpowers/plans/2026-11-01-issue373-scalar-golden-neon-rot.md && git commit -s -m "docs(plan): issue #373 第一棒——neon_rot 族标量独立 golden 范式与迁移计划"`。
 
 ### Task 2: Wave 1 —— 范式立桩（10 文件，T-A/A1/A32/A8/SUB）
 
 **Files:** 见映射表 W1 行。**Interfaces:** 无（纯测试内部改动）。
 
-- [ ] 逐文件：Read init 窗口 → 按模板替换 golden 循环（保留原注释语义改写为 issue #373 注释）→ Edit。
-- [ ] V3 构建（零新警告）。
-- [ ] V1+V2：10 个测试逐个 `-t 10 -n 4` pass + 同 seed 双跑稳定。
-- [ ] V4：objdump 门过 10 个 init 符号。
-- [ ] Commit（-s）：`fix(tests): neon_rot W1 同码 golden→标量独立 golden（issue #373 范式立桩）`。
+- [x] 逐文件：Read init 窗口 → 按模板替换 golden 循环（保留原注释语义改写为 issue #373 注释）→ Edit。
+- [x] V3 构建（零新警告）。
+- [x] V1+V2：10 个测试逐个 `-t 10 -n 4` pass + 同 seed 双跑稳定。
+- [x] V4：objdump 门过 10 个 init 符号。
+- [x] Commit（-s）：`fix(tests): neon_rot W1 同码 golden→标量独立 golden（issue #373 范式立桩）`。
 
 ### Task 3: Wave 2 —— ldr_at_top 探针变体（12 文件）
 
@@ -337,20 +337,22 @@ T-TLB：只改 `tlbstress_compute_golden` 函数体。V1/V2/V4（objdump 查 `tl
 
 **Files:** 临时 patch `tests/cpu/misc/neon_rot_ldr_at_top.cpp`，实验后 `git checkout --` 还原。
 
-- [ ] **A 步（旧 golden 零检出复现）**：在**未转换**的源上（Task 2 之前先做此步，或 `git stash`/临时还原），把 init 与 run 的 case 0 同时改为 `veorq_u64(vaddq_u64(a, b), vdupq_n_u64(1ULL << 41))`（模拟 NEON 加法单元持久故障：两条路径同错一位）→ 增量构建 → `-e neon_rot_ldr_at_top -t 10 -n 4` → **预期 pass**（持久故障被同码 golden 吞掉——零检出实证）。记录完整输出。
-- [ ] **B 步（新 golden 检出证明)**：在已转换源上只给 run 的 case 0 注入同一位错 → 增量构建 → 同命令 → **预期 FAIL，报 `neon_rot_ldr_at_top data miscompare`**。记录完整输出。
-- [ ] 还原 patch，重建，确认 `-e neon_rot_ldr_at_top -t 10 -n 4` 回到 pass。
-- [ ] 边界诚实声明：源级注入等效模拟单元故障（任务卡认可）；gem5-fi CHAOS 真·单 lane 持久注入演示留给后续棒（issue 验收方向的原话），在 PR 正文注明。
+- [x] **A 步（旧 golden 零检出复现）**：在**未转换**的源上（Task 2 之前先做此步，或 `git stash`/临时还原），把 init 与 run 的 case 0 同时改为 `veorq_u64(vaddq_u64(a, b), vdupq_n_u64(1ULL << 41))`（模拟 NEON 加法单元持久故障：两条路径同错一位）→ 增量构建 → `-e neon_rot_ldr_at_top -t 10 -n 4` → **预期 pass**（持久故障被同码 golden 吞掉——零检出实证）。记录完整输出。
+- [x] **B 步（新 golden 检出证明)**：在已转换源上只给 run 的 case 0 注入同一位错 → 增量构建 → 同命令 → **预期 FAIL，报 `neon_rot_ldr_at_top data miscompare`**。记录完整输出。
+- [x] 还原 patch，重建，确认 `-e neon_rot_ldr_at_top -t 10 -n 4` 回到 pass。
+- [x] 边界诚实声明：源级注入等效模拟单元故障（任务卡认可）；gem5-fi CHAOS 真·单 lane 持久注入演示留给后续棒（issue 验收方向的原话），在 PR 正文注明。
 
 ### Task 7: 回归、文档同步、收尾
 
-- [ ] V6 回归 `-e zstd19 -t 2000 -n 1` → `exit: pass`。
-- [ ] V3 最终全量构建零新警告；V7 x86 目检记录。
-- [ ] 文档同步（CLAUDE.md 规则 7）：`docs/coding/writing_tests.md` 增补"golden 必须独立于被测数据通路（issue #373 范式）"小节，指向本计划为模板；README 若有涉及 neon_rot golden 语义的表述则同步（无则不动）。
-- [ ] Commit：`docs(tests): golden 独立性范式写入 writing_tests.md（issue #373）`。
-- [ ] push feature 分支；开 PR：正文含范式说明 + W1-W4 完成清单（38 文件全列）+ 注入实验输出 + 剩余清单（sve_rot 5、arm0102_sve 5、sve VLA 变体 15、neon_test 1、neon_add_sve 1、scalar64 标量同码决策、gem5-fi CHAOS 演示）+ `Refs #373`（**不写 Fixes，issue 不关闭**）。
-- [ ] code-review（/code-review 或 scripts/pr_local_review.py）→ 处置发现 → 人工授权下的 merge（本任务卡明确授权 merge；历史先例为 merge commit）。
-- [ ] 向编排者汇报：完成度、范式要点、验证证据、PR 链接、剩余清单。
+- [x] V6 回归 `-e zstd19 -t 2000 -n 1` → `exit: pass`（实测：rebase 前后各一次均 pass）。
+- [x] V3 最终全量构建零新警告；V7 x86 目检记录（39 文件全在 aarch64-only meson 块；全树干净重建仅 2 条存量警告在 tests/cpu/mesh/mesh_upi_{avx,sse}_sym.cpp，origin/main #308/#331 引入，不在本 diff）。
+- [x] 文档同步（CLAUDE.md 规则 7）：`docs/coding/writing_tests.md` 增补"golden 必须独立于被测数据通路（issue #373 范式）"条目，指向本计划为模板；README 无 golden 语义表述，不动。
+- [x] Commit：`docs(tests): golden 独立性范式写入 writing_tests.md（issue #373）`。
+- [x] push feature 分支；开 PR #412：正文含范式说明 + 完成清单 + 注入实验输出 + 剩余清单 + `Refs #373`（**不写 Fixes，issue 不关闭**）。
+- [x] code-review（/code-review high：4 角度并行 + 实证复核）→ 全部发现处置（见下）→ merge。
+- [x] 向编排者汇报：完成度、范式要点、验证证据、PR 链接、剩余清单。
+
+**检视处置记录（2026-11-01）**：零功能性缺陷；采纳 6 项加固——(1) mla 注释的"乘积不溢出 s32"说法错误（0xffff×0xffff=0xFFFE0001 会进符号位，位精确的真实理由是 uint32 模 2^32 == s32 低 32 位），三处注释改正并警示 int32_t 改写会是 UB；(2) stale_reload 注释补边界（旋转搬运被 GCC 向量化为 ldr/str q 属数据搬运非 golden 计算，检出语义不受影响）；(3) 新增 `scripts/check-scalar-golden.sh` 机械门（mangled 符号解析 + 空反汇编记 FAIL，堵住 V4 假阴性 PASS 陷阱；负向对照：run 符号被抓出 4 条向量 ALU；正向：43/43 符号 PASS）；(4) writing_tests.md 的族 glob 限定排除 scalar64；(5) 剩余清单补 `tests/cpu/misc/core179_kernel_sdc_repro.cpp` 与 `tests/cpu/arm-0102/arm0102_kreg_mask.cpp`（非 sve 变体，原清单漏计）；(6) 先例文件 neon_rot_u8x16_sve.cpp 过时注释修正（与 2src_sve 同类）。
 
 ## Self-Review
 

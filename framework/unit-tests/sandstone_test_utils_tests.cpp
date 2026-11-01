@@ -65,6 +65,18 @@ TEST_F(CodeBufferTestFixture, AllocatingBufferAtParticularAddress) {
 #endif // __x86_64__
 
 // ======================================================================
+// Page Size Tests
+// ======================================================================
+TEST(PageSizeTest, ReturnsPositivePowerOfTwo)
+{
+    /* Host-dependent (ARM64: 4K/16K/64K), so assert the invariants that
+     * ROUND_UP_TO_PAGE relies on rather than a specific value. */
+    unsigned pg = sandstone_page_size();
+    EXPECT_GT(pg, 0u);
+    EXPECT_EQ(pg & (pg - 1), 0u) << "page size must be a power of two";
+}
+
+// ======================================================================
 // Weighted Test Picker Tests
 // ======================================================================
 class WeightedPickerTestFixture : public ::testing::Test {

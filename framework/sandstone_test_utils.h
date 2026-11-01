@@ -28,10 +28,12 @@
 #define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
 static inline unsigned sandstone_page_size()
 {
-    static long cached = 0;
-    if (!cached)
-        cached = sysconf(_SC_PAGESIZE);
-    return unsigned(cached);
+    long pg = sysconf(_SC_PAGESIZE);
+    /* No static cache: race-free by construction and a sysconf failure is
+     * not permanently cached (issue #399).  POSIX permits -1; on Linux it
+     * cannot happen, so the 4096 fallback just keeps the historical default
+     * instead of feeding (unsigned)-1 into the ROUND_UP_TO bitmask. */
+    return pg > 0 ? unsigned(pg) : 4096;
 }
 #define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, sandstone_page_size())
 

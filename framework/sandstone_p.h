@@ -76,8 +76,11 @@ extern "C" {
  * Page size used for mmap/mprotect alignment.  MUST match the kernel's actual
  * page size, otherwise mprotect() will round to the kernel's page boundary and
  * may make adjacent data read-only (causing SIGSEGV on kernels with >4 KB
- * pages, e.g. ARM64 16 KB / 64 KB configurations).  Resolve once via
- * sysconf(_SC_PAGESIZE) and cache it.
+ * pages, e.g. ARM64 16 KB / 64 KB configurations).  Resolved per call via
+ * sysconf(_SC_PAGESIZE), with no function-level static cache: concurrent
+ * first calls cannot race (issue #399) and a sysconf failure is never
+ * permanently cached.  All call sites are cold paths, so the per-call cost
+ * (glibc reads the dynamic loader's dl_pagesize, no syscall) is irrelevant.
  */
 #ifdef __cplusplus
 extern "C++"
@@ -85,10 +88,11 @@ extern "C++"
 #endif
 static inline unsigned sandstone_page_size(void)
 {
-    static long cached = 0;
-    if (!cached)
-        cached = sysconf(_SC_PAGESIZE);
-    return (unsigned)cached;
+    long pg = sysconf(_SC_PAGESIZE);
+    /* POSIX permits -1; on Linux it cannot happen (glibc: dl_pagesize load,
+     * musl: build-time constant).  Fall back to the historical 4 KB default
+     * rather than feeding (unsigned)-1 into the ROUND_UP_TO bitmask. */
+    return pg > 0 ? (unsigned)pg : 4096;
 }
 #ifdef __cplusplus
 }

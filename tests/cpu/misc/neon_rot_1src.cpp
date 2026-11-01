@@ -53,13 +53,21 @@ static int neon_rot_1src_init(struct test *test) {
 
     memset_random(data->srcA, NEON_ROT_1SRC_COUNT * sizeof(uint64x2_t));
 
-    /* golden: same rotating composition with the constant second operand */
-    for (int i = 0; i < NEON_ROT_1SRC_COUNT; i++) {
-        switch (i % 4) {
-            case 0: data->expected[i] = vaddq_u64(data->srcA[i], vdupq_n_u64(0x5A5A5A5A5A5A5A5AULL)); break;
-            case 1: data->expected[i] = veorq_u64(data->srcA[i], vdupq_n_u64(0x5A5A5A5A5A5A5A5AULL)); break;
-            case 2: data->expected[i] = vandq_u64(data->srcA[i], vdupq_n_u64(0x5A5A5A5A5A5A5A5AULL)); break;
-            case 3: data->expected[i] = vorrq_u64(data->srcA[i], vdupq_n_u64(0x5A5A5A5A5A5A5A5AULL)); break;
+    /* golden (issue #373): scalar independent recomputation — pure C integer
+     * ops on the scalar pipeline, never the NEON units under test. A persistent
+     * NEON datapath fault (stuck lane / unit computing deterministic wrong
+     * bits) can no longer corrupt golden and actual identically; it now
+     * surfaces as a golden-vs-actual byte difference at the memcmp. */
+    {
+        const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
+        uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expected);
+        for (int e = 0; e < 2 * NEON_ROT_1SRC_COUNT; e++) {
+            switch ((e / 2) % 4) {   /* op phase: vector index % 4 */
+                case 0: ex[e] = sa[e] + 0x5A5A5A5A5A5A5A5AULL; break;
+                case 1: ex[e] = sa[e] ^ 0x5A5A5A5A5A5A5A5AULL; break;
+                case 2: ex[e] = sa[e] & 0x5A5A5A5A5A5A5A5AULL; break;
+                case 3: ex[e] = sa[e] | 0x5A5A5A5A5A5A5A5AULL; break;
+            }
         }
     }
 

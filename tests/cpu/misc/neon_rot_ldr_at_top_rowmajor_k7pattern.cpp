@@ -136,12 +136,25 @@ static int k7p_init_common(struct test *test, enum K7Pattern p) {
                                                   vcreate_u64(pattern_word(p, 2, byte + 8))));
     }
 
-    for (int i = 0; i < K7P_COUNT; i++) {
-        switch (i % 4) {
-            case 0: data->expected[i] = vaddq_u64(data->srcA[i], data->srcB[i]); break;
-            case 1: data->expected[i] = veorq_u64(data->srcA[i], data->srcB[i]); break;
-            case 2: data->expected[i] = vandq_u64(data->srcA[i], data->srcB[i]); break;
-            case 3: data->expected[i] = vorrq_u64(data->srcA[i], data->srcB[i]); break;
+    /* golden (issue #373): scalar independent recomputation — pure C integer
+     * ops on the scalar pipeline, never the NEON units under test. A persistent
+     * NEON datapath fault (stuck lane / unit computing deterministic wrong
+     * bits) can no longer corrupt golden and actual identically; it now
+     * surfaces as a golden-vs-actual byte difference at the memcmp.
+     * (The pattern fill above is input GENERATION, not golden computation:
+     * a store-path fault corrupts input that golden and run would both read
+     * identically — out of scope for the golden-independence paradigm.) */
+    {
+        const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
+        const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB);
+        uint64_t       *ex = reinterpret_cast<uint64_t *>(data->expected);
+        for (int e = 0; e < 2 * K7P_COUNT; e++) {
+            switch ((e / 2) % 4) {   /* op phase: vector index % 4 */
+                case 0: ex[e] = sa[e] + sb[e]; break;
+                case 1: ex[e] = sa[e] ^ sb[e]; break;
+                case 2: ex[e] = sa[e] & sb[e]; break;
+                case 3: ex[e] = sa[e] | sb[e]; break;
+            }
         }
     }
 

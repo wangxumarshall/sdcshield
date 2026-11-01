@@ -17,8 +17,9 @@
  *   case 2: mls-style: acc = sub(mul)
  *   case 3: veor (parent control op, unchanged semantics)
  * 32-bit lanes chosen because mla/mls are s32-only on this ISA; sources
- * are built so products are exact (no overflow into sign bit), golden
- * precomputed in init on the same NEON units.
+ * are masked to 16-bit magnitudes (products can still reach the s32 sign
+ * bit — bit-exactness comes from uint32_t mod-2^32 arithmetic), golden
+ * precomputed in init via scalar independent recomputation (issue #373).
  * Same skeleton otherwise: 3rd ldr at top + 2-src loads + rotating ALU +
  * back-to-back str/str; memcmp in cold path.
  * @endparblock
@@ -53,11 +54,11 @@ static inline uint32x4_t load_vec(const void *addr) {
     return res;
 }
 
-/* keep every lane a small signed value so products never overflow s32 */
-static inline uint32x4_t narrow_for_mul(uint32x4_t v) {
-    return vandq_u32(v, vdupq_n_u32(0x0000ffff));   /* mask to signed 15-bit magnitude range */
-}
-
+/* keep every lane a 16-bit magnitude (0x0000ffff mask) so products stay
+ * small — note they CAN still set the s32 sign bit (0xffff*0xffff =
+ * 0xFFFE0001); the golden below is bit-exact via uint32_t mod-2^32
+ * arithmetic, not via no-overflow. Narrowing lives in the scalar golden
+ * loop (issue #373) — masked values are bit-identical either way. */
 #endif
 
 static int neon_rot_ldr_at_top_mla_init(struct test *test) {
@@ -71,20 +72,31 @@ static int neon_rot_ldr_at_top_mla_init(struct test *test) {
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t));
     memset_random(data->scratch, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t));
 
-    /* golden: same rotating composition, computed on the same NEON units */
-    for (int i = 0; i < NEON_ROT_LDR_AT_TOP_MLA_COUNT; i++) {
-        uint32x4_t a = narrow_for_mul(data->srcA[i]);
-        uint32x4_t b = narrow_for_mul(data->srcB[i]);
-        data->srcA[i] = a;   /* persist the narrowed sources so run-side
-                              * recomputation sees identical inputs */
-        data->srcB[i] = b;
-        int32x4_t sa = vreinterpretq_s32_u32(a);
-        int32x4_t sb = vreinterpretq_s32_u32(b);
-        switch (i % 4) {
-            case 0: data->expected[i] = vreinterpretq_u32_s32(vmulq_s32(sa, sb)); break;
-            case 1: data->expected[i] = vreinterpretq_u32_s32(vaddq_s32(vmulq_s32(sa, sb), sa)); break;
-            case 2: data->expected[i] = vreinterpretq_u32_s32(vsubq_s32(vmulq_s32(sa, sb), sb)); break;
-            case 3: data->expected[i] = veorq_u32(a, b); break;
+    /* golden (issue #373): scalar independent recomputation — narrowing +
+     * mul/add/sub/eor in pure C integer ops on the scalar pipeline, never the
+     * NEON units under test. uint32_t arithmetic is bit-exact with the s32
+     * vector ops because both reduce mod 2^32 — NOT because products stay in
+     * s32 range (0xffff*0xffff = 0xFFFE0001 does set the sign bit; ~600
+     * lanes per run overflow). Keep uint32_t here: an int32_t rewrite of
+     * a*b+a would be signed-overflow UB.
+     * A persistent NEON datapath fault can no longer corrupt golden and
+     * actual identically; it now surfaces as a byte difference at the memcmp. */
+    {
+        uint32_t *sa = reinterpret_cast<uint32_t *>(data->srcA);
+        uint32_t *sb = reinterpret_cast<uint32_t *>(data->srcB);
+        uint32_t *ex = reinterpret_cast<uint32_t *>(data->expected);
+        for (int e = 0; e < 4 * NEON_ROT_LDR_AT_TOP_MLA_COUNT; e++) {
+            const uint32_t a = sa[e] & 0x0000ffffu;   /* narrow_for_mul, scalar */
+            const uint32_t b = sb[e] & 0x0000ffffu;
+            sa[e] = a;   /* persist the narrowed sources so run-side
+                          * recomputation sees identical inputs */
+            sb[e] = b;
+            switch ((e / 4) % 4) {   /* op phase: vector index % 4 */
+                case 0: ex[e] = a * b;     break;
+                case 1: ex[e] = a * b + a; break;
+                case 2: ex[e] = a * b - b; break;
+                case 3: ex[e] = a ^ b;     break;
+            }
         }
     }
 

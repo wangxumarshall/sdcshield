@@ -101,7 +101,10 @@ static int neon_rot_2src_sve_init(struct test *test) {
     memset_random(data->srcA, count * sizeof(uint64_t));
     memset_random(data->srcB, count * sizeof(uint64_t));
 
-    /* golden: same rotating composition, computed on the same SVE units */
+    /* golden: same rotating composition — scalar independent recomputation
+     * (issue #373 paradigm): pure C integer ops on the scalar pipeline, never
+     * the SVE units under test, so a persistent SVE datapath fault cannot
+     * corrupt golden and actual identically. */
     for (size_t i = 0; i < count; i++) {
         switch (i % 4) {
             case 0: data->expected[i] = data->srcA[i] + data->srcB[i]; break;

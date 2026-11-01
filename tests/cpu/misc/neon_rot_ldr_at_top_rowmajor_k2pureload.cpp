@@ -122,24 +122,30 @@ static int k2pureload_init(struct test *test) {
                                                   vcreate_u64(gps_tag(K2PL_MAGIC_SCR, byte + 8, 0))));
     }
 
-    /* golden checksums: same accumulation the hot loop performs */
-    uint64x2_t sum[4] = {
-        vdupq_n_u64(0), vdupq_n_u64(0), vdupq_n_u64(0), vdupq_n_u64(0),
-    };
-    for (int i = 0; i < K2PL_COUNT; i++) {
-        const uint64x2_t a = data->srcA[i];
-        const uint64x2_t b = data->srcB[i];
-        uint64x2_t r;
-        switch (i % 4) {
-            case 0: r = vaddq_u64(a, b); break;
-            case 1: r = veorq_u64(a, b); break;
-            case 2: r = vandq_u64(a, b); break;
-            default: r = vorrq_u64(a, b); break;
+    /* golden checksums (issue #373): scalar independent fold — the same
+     * per-op-class XOR accumulation the hot loop performs, computed with
+     * pure C integer ops on the scalar pipeline so a persistent NEON fault
+     * cannot corrupt golden and actual identically. XOR folding is
+     * order-independent, so the init fold equals the run's asc/desc sweeps. */
+    {
+        const uint64_t *sa = reinterpret_cast<const uint64_t *>(data->srcA);
+        const uint64_t *sb = reinterpret_cast<const uint64_t *>(data->srcB);
+        uint64_t *gs = reinterpret_cast<uint64_t *>(data->golden_sum);   /* uint64x2_t[4] -> 8 lanes */
+        for (int k = 0; k < 8; k++) gs[k] = 0;
+        for (int i = 0; i < K2PL_COUNT; i++) {
+            const uint64_t a0 = sa[2 * i], a1 = sa[2 * i + 1];
+            const uint64_t b0 = sb[2 * i], b1 = sb[2 * i + 1];
+            uint64_t r0, r1;
+            switch (i % 4) {
+                case 0:  r0 = a0 + b0; r1 = a1 + b1; break;
+                case 1:  r0 = a0 ^ b0; r1 = a1 ^ b1; break;
+                case 2:  r0 = a0 & b0; r1 = a1 & b1; break;
+                default: r0 = a0 | b0; r1 = a1 | b1; break;
+            }
+            gs[2 * (i % 4)]     ^= r0;
+            gs[2 * (i % 4) + 1] ^= r1;
         }
-        sum[i % 4] = veorq_u64(sum[i % 4], r);
     }
-    for (int k = 0; k < 4; k++)
-        data->golden_sum[k] = sum[k];
 
     test->data = data;
     return EXIT_SUCCESS;

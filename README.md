@@ -1,16 +1,12 @@
 # SDCShield
 
-SDCShield is an open-source project designed to identify defects and bugs in ARM CPUs derived from Intel's OpenDCDiag (ARM64 port). It consists of a set of tests built around a sophisticated CPU testing framework.
+SDCShield is an open-source project designed to identify defects and bugs in ARM CPUs derived from Intel's OpenDCDiag (ARM64 port). It consists of a set of tests built around a sophisticated CPU testing framework， licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for full derivation and upstream provenance.
 
-SDCShield 专攻**静默数据损坏（SDC, Silent Data Corruption）**——计算不崩溃、但产出错误比特的缺陷。检测原理：向目标计算单元（FMA、SIMD、压缩、SVD、crypto）施加高强压测，再与预计算的 golden 值做**字节级比对**（错一比特即 FAIL，无容差）；x86-64 为未改动的参考架构，ARM64 移植全程增量式非回归。
-
-## Origin
-
-SDCShield is derived from OpenDCDiag (which contains the Intel `sandstone` framework), licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for full derivation and upstream provenance.
+SDCShield 专攻**静默数据损坏（SDC, Silent Data Corruption）**——计算不崩溃、但产出错误比特的缺陷。检测原理：向目标计算单元（FMA、SIMD、压缩、SVD、crypto）施加高强压测，再与预计算的 golden 值做**字节级比对**（错一比特即 FAIL，无容差）。
 
 ## 质量保障：Agent 全流程自动化
 
-SDCShield 的检测结论必须可信，因此仓库把「质量保障」做成贯穿开发—检视—CI—发布的全流程自动化体系，而非依赖人工自觉。总体架构（v3 整合视图）：
+SDCShield 的检测结论必须可信，因此仓库把「质量保障」做成贯穿开发—检视—CI—发布的全流程自动化体系，总体架构：
 
 ![Agent 全流程自动化总体架构](docs/build-deploy-pr-ci/agent-full-automation.png)
 
@@ -23,7 +19,7 @@ SDCShield 的检测结论必须可信，因此仓库把「质量保障」做成�
 
 架构设计、PR 状态机与分阶段路线图见 [docs/build-deploy-pr-ci/agent-full-automation.md](docs/build-deploy-pr-ci/agent-full-automation.md)；各机制工程细节在本 README「质量保障与 CI 基础设施」一节及 [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)、[task-loop 手册](docs/build-deploy-pr-ci/task-loop.md) 展开。
 
-## 一行命令检测鲲鹏 CPU SDC
+## 一行命令检测CPU SDC
 
 **源码树（推荐）**：
 
@@ -82,7 +78,7 @@ bash scripts/run/sdc_detect.sh
 ./run-sdcshield.sh --quality=0 -T forever -t 60s -Y -F -o sdc-$(date +%m%d-%H%M).yaml
 ```
 
-**为什么是这条命令**：0102单板故障核的实证——优先序全套件全核轮转约 100 秒出首错，而单测试单跑（含 11180 个 seed 轮换）零复现。全核并发 + 负载多样性 + 长驻留三者齐备才有检出率，这条命令一次配齐。
+**为什么是这条命令**：根据我们的经验，全核并发 + 负载多样性 + 长驻留三者齐备才有检出率，这条命令一次配齐。
 
 **结果判读**：
 

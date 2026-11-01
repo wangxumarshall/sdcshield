@@ -22,13 +22,22 @@
  *     recomputed golden; plus the store/reload consistency check of the
  *     original skeleton.
  *
- *   Global sum: per-block sums (computed exactly on both sides — block
- *     values are 0.5-multiples, so every chain result and every sum is
- *     exact in f64, order-independent) are accumulated into atomic
- *     f64 counters on each side; read total must equal write total
- *     byte-for-byte. Exactness argument: with all values being exact
- *     halves and bounded magnitude, no rounding ever occurs, so the
- *     floating-point associativity hazard does not exist here.
+ *   Global sum (closed form, #323): the expected total is a deterministic
+ *     function of the buffer content — block_value() is a pure function of
+ *     (block, j), and each block's 4096 elements cover exactly 128 full
+ *     32-residue cycles, so every block sums to the same 33792.0 and the
+ *     expected total is 33792 × num_blocks (computed in init from the same
+ *     block_value()). Every value is an exact 0.5-multiple and the total
+ *     magnitude stays below 2^51 for any physically allocatable buffer, so
+ *     both sides are exact in f64 under any accumulation order — the
+ *     floating-point associativity hazard does not exist. The read side
+ *     byte-compares its full-buffer sum against this constant: no
+ *     cross-thread accumulator, no cross-round state, structurally
+ *     race-free (the old write-side global_sum atomic could go stale/dirty
+ *     across timeout-interrupted rounds and misreport). Strictly stronger
+ *     detection than the old read==write agreement: a value corrupted
+ *     before both the store and the write-side accumulation used to fool
+ *     both arms; now only the read arm needs to see it.
  *
  * NEON f64 (float64x2_t) — runs on any aarch64, no SVE needed, so the
  * compound coverage also exists on SVE-less hosts (this Kunpeng 920
@@ -58,8 +67,8 @@ struct TestData {
     alignas(16) double *data;             // 共享缓冲(16B 对齐)
     size_t num_blocks;                    // 运行时块数(按目标内存计算)
     size_t total_elements;                // 运行时总元素数
+    double expected_total;                // 闭式期望总和(init 一次写入,此后只读)
     std::atomic<uint64_t> next_block;
-    std::atomic<uint64_t> global_sum;     // f64 位模式的精确和(见下)
     std::atomic<uint64_t> write_done;
     std::atomic<uint32_t> read_done;
     std::atomic<uint32_t> reset_lock;
@@ -250,8 +259,18 @@ static int mesh_upi_avx512_symm_f64_init(struct test *test) {
     }
     memset(td->data, 0, total_bytes);
 
+    /* 期望总和闭式基线(#323):块值是 (block, j) 纯函数,每块 4096 元素
+     * 恰 128 个完整 32 残差周期 → 每块和与块号无关。全部为 0.5 倍数、
+     * 总幅 < 2^51(16 TiB 缓冲封顶下 ≈1.8e13),任意加法序下精确无舍入
+     * ——与读侧逐元素累加同构,顺序无关,字节可比。init 一次写入、运行期
+     * 只读:无跨线程/跨轮状态,替代旧 global_sum 原子累加器(其生命周期
+     * 依赖重置门,门被超时打断后留下脏状态 → 假 FAIL,见文件头)。 */
+    double per_block = 0.0;
+    for (int j = 0; j < BLOCK_SIZE; ++j)
+        per_block += block_value(0, j);
+    td->expected_total = per_block * (double)td->num_blocks;
+
     td->next_block.store(0, std::memory_order_relaxed);
-    td->global_sum.store(0, std::memory_order_relaxed);
     td->write_done.store(0, std::memory_order_relaxed);
     td->read_done.store(0, std::memory_order_relaxed);
     td->reset_lock.store(0, std::memory_order_relaxed);
@@ -283,37 +302,14 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
             // 低块被重复认领重写。
             size_t offset = (size_t)block * BLOCK_SIZE;
             double vals[BLOCK_SIZE];
-            double local_sum = 0.0;
-            for (int j = 0; j < BLOCK_SIZE; ++j) {
+            for (int j = 0; j < BLOCK_SIZE; ++j)
                 vals[j] = block_value(block, j);
-                local_sum += vals[j];   // 精确:0.5 倍数求和无舍入
-            }
             // NEON 存储(每块 8 个 float64x2)
             for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
                 float64x2_t vec = vld1q_f64(vals + v * NEON_VECTOR_SIZE);
                 vst1q_f64(td->data + offset + v * NEON_VECTOR_SIZE, vec);
             }
             __sync_synchronize();
-
-            // 写侧全局和必须在 write_done++ 之前完成:读侧在
-            // write_done==NUM_BLOCKS 时快照 global_sum,若累加仍在途
-            // 中会漏掉尚未写入者的贡献,产生虚假的 sum mismatch
-            // (测试自身的并发竞态,而非硬件 SDC)。
-            // (double 无原子 fetch_add,用 CAS 重试循环逐块累加)
-            uint64_t exp_bits = td->global_sum.load(std::memory_order_seq_cst);
-            for (;;) {
-                double snapshot, desired;
-                memcpy(&snapshot, &exp_bits, 8);
-                desired = snapshot + local_sum;           // 精确加法
-                uint64_t des_bits;
-                memcpy(&des_bits, &desired, 8);
-                if (td->global_sum.compare_exchange_weak(
-                        exp_bits, des_bits,
-                        std::memory_order_seq_cst,
-                        std::memory_order_seq_cst)) {
-                    break;
-                }
-            }
 
             td->write_done.fetch_add(1, std::memory_order_seq_cst);
         }
@@ -336,14 +332,11 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
             }
         }
 
-        // Sum snapshot BEFORE the read loop: a fast thread can finish its
-        // read, run the reset phase and start the NEXT iteration's writes
-        // while this thread is still walking the buffer (the f64 FMA chain
-        // widens the read window vs the int skeleton). Comparing against a
-        // snapshot taken after the read would race the reset/next-write
-        // and produce a false mismatch (caught live: iteration 17,
-        // read_sum=0x1.08p+13 vs expected=0x1.bdp+10).
-        uint64_t expected_sum_bits = td->global_sum.load(std::memory_order_seq_cst);
+        /* 期望值是闭式常量(见 init):无快照、无跨线程累加——旧实现在此
+         * 快照 global_sum,而快照时机本身与重置/下一轮写入存在协议竞态
+         * (#323:曾在 iteration 17 实测 read_sum=0x1.08p+13 vs
+         * expected=0x1.bdp+10 的假 mismatch;根治 = 期望值不再依赖任何
+         * 共享可变状态)。 */
 
         // ---------- 读阶段:全量读 + FMA 链 + golden 比对 ----------
         double read_sum = 0.0;
@@ -386,17 +379,15 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
             if (!consistent) break;
         }
 
-        double expected_sum;
-        memcpy(&expected_sum, &expected_sum_bits, 8);
-        bool sum_ok = (read_sum == expected_sum);   // 双侧精确,顺序无关
+        bool sum_ok = (read_sum == td->expected_total);   // 双侧精确,顺序无关
         bool passed = sum_ok && consistent;
 
         if (!passed) {
             log_warning("mesh_upi_avx512_symm_f64: thread %d read_sum=%a "
                         "expected=%a consistent=%d", id, read_sum,
-                        expected_sum, (int)consistent);
+                        td->expected_total, (int)consistent);
             report_fail_msg("mesh_upi_avx512_symm_f64: cross-core FP sum "
-                            "mismatch or consistency failure");
+                            "mismatch vs deterministic golden");
             return EXIT_FAILURE;
         }
         validated_any = true;   // 本轮全量读取校验（精确和+FMA 链 golden）已通过
@@ -422,7 +413,8 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
                     }
                 }
             }
-            td->global_sum.store(0, std::memory_order_seq_cst);
+            /* 轮屏障计数器重置(global_sum 已随闭式化删除——期望值是
+             * init 期常量,无跨轮状态可残留)。 */
             td->next_block.store(0, std::memory_order_seq_cst);
             td->write_done.store(0, std::memory_order_seq_cst);
             td->read_done.store(0, std::memory_order_seq_cst);

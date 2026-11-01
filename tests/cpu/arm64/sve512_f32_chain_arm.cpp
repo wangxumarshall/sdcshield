@@ -37,9 +37,14 @@
  * fails closed on drift.
  *
  * SDC detection: byte-exact lane compares against the deterministic
- * software reference, with per-lane golden/actual/XOR logging on mismatch.
- * report_fail_msg on any mismatch. ARM64-native; non-SVE CPUs return a
- * clean EXIT_SKIP from init. Built only on aarch64.
+ * software reference at SEG_LEN-step intermediate checkpoints along the
+ * chain (issue #376) — not only at the chain end. A mid-chain accumulator
+ * bit flip is compared at the next boundary while it is still supra-ulp,
+ * before the accumulated-magnitude growth can grind it away by rounding
+ * (the absorption blind zone of a final-only compare). Per-segment,
+ * per-lane golden/actual/XOR logging on mismatch; report_fail_msg on any
+ * mismatch. ARM64-native; non-SVE CPUs return a clean EXIT_SKIP from init.
+ * Built only on aarch64.
  * @endparblock
  */
 
@@ -59,6 +64,19 @@
 // Serial FMA chain length per iteration — VL-independent (a per-lane
 // dependency sequence; the lane count, not the length, scales with VL).
 static constexpr size_t CHAIN_STEPS = 512;
+
+// Segmented intermediate checkpoints (issue #376): the chain state is
+// byte-compared at SEG_LEN-step boundaries, not only at chain end. A
+// mid-chain accumulator bit flip (delta = 2^j ulp) propagates
+// deterministically until the accumulated magnitude grows 2^j past it,
+// then gets ground away by rounding — final-only comparison is blind to
+// that class (measured on this chain's semantics, 30 seeds x 90 (step,bit)
+// cells: low-bit mid-chain flips caught 59.9% at chain end vs 79.4% with
+// 64-step checkpoints). The boundary spill does NOT break the FMA
+// dependency chain (acc flows on in the same register past the store);
+// it is 8 stores per 512 FMAs (1.6% instruction count).
+static constexpr size_t SEG_LEN = 64;
+static constexpr size_t SEG_COUNT = CHAIN_STEPS / SEG_LEN;
 
 // f32 finite patterns (|x| <= 2).
 static const uint32_t F32_FINITE[] = {
@@ -94,9 +112,11 @@ struct SveF32ChainData {
 
 // ---------------------------------------------------------------------------
 // Scalar golden: identical operation order and indexing to the SVE chain
-// (stream layout is [step * lanes + lane]).
+// (stream layout is [step * lanes + lane]). Records the accumulator state
+// at every SEG_LEN-step boundary (issue #376); the last entry IS the
+// chain-final state, so the old final-only compare is subsumed.
 // ---------------------------------------------------------------------------
-static void f32_chain_golden(const SveF32ChainData *d, uint32_t *out)
+static void f32_chain_golden(const SveF32ChainData *d, uint32_t *seg_out)
 {
     const size_t lanes = d->vl_w;
     for (size_t lane = 0; lane < lanes; ++lane) {
@@ -108,16 +128,19 @@ static void f32_chain_golden(const SveF32ChainData *d, uint32_t *out)
             memcpy(&m, &d->m_f32[i * lanes + lane], 4);
             memcpy(&a, &d->a_f32[i * lanes + lane], 4);
             acc = std::fma(m, a, acc);
+            if ((i + 1) % SEG_LEN == 0)
+                memcpy(&seg_out[((i + 1) / SEG_LEN - 1) * lanes + lane],
+                       &acc, 4);
         }
-        memcpy(&accw, &acc, 4);
-        out[lane] = accw;
     }
 }
 
 // ---------------------------------------------------------------------------
-// Hardware chain (SVE, full runtime VL).
+// Hardware chain (SVE, full runtime VL). Spills the accumulator to the
+// segment table at each SEG_LEN boundary; the FMA dependency chain runs
+// on unbroken (acc flows through the store in the same register).
 // ---------------------------------------------------------------------------
-static void f32_chain_hw(const SveF32ChainData *d, uint32_t *out)
+static void f32_chain_hw(const SveF32ChainData *d, uint32_t *seg_out)
 {
     const size_t lanes = d->vl_w;
     const svbool_t pg = svptrue_b32();
@@ -126,19 +149,10 @@ static void f32_chain_hw(const SveF32ChainData *d, uint32_t *out)
         svfloat32_t m = svld1_f32(pg, reinterpret_cast<const float *>(&d->m_f32[i * lanes]));
         svfloat32_t a = svld1_f32(pg, reinterpret_cast<const float *>(&d->a_f32[i * lanes]));
         acc = svmla_f32_x(pg, acc, m, a);
+        if ((i + 1) % SEG_LEN == 0)   /* issue #376 checkpoint spill */
+            svst1_f32(pg, reinterpret_cast<float *>(
+                          &seg_out[((i + 1) / SEG_LEN - 1) * lanes]), acc);
     }
-    svst1_f32(pg, reinterpret_cast<float *>(out), acc);
-}
-
-// ---------------------------------------------------------------------------
-// Per-lane failure logging (fsu_byteexact_arm style).
-// ---------------------------------------------------------------------------
-static void report_f32_lane_mismatch(const char *tag, size_t lane,
-                                     uint32_t golden, uint32_t actual)
-{
-    log_warning("%s: lane %zu golden=0x%08" PRIx32 " "
-                "actual=0x%08" PRIx32 " xor=0x%08" PRIx32,
-                tag, lane, golden, actual, golden ^ actual);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,26 +263,35 @@ static int sve512_f32_chain_arm_run(struct test *test, int cpu)
        framework/device/cpu/arm64/arm64_vl.h). */
     ARM64_SVE_VL_DRIFT_CHECK_F32(test, d->vl_w);
 
-    // Golden, recomputed each iteration (deterministic, same op order).
-    std::vector<uint32_t> gold32(d->vl_w);
-    f32_chain_golden(d, gold32.data());
+    // Golden segment table, recomputed each iteration (deterministic, same
+    // op order). seg_out[SEG_COUNT-1] is the chain-final state.
+    std::vector<uint32_t> gold_seg(SEG_COUNT * d->vl_w);
+    std::vector<uint32_t> hw_seg(SEG_COUNT * d->vl_w);
+    f32_chain_golden(d, gold_seg.data());
 
     do {
         bool all_passed = true;
 
-        std::vector<uint32_t> hw(d->vl_w);
-        f32_chain_hw(d, hw.data());
-        for (size_t lane = 0; lane < d->vl_w; ++lane) {
-            if (hw[lane] != gold32[lane]) {
-                report_f32_lane_mismatch("sve512_f32_chain", lane,
-                                         gold32[lane], hw[lane]);
-                all_passed = false;
+        f32_chain_hw(d, hw_seg.data());
+        for (size_t seg = 0; seg < SEG_COUNT; ++seg) {
+            for (size_t lane = 0; lane < d->vl_w; ++lane) {
+                const size_t idx = seg * d->vl_w + lane;
+                if (hw_seg[idx] != gold_seg[idx]) {
+                    log_warning("sve512_f32_chain: seg %zu (after step %zu) "
+                                "lane %zu golden=0x%08" PRIx32 " "
+                                "actual=0x%08" PRIx32 " xor=0x%08" PRIx32,
+                                seg, (seg + 1) * SEG_LEN, lane,
+                                gold_seg[idx], hw_seg[idx],
+                                gold_seg[idx] ^ hw_seg[idx]);
+                    all_passed = false;
+                }
             }
         }
 
         if (!all_passed) {
             report_fail_msg(
-                "sve512_f32_chain_arm: SVE f32 FMLA chain SDC detected");
+                "sve512_f32_chain_arm: SVE f32 FMLA chain SDC detected "
+                "(segmented checkpoint)");
             return EXIT_FAILURE;
         }
 

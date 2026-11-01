@@ -52,9 +52,17 @@
  *      scatter — a software-induced false SDC).
  *
  * SDC detection: byte-exact lane compares against deterministic software
- * references, with per-lane golden/actual/XOR logging on mismatch.
- * report_fail_msg on any mismatch. ARM64-native; non-SVE CPUs return a
- * clean EXIT_SKIP from init. Built only on aarch64.
+ * references at SEG_LEN-step intermediate checkpoints along each chain
+ * (issue #376) — not only at chain end. A mid-chain accumulator bit flip
+ * is compared at the next boundary while it is still supra-ulp, before
+ * accumulated-magnitude growth grinds it away by rounding (the absorption
+ * blind zone of a final-only compare; measured: low-bit mid-chain flips
+ * 59.9% caught at chain end vs 79.4% with 64-step checkpoints). The
+ * special-value chain keeps its category compare per segment (intermediate
+ * NaN payloads are IMP-DEF). The gather/scatter workload is per-round
+ * checked already and is unchanged. Per-segment, per-lane logging on
+ * mismatch; report_fail_msg on any mismatch. ARM64-native; non-SVE CPUs
+ * return a clean EXIT_SKIP from init. Built only on aarch64.
  *
  * gem5-fi same-source dual-kernel evidence (spec "记录落盘三处" #1;
  * kernel workloads/sdcshield/sve512_fma_dual, gem5-fi branch
@@ -91,6 +99,22 @@ static constexpr size_t CHAIN_STEPS = 512;
 
 // Special-value (category-checked) chain length.
 static constexpr size_t SPECIAL_CHAIN_STEPS = 64;
+
+// Segmented intermediate checkpoints (issue #376): each chain's state is
+// compared at SEG_LEN-step boundaries, not only at chain end. A mid-chain
+// accumulator bit flip (delta = 2^j ulp) propagates deterministically
+// until the accumulated magnitude grows 2^j past it, then gets ground
+// away by rounding — a final-only compare is blind to that class
+// (measured on the f32-chain semantics, 30 seeds x 90 (step,bit) cells:
+// low-bit mid-chain flips 59.9% caught at chain end vs 79.4% with
+// 64-step checkpoints). The boundary spill does NOT break the FMA
+// dependency chain (acc flows on in the same register past the store):
+// 8 stores per 512 FMAs (1.6%). The special chain is shorter, so its
+// segment is proportionally finer (16 steps -> 4 checkpoints).
+static constexpr size_t SEG_LEN = 64;
+static constexpr size_t SEG_COUNT = CHAIN_STEPS / SEG_LEN;
+static constexpr size_t SPECIAL_SEG_LEN = 16;
+static constexpr size_t SPECIAL_SEG_COUNT = SPECIAL_CHAIN_STEPS / SPECIAL_SEG_LEN;
 
 // Finite high-Hamming f64 patterns: |x| <= 2, so products stay <= 4 and
 // 512-step sums stay < 2048 — the chain can never overflow or NaN, so
@@ -183,9 +207,11 @@ struct SveFmaData {
 
 // ---------------------------------------------------------------------------
 // Scalar goldens: identical operation order and indexing to the SVE chains
-// (stream layout is [step * lanes + lane]).
+// (stream layout is [step * lanes + lane]). Each records the accumulator
+// state at every segment boundary (issue #376); the last entry IS the
+// chain-final state, so the old final-only compare is subsumed.
 // ---------------------------------------------------------------------------
-static void f64_chain_golden(const SveFmaData *d, uint64_t *out)
+static void f64_chain_golden(const SveFmaData *d, uint64_t *seg_out)
 {
     const size_t lanes = d->vl_d;
     for (size_t lane = 0; lane < lanes; ++lane) {
@@ -197,13 +223,14 @@ static void f64_chain_golden(const SveFmaData *d, uint64_t *out)
             memcpy(&m, &d->m_f64[i * lanes + lane], 8);
             memcpy(&a, &d->a_f64[i * lanes + lane], 8);
             acc = std::fma(m, a, acc);
+            if ((i + 1) % SEG_LEN == 0)
+                memcpy(&seg_out[((i + 1) / SEG_LEN - 1) * lanes + lane],
+                       &acc, 8);
         }
-        memcpy(&accw, &acc, 8);
-        out[lane] = accw;
     }
 }
 
-static void f64_special_golden(const SveFmaData *d, uint64_t *out)
+static void f64_special_golden(const SveFmaData *d, uint64_t *seg_out)
 {
     const size_t lanes = d->vl_d;
     for (size_t lane = 0; lane < lanes; ++lane) {
@@ -215,13 +242,14 @@ static void f64_special_golden(const SveFmaData *d, uint64_t *out)
             memcpy(&m, &d->sm_f64[i * lanes + lane], 8);
             memcpy(&a, &d->sa_f64[i * lanes + lane], 8);
             acc = std::fma(m, a, acc);
+            if ((i + 1) % SPECIAL_SEG_LEN == 0)
+                memcpy(&seg_out[((i + 1) / SPECIAL_SEG_LEN - 1) * lanes + lane],
+                       &acc, 8);
         }
-        memcpy(&accw, &acc, 8);
-        out[lane] = accw;
     }
 }
 
-static void f32_chain_golden(const SveFmaData *d, uint32_t *out)
+static void f32_chain_golden(const SveFmaData *d, uint32_t *seg_out)
 {
     const size_t lanes = d->vl_w;
     for (size_t lane = 0; lane < lanes; ++lane) {
@@ -233,9 +261,10 @@ static void f32_chain_golden(const SveFmaData *d, uint32_t *out)
             memcpy(&m, &d->m_f32[i * lanes + lane], 4);
             memcpy(&a, &d->a_f32[i * lanes + lane], 4);
             acc = std::fma(m, a, acc);
+            if ((i + 1) % SEG_LEN == 0)
+                memcpy(&seg_out[((i + 1) / SEG_LEN - 1) * lanes + lane],
+                       &acc, 4);
         }
-        memcpy(&accw, &acc, 4);
-        out[lane] = accw;
     }
 }
 
@@ -269,7 +298,7 @@ static inline bool f32_lane_ok(uint32_t golden, uint32_t actual)
 // ---------------------------------------------------------------------------
 // Hardware chains (SVE, full runtime VL).
 // ---------------------------------------------------------------------------
-static void f64_chain_hw(const SveFmaData *d, uint64_t *out)
+static void f64_chain_hw(const SveFmaData *d, uint64_t *seg_out)
 {
     const size_t lanes = d->vl_d;
     const svbool_t pg = svptrue_b64();
@@ -278,11 +307,13 @@ static void f64_chain_hw(const SveFmaData *d, uint64_t *out)
         svfloat64_t m = svld1_f64(pg, reinterpret_cast<const double *>(&d->m_f64[i * lanes]));
         svfloat64_t a = svld1_f64(pg, reinterpret_cast<const double *>(&d->a_f64[i * lanes]));
         acc = svmla_f64_x(pg, acc, m, a);
+        if ((i + 1) % SEG_LEN == 0)   /* issue #376 checkpoint spill */
+            svst1_f64(pg, reinterpret_cast<double *>(
+                          &seg_out[((i + 1) / SEG_LEN - 1) * lanes]), acc);
     }
-    svst1_f64(pg, reinterpret_cast<double *>(out), acc);
 }
 
-static void f64_special_chain_hw(const SveFmaData *d, uint64_t *out)
+static void f64_special_chain_hw(const SveFmaData *d, uint64_t *seg_out)
 {
     const size_t lanes = d->vl_d;
     const svbool_t pg = svptrue_b64();
@@ -291,11 +322,13 @@ static void f64_special_chain_hw(const SveFmaData *d, uint64_t *out)
         svfloat64_t m = svld1_f64(pg, reinterpret_cast<const double *>(&d->sm_f64[i * lanes]));
         svfloat64_t a = svld1_f64(pg, reinterpret_cast<const double *>(&d->sa_f64[i * lanes]));
         acc = svmla_f64_x(pg, acc, m, a);
+        if ((i + 1) % SPECIAL_SEG_LEN == 0)   /* issue #376 checkpoint spill */
+            svst1_f64(pg, reinterpret_cast<double *>(
+                          &seg_out[((i + 1) / SPECIAL_SEG_LEN - 1) * lanes]), acc);
     }
-    svst1_f64(pg, reinterpret_cast<double *>(out), acc);
 }
 
-static void f32_chain_hw(const SveFmaData *d, uint32_t *out)
+static void f32_chain_hw(const SveFmaData *d, uint32_t *seg_out)
 {
     const size_t lanes = d->vl_w;
     const svbool_t pg = svptrue_b32();
@@ -304,8 +337,10 @@ static void f32_chain_hw(const SveFmaData *d, uint32_t *out)
         svfloat32_t m = svld1_f32(pg, reinterpret_cast<const float *>(&d->m_f32[i * lanes]));
         svfloat32_t a = svld1_f32(pg, reinterpret_cast<const float *>(&d->a_f32[i * lanes]));
         acc = svmla_f32_x(pg, acc, m, a);
+        if ((i + 1) % SEG_LEN == 0)   /* issue #376 checkpoint spill */
+            svst1_f32(pg, reinterpret_cast<float *>(
+                          &seg_out[((i + 1) / SEG_LEN - 1) * lanes]), acc);
     }
-    svst1_f32(pg, reinterpret_cast<float *>(out), acc);
 }
 
 // Gather/scatter round-trip: gather from pool at permuted element indices,
@@ -450,15 +485,6 @@ static int sve512_fma_arm_init(struct test *test)
 #endif
 }
 
-// f32 variant of the mismatch logger.
-static void report_f32_lane_mismatch(const char *tag, size_t lane,
-                                     uint32_t golden, uint32_t actual)
-{
-    log_warning("%s: lane %zu golden=0x%08" PRIx32 " "
-                "actual=0x%08" PRIx32 " xor=0x%08" PRIx32,
-                tag, lane, golden, actual, golden ^ actual);
-}
-
 // ---------------------------------------------------------------------------
 // test_run: four byte-exact-checked workloads per iteration.
 // ---------------------------------------------------------------------------
@@ -486,12 +512,17 @@ static int sve512_fma_arm_run(struct test *test, int cpu)
     }
 
     // Goldens, recomputed each iteration (deterministic, same op order).
-    std::vector<uint64_t> gold64(d->vl_d);
-    std::vector<uint64_t> golds64(d->vl_d);
-    std::vector<uint32_t> gold32(d->vl_w);
-    f64_chain_golden(d, gold64.data());
-    f64_special_golden(d, golds64.data());
-    f32_chain_golden(d, gold32.data());
+    // Segment tables (issue #376): the last entry of each table is the
+    // chain-final state, so the old final-only compare is subsumed.
+    std::vector<uint64_t> gold64_seg(SEG_COUNT * d->vl_d);
+    std::vector<uint64_t> golds64_seg(SPECIAL_SEG_COUNT * d->vl_d);
+    std::vector<uint32_t> gold32_seg(SEG_COUNT * d->vl_w);
+    std::vector<uint64_t> hw64_seg(SEG_COUNT * d->vl_d);
+    std::vector<uint64_t> hws64_seg(SPECIAL_SEG_COUNT * d->vl_d);
+    std::vector<uint32_t> hw32_seg(SEG_COUNT * d->vl_w);
+    f64_chain_golden(d, gold64_seg.data());
+    f64_special_golden(d, golds64_seg.data());
+    f32_chain_golden(d, gold32_seg.data());
 
     // Gather/scatter scratch is per-worker mutable state, allocated here in
     // test_run — NOT in the shared test->data: under -n>1 every worker
@@ -506,41 +537,58 @@ static int sve512_fma_arm_run(struct test *test, int cpu)
     do {
         bool all_passed = true;
 
-        // ---- (1) f64 finite FMLA chain.
+        // ---- (1) f64 finite FMLA chain (segmented checkpoints).
         {
-            std::vector<uint64_t> hw(d->vl_d);
-            f64_chain_hw(d, hw.data());
-            for (size_t lane = 0; lane < d->vl_d; ++lane) {
-                if (hw[lane] != gold64[lane]) {
-                    report_f64_lane_mismatch("sve512_f64_chain", lane,
-                                             gold64[lane], hw[lane]);
-                    all_passed = false;
+            f64_chain_hw(d, hw64_seg.data());
+            for (size_t seg = 0; seg < SEG_COUNT; ++seg) {
+                for (size_t lane = 0; lane < d->vl_d; ++lane) {
+                    const size_t idx = seg * d->vl_d + lane;
+                    if (hw64_seg[idx] != gold64_seg[idx]) {
+                        log_warning("sve512_f64_chain: seg %zu (after step "
+                                    "%zu) lane %zu golden=0x%016" PRIx64
+                                    " actual=0x%016" PRIx64, seg,
+                                    (seg + 1) * SEG_LEN, lane,
+                                    gold64_seg[idx], hw64_seg[idx]);
+                        all_passed = false;
+                    }
                 }
             }
         }
 
-        // ---- (2) f64 special-value chain (category compare).
+        // ---- (2) f64 special-value chain (segmented category compare:
+        //      intermediate NaN states have IMP-DEF payloads, so segments
+        //      keep the fsu_byteexact category semantics, not byte-exact).
         {
-            std::vector<uint64_t> hw(d->vl_d);
-            f64_special_chain_hw(d, hw.data());
-            for (size_t lane = 0; lane < d->vl_d; ++lane) {
-                if (!f64_lane_ok(golds64[lane], hw[lane])) {
-                    report_f64_lane_mismatch("sve512_f64_special", lane,
-                                             golds64[lane], hw[lane]);
-                    all_passed = false;
+            f64_special_chain_hw(d, hws64_seg.data());
+            for (size_t seg = 0; seg < SPECIAL_SEG_COUNT; ++seg) {
+                for (size_t lane = 0; lane < d->vl_d; ++lane) {
+                    const size_t idx = seg * d->vl_d + lane;
+                    if (!f64_lane_ok(golds64_seg[idx], hws64_seg[idx])) {
+                        log_warning("sve512_f64_special: seg %zu (after "
+                                    "step %zu) lane %zu golden=0x%016"
+                                    PRIx64 " actual=0x%016" PRIx64, seg,
+                                    (seg + 1) * SPECIAL_SEG_LEN, lane,
+                                    golds64_seg[idx], hws64_seg[idx]);
+                        all_passed = false;
+                    }
                 }
             }
         }
 
-        // ---- (3) f32 finite FMLA chain.
+        // ---- (3) f32 finite FMLA chain (segmented checkpoints).
         {
-            std::vector<uint32_t> hw(d->vl_w);
-            f32_chain_hw(d, hw.data());
-            for (size_t lane = 0; lane < d->vl_w; ++lane) {
-                if (hw[lane] != gold32[lane]) {
-                    report_f32_lane_mismatch("sve512_f32_chain", lane,
-                                             gold32[lane], hw[lane]);
-                    all_passed = false;
+            f32_chain_hw(d, hw32_seg.data());
+            for (size_t seg = 0; seg < SEG_COUNT; ++seg) {
+                for (size_t lane = 0; lane < d->vl_w; ++lane) {
+                    const size_t idx = seg * d->vl_w + lane;
+                    if (hw32_seg[idx] != gold32_seg[idx]) {
+                        log_warning("sve512_f32_chain: seg %zu (after step "
+                                    "%zu) lane %zu golden=0x%08" PRIx32
+                                    " actual=0x%08" PRIx32, seg,
+                                    (seg + 1) * SEG_LEN, lane,
+                                    gold32_seg[idx], hw32_seg[idx]);
+                        all_passed = false;
+                    }
                 }
             }
         }

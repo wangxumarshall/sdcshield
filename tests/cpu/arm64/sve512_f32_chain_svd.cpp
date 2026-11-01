@@ -28,6 +28,13 @@
  * Differs from sve512_f32_chain_arm: working set scales with the lanes
  * (5.9..47.3 MB across m and a over the 128..1024-bit tiers) vs 64 KB,
  * nested block traversal vs flat stream.
+ *
+ * SDC detection (issue #376): byte-exact per-lane compares against the
+ * scalar fmaf reference at SEG_LEN-step intermediate checkpoints within
+ * each block's chain — not only at the block-final state. A mid-chain
+ * accumulator bit flip is compared at the next boundary while it is
+ * still supra-ulp, before accumulated-magnitude growth grinds it away
+ * by rounding (the absorption blind zone of a final-only compare).
  * @endparblock
  */
 
@@ -47,6 +54,17 @@
 // Serial FMA chain length per iteration — VL-independent (a per-lane
 // dependency sequence; the lane count, not the length, scales with VL).
 static constexpr size_t CHAIN_STEPS = 512;
+
+// Segmented intermediate checkpoints (issue #376): the per-block chain
+// state is byte-compared at SEG_LEN-step boundaries, not only at chain
+// end — a mid-chain accumulator bit flip (delta = 2^j ulp) propagates
+// deterministically until the accumulated magnitude grows 2^j past it,
+// then gets ground away by rounding, which a final-only compare never
+// sees (measured on the flat sibling's semantics: low-bit mid-chain
+// flips 59.9% caught at chain end vs 79.4% with 64-step checkpoints).
+// The boundary spill does not break the FMA dependency chain.
+static constexpr size_t SEG_LEN = 64;
+static constexpr size_t SEG_COUNT = CHAIN_STEPS / SEG_LEN;
 static constexpr size_t SVD_ROWS = 300;
 static constexpr size_t SVD_COLS = 300;
 static constexpr size_t SVD_BLOCK_ROWS = 16;
@@ -87,7 +105,7 @@ static inline size_t block_slab_base(size_t row, size_t col, size_t lanes)
            (CHAIN_STEPS * lanes);
 }
 
-static void f32_chain_golden(const SveF32ChainSvdData *d, uint32_t *out,
+static void f32_chain_golden(const SveF32ChainSvdData *d, uint32_t *seg_out,
                              size_t row, size_t col)
 {
     const size_t lanes = d->vl_w;
@@ -101,13 +119,14 @@ static void f32_chain_golden(const SveF32ChainSvdData *d, uint32_t *out,
             memcpy(&m, &d->m_f32[base + lane], 4);
             memcpy(&a, &d->a_f32[base + lane], 4);
             acc = std::fma(m, a, acc);
+            if ((i + 1) % SEG_LEN == 0)
+                memcpy(&seg_out[((i + 1) / SEG_LEN - 1) * lanes + lane],
+                       &acc, 4);
         }
-        memcpy(&accw, &acc, 4);
-        out[lane] = accw;
     }
 }
 
-static void f32_chain_hw(const SveF32ChainSvdData *d, uint32_t *out,
+static void f32_chain_hw(const SveF32ChainSvdData *d, uint32_t *seg_out,
                          size_t row, size_t col)
 {
     const size_t lanes = d->vl_w;
@@ -121,16 +140,10 @@ static void f32_chain_hw(const SveF32ChainSvdData *d, uint32_t *out,
         svfloat32_t a = svld1_f32(pg,
             reinterpret_cast<const float *>(&d->a_f32[base]));
         acc = svmla_f32_x(pg, acc, m, a);
+        if ((i + 1) % SEG_LEN == 0)   /* issue #376 checkpoint spill */
+            svst1_f32(pg, reinterpret_cast<float *>(
+                          &seg_out[((i + 1) / SEG_LEN - 1) * lanes]), acc);
     }
-    svst1_f32(pg, reinterpret_cast<float *>(out), acc);
-}
-
-static void report_f32_lane_mismatch(const char *tag, size_t lane,
-                                     uint32_t golden, uint32_t actual)
-{
-    log_warning("%s: lane %zu golden=0x%08" PRIx32 " "
-                "actual=0x%08" PRIx32 " xor=0x%08" PRIx32,
-                tag, lane, golden, actual, golden ^ actual);
 }
 
 static int sve512_f32_chain_svd_init(struct test *test)
@@ -224,27 +237,39 @@ static int sve512_f32_chain_svd_run(struct test *test, int cpu)
        framework/device/cpu/arm64/arm64_vl.h). */
     ARM64_SVE_VL_DRIFT_CHECK_F32(test, d->vl_w);
 
-    std::vector<uint32_t> gold32(d->vl_w);
-    std::vector<uint32_t> hw(d->vl_w);
+    // Segment tables sized once (issue #376); recomputed per block. The
+    // last segment entry is the block-final state, so the old final-only
+    // compare is subsumed.
+    std::vector<uint32_t> gold_seg(SEG_COUNT * d->vl_w);
+    std::vector<uint32_t> hw_seg(SEG_COUNT * d->vl_w);
 
     do {
         bool all_passed = true;
         for (size_t br = 0; br < SVD_ROWS; br += SVD_BLOCK_ROWS) {
             for (size_t bc = 0; bc < SVD_COLS; bc += SVD_BLOCK_COLS) {
-                f32_chain_golden(d, gold32.data(), br, bc);
-                f32_chain_hw(d, hw.data(), br, bc);
-                for (size_t lane = 0; lane < d->vl_w; ++lane) {
-                    if (hw[lane] != gold32[lane]) {
-                        report_f32_lane_mismatch(
-                            "sve512_f32_chain_svd", lane,
-                            gold32[lane], hw[lane]);
-                        all_passed = false;
+                f32_chain_golden(d, gold_seg.data(), br, bc);
+                f32_chain_hw(d, hw_seg.data(), br, bc);
+                for (size_t seg = 0; seg < SEG_COUNT; ++seg) {
+                    for (size_t lane = 0; lane < d->vl_w; ++lane) {
+                        const size_t idx = seg * d->vl_w + lane;
+                        if (hw_seg[idx] != gold_seg[idx]) {
+                            log_warning("sve512_f32_chain_svd: block (%zu,"
+                                        "%zu) seg %zu (after step %zu) lane "
+                                        "%zu golden=0x%08" PRIx32 " "
+                                        "actual=0x%08" PRIx32 " xor=0x%08"
+                                        PRIx32, br, bc, seg,
+                                        (seg + 1) * SEG_LEN, lane,
+                                        gold_seg[idx], hw_seg[idx],
+                                        gold_seg[idx] ^ hw_seg[idx]);
+                            all_passed = false;
+                        }
                     }
                 }
             }
         }
         if (!all_passed) {
-            report_fail_msg("sve512_f32_chain_svd: SDC detected");
+            report_fail_msg("sve512_f32_chain_svd: SDC detected "
+                            "(segmented checkpoint)");
             return EXIT_FAILURE;
         }
     } while (test_time_condition(test));

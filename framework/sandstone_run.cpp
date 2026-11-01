@@ -1241,17 +1241,24 @@ double sdc_feedback_eff_median(const char *test_id)
     for (int i = 0; i < sApp->shmem->main_thread_count; ++i) {
         const PerThreadData::MemFeedback *fb =
                 &sApp->raw_main_thread_data(i)->mem_feedback;
-        /* seqlock 读侧(PR#302 检视 #13/#26): 前后 acquire 各读一次 seq,
-         * 序号一致且为偶才采纳快照; 奇数(兄弟 child 正在写)/序号变动
-         * (读取期间发生过写)的槽丢弃——共享字段的重排混合态不再可能
-         * 进入 median。空槽 seq=0 恒为偶, 走既有 samples==0 无效判据。 */
+        /* seqlock 读侧(PR#302 检视 #13/#26): 前后各读一次 seq, 序号一致
+         * 且为偶才采纳快照; 奇数(兄弟 child 正在写)/序号变动(读取期间
+         * 发生过写)的槽丢弃。空槽 seq=0 恒为偶, 走既有 samples==0
+         * 无效判据。
+         * 复检屏障(issue #438, 内核 read_seqcount_retry 的 smp_rmb):
+         * 字段是普通 ldr, 第二次 seq 读取若在字段加载完成前完成绑定,
+         * 采纳的字段可比 seq 序号所对应的写入更新——LDAR/acquire 只
+         * 约束其后的访问, 不约束其前者。字段与 seq 复检之间须显式 load
+         * 屏障(acquire fence, aarch64 dmb ishld), 否则读者可接受
+         * {hash=新, samples>0, eff_ratio=上一测试值} 的源序不可能快照。 */
         uint32_t s1 = __atomic_load_n(&fb->seq, __ATOMIC_ACQUIRE);
         if (s1 & 1)
             continue;
         uint64_t h = fb->test_id_hash;
         uint32_t samples = fb->samples;
         double eff = fb->eff_ratio;
-        uint32_t s2 = __atomic_load_n(&fb->seq, __ATOMIC_ACQUIRE);
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        uint32_t s2 = __atomic_load_n(&fb->seq, __ATOMIC_RELAXED);
         if (s1 != s2)
             continue;
         if (h == hash && samples > 0 && eff > 0.0)
@@ -1292,17 +1299,22 @@ static void sdc_feedback_write(const struct test *test)
 
     PerThreadData::MemFeedback *fb = &sApp->main_thread_data()->mem_feedback;
     uint64_t hash = sdc_test_id_hash(test->id);
-    /* seqlock 发布(PR#302 检视 #13/#26, 收口 T9 注释自认的已知边界):
+    /* seqlock 发布(PR#302 检视 #13/#26; issue #438 补 canonical 两屏障):
      * 本槽是 MAP_SHARED 上的单写者(本 slice 的当前 child)/多读者(兄弟
-     * slice child 的 test_init 读侧)共享字段, 普通非原子 store/RMW 的
+     * slice child 的 test_init 读侧)共享字段, 无屏障的普通 store/RMW 的
      * 编译器/架构重排可使读者见到混合态(新 hash 配旧 eff_ratio——异常
      * 偏大的旧 eff 经读侧无上钳的向上修正直接放大 n_mem)。写序:
-     *   [seq→奇(relaxed)] → 复位+EMA 字段更新 → [seq+1→偶(release)]
-     * release 保证字段 store 不下沉到偶数发布之后; 首次置奇用 relaxed
-     * 即可——字段 store 被提前到置奇之前时, 读者见到的仍是完整
-     * (新或旧)快照, 语义无损。T9 的『先清 samples 再发布 hash』源序
-     * 保留(双保险: 复位期间读者见奇数丢弃或见稳定偶数且 samples==0
-     * 判无效)。
+     *   [seq→奇(relaxed)] → [release fence] → 复位+EMA 字段更新
+     *   → [seq+1→偶(release)]
+     * 置奇后的 release fence(issue #438, 内核 write_seqcount_begin 的
+     * smp_wmb): ARM64 不保证其他观察者按源序观察不同地址的 store——置奇
+     * 若迟于字段 store 传播, 读者可在 seq 仍读旧偶数时读到新 hash, 且
+     * 字段间同样无序、可部分提前(旧注释『读者见到的仍是完整(新或旧)
+     * 快照, 语义无损』论证不成立), 由此接受 {hash=新, samples>0,
+     * eff=上一测试} 混合态。fence 保证置奇先于字段对读者可见。偶数发布
+     * 用 release 保证字段 store 不下沉到置偶之后。T9 的『先清 samples
+     * 再发布 hash』源序保留(双保险: 复位期间读者见奇数丢弃或见稳定
+     * 偶数且 samples==0 判无效)。
      * 被杀写者恢复(置奇用 s1 = seq0|1 而非 seq0+1 的原因): 上代 child
      * 可在两次 seq store 之间被杀(超时 SIGQUIT/OOM), seq 停在奇数。
      * 若用 seq0+1: 奇数+1=偶——半写字段被当"稳定态"发布一次, 且
@@ -1312,11 +1324,13 @@ static void sdc_feedback_write(const struct test *test)
      * (seq0 偶)与 +1 完全同值。序号单调不减, 2^32 回绕需 40 亿次
      * 写入(每 test 每 fracture 一次)——不可达。
      * 上一测试的 eff_ratio 被采进本测试 median 的窗口由 seq 一致性
-     * 判据关闭: 复位期间读者要么见奇数丢弃, 要么见稳定偶数且
-     * samples==0 判无效。 */
+     * 判据 + 写/读两侧屏障关闭: 复位期间读者要么见奇数丢弃, 要么
+     * 见稳定偶数且 samples==0 判无效; 写序屏障保证奇数先于字段可见,
+     * 读侧复检屏障保证字段绑定先于 seq 复检。 */
     uint32_t seq0 = __atomic_load_n(&fb->seq, __ATOMIC_RELAXED);
     uint32_t s1 = seq0 | 1;                 /* 奇数=写入中(被杀写者恢复) */
     __atomic_store_n(&fb->seq, s1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
     if (fb->test_id_hash != hash) {         /* 槽被上一测试占用 → 重置 */
         fb->samples = 0;
         fb->test_id_hash = hash;

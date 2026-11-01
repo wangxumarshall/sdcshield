@@ -181,76 +181,76 @@ cleanup 加 `free(data->expected_swapped);`。
 
 **Files:** 无代码改动。
 
-- [ ] `git checkout -b feat/issue374-movbe-roundtrip-golden`。
-- [ ] 基线构建（零警告确认）+ `movbe_dump`、`movbe_l1d_v_rev`、`movbe_sve` 各跑一次 `-t 10 -n 4` pass 确认起点干净。
-- [ ] 基线 run/init 符号 objdump 快照存 /tmp（V4b 对照用）。
-- [ ] 提交本计划：`git add docs/superpowers/plans/2026-11-01-issue374-movbe-roundtrip-golden.md && git commit -s -m "docs(plan): issue #374 movbe 中间值 golden 与恒真族修复计划"`。
+- [x] `git checkout -b feat/issue374-movbe-roundtrip-golden`。
+- [x] 基线构建（零警告确认）+ `movbe_dump`、`movbe_l1d_v_rev`、`movbe_sve` 各跑一次 `-t 10 -n 4` pass 确认起点干净。
+- [x] 基线 run/init 符号 objdump 快照存 /tmp（V4b 对照用）。
+- [x] 提交本计划：`git add docs/superpowers/plans/2026-11-01-issue374-movbe-roundtrip-golden.md && git commit -s -m "docs(plan): issue #374 movbe 中间值 golden 与恒真族修复计划"`。
 
 ### Task 2: 机械门 scripts/check-bswap-golden.sh
 
 **Files:** Create `scripts/check-bswap-golden.sh`（chmod +x）。
 
-- [ ] 照抄 check-scalar-golden.sh 骨架（nm mangled 解析 + 精确地址范围 + 空反汇编 FAIL），检查集 = 标量 `rev/rev16/rev32`（`[wx]` 操作数）∪ 向量 ALU（复用 VALU_RE）。
-- [ ] 负向对照：对基线二进制跑 `movbe_dump_run` 符号 → 必须 FAIL（含 rev）；`movbe_dump_init` → PASS（现状 init 无 rev）。记录输出。
-- [ ] Commit：`feat(scripts): check-bswap-golden.sh 机械门——golden 符号零 rev/零向量 ALU（issue #374）`。
+- [x] 照抄 check-scalar-golden.sh 骨架（nm mangled 解析 + 精确地址范围 + 空反汇编 FAIL），检查集 = 标量 `rev/rev16/rev32`（`[wx]` 操作数）∪ 向量 ALU（复用 VALU_RE）。
+- [x] 负向对照：对基线二进制跑 `movbe_dump_run` 符号 → 必须 FAIL（含 rev）；`movbe_dump_init` → PASS（现状 init 无 rev）。记录输出。
+- [x] Commit：`feat(scripts): check-bswap-golden.sh 机械门——golden 符号零 rev/零向量 ALU（issue #374）`。
 
 ### Task 3: W2a —— C 往返族标准 10 文件
 
 **Files:** 见映射表 W2a。逐文件：Read → struct 加字段 → init 加 LUT+golden 填充 → run 加 sweep → cleanup 加 free → Edit。
 
-- [ ] 10 文件全部改造（模板 T-C ×9、T-C-SINK ×1）。
-- [ ] V3 构建；V1+V2 逐测试；V4 机械门过 10 个 init 符号；V4b 抽 3 个文件做热循环对照。
-- [ ] Commit：`fix(tests): movbe C 族 swapped 中间值→独立 LUT golden + post-loop sweep（issue #374 W2a）`。
+- [x] 10 文件全部改造（模板 T-C ×9、T-C-SINK ×1）。
+- [x] V3 构建；V1+V2 逐测试；V4 机械门过 10 个 init 符号；V4b 抽 3 个文件做热循环对照。
+- [x] Commit：`fix(tests): movbe C 族 swapped 中间值→独立 LUT golden + post-loop sweep（issue #374 W2a）`。
 
 ### Task 4: W2b —— slot 族 4 文件
 
 同 Task 3 流程（T-C-SLOT；h 读运行期 mask）。
 
-- [ ] 4 文件改造 + V1/V2/V4；V4b 抽 1 个对照。
-- [ ] Commit：`fix(tests): movbe slot 探针族 swapped 终态→按槽位 golden 校验（issue #374 W2b）`。
+- [x] 4 文件改造 + V1/V2/V4；V4b 抽 1 个对照。
+- [x] Commit：`fix(tests): movbe slot 探针族 swapped 终态→按槽位 golden 校验（issue #374 W2b）`。
 
 ### Task 5: W2c —— probe_c 合法集 + probe_a 标注
 
-- [ ] probe_c：终态双合法态校验 + 边界注释；probe_a：描述串与注释如实标注"无状态外泄变体，中间值校验结构性不可行（issue #374 边界）"。
-- [ ] V1/V2（probe_a 仅 V1——无行为变化）；Commit：`fix(tests): movbe probe_c 终态合法集校验 + probe_a 零检出边界标注（issue #374 W2c）`。
+- [x] probe_c：终态双合法态校验 + 边界注释；probe_a：描述串与注释如实标注"无状态外泄变体，中间值校验结构性不可行（issue #374 边界）"。
+- [x] V1/V2（probe_a 仅 V1——无行为变化）；Commit：`fix(tests): movbe probe_c 终态合法集校验 + probe_a 零检出边界标注（issue #374 W2c）`。
 
 ### Task 6: W3 —— asm 族 2 文件 11 测试
 
-- [ ] movbe_l1d_variants：init/cleanup 扩展 + 共享 sweep helper + 10 个 run 尾部各加调用（v_mul/v_add 内联期望）。
-- [ ] movbe_str_multiload：T-C（asm 零触碰；既有 in-loop expected 不动，仅加 sweep）。
-- [ ] V1/V2 ×11、V4（movbe_v_init、movbe_init 符号）；Commit：`fix(tests): movbe asm 族 swapped 中间值→独立 golden（issue #374 W3）`。
+- [x] movbe_l1d_variants：init/cleanup 扩展 + 共享 sweep helper + 10 个 run 尾部各加调用（v_mul/v_add 内联期望）。
+- [x] movbe_str_multiload：T-C（asm 零触碰；既有 in-loop expected 不动，仅加 sweep）。
+- [x] V1/V2 ×11、V4（movbe_v_init、movbe_init 符号）；Commit：`fix(tests): movbe asm 族 swapped 中间值→独立 golden（issue #374 W3）`。
 
 ### Task 7: 注入实验 V5（C/asm/SVE 三子族，临时 patch 不进 commit）
 
-- [ ] 按 V5 (a)(b)(c) 执行：旧代码盲区 pass 实证 → 新校验 FAIL 证明 → 还原重建 pass。记录完整输出。
-- [ ] SVE 注入在 W4 完成后补做（顺序调整：(a)(b) 此时做，(c) 在 Task 9 后）。
+- [x] 按 V5 (a)(b)(c) 执行：旧代码盲区 pass 实证 → 新校验 FAIL 证明 → 还原重建 pass。记录完整输出。
+- [x] SVE 注入在 W4 完成后补做（顺序调整：(a)(b) 此时做，(c) 在 Task 9 后）。
 
 ### Task 8: W4a —— SVE 标准 9 文件 11 测试
 
-- [ ] 逐文件 T-SVE 改造；dump_golden_sve/l1d_vs_l2_sve 冷路径零触碰确认（diff 检查）。
-- [ ] V1/V2/V4（sve init 符号）；Commit：`fix(tests): movbe sve 族 swapped 中间值→标量 LUT golden（issue #374 W4a）`。
+- [x] 逐文件 T-SVE 改造；dump_golden_sve/l1d_vs_l2_sve 冷路径零触碰确认（diff 检查）。
+- [x] V1/V2/V4（sve init 符号）；Commit：`fix(tests): movbe sve 族 swapped 中间值→标量 LUT golden（issue #374 W4a）`。
 
 ### Task 9: W4b —— SVE slot/特殊 7 文件 7 测试 + SVE 注入
 
-- [ ] f/g1/g2/h_sve（实读定模板）、probe_c_sve（合法集）、probe_a_sve（标注）、slf_sweep_sve（实读定终态置换）。
-- [ ] V5(c) SVE 索引表错排注入。
-- [ ] V1/V2/V4；Commit：`fix(tests): movbe sve slot/SLF 族中间值校验 + 注入证明（issue #374 W4b）`。
+- [x] f/g1/g2/h_sve（实读定模板）、probe_c_sve（合法集）、probe_a_sve（标注）、slf_sweep_sve（实读定终态置换）。
+- [x] V5(c) SVE 索引表错排注入。
+- [x] V1/V2/V4；Commit：`fix(tests): movbe sve slot/SLF 族中间值校验 + 注入证明（issue #374 W4b）`。
 
 ### Task 10: W5 —— 缺口 B 8 文件 9 测试
 
-- [ ] partial_store_forwarding（+实读 _sve 套同型）、memcpy_rewr、cachebounce、sched_storm×4。
-- [ ] V1/V2（sched_storm BETA 后 `-e` 显式点名仍可跑，验证 quality 过滤不拦显式请求）；memcpy_rewr 按 `-n ≥2` 跑（要求 ≥2 线程）；Commit：`fix(tests): 恒真族独立 golden——PSF 拼接 golden/memcpy 算术 golden/cachebounce 寄存器计数/sched_storm 降 BETA（issue #374 W5）`。
+- [x] partial_store_forwarding（+实读 _sve 套同型）、memcpy_rewr、cachebounce、sched_storm×4。
+- [x] V1/V2（sched_storm BETA 后 `-e` 显式点名仍可跑，验证 quality 过滤不拦显式请求）；memcpy_rewr 按 `-n ≥2` 跑（要求 ≥2 线程）；Commit：`fix(tests): 恒真族独立 golden——PSF 拼接 golden/memcpy 算术 golden/cachebounce 寄存器计数/sched_storm 降 BETA（issue #374 W5）`。
 
 ### Task 11: 文档同步 + 回归 + 收尾
 
-- [ ] `docs/coding/writing_tests.md` golden 独立性条目增补"自逆往返中间值必须校验"与 LUT 防融合要点（引用本计划）。
-- [ ] V6 回归；V7 x86 目检记录；最终全量构建零新警告。
-- [ ] Commit：`docs(tests): 自逆往返中间值校验范式写入 writing_tests.md（issue #374）`。
+- [x] `docs/coding/writing_tests.md` golden 独立性条目增补"自逆往返中间值必须校验"与 LUT 防融合要点（引用本计划）。
+- [x] V6 回归；V7 x86 目检记录；最终全量构建零新警告。
+- [x] Commit：`docs(tests): 自逆往返中间值校验范式写入 writing_tests.md（issue #374）`。
 
 ### Task 12: PR 与闭环
 
-- [ ] push feature 分支；PR 正文：范式说明、完成清单、注入实验输出、诚实边界、移交清单（cache_stress_civac 同病、probe_a 结构边界、mercurial 覆盖边界、gem5-fi 后续棒）、`Refs #374`（不写 Fixes）。
-- [ ] /code-review high → 处置全部发现 → merge；issue #374 留移交评论。
+- [x] push feature 分支；PR 正文：范式说明、完成清单、注入实验输出、诚实边界、移交清单（cache_stress_civac 同病、probe_a 结构边界、mercurial 覆盖边界、gem5-fi 后续棒）、`Refs #374`（不写 Fixes）。
+- [x] /code-review high → 处置全部发现 → merge；issue #374 留移交评论。
 
 ## Self-Review
 

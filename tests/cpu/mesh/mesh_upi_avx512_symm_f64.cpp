@@ -14,13 +14,27 @@
  * three-phase skeleton (write / read-verify / reset with atomic block
  * claiming), with FP compute on both sides of the shared buffer:
  *
- *   WRITE phase: each claimed block is produced with a 4-step NEON
- *     vfmaq_f64 local chain over exact binary values, then stored.
+ *   WRITE phase: each claimed block is produced from the deterministic
+ *     block_value() formula and stored with NEON; immediately read back
+ *     per lane and hard-failed on mismatch (#332 gap-B low-cost
+ *     high-value pattern, precedent avx512_sym's block_ok) — this is
+ *     the file's only byte-level write-content check. Same-thread,
+ *     right after own store: deterministic, zero false-positive risk.
  *
- *   READ phase: every element of the shared buffer is loaded, run
- *     through the same 4-step FMA chain, and byte-compared against the
- *     recomputed golden; plus the store/reload consistency check of the
- *     original skeleton.
+ *   READ phase: every element of the shared buffer is loaded and run
+ *     through three checks with honest, distinct detection boundaries:
+ *     (a) the closed-form aggregate sum (content: any value corruption
+ *     that changes the total — the primary data validation);
+ *     (b) a 4-step NEON vfmaq_f64 chain vs the same-order scalar golden
+ *     on the SAME loaded value — detects compute-path divergence
+ *     (NEON FMA unit vs scalar pipeline) only, NOT memory content
+ *     (both arms consume identical input; #323 renamed this from the
+ *     misleading "consistent");
+ *     (c) the original skeleton's store/reload self-compare through a
+ *     private buffer — private load/store path only, not shared-buffer
+ *     content. Compensating multi-element corruption that preserves
+ *     the total stays undetectable here (aggregate bound, #332 tracks
+ *     the family-wide per-element golden).
  *
  *   Global sum (closed form, #323): the expected total is a deterministic
  *     function of the buffer content — block_value() is a pure function of
@@ -311,6 +325,33 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
             }
             __sync_synchronize();
 
+            /* 写侧立即读回:本文件唯一逐 lane 写入内容校验(#332 缺口 B 的
+             * 低成本高价值先行项模式,先例 avx512_sym 的 block_ok)——
+             * 同线程紧随 own store,字节级抓 store/load 通路损坏,确定性强、
+             * 零假阳性风险。 */
+            bool block_ok = true;
+            for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
+                float64x2_t written = vld1q_f64(vals + v * NEON_VECTOR_SIZE);
+                float64x2_t loaded = vld1q_f64(td->data + offset + v * NEON_VECTOR_SIZE);
+                uint64x2_t cmp = vceqq_u64(vreinterpretq_u64_f64(written),
+                                           vreinterpretq_u64_f64(loaded));
+                if (!(vgetq_lane_u64(cmp, 0) == 0xFFFFFFFFFFFFFFFFULL &&
+                      vgetq_lane_u64(cmp, 1) == 0xFFFFFFFFFFFFFFFFULL)) {
+                    block_ok = false;
+                    break;
+                }
+            }
+            if (!block_ok) {
+                log_warning("mesh_upi_avx512_symm_f64: thread %d block %llu "
+                            "immediate read-back mismatch at offset %zu "
+                            "(store/load corruption)", id,
+                            (unsigned long long)block, offset);
+                report_fail_msg("mesh_upi_avx512_symm_f64: write-phase "
+                                "immediate read-back mismatch (store/load "
+                                "corruption)");
+                return EXIT_FAILURE;
+            }
+
             td->write_done.fetch_add(1, std::memory_order_seq_cst);
         }
 
@@ -338,9 +379,14 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
          * expected=0x1.bdp+10 的假 mismatch;根治 = 期望值不再依赖任何
          * 共享可变状态)。 */
 
-        // ---------- 读阶段:全量读 + FMA 链 + golden 比对 ----------
+        // ---------- 读阶段:全量读 + 三检(检出边界见文件头) ----------
         double read_sum = 0.0;
-        bool consistent = true;
+        /* fma_ok 检计算路径分歧(NEON FMA 单元 vs 标量流水线),不检内存
+         * 内容——两臂消费同一个刚载入的 vals[j],内容损坏对两臂同输入
+         * (#323:旧名 consistent 恒真且误导为数据校验)。
+         * store_ok 检私有 store/reload 通路自一致,不检共享缓冲内容。 */
+        bool fma_ok = true;
+        bool store_ok = true;
         alignas(16) double store_buf[BLOCK_SIZE];
 
         for (size_t i = 0; i < td->total_elements; i += BLOCK_SIZE) {
@@ -354,13 +400,13 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
                 double got = fma_chain(vals[j]);
                 double want = fma_chain_scalar(vals[j]);
                 if (got != want) {              // byte-exact(精确值,== 可靠)
-                    consistent = false;
+                    fma_ok = false;
                     break;
                 }
             }
-            if (!consistent) break;
+            if (!fma_ok) break;
 
-            // 一致性测试:Store/Load 比较(原骨架)
+            // 私有通路:Store/Load 自比较(原骨架)
             for (int v = 0; v < VECTORS_PER_BLOCK; ++v) {
                 float64x2_t orig = vld1q_f64(vals + v * NEON_VECTOR_SIZE);
                 vst1q_f64(store_buf + v * NEON_VECTOR_SIZE, orig);
@@ -372,25 +418,38 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
                                            vreinterpretq_u64_f64(reload));
                 if (!(vgetq_lane_u64(cmp, 0) == 0xFFFFFFFFFFFFFFFFULL &&
                       vgetq_lane_u64(cmp, 1) == 0xFFFFFFFFFFFFFFFFULL)) {
-                    consistent = false;
+                    store_ok = false;
                     break;
                 }
             }
-            if (!consistent) break;
+            if (!store_ok) break;
         }
 
         bool sum_ok = (read_sum == td->expected_total);   // 双侧精确,顺序无关
-        bool passed = sum_ok && consistent;
-
-        if (!passed) {
+        if (!sum_ok) {
             log_warning("mesh_upi_avx512_symm_f64: thread %d read_sum=%a "
-                        "expected=%a consistent=%d", id, read_sum,
-                        td->expected_total, (int)consistent);
+                        "expected=%a (deterministic golden)", id, read_sum,
+                        td->expected_total);
             report_fail_msg("mesh_upi_avx512_symm_f64: cross-core FP sum "
                             "mismatch vs deterministic golden");
             return EXIT_FAILURE;
         }
-        validated_any = true;   // 本轮全量读取校验（精确和+FMA 链 golden）已通过
+        if (!fma_ok) {
+            log_warning("mesh_upi_avx512_symm_f64: thread %d NEON FMA chain "
+                        "diverged from scalar golden (compute path, not a "
+                        "data check)", id);
+            report_fail_msg("mesh_upi_avx512_symm_f64: NEON FMA chain "
+                            "diverged from scalar golden");
+            return EXIT_FAILURE;
+        }
+        if (!store_ok) {
+            log_warning("mesh_upi_avx512_symm_f64: thread %d private "
+                        "store/reload self-consistency failure", id);
+            report_fail_msg("mesh_upi_avx512_symm_f64: private store/reload "
+                            "self-consistency failure");
+            return EXIT_FAILURE;
+        }
+        validated_any = true;   // 本轮全量读取校验（闭式和+FMA 链+私有通路）已通过
 
         td->read_done.fetch_add(1, std::memory_order_seq_cst);
 
@@ -464,11 +523,12 @@ static int mesh_upi_avx512_symm_f64_finish(struct test *test) { (void)test; retu
 #endif
 DECLARE_TEST(mesh_upi_avx512_symm_f64,
              "Cross-core shared-data f64 production/consumption (symm): "
-             "the first FP mesh variant — NEON vfmaq_f64 chains on both "
-             "sides of a shared cross-core buffer with exact 0.5-multiple "
-             "arithmetic (order-independent sums, byte-exact compare) — "
-             "the remote-access x compute compound the int-only mesh "
-             "family never covered")
+             "the first FP mesh variant — NEON vfmaq_f64 chains over a "
+             "shared cross-core buffer with exact 0.5-multiple arithmetic, "
+             "deterministic closed-form golden sum (order-independent, "
+             "byte-exact) and per-lane write read-back — the "
+             "remote-access x compute compound the int-only mesh family "
+             "never covered")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = mesh_upi_avx512_symm_f64_init,
     .test_run = mesh_upi_avx512_symm_f64_run,

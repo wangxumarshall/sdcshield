@@ -5,6 +5,115 @@
 
 ---
 
+## 2026-10-31（issue #180：Float80/long-double 框架适配 aarch64 binary128——解除 2 个 x86-only 守卫）
+
+### 结论
+
+- **选型 A（per-arch 语义）落地**：`Float80` 在两架构都表示 `long double`——x86 = x87
+  80 位（显式 jbit，原文逐字节不动），aarch64 = IEEE binary128（1+15+112，隐式整数位）。
+  位域映射：`mantissa_lo` bits 0..63 / `mantissa_hi` bits 64..111 / `exponent` bits
+  112..126 / `sign` bit 127（GCC 小端 LSB-first 逐 64 位单元分配，无跨单元 straddle）。
+  指数类宏（15 位、bias 0x3fff、全 1 = Inf/NaN）两格式位同义，保持共享；x87-only
+  尾数宏在 aarch64 分支 `#undef`——误用即编译错而非静默错读。
+- **不选 B（重映射 `long double`→`Float128Data`）**：FloatGeneration 测试直接构造
+  `Float80` 结构体不经过类型映射，B 修不了它；且 `__SIZEOF_FLOAT128__` 在 aarch64
+  GCC 未定义（实测），`Float128Data` 无对应 C 类型。
+- **`type_name(Float80Data) == "_Float64x"` 两架构都对**（issue 第 3 项核对）：TS
+  18661-3 的「binary64 之扩展」在 aarch64 就是 binary128 的 `long double`
+  （本机实测 `__FLT64X_MANT_DIG__=113`、`sizeof(_Float64x)=16`；x86 = x87 64 位尾数）。
+  返回值零改动，仅注释 per-arch 化。
+- **顺带纠正 `type_real_size(Float80Data)` aarch64 错报 10**（枚举低 6 位编码 x87
+  10-of-16 布局）：改为 `sizeof(long double)`=16——logging.cpp:1284 的 mismatch XOR
+  mask 现在覆盖全 16 字节（此前指数/符号字节差异进不了 mask）。
+- **aarch64 golden 位型表**（issue 第 4 项）：IEEE 754 binary128 标准位型，C 探针 +
+  C++ `numeric_limits` 探针 + x86 侧 `DataCompare.Float128` 表三方一致；glibc `%La`
+  渲染两架构不同属预期（x87 显式整数位 → `0xf.xxx`，binary128 归一化 → `0x1.xxx`）。
+- **generated_vectors.c float80 池**：497 条 x87 walk 位型在 binary128 无语义且
+  `.jbit` 设计符已不存在；该池无任何测试消费者（grep 实证）。x86 表原文保留，
+  aarch64 给 7 条真实 binary128 特殊值（`.as_float` 布局无关初值）维持接口可链接。
+
+### 实证
+
+- 构建：`meson setup --buildtype=release` + `SDC_BUILD_JOBS=20 ./scripts/build.sh`
+  主目标零错误零警告；unittests 目标 1 个警告 = 基线同款 gtest 头内联警告
+  （stash A/B 对比：1 vs 1，零新警告）。
+- 单测：CI 官方过滤口径
+  `--gtest_filter=-LinuxThermalFixture.CurrentMachine_TestUsingSingletomTemperaturesOnCurrentMachine`
+  全量 **104/104 PASSED**（基线 101 + 解守卫 2 + 新增 `Float80Binary128.LayoutAndPredicates` 1）。
+  注意：本机全量不过滤会段错误在 thermal 测试（基线同崩，环境性，CI 亦因此过滤它）。
+- 位序钉死：constexpr 跨联合体成员读非法且 GCC 12 `bit_cast` 拒绝联合体 → 编译期
+  断言钉宽度（MASK/求和 128），位序由新增运行时测试证明——编译器/libc 产出的真实
+  binary128 值（max/min/denorm_min/inf/qNaN/sNaN/±0/1.0/-2.0）穿过位域视图逐字段
+  解码 + IS_* 分类 + 构造往返 `as_fp()`（独立于位域代码的证据链）。
+- 回归：`./builddir/sdcshield -e zstd19 -t 2000 -n 1` → `exit: pass`。
+- x86 非回归：目检 diff 全部在 `#ifdef __aarch64__`/`#else 原文` 内、x86 golden 表
+  逐字节不变（本机无 x86 编译器，边界如实声明，x86 侧待 CI 复核）。
+
+---
+
+## 2026-10-30（会话：SVE 全 VL 验证运动收口——190×3 证据矩阵 + gem5 真二进制 SE 通路）
+
+### 结论
+
+- **矩阵结果**：190 个 SVE 用例（tag∪name 枚举，`sve-test-list.txt`）× 128/256/512-bit
+  = **570 格：560 pass（469 直绿 + 91 有界几何）+ 1 合法 SKIP + 9 gem5 边界格 + 0 FAIL**。
+  **全程零测试代码缺陷**——Task 7 发现-修复循环无测试修复可做，缩减为两个工具卫生项
+  （extract-summary.sh mce_check 行 / run_sve.sh 陈旧 G5 默认路径）。
+- **三类发现，全部分诊闭环**：① 环境性（256 腿 seed1 25 格超时：内存自适应几何把
+  单迭代工作量放大到 300 s 超时预算内无法完成一轮，与 seed 无关 → 同 seed 有界
+  重跑全绿）；② 架构性合法 SKIP（唯一格 `sve512_fmmla_arm@128`，F64MM
+  UNDEFINED <VL=256，实测 SIGILL）；③ gem5 侧限制（9 格：2×PMULL64 GCM
+  [gem5 缺 64-bit PMULL 编码] + 3×DC-CIVAC [SE 模式缓存维护路径 raise
+  UndefinedInstruction] + 4×仿真速超时 [~1400× 减速下单轮超实用预算]；native 两档全绿）。
+- **三腿采集方式**：128 = `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 进程内降档（避开
+  `PR_SVE_SET_VL` 不跨 `execve` 的坑，见 2026-10-27 怪癖条目）、256 = 原生默认档，
+  各 2 seeds（LCG:1001/1002）；512 = gem5 SE 跑真 sdcshield 二进制。
+- **gem5 真二进制 SE 通路（可复用资产）**：gem5-fi 分支 `feat/sve-se-prctl-stub-2026-10-28`
+  （HEAD `ad6e36d2`）9-syscall stub 链：sched_getaffinity（真填线程上下文位图）→
+  memfd_create（ENOSYS，框架自有 fallback 接管）→ prlimit RLIMIT_NOFILE → socket
+  三件套 → fcntl64 F_DUPFD/F_DUPFD_CLOEXEC（补第三参语义）→ dup3 → perf_event_open
+  （ENOSYS）→ fdatasync（ignore）→ clock_nanosleep（ignoreWarnOnce）。执行模式
+  `-f no` nofork + 单测单进程，判定 = **进程退出码**（`exit:` 行会被间歇抑制）。
+- **shmem 叠印根因（Ruling H，benign）**：gem5 不保留 MAP_SHARED tmpfile 内容跨
+  munmap+重映射，而框架 `commit_shmem()` 的拆-重映射是 Linux 合法模式 → 重映射页
+  全零 → PerThreadData 叠印 SharedMemory（NDEBUG 吞掉 assert 防线）→ 后果三连：
+  `-t` 时限预算结构性失效（每测试恰 ~1 轮内层循环 ⇒ **512 腿语义 = 功能性正确性，
+  压力/重复维度归 native 腿**）、Skip 标签虚标（曾致 `--fatal-skips` 假红格，已废弃
+  该旗标）、exit 行间歇抑制。非越界写——三重实证：源码写入点审计 + /tmp 探针
+  native/gem5 对照（gem5 零填重映射页）+ syscall 追踪 clone-pid 值闭环（104 = worker
+  tid 落 `+0x2c`）。
+- **Ruling G（冻结基线 + delta）**：矩阵钉在 `12ccda540fd4` + campaign commits
+  （`git diff 12ccda54..HEAD -- tests/ framework/` 为空）；运动期间并行合并的
+  PR #302（eigen 修复，merge `51868e40`）与 PR #316（SVE OOB 四连修，merge
+  `29da76ef`）不在矩阵语义内（各自 PR-loop 自带验证义务）。
+- **Ruling I（边界格终局）**：9 个 gem5 边界格终局；gem5 侧补 PMULL64 编码 +
+  DC-CIVAC SE 路径（圈外后续）可转绿 5 格。
+- **Ruling J（框架健壮性观察，未修）**：`mem_disambig_alu_sve` 超时杀灭迟滞实测
+  **1280 s**（300 s 预算的 4.3 倍，triage-256 §4 #15）——超时收尸路径的迟滞值得
+  框架侧关注；其时间窗与一次 seed2 中途死亡+主机重启吻合（相关、因果未证）。
+
+### 实证
+
+- 工件全部入库 `docs/superpowers/inventory/sve-all-vl-campaign/`：
+  `matrix.md`（570 格，`matrix-gen.sh` 从 8 份入库工件机械生成、幂等、内置断言）
+  + 4 份 native summary（128/256 × 2 seeds）+ `gem5-512-verdicts.txt`（190 行
+  机械判定）+ `triage-{128,256,512}.md` + `gem5-overrides.txt`（16 条降容，以文件
+  为权威）。原始 yaml 日志按 Ruling E 不入库（.gitignore）。
+- 抽查 10+1 格回放原始工件全部一致（Task 8）；`sve512_fmmla_arm@512` 经 Exec 追踪
+  直证 514 条 `fmmla` 真实执行；`sleef_sve@512` 平反链顺带产出"SLEEF SVE 内核在
+  gem5@512 逐位确定"的正面证据。
+- gem5 二进制 md5 `3f9011f40dbe80ec1df478c62ddb0b06`（9-stub 终版），sdcshield
+  `12ccda540fd4`，native 与 512 腿同源。
+- campaign 分支 `feat/sve-all-vl-verification-2026-10-28`：`12ccda54` 起运动提交
+  全部为 docs / campaign 工具脚本 / gem5 启动脚本，零 tests/framework 改动。
+
+### 状态与下一步
+
+- 运动收口（Task 9 = README/CLAUDE.md/本日志三处文档同步）。后续候选：gem5 侧
+  PMULL64 / DC-CIVAC 实装（转绿 5 格）；`mem_disambig` 杀灭迟滞的框架侧修复评估。
+
+---
+
 ## 2026-10-26（会话：主机向量能力「先探测、不假设」规则化）
 
 ### 结论（本机实测）
@@ -1275,3 +1384,44 @@ test_orphan_cleanup_targets_own_user_only 在 pristine d7afaa88 上同样
 
 遗留: #332（mesh 读相逐字节内容校验重设计——golden 重算/双缓冲）仍
 OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
+## 2026-10-31（issue #7：smi_count ARM64 移植——CNTVCT 时序毛刺探针）
+
+- **决策**: 方案 A（软件探针）。两轮实测判死方案 B（内核数据源）与
+  "占位永久化"（方案 C 弃价值）: 裸机 HIP09 128 核上 /proc/stat steal
+  自启动恒 0（paravirt 在、无 provider）、/proc/interrupts 无任何
+  EL3/SMC/firmware 行（Group-0 中断由 TF-A 处理, 结构性不可见）、PMU
+  exc_taken(0x09) 仅计 EL0→EL1 异常且内核态需 root（paranoid=2）、SDEI
+  计数在 root-only debugfs、无 cpuidle 驱动故稳态 SMC 流量≈0。方案三
+  （改 TF-A 加 SMCCC OEM 函数）超仓库边界。
+- **实现**: tests/common/smi_count/smi_count.cpp 的 #else 拆为
+  #elif __aarch64__（真探针）+ #else（其它架构占位原样）。每 worker
+  TEST_LOOP 窗口内连续 mrs cntvct_el0（~25ns/读）, 统计 >100µs 毛刺
+  （次数/ >1ms 严重数 / 最大 / 累计）, 非零才 log_platform_message
+  （INFO, -vv 可见, 与 x86 SMI 消息同通路）。init 装 SIGILL 守卫探
+  CNTVCT/CNTFRQ EL0 可读性, 陷阱即诚实 SKIP。fracture_loop_count=-1
+  （自动 fracture 每 40 内循环重启 run 会清零统计）; desired_duration=0
+  （默认 1s 窗口）; PROD（x86 对等, 永不失败）。
+- **阈值依据**（独立探针 128 核 10s, loadavg≈2.5）: ≤20µs 桶 978 次/
+  cpu（tick/IRQ）; 2–5ms 桶 125 次/cpu（CFS 抢占主导）——双峰之间的
+  谷区（200µs–2ms, ~20 次/cpu）才是固件级事件会落入的区间。100µs/
+  1ms 只是分布分桶, 不做来源归因——语义边界写进代码注释、README 与
+  issue 收尾。
+- **验证**: build.sh 零新警告; 改动前基线 skip+占位 reason 逐字留档,
+  改后默认清单 488→489（PROD 入集）; 单核 -t 5000 pass 且跑满窗口
+  （test-runtime 5000.653ms）; CPU0 加竞争负载的判别实验出
+  "493 gaps > 100us (493 > 1000us), max 4057us, total stolen
+  1975167us"（CFS 时间片签名, 消息通路实证）; 全核 -t 10000 10s:
+  15/128 CPU 报毛刺（cpu75=147/max 1.1ms 局部化, cpu28 max 12ms）,
+  113 CPU 静默（静默=干净）; SIGILL 恢复机制用真陷阱寄存器
+  cntpct_el0（本机 EL0 SIGILL）实证: 捕获信号 4、siglongjmp 恢复、
+  守卫复原三步全过; zstd19 -t 2000 -n 1 → exit: pass; framework/
+  零 diff, 删除行 16 条全部来自原 #else 占位段（x86 段零触碰）。
+- **验证边界（诚实声明）**: "内核禁用 EL0VCTEN 致 SKIP" 分支在任何
+  可用环境都不存在（Linux arm64 为 vDSO 恒开 EL0 计数器访问）,
+  gem5 同样不会关——该守卫只做了机制级（真 SIGILL 陷阱恢复）与编译
+  级验证, 未在真实禁用内核上跑过。
+- **文档**: README 质量表 5→4 SKIP / 489→490 PROD（总数 500 不变,
+  注明 2026-10-31 增量与本机复测 489/495/499——README 旧 479 口径
+  因 main 期间增合已过期）、占位表删 smi_count 行、新增探针语义边界
+  段; architecture.md 占位示例改 ist 独例 + InterruptMonitor 节注明
+  ARM64 smi_count 绕过 InterruptMonitor 的原因。

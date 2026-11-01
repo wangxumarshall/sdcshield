@@ -8,11 +8,13 @@
 
 #define MAX_THREADS 128
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     alignas(64) std::atomic<uint64_t> counter;  // 共享计数器（原子类型）
     std::atomic<uint64_t> thread_idx;           // 线程 ID 分配器
     uint64_t local_sums[MAX_THREADS];           // 每个线程的本地增量总和
 };
+}
 
 static int lock_instr_init(struct test *test) {
     auto *sd = new SharedData;

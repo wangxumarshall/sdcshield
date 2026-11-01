@@ -28,12 +28,14 @@ static inline void spin_unlock(std::atomic<uint64_t> &lock) {
     lock.store(0, std::memory_order_release);
 }
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     alignas(64) std::atomic<uint64_t> lock;   // 自旋锁变量（原子类型）
     alignas(64) uint64_t counter;             // 共享计数器
     std::atomic<uint64_t> thread_idx;         // 线程 ID 分配器
     uint64_t local_sums[MAX_THREADS];         // 每个线程的本地增量总和
 };
+}
 
 static int spinlock_stress_cmpxchg_init(struct test *test) {
     auto *sd = new SharedData;

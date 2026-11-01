@@ -8,6 +8,7 @@
 
 #define MAX_THREADS 128
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     alignas(64) std::atomic<uint64_t> lock;   // 自旋锁变量（原子类型）
     alignas(64) uint64_t counter;             // 共享计数器
@@ -15,6 +16,7 @@ struct SharedData {
     uint64_t local_sums[MAX_THREADS];         // 每个线程的本地增量总和
     bool even;                                // true=偶数核心，false=奇数核心
 };
+}
 
 // 自旋锁：使用 std::atomic 的 compare_exchange_weak
 static inline void spin_lock(std::atomic<uint64_t> &lock) {

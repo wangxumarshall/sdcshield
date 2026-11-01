@@ -43,15 +43,28 @@ EOF
 chmod +x ~/.local/bin/python3-config
 pip3 install --user -i https://mirrors.aliyun.com/pypi/simple/ scons
 
-# Build gem5.opt from the vendored CHAOS tree (note: the artifact lands in
-# the REPO ROOT build/, not CHAOS/gem5/build/ — verified again here):
-cd /home/sdc/wangxu/gem5-fi-fuzz
+# Build gem5.opt from the vendored CHAOS tree. Workspace path current as of
+# 2026-10-30: /home/sdc/wangxu/gem5-fi (the older gem5-fi-fuzz location no
+# longer exists on this host; gem5-fi paths are per-host — probe, and see
+# CLAUDE.md rule 2):
+cd /home/sdc/wangxu/gem5-fi
 export PATH="$HOME/.local/bin:$PATH" \
        C_INCLUDE_PATH=$HOME/.local/zlib/include \
        CPLUS_INCLUDE_PATH=$HOME/.local/zlib/include \
        LIBRARY_PATH=$HOME/.local/zlib/lib
 scons -C CHAOS/gem5 build/ARM/gem5.opt -j32     # ~25 min at -j32 on 127 cores
-# -> /home/sdc/wangxu/gem5-fi-fuzz/build/ARM/gem5.opt (1.1 GB)
+# TRAP (gem5-fi repo README "已知陷阱" / campaign plan Task 4 Step 3):
+# `scons -C` writes the artifact to the REPO-ROOT build/ARM/gem5.opt — NOT
+# to CHAOS/gem5/build/ARM/. run_sve.sh defaults to the CHAOS path, so after
+# a rebuild you MUST copy it back or the runner silently keeps the STALE
+# binary (historically produced "injection not taking effect" ghosts):
+mkdir -p CHAOS/gem5/build/ARM
+cp -f build/ARM/gem5.opt CHAOS/gem5/build/ARM/gem5.opt
+md5sum CHAOS/gem5/build/ARM/gem5.opt
+# (the binary the 2026-10 all-VL campaign verified:
+#  md5 3f9011f40dbe80ec1df478c62ddb0b06, 1.1 GB; both paths held
+#  byte-identical copies as of 2026-10-30 because the copy-back above had
+#  been done — repo-root copy mtime 17:46:32, CHAOS copy 17:47:13)
 ```
 
 Pitfalls hit and solved (all reproducible from the log above):

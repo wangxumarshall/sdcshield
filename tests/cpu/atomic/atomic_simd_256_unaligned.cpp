@@ -10,6 +10,7 @@
 #include <arm_neon.h>
 
 // 数据块：偏移 1 字节以确保非对齐（可能跨缓存行）
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     /* run-constant random pattern halves (randomization hardening H10') */
     uint8_t padding[1];            // 偏移 1 字节
@@ -18,6 +19,7 @@ struct SharedData {
     std::atomic<uint64_t> seq;
     uint8x16_t pat0, pat1;
 };
+}
 
 static int atomic_simd_256_unaligned_init(struct test *test) {
     auto *sd = new SharedData;

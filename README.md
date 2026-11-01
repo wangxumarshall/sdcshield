@@ -48,7 +48,7 @@ bash scripts/run/sdc_detect.sh
 
 | 旗标 | 作用 |
 |---|---|
-| `--quality=0` | 跑 PROD+BETA（ARM64 构建全量上界 495 = 489 PROD + 6 BETA；默认集与该集均随芯片能力过滤——SVE1 主机实测口径见「测试用例与检测能力」节；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
+| `--quality=0` | 跑 PROD+BETA（ARM64 构建全量上界 496 = 490 PROD + 6 BETA；默认集与该集均随芯片能力过滤——SVE1 主机实测口径见「测试用例与检测能力」节；预构建二进制为 225 例、一轮约 3.75 小时——少的是 vendored 计算库测试组，见下节口径说明）。**必须加**：BETA 级 `arm64_sdc`（di/dt 电压骤降专项）等 6 个用例不加此旗标会被跳过（实测 skip 并提示） |
 | `--test-list-file` | 优先序测试列表：由脚本从当前二进制动态生成（顺序即执行序，对新用例自适应） |
 | `-T forever` | 整套用例无限轮转。SDC 故障窗口极稀疏（CPU179 实测占空比 ~0.06%），长驻留是检出关键；一轮时长随用例集（数百例 × 60s ≈ 数小时） |
 | `-t 60s` | 每用例 60 秒。SEVI 实测 >80% 的首错在 10 秒内出现，60s 有 6 倍余量 |
@@ -122,7 +122,7 @@ sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断�
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
-预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（489 PROD 全量上界，选择期 spec 过滤前）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（490 PROD 全量上界，选择期 spec 过滤前）是因为镜像内未含全部 vendored 计算库测试组；检出命令见上节"一行命令"。
 
 > **旧二进制判读警示**：2026-09-12 预构建二进制是满核假阳修复（2026-10-24）**之前**的构建——其上 `eigen_svd_double`/`eigen_sparse` 的满核 FAIL 按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；"满核挂 = SDC 嫌疑"的判读规则仅适用于含修复的构建。用旧二进制跑 24h 战役脚本须显式恢复旧白名单（含修复的源码构建不需要、也不应设置）：
 >
@@ -226,9 +226,9 @@ PR（`pr.yaml`，arm64-only）：lint（tabs/codespell/actionlint）→ 新增�
 
 PR 检视共 **五个 bot**：四个外部 SaaS（codex、CodeRabbit、PR-Agent、Greptile——配置 `AGENTS.md`、`.coderabbit.yaml`、`.pr_agent.toml`、`.greptile/`，均内嵌 SDC 激发专属检视要点：激发强度与覆盖、数据模式与缺陷激活、golden 字节比对、x86-64 非回归、占位诚实性、SVE/NEON VL、失败现场留证、多样性与检出率口径）+ 第 5 个**本地无头 claude 对抗检视**（`scripts/pr_local_review.py`，PR 检视-修复闭环引擎 `scripts/pr_loop.py` 的组成部分，本地触发无需 GitHub 使能）。`bot-coverage.yml` 做**非阻塞**覆盖度校验：有界轮询四个外部 bot 是否已检视，结果写入 step summary 并评论告警，**恒 exit 0、绝不阻塞合并**。四个外部机器人均已生效（Greptile 于 2026-10-13 完成安装授权，PR #238 首次实测产出检视）。生效核查方法（`gh` 命令与账号对照）、Greptile 安装记录与 SDC 检视要点汇总见 [docs/build-deploy-pr-ci/pr-review-bots.md](docs/build-deploy-pr-ci/pr-review-bots.md)；五 bot 检视-修复闭环全流程见 [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)。
 
-### CI 无人值守分诊（main CI 红 → 修复 PR 闭环）
+### task-loop：无人值守任务闭环（issue 驱动开发闭环）
 
-`scripts/ci_triage.py`（pr_loop 姊妹件，cron 每 30 分钟驱动 `scan`）：main 分支 CI 红 run 自动开跟踪 issue → headless agent 在独立克隆里修复 → push `fix/ci-<runid>` 分支 → `auto-pr.yml` 自动开 PR → 复用 pr-loop 检视闭环 → READY_TO_MERGE 时 @人工 merge。**merge 永远在人**；双车道（修复派发 / PR 收割）、flock 单实例、PAUSED kill switch 等运维细节见 [docs/build-deploy-pr-ci/ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)。
+`scripts/task_loop.py`（统一任务编排引擎，`ci_triage.py` 的泛化后继——后者现为过渡薄壳；cron 每 30 分钟驱动 `scan`、每 6 小时驱动 `audit`）：四类触发源——main 分支 CI 红 run、main 增量对抗审查（audit）、会话 enqueue（`/dev-loop` 命令）、GitHub 手建 issue——统一进入 `agent-task` 标签 issue 队列，单飞 headless agent 在独立克隆里修复/实现 → push `fix|feat/issue-<N>` 分支 → agent 自开 PR（`Closes #N`）→ 复用 pr-loop 五 bot 检视闭环 → READY_TO_MERGE 时 @人工 merge。**merge 永远在人**；标签协议/队列对账/单飞/熔断/kill switch/状态目录迁移等运维细节见 [docs/build-deploy-pr-ci/task-loop.md](docs/build-deploy-pr-ci/task-loop.md)；前代 CI 分诊手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)（历史保留）。
 
 ### 15 镜像全严格选项稳定性验证（`scripts/lts-stability/`）
 
@@ -360,14 +360,18 @@ bash scripts/run/run_sdc_campaign.sh --selftest-classify                # 解析
 
 ### ARM64 spec 策略与默认用例集（2026-10-27 起）
 
-sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `struct test::arm64_requires`（SVE/SVE2/SME/SME2 要求位，`framework/sandstone.h`）与 `arm64_min_vl_bits`（最低档位）过滤，只保留芯片能执行的用例——因此默认用例数是 **host-dependent** 的：SVE1 主机（Kunpeng 920 0xd02，SVE-256/无 SVE2/SME，gcc + 全部 vendored 依赖）实测 **479** 个 PROD（`--quality=0` 485、`--quality=-1` 490），无 SVE 的鲲鹏 920 上 297 个（2026-10-27 实测口径）。
+sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `struct test::arm64_requires`（SVE/SVE2/SME/SME2 要求位，`framework/sandstone.h`）与 `arm64_min_vl_bits`（最低档位）过滤，只保留芯片能执行的用例——因此默认用例数是 **host-dependent** 的：SVE1 主机（Kunpeng 920 0xd02，SVE-256/无 SVE2/SME，gcc + 全部 vendored 依赖）实测 **489** 个 PROD（`--quality=0` 495、`--quality=-1` 499；2026-10-31 复测，含 issue #7 `smi_count` 探针 +1——2026-10-27 口径为 479/485/490，期间 main 增合了 SVE-all-VL 等用例），无 SVE 的鲲鹏 920 上 297 个（2026-10-27 实测口径，按同 +1 推算 298）。
 
 - `-e` / `--test-list-file` **旁路过滤**：显式请求的用例仍会注册，能力不足时诚实 SKIP（附理由），而不是从列表里消失。
 - **控制线程**在 `test_init` 前 pin 到芯片最大档（其 aux 线程与 per-CPU worker 继承该 VL，init golden 与 run lane 档位一致，即使 sysctl 压低了默认值）；每个 SVE/SVE2 worker 重新 pin 并校验读回——pin 被拒 = SKIP，读回不符 = FAIL。
 - `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` 可压低假定的最大档（只降不升；会重新探测归一——未实现的档如 384 回退到内核实际授予值）。
 - 用例的规格声明覆盖由 `scripts/check-arm64-requires.py` 检查器保证诚实。
 
-当前 ARM64 构建默认 quality 的用例数即按上述机制**随芯片能力过滤**（源码全量上界：489 PROD + 6 BETA + 5 SKIP，gcc + 全部 vendored 依赖齐备、过滤前；`--quality=0` / `--quality=-1` 集合同样过滤）。含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建默认 quality 的用例数即按上述机制**随芯片能力过滤**（源码全量上界：490 PROD + 6 BETA + 4 SKIP，gcc + 全部 vendored 依赖齐备、过滤前；`--quality=0` / `--quality=-1` 集合同样过滤）。含 SVE 全向量长家族。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+
+### SVE 用例全 VL 验证矩阵（2026-10-30 收口）
+
+190 个 SVE 用例（tag∪name 枚举口径）× 128/256/512-bit 三档真实证据矩阵（570 格）：**560 pass（469 直绿 + 91 有界几何）+ 1 合法 SKIP + 9 gem5 边界格 + 0 FAIL**，运动全程零测试代码缺陷（指**本轮运动检出**为零——冻结基线上另有 5 个测试携带 PR #316 检视事后修复的越界缺陷，其 15 格 pass 是「同条件可跑绿」的弱证据、不构成基线洁净性证明，见 matrix.md §4 † 脚注）。三档采集：128 = `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 进程内降档、256 = 原生（SVE-256 主机默认档），各 2 seeds（其中 256 腿 25 个超时格的**入库机械证据为 seed2 单腿**——seed1 侧绿证据是 triage-256 §5 的有界重跑记录，其原始日志易失未入库，见矩阵 §2 种子语义）；512 = gem5 SE 跑真 sdcshield 二进制（9-syscall stub 链 + `-f no` nofork，每测试 ~1 轮内层循环——512 列语义为**功能性正确性**，压力/重复维度由 native 腿承担）。两个边界注记：① 唯一 SKIP = `sve512_fmmla_arm@128`——F64MM 在 VL<256 架构性 UNDEFINED（实测 SIGILL，`svmmla_f64` 门从 256 起）；② 9 个 gem5 边界格（2×PMULL64 GCM + 3×DC-CIVAC + 4×仿真速超时）native 两档全绿，属 gem5 侧实现限制，其中 5 格可随 gem5 补编码/路径转绿。矩阵证据钉在冻结基线 `12ccda540fd4`（运动期间并行合并的 PR #302/#316 不在其语义内）。证据索引：[docs/superpowers/inventory/sve-all-vl-campaign/matrix.md](docs/superpowers/inventory/sve-all-vl-campaign/matrix.md)（`matrix-gen.sh` 从入库工件机械生成，重跑即复现）+ 逐腿分诊 `triage-{128,256,512}.md`（同目录）。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
@@ -397,15 +401,15 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 
 | 级别 | 名称 | 运行条件 | 实有数量（源码全量，选择期过滤前） |
 |---|---|---|---|
-| -1 | SKIP | `quality >= -1` | 5 |
+| -1 | SKIP | `quality >= -1` | 4 |
 | 0 | BETA | `quality >= 0` | 6 |
-| 2 | PROD（默认）| `quality >= 2` | 489 |
+| 2 | PROD（默认）| `quality >= 2` | 490 |
 | | **合计** | | **500** |
 
-> 上表为 ARM64 gcc 构建的源码全量口径（2026-10-27 核对）；默认运行时实际数量随芯片 spec 过滤（SVE1 主机实测 479 PROD、无 SVE 鲲鹏 920 为 297，见「ARM64 spec 策略」节）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
+> 上表为 ARM64 gcc 构建的源码全量口径（2026-10-27 核对；2026-10-31 增量：`smi_count` 自 SKIP 转为真实 PROD 探针，即 issue #7，总数不变；期间 main 合入的其它新用例未逐项重审入表）；默认运行时实际数量随芯片 spec 过滤（SVE1 主机 2026-10-31 复测 489 PROD、`--quality=0` 495、`--quality=-1` 499，含 `smi_count` +1；无 SVE 鲲鹏 920 为 297（2026-10-27 实测口径，按同 +1 推算 298），见「ARM64 spec 策略」节）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`
-- **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
+- **SKIP（`--quality=-1`）**：`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
 
 ### 占位用例的诚实跳过
 
@@ -414,9 +418,12 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | 用例 | 跳过理由 |
 |---|---|
 | `ist` / `ist_array` / `ist_sbaf` | `to be implemented (placeholder): ARM64 In-Silicon Test (IST) backend not yet available; test reserved as the counterpart of Intel IFS` |
-| `smi_count` | `to be implemented (placeholder): SMI counting requires a per-CPU firmware/RAS-interrupt counter not available on this architecture` |
 
 > `mce_check` 是真实 EDAC 后端测试（统计 `/proc/interrupts` 的 EDAC `ce/ue_count`），实测 `exit: pass`，非 placeholder。
+
+### `smi_count`（ARM64）：CNTVCT 时序毛刺探针
+
+`smi_count` 在 ARM64 上是真实探针（2026-10-31，issue #7）：每个 CPU 一个 worker 在测试窗口内连续读架构计数器 `CNTVCT_EL0`（用户态 `mrs`，~25ns/读），统计相邻读间隔 >100µs 的"被偷走时间"事件——次数、>1ms 严重数、最大值、累计值，非零才经 `log_platform_message` 报告（INFO 级，`-vv` 可见），永不失败。**语义边界**：探针无法区分毛刺来源（固件 SMC/EL3、虚拟化偷取、中断风暴、内核调度抢占——多租户负载下 2–5ms 桶由 CFS 抢占主导，实测 loadavg≈2.5 时 ~12 次/cpu/s），与 x86 的 MSR 0x34（仅计 SMM、preinit 起覆盖整个运行期）语义不同；ARM64 版观察窗口是本测试自身运行窗口（默认 1s，`-t` 可延长；fork 模型下 preinit 起后台监控线程无法存活到子进程，故窗口只能如此）。裸机 ARM64 不存在内核可见的固件抢占计数器（`/proc/stat` steal 恒 0、EL3 Group-0 中断不进 `/proc/interrupts`、PMU `EXC_TAKEN` 仅 EL0 异常且内核态需 root、SDEI 计数在 root-only debugfs）——这是可用的最接近等价物，定位是**解释其它测试时序抖动的逐 CPU 噪声地图**，不是固件事件计数器。若内核禁用了 EL0 计数器访问（`CNTKCTL_EL1.EL0VCTEN=0`），init 的 SIGILL 守卫会诚实 SKIP。**`--inject-idle` 下本用例计数无效**——框架注入的 sleep 恰落在相邻两次计数器读之间，会被计为毛刺。x86-64 版本仍走 MSR 0x34 路径（零改动）；其它架构保留诚实占位。
 
 **能力门控的诚实跳过**（skip 不是只有"未实现"一种）：17 个多流 HMAC 的 ipsec SVE 用例（`*_hmac_sha*` / `*_sha2_*`）每条 HMAC 流占一个 SVE lane，**流数 = 运行时 lane 数**（sha1/224/256 为 `svcntw()` 4..32 流、384/512 为 `svcntd()` 2..16 流，128..1024-bit 全档自适应），经框架层 `arm64_require_sve_vl` 门控；W 调度表按 1024-bit 上限定维，`data_size` knob 上限钳制到 HMAC 组装缓冲容量。无 SVE 的硬件在框架级 `test compiled with sve` 守卫处跳过；流数参数化形态经 gem5-fi `sve_sha_dual` 四档 16-run 实证（FIPS 标量参考逐流字节级比对）。
 
@@ -534,7 +541,7 @@ SDC 激励/复现战役（M0–M5）的机侧运维脚本在 `scripts/sdc-excite
 ## 延伸
 
 - [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md) — 会话内 agent 自动化：push 自动开 PR → 五 bot 检视（四外部 SaaS + 本地无头 claude）→ subagent 批判性处置修复 → 循环闭环 → 人工 merge（引擎 `scripts/pr_loop.py` + `scripts/pr_local_review.py`，双端入口 `/pr-loop` 与 `.trae/rules/pr-loop.md`）
-- [CI 无人值守分诊手册](docs/build-deploy-pr-ci/ci-triage.md) — main CI 红 → issue → headless agent 修复 → fix/ci-* PR → 检视闭环 → 人工 merge（引擎 `scripts/ci_triage.py`，cron 每 30 分钟，双车道/熔断/kill switch）
+- [task-loop 无人值守任务闭环手册](docs/build-deploy-pr-ci/task-loop.md) — CI 红/main 审查/会话/手建 issue → agent-task 队列 → headless agent 修复/实现 → PR → 检视闭环 → 人工 merge（引擎 `scripts/task_loop.py`，cron scan */30 + audit 每 6h，标签协议/单飞/熔断/kill switch；会话命令 `/dev-loop`；`ci_triage.py` 为过渡薄壳，历史手册见 [ci-triage.md](docs/build-deploy-pr-ci/ci-triage.md)）
 - [编写测试指南](docs/coding/writing_tests.md) — 框架处理了测试生命周期、线程模型、CPU 特性识别、RNG 等样板代码
 - [离线构建依赖与排坑](docs/build-deploy-pr-ci/offline-build-dependencies.md) — 完整依赖树、版本管制、坑点
 - [SDC 前沿研究综合](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md) — 31 篇 SDC 文献（SOSP/HPCA/ISCA/MICRO/ASPLOS 等，2003–2026）系统性总结，负载设计与 vendored 依赖库选型依据

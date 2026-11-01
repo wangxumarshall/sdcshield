@@ -34,9 +34,10 @@ double sdc_ar_factor(enum sdc_mem_family fam, const struct sdc_numa_topology *t)
 int sdc_numa_node_of_cpu(int cpu);
 
 /* 节点合成预算(spec §4.2): 节点 meminfo 无 MemAvailable 字段(实测),
- * 按 node_MemFree / ΣMemFree 比例分摊全局三源预算 sdc_budget_bytes
- * (permille)(其内已含 MemAvailable×0.9 与 cgroup 上界, 节点合计不越
- * 全局)。退化规则(C1): 无内存节点(MemTotal=0)的线程需求并入 fallback
+ * 按 node_MemFree / ΣMemFree 比例分摊全局四源预算 sdc_budget_bytes
+ * (permille)(其内已含 MemAvailable×0.9、cgroup 上界与 strict
+ * overcommit 承诺余量[#310], 节点合计不越全局)。退化规则(C1): 无内存
+ * 节点(MemTotal=0)的线程需求并入 fallback
  * 节点(有内存节点中 MemFree 最大者) —— node0-only 机器上等价于全局模型。 */
 uint64_t sdc_node_budget_bytes(int permille, int cpu);
 

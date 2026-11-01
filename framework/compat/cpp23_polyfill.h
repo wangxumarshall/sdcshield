@@ -27,6 +27,10 @@
 //     API 面: 构造(count, completion_fn) + arrive_and_wait + arrive_and_drop。
 //   注: std::span(GCC10 已支持)、operator<=>(GCC10 已支持)无需 polyfill。
 //   注: std::format 仅用于 x86_64 路径(#ifdef __x86_64__),ARM64 不编,无需 polyfill。
+//   注: std::string/string_view::contains (C++23, P1679R3, libstdc++ GCC>=12) 是
+//     成员函数,本 polyfill 无法补(只能补命名空间层自由符号)——全仓禁用该 API,
+//     一律用 find() != npos 等价替代(否则 debug 构建在 gnu++20/旧 libstdc++ 上必现
+//     编译失败, release 被 NDEBUG 掩盖; issue #327 条目 2)。
 #pragma once
 
 // 只在确实命中旧编译器 + 适配宏时才动 std 命名空间。

@@ -1020,6 +1020,11 @@ test_random() {
     ((status == 64))
     [[ "$output" = *\'$invalid_test\'* ]]
 
+    # Ditto for --disable: unknown name is an error too (upstream 631ffb1)
+    run $SANDSTONE --selftest --disable=$invalid_test -e selftest_pass
+    ((status == 64))
+    [[ "$output" = *\'$invalid_test\'* ]]
+
     # Now check we can ignore it
     selftest_pass --ignore-unknown-test "$@"
 

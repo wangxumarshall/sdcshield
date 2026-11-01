@@ -124,8 +124,10 @@ END_DECLARE_TEST
   feat/eigen-p0-p3-fix — also cured the full-core auto timeouts
   `eigen_svd_cdouble_sve` 321s / `eigen_svd_bidiag_sve` 343s):
   `sdc_joint_dim_slice` = min(n_mem, n_run, clamp) — n_mem from a
-  per-NUMA-node three-source budget (phys×‰ / MemAvailable×0.9 / cgroup
-  v1+v2) against measured per-family RSS coefficients (RSS_RATIO_TABLE),
+  per-NUMA-node four-source budget (phys×‰ / MemAvailable×0.9 / cgroup
+  v1+v2 / CommitLimit−Committed_AS×0.9 when vm.overcommit_memory=2 —
+  no-op otherwise, issue #310) against measured per-family RSS
+  coefficients (RSS_RATIO_TABLE),
   n_run from a probe power-law fit × the AR all-core-slowdown table
   (family×topology), refined by a VmHWM feedback loop (per-slice EMA,
   median aggregation, 0.7× table floor). Explicit `-O <test>.mdim/n`
@@ -225,8 +227,10 @@ END_DECLARE_TEST
 - **PR review-fix loop** (agent-driven: five bots (four external SaaS + the local
   headless claude adversarial reviewer) → subagent critical triage →
   fix → loop → human merge; never auto-merge): `docs/build-deploy-pr-ci/pr-loop.md`;
-  engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot）; `/pr-loop` command
-  (`.claude/commands/`) and Trae rule (`.trae/rules/`) are content-twins.
-- **CI 无人值守分诊**（cron/双车道/熔断/kill switch 运维手册）:
-  `docs/build-deploy-pr-ci/ci-triage.md`; engine `scripts/ci_triage.py`（pr_loop 姊妹件,
-  main CI 红 → issue → headless agent 修复 → fix/ci-* PR）。
+  engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot;
+  unattended orchestration is task_loop's); `/pr-loop` and `/dev-loop` commands
+  (`.claude/commands/`) and Trae rules (`.trae/rules/`) are content-twins.
+- **task-loop 无人值守任务闭环**（统一编排引擎: CI 红/main 审查/会话/手建
+  issue → agent → PR 闭环;ci_triage 的泛化后继,含迁移说明）:
+  `docs/build-deploy-pr-ci/task-loop.md`;引擎 `scripts/task_loop.py`;
+  会话命令 `/dev-loop`。

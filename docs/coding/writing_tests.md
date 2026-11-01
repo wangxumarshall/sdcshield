@@ -695,6 +695,37 @@ instead of assuming one tier:
   `tests/cpu/misc/neon_rot_*.cpp` (except `rowmajor_scalar64` — already
   fully scalar, a separate scalar-vs-scalar same-code gap) +
   `tests/cpu/arm64/neon_rot_2src.cpp`.
+- **A self-inverse transform's intermediate must be verified against an
+  independent golden** (issue #374 paradigm, template:
+  `docs/superpowers/plans/2026-11-01-issue374-movbe-roundtrip-golden.md`):
+  never let the only check be `f(f(x)) == x` (bswap∘bswap, svtbl∘svtbl with
+  the same table, copy-vs-copy of same-source data, counter-vs-counter
+  incremented together). A symmetric persistent fault — the byte-swap/TBL
+  unit computing a fixed WRONG (involutive) permutation — applies the same
+  error twice and the identity holds: the fault is *undetectable* by the
+  roundtrip. Store the intermediate and verify it against a golden computed
+  OFF the byte-swap datapath: a 256-entry identity LUT reassembly (the
+  table's memory loads also block GCC's bswap-idiom recognizer from folding
+  a hand-written shift/or reassembly back into a single `rev` — the very
+  instruction under test). Pin it mechanically with
+  `scripts/check-bswap-golden.sh <binary> <init-symbol>...` (zero
+  scalar `rev/rev16/rev32` and zero vector ALU inside the golden symbol;
+  same hollow-pass guard as the scalar gate). For timing-sensitive trigger
+  probes whose hot loop must stay byte-identical (core-179 family: any
+  schedule change silences the defect), compute the golden in `test_init`
+  and sweep ONCE after `TEST_LOOP` exits — every iteration writes the same
+  value to element `i`, so the final content is deterministic and a
+  persistent mispermutation is caught byte-exactly; slot-mapped stores
+  (`swapped[i & mask]`) must be verified in `test_cleanup` (post-join —
+  the slot value depends on which element a still-running worker is at;
+  a run-side sweep races). Boundary to state honestly: post-loop sweeps
+  cover persistent faults fully, mercurial ones only in the final iteration.
+  Precedents: `tests/cpu/arm64/movbe.cpp`, `tests/cpu/misc/movbe_l1d_variants.cpp`
+  (inline-asm variants), `tests/cpu/sve/case/movbe_dump_sve.cpp` (svtbl),
+  `tests/cpu/misc/partial_store_forwarding.cpp` (pre-store capture +
+  register splice golden), `tests/cpu/memory/memcpy_rewr.cpp` (arithmetic
+  `i ^ C` golden for a memcpy chain), `tests/cpu/cache/cachebounce.cpp`
+  (per-CPU register counts vs bounced atomics).
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 

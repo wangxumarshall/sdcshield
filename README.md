@@ -2,9 +2,26 @@
 
 SDCShield is an open-source project designed to identify defects and bugs in ARM CPUs derived from Intel's OpenDCDiag (ARM64 port). It consists of a set of tests built around a sophisticated CPU testing framework.
 
+SDCShield 专攻**静默数据损坏（SDC, Silent Data Corruption）**——计算不崩溃、但产出错误比特的缺陷。检测原理：向目标计算单元（FMA、SIMD、压缩、SVD、crypto）施加高强压测，再与预计算的 golden 值做**字节级比对**（错一比特即 FAIL，无容差）；x86-64 为未改动的参考架构，ARM64 移植全程增量式非回归。
+
 ## Origin
 
 SDCShield is derived from OpenDCDiag (which contains the Intel `sandstone` framework), licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for full derivation and upstream provenance.
+
+## 质量保障：Agent 全流程自动化
+
+SDCShield 的检测结论必须可信，因此仓库把「质量保障」做成贯穿开发—检视—CI—发布的全流程自动化体系，而非依赖人工自觉。总体架构（v3 整合视图）：
+
+![Agent 全流程自动化总体架构](docs/build-deploy-pr-ci/agent-full-automation.png)
+
+四层机制：
+
+1. **PR 检视-修复闭环（六阶段，绝不自动 merge）**——push 到特性分支自动开 PR（`auto-pr.yml`）；五路检视：四个外部 SaaS bot（Codex / CodeRabbit / PR-Agent / Greptile，均内嵌 SDC 激发检视要点）+ 本地无头 claude 对抗检视（`scripts/pr_local_review.py`）；`scripts/pr_loop.py` 驱动 Status → Wait → Collect → subagent 批判性处置（逐条拒绝或修复并说明）→ 修复提交触发新一轮检视 → 循环至 READY_TO_MERGE → **人工 merge**。合入权永远在维护者手中。
+2. **无人值守任务闭环（task-loop）**——main 分支 CI 红 / main 增量对抗审查 / 会话 / 手建 issue 统一进入 `agent-task` 队列，headless agent 修复后开 PR，走同一条检视闭环，最终仍由人工 merge（`scripts/task_loop.py`）。
+3. **CI 哨兵与发布闸门**——每日 cron 在 15 个 openEuler 版本容器内全量构建 + 全用例 × 全参数验证（`multi-os-verify.yml`，汇总「用例 × 版本」结果矩阵）；PR 级 lint / DCO / 新增代码随机性门禁 / 多版本角落构建并行把关；发布链 `release-all.sh` 以 15 × `RESULT: PASS` 为硬闸，不过绝不推送。
+4. **安全与稳定性扫描**——CodeQL / Gitleaks / osv-scanner / zizmor（每周全量 + PR 增量）；ASan+UBSan 夜巡；本地 15 镜像 × 29 条严格选项矩阵（`scripts/lts-stability/`）。
+
+架构设计、PR 状态机与分阶段路线图见 [docs/build-deploy-pr-ci/agent-full-automation.md](docs/build-deploy-pr-ci/agent-full-automation.md)；各机制工程细节在本 README「质量保障与 CI 基础设施」一节及 [PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)、[task-loop 手册](docs/build-deploy-pr-ci/task-loop.md) 展开。
 
 ## 一行命令检测鲲鹏 CPU SDC
 
@@ -214,9 +231,11 @@ cd scripts/offline-build/
 
 单 SP 手动链（上节 D→E→F）由 `build-all.sh` 自动化封装（镜像烘焙、哈希 skip、`-P` 并行、`--since`、smoke/full 五档）：`./scripts/offline-build/build-all.sh --all --full --jobs 3` 一次构建全 15 个版本（20.03/22.03/24.03 × LTS+SP1~SP4），以纯净容器 full 验证为发布闸门（期望 `PASS: 15`）；`./scripts/offline-build/package-release.sh <series> <sp>` 产出 ~20MB 现场 tarball，内含自动检测 OS 的 `run.sh`（精确匹配版本、校验 sha256，不匹配硬停指路；`run.sh full` 为两段式全核 eigen 满载，4 个数值敏感测试 `-n 1` 补跑规避 ULP 级假 FAIL）。一键式全流程 `release-all.sh` 是 agent/CI 首选入口：base 镜像拉取 → 15 版本烘焙 → 构建 → full 验证 → 提交推送（3 个 RPM submodule + 主仓），五阶段幂等，check 阶段 **15 × `RESULT: PASS` 且 0 FAIL** 硬闸、不过绝不推送，在 `main` 上拒绝运行；`--skip-base` 跳过 base 拉取。完整设计、一键复现指南（含 15 SP 全 full 验证基线）与速查见 [docs/build-deploy-pr-ci/multi-version-build-deploy.md](docs/build-deploy-pr-ci/multi-version-build-deploy.md)（设计方案）、[docs/build-deploy-pr-ci/multi-version-build-deploy-usermanual.md](docs/build-deploy-pr-ci/multi-version-build-deploy-usermanual.md)（用户手册）与 [scripts/offline-build/README.md](scripts/offline-build/README.md)。
 
+## 质量保障与 CI 基础设施
+
 ### GitHub Actions 每日多 OS 自动验证（`.github/workflows/multi-os-verify.yml`）
 
-CI 哨兵（与上节 `release-all.sh` 发布链路互补）：每天 UTC 04:00（北京时间 12:00）自动触发，也可手动 `workflow_dispatch`；15 个镜像 × 15 个 job 并行（`fail-fast: false`）——openEuler 20.03/22.03/24.03 × LTS+SP1~SP4，运行在 `ubuntu-24.04-arm` 托管 aarch64 runner 的 ghcr.io 构建镜像内。每 job 原生 `meson+ninja` 构建后由 `scripts/gha/verify-params.py` 做全量用例 × 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），`scripts/gha/benchmark.sh` 采跨 OS 基准，`report` job 汇总 15 份结果成「用例 × 版本」矩阵。零执行与全 skip 分两层判定：任一阶段 `pass+skip` 全为 0（一条结果记录都没有）即按失败处理，不静默放过坏门；`all-quality` 阶段允许只有 skip 记录的通过（仍需 `seeds>0` 种证据），并发档与 `mdim` 档则要求至少 1 个 `pass` 结果（全 skip 判 FAIL）。镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。详见 [docs/build-deploy-pr-ci/multi-version-build-deploy.md](docs/build-deploy-pr-ci/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
+CI 哨兵（与上节「多版本一键构建与部署」的 `release-all.sh` 发布链路互补）：每天 UTC 04:00（北京时间 12:00）自动触发，也可手动 `workflow_dispatch`；15 个镜像 × 15 个 job 并行（`fail-fast: false`）——openEuler 20.03/22.03/24.03 × LTS+SP1~SP4，运行在 `ubuntu-24.04-arm` 托管 aarch64 runner 的 ghcr.io 构建镜像内。每 job 原生 `meson+ninja` 构建后由 `scripts/gha/verify-params.py` 做全量用例 × 全量参数功能测试（`--quality=-1` 全覆盖、`-n 1/4/8` 三档、openblas `mdim` 扫谱、selftests 正负集），`scripts/gha/benchmark.sh` 采跨 OS 基准，`report` job 汇总 15 份结果成「用例 × 版本」矩阵。零执行与全 skip 分两层判定：任一阶段 `pass+skip` 全为 0（一条结果记录都没有）即按失败处理，不静默放过坏门；`all-quality` 阶段允许只有 skip 记录的通过（仍需 `seeds>0` 种证据），并发档与 `mdim` 档则要求至少 1 个 `pass` 结果（全 skip 判 FAIL）。镜像需先 `./scripts/offline-build/images/build-images.sh <series> <sp> --push` 推到 `ghcr.io/wangxumarshall/sdcshield-offline`。详见 [docs/build-deploy-pr-ci/multi-version-build-deploy.md](docs/build-deploy-pr-ci/multi-version-build-deploy.md) 的「GitHub Actions 每日多 OS 验证」章节与 [scripts/gha/README.md](scripts/gha/README.md)。
 
 ### PR CI 门禁、安全扫描与基准趋势
 

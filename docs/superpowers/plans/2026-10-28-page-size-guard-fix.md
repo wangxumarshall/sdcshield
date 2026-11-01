@@ -44,6 +44,12 @@
 - `static inline` + 函数级 static 缓存：每 TU 一份缓存；竞态良性（所有
   写入者写同值）；sysconf 线程安全；`_SC_PAGESIZE` 在 Linux/macOS/
   FreeBSD 均存在。
+  **更正（2026-11-01，issue #399）**：「竞态良性」论断不成立——C++11
+  [intro.races] / C11 5.1.2.4 下，非同步并发写同一非原子对象即 data race
+  （形式 UB），与是否同值无关；且 sysconf 失败值 -1 会被 `!cached` 判定
+  永久缓存并转型为 4294967295 喂给 ROUND_UP_TO 位掩码。已由
+  [2026-11-01-page-size-race-fix.md](2026-11-01-page-size-race-fix.md)
+  修复（去掉缓存，改每次调用 sysconf + 非正值回退 4096）。
 - x86-64：改动为架构中立 framework 代码，4K 页 x86-64（全部主流配置）
   行为逐位等价；Windows 不在范围（用户裁定，只考虑 Linux）。
 

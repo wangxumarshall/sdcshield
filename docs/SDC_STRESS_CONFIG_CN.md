@@ -171,7 +171,7 @@ arena 越大，golden/被测元素的随机落点跨度越大（覆盖更多 cac
 兼容旧变量 `SDC_MESH_BUFFER_BYTES`（直接指定字节）。
 注：代码 clamp 实为 `1<<20 .. 1<<44`（16 TiB），原表 4TiB 为笔误。
 
-### NEON mesh FP 对（tests/cpu/mesh：mesh_upi_avx_sym / mesh_upi_avx512_sym）
+### NEON mesh FP（tests/cpu/mesh：mesh_upi_avx_sym / mesh_upi_avx512_sym / mesh_upi_avx512_symm_f64）
 | knob | 含义 | 范围 | 缺省 |
 |---|---|---|---|
 | `buffer_bytes` | 共享缓冲目标字节 | 1MiB~16TiB | 四源安全预算(90% 口径) ÷ (2×线程×slice)，clamp [64MiB, 1GiB] |
@@ -185,6 +185,8 @@ min，#310；90% 口径）÷ 2 路战役均摊 ÷ 线程数 ÷ 并发 slice 数�
 64 MiB 下限保工作集达 LLC 量级（不超过本实例战役份额——紧预算下让位
 于不超分；四源预算为 0 时诚实 SKIP），1 GiB 上限只约束默认值——显式
 knob/env 可申请更大足迹（其超时语义见 #357）。quick 模式 16 MiB。
+注：symm_f64 由 #323 补齐（#414 当时只改了 sym 对）；f64 块粒度
+32 KiB（4096×double），sym 对为 32 KiB（8192×float）。
 
 ### SVE eigen / acl_gemm
 | knob | 含义 | 范围 | 缺省 |

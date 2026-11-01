@@ -28,6 +28,7 @@
 
 #include <sandstone.h>
 #include "sdc_stress_config.h"
+#include "gemm_solve_probe.h"
 
 #include <Eigen/Core>
 #include <cstdint>
@@ -38,40 +39,14 @@ using namespace Eigen;
 typedef Matrix < std::complex < double >, Dynamic, Dynamic > Mat;
 
 #if defined(__aarch64__) && defined(__linux__)
-/* 联合求解 sizing 探针(T9): 填充与 run() 的 fill_rand 同谱系(均匀随机
- * [-1,1) 独立 re/im, 检视 #51)——splitmix 确定性哈希满足该契约, 且不
- * 依赖 init aux 线程上未定义的 per-thread RNG 状态。GEMM 计时对数值
- * 不敏感(无 SVD 式 deflation 路径), 谱系由分布一致性满足; 填充 O(n²)
- * 相对乘法 O(n³) 已计入探针计时(保守方向)。同 T6 gemm_double_max_arm
- * _body 的 solve_once(complex 四流: a.re/a.im/b.re/b.im)。 */
+/* 联合求解 sizing 探针(T9): 谱系契约(检视 #51: 填充与 run() 的
+ * fill_rand 同谱系, 均匀随机 [-1,1) 独立 re/im)已单点收口至
+ * gemm_solve_probe.h(issue #389, 含 T6 gemm_double_max_arm_body 源头
+ * 共 8→1)——填充唯一定义, 漂移在编译期不可能(complex 四流:
+ * a.re/a.im/b.re/b.im 经 if constexpr 分支)。 */
 static int gemm_solve_once(int n)
 {
-    Mat a(n, n), b(n, n), c;
-    for (int r = 0; r < n; ++r)
-        for (int col = 0; col < n; ++col) {
-            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
-            h ^= h >> 32;
-            h *= 0xD6E8FEB86659FD93ull;
-            h ^= h >> 32;
-            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h2 ^= h2 >> 32;
-            std::uint64_t h3 = h2 * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h3 ^= h3 >> 32;
-            std::uint64_t h4 = h3 * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h4 ^= h4 >> 32;
-            a(r, col) = std::complex<double>(
-                (double)(h % 2000u) / 1000.0 - 1.0,
-                (double)(h2 % 2000u) / 1000.0 - 1.0);
-            b(r, col) = std::complex<double>(
-                (double)(h3 % 2000u) / 1000.0 - 1.0,
-                (double)(h4 % 2000u) / 1000.0 - 1.0);
-        }
-    c = a * b;
-    return 0;
+    return gemm_probe::solve_once<Mat>(n);
 }
 #endif
 

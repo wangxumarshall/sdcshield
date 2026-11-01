@@ -101,8 +101,11 @@ static int neon_rot_stale_reload_init(struct test *test) {
 static int neon_rot_stale_reload_run(struct test *test, int cpu) {
     auto *data = static_cast<NeonRotStaleReloadData *>(test->data);
 
-    /* one leading element so &temp[-1] is valid for i=0 */
-    uint64x2_t *temp_buf = static_cast<uint64x2_t *>(aligned_alloc(64, (NEON_ROT_STALE_RELOAD_COUNT + 1) * sizeof(uint64x2_t)));
+    /* one leading element so &temp[-1] is valid for i=0; aligned_alloc_safe
+     * rounds the (COUNT+1)*16 = 16400-byte request up to a 64-byte multiple —
+     * C11 requires size to be a multiple of alignment (glibc tolerates a
+     * violation, ASan aborts on it) */
+    uint64x2_t *temp_buf = static_cast<uint64x2_t *>(aligned_alloc_safe(64, (NEON_ROT_STALE_RELOAD_COUNT + 1) * sizeof(uint64x2_t)));
     uint64x2_t *temp = temp_buf + 1;
     uint64x2_t *dst = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
 

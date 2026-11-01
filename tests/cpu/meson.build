@@ -402,6 +402,10 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/stress_fma.cpp',
             'misc/stress_sub.cpp',
             'misc/stress_xor.cpp',
+            # Address-randomized carve variant: exclusive 16 KiB slots
+            # allocated once at init, so no two regions can overlap
+            # (issue #339 fix).
+            'misc/neon_rot_ldr_rand.cpp',
         )
     )
 endif

@@ -85,20 +85,26 @@ static char *window_base(struct NeonRotLdrAtTopTlbStressData *data, uint64_t ite
     return data->region + off;
 }
 
-/* Golden recompute for the active window. Deliberately NOINLINE: when this
- * loop was inline in run(), GCC 12 fused it with the (same-shape) hot sweep
- * and eliminated the sweep's dst stores -- every core failed the smoke run
- * (2026-09-09). A noinline call is an optimization barrier the compiler
- * cannot fuse loops across; the hot loop stays byte-pure. */
+/* Golden recompute for the active window (issue #373: scalar independent
+ * golden — pure C integer ops on the scalar pipeline, never the NEON units
+ * under test, so a persistent NEON datapath fault cannot corrupt golden and
+ * actual identically). Deliberately NOINLINE: when this loop was inline in
+ * run(), GCC 12 fused it with the (same-shape) hot sweep and eliminated the
+ * sweep's dst stores -- every core failed the smoke run (2026-09-09). A
+ * noinline call is an optimization barrier the compiler cannot fuse loops
+ * across; the hot loop stays byte-pure. */
 __attribute__((noinline))
 static void tlbstress_compute_golden(uint64x2_t *golden, const uint64x2_t *srcA,
                                      const uint64x2_t *srcB, int n) {
-    for (int i = 0; i < n; i++) {
-        switch (i % 4) {
-            case 0: golden[i] = vaddq_u64(srcA[i], srcB[i]); break;
-            case 1: golden[i] = veorq_u64(srcA[i], srcB[i]); break;
-            case 2: golden[i] = vandq_u64(srcA[i], srcB[i]); break;
-            case 3: golden[i] = vorrq_u64(srcA[i], srcB[i]); break;
+    const uint64_t *sa = reinterpret_cast<const uint64_t *>(srcA);
+    const uint64_t *sb = reinterpret_cast<const uint64_t *>(srcB);
+    uint64_t       *ex = reinterpret_cast<uint64_t *>(golden);
+    for (int e = 0; e < 2 * n; e++) {
+        switch ((e / 2) % 4) {   /* op phase: vector index % 4 */
+            case 0: ex[e] = sa[e] + sb[e]; break;
+            case 1: ex[e] = sa[e] ^ sb[e]; break;
+            case 2: ex[e] = sa[e] & sb[e]; break;
+            case 3: ex[e] = sa[e] | sb[e]; break;
         }
     }
 }

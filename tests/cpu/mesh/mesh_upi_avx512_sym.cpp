@@ -123,6 +123,10 @@ static size_t mesh_target_bytes(struct test *test) {
         b = lo;
     if (b > (1ull << 30))
         b = 1ull << 30;
+    if (b == 0)
+        /* budget==0(或 < consumers 的极限小额):交 init 诚实 SKIP——勿落进
+         * 下方 [欠压力] 分支打「仍按 PROD 记账」的自相矛盾日志(检视轮 2)。 */
+        return b;
     if (b < (64ull << 20)) {
         /* 64 MiB 下限被战役份额截断:紧预算下工作集缩进 LLC 深内,mesh
          * 互连压力语义退化——按框架惯例打 [欠压力] 档位警告(检视轮 3),

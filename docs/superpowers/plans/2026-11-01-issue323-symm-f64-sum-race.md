@@ -246,7 +246,9 @@ SDC_BUILD_JOBS=20 ./scripts/build.sh
 for i in 1 2 3 4 5; do ./builddir/sdcshield -e mesh_upi_avx512_symm_f64 -t 2 -n 8; done
 ```
 
-期望：pass；`grep -c global_sum tests/cpu/mesh/mesh_upi_avx512_symm_f64.cpp` = 0。
+期望：pass；`grep -n global_sum tests/cpu/mesh/mesh_upi_avx512_symm_f64.cpp`
+仅余注释性历史引用（代码引用清零；实测全文 5 处，全为注释——检视轮 2
+修正：原文「grep -c = 0」字面不实）。
 （Step 4 做竞态针对性扫掠。）
 
 - [x] **Step 2.6: Commit**

@@ -208,6 +208,10 @@ static size_t mesh_target_bytes(struct test *test) {
         b = lo;
     if (b > (1ull << 30))
         b = 1ull << 30;
+    if (b == 0)
+        /* budget==0(或 < consumers 的极限小额):交 init 诚实 SKIP——勿落进
+         * 下方 [欠压力] 分支打「仍按 PROD 记账」的自相矛盾日志(检视轮 2)。 */
+        return b;
     if (b < (64ull << 20)) {
         /* 64 MiB 下限被战役份额截断:紧预算下工作集缩进 LLC 深内,mesh
          * 互连压力语义退化——按框架惯例打 [欠压力] 档位警告(检视轮 3),
@@ -425,15 +429,11 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
             if (!store_ok) break;
         }
 
-        bool sum_ok = (read_sum == td->expected_total);   // 双侧精确,顺序无关
-        if (!sum_ok) {
-            log_warning("mesh_upi_avx512_symm_f64: thread %d read_sum=%a "
-                        "expected=%a (deterministic golden)", id, read_sum,
-                        td->expected_total);
-            report_fail_msg("mesh_upi_avx512_symm_f64: cross-core FP sum "
-                            "mismatch vs deterministic golden");
-            return EXIT_FAILURE;
-        }
+        /* 判定顺序(检视轮 2 修正):fma_ok/store_ok 必须先于 sum 判定——二者
+         * 任一失效都会 break 截断遍历,read_sum 只覆盖缓冲前缀(截断和严格
+         * 小于期望),此时若先判 sum 必然误报「sum mismatch vs deterministic
+         * golden」,把计算路径/私有通路故障归因为内存内容损坏(幽灵诊断)。
+         * sum 判定只在遍历完整(fma_ok && store_ok)后才有意义。 */
         if (!fma_ok) {
             log_warning("mesh_upi_avx512_symm_f64: thread %d NEON FMA chain "
                         "diverged from scalar golden (compute path, not a "
@@ -447,6 +447,15 @@ static int mesh_upi_avx512_symm_f64_run(struct test *test, int cpu) {
                         "store/reload self-consistency failure", id);
             report_fail_msg("mesh_upi_avx512_symm_f64: private store/reload "
                             "self-consistency failure");
+            return EXIT_FAILURE;
+        }
+        bool sum_ok = (read_sum == td->expected_total);   // 双侧精确,顺序无关
+        if (!sum_ok) {
+            log_warning("mesh_upi_avx512_symm_f64: thread %d read_sum=%a "
+                        "expected=%a (deterministic golden)", id, read_sum,
+                        td->expected_total);
+            report_fail_msg("mesh_upi_avx512_symm_f64: cross-core FP sum "
+                            "mismatch vs deterministic golden");
             return EXIT_FAILURE;
         }
         validated_any = true;   // 本轮全量读取校验（闭式和+FMA 链+私有通路）已通过

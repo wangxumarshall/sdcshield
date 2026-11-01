@@ -25,7 +25,9 @@ placeholder honesty / AGENTS.md 诚实性——不以不可复核的工件充当
 ## Global Constraints
 
 - 纯 .md 改动：不碰任何代码、脚本、数据文件；`matrix.md`/README 已核无此论断
-  （grep `尸体|比对一致|seed2 首跑` 仅命中 triage-256.md），无需同步。
+  （grep `尸体|比对一致|seed2 首跑` 零命中 matrix.md/README；库内其余命中为主题
+  文件 triage-256.md、本 plan 自身，及无关语境一处——mspc_paper_zh.md:121 论文译文
+  中的「尸体」一词——均非该论断的扩散），无需同步。
 - 单 commit（一个逻辑单元：一处证据地位降格）。
 - x86-64 非回归 = 纯文档，无架构语义，如实声明。
 

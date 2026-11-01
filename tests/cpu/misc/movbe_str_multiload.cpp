@@ -67,17 +67,50 @@
 struct movbe_data {
     uint32_t *input;
     uint32_t *swapped;
+    uint32_t *expected_swapped;
 };
+
+/* issue #374: identity LUT for the scalar-independent byte-swap golden.
+ * The table loads block GCC's bswap-idiom recognizer from folding the
+ * shift/or reassembly back into a REV instruction -- the exact unit under
+ * test -- so a persistent REV mispermutation can never corrupt golden and
+ * actual identically. Pinned by scripts/check-bswap-golden.sh (zero
+ * rev/rev16/rev32 and zero vector-ALU inside the init symbol). */
+static uint8_t g_bswap_lut[256];
+static void movbe_golden_lut_init(void)
+{
+    for (int b = 0; b < 256; ++b)
+        g_bswap_lut[b] = (uint8_t)b;
+}
+static uint32_t movbe_golden_bswap32(uint32_t x)
+{
+    return ((uint32_t)g_bswap_lut[x & 0xff] << 24) |
+           ((uint32_t)g_bswap_lut[(x >> 8) & 0xff] << 16) |
+           ((uint32_t)g_bswap_lut[(x >> 16) & 0xff] << 8) |
+           (uint32_t)g_bswap_lut[x >> 24];
+}
 
 static int movbe_init(struct test *test)
 {
     movbe_data *data = (movbe_data *)malloc(sizeof(movbe_data));
     data->input   = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
     data->swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
+    data->expected_swapped = (uint32_t *)aligned_alloc_safe(64, MOVBE_BUFFER_SIZE * sizeof(uint32_t));
 
     for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i) {
         data->input[i] = random32();
     }
+
+    /* issue #374: independent golden for the swapped intermediate, computed
+     * once here with pure scalar LUT lookups (never the REV under test).
+     * Note the in-loop `expected = __builtin_bswap32(golden)` below is
+     * deliberately left on the same REV unit: it is part of the diagnostic
+     * classification path whose hot-loop schedule must not change; the
+     * persistent-fault coverage comes from this post-loop golden, not from
+     * the in-loop compare. */
+    movbe_golden_lut_init();
+    for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i)
+        data->expected_swapped[i] = movbe_golden_bswap32(data->input[i]);
 
     test->data = data;
     return EXIT_SUCCESS;
@@ -156,6 +189,25 @@ static int movbe_run(struct test *test, int cpu)
         }
     }
 
+    /* issue #374: post-loop verification of the stored intermediate. The asm
+     * hot loop (both str->ldr trigger windows) is untouched; every iteration
+     * stores the same rev(input[i]) to swapped[i], so the final content must
+     * equal the init-time LUT golden. A persistent REV mispermutation makes
+     * the asm rev, the in-loop C bswap, AND the stored bytes all wrong in
+     * the same involutive way -- the in-loop a==expected==b check cancels it
+     * (bswap(bswap) identity) -- but this byte-exact check against the
+     * independently computed golden cannot be fooled by it. */
+    for (size_t i = 0; i < MOVBE_BUFFER_SIZE; ++i) {
+        if (data->swapped[i] != data->expected_swapped[i]) {
+            log_error("MovBE-multiload: swapped-intermediate miscompare at index %u: "
+                      "input=0x%08X golden=0x%08X actual=0x%08X xor=0x%08X",
+                      (unsigned)i, data->input[i], data->expected_swapped[i],
+                      data->swapped[i], data->expected_swapped[i] ^ data->swapped[i]);
+            report_fail_msg("MovBE: swapped buffer != independent golden at index %u",
+                            (unsigned)i);
+        }
+    }
+
     return EXIT_SUCCESS;
 }
 
@@ -165,6 +217,7 @@ static int movbe_cleanup(struct test *test)
     if (data) {
         free(data->input);
         free(data->swapped);
+        free(data->expected_swapped);
         free(data);
     }
     return EXIT_SUCCESS;

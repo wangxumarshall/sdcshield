@@ -22,7 +22,7 @@
 - **现象**：random_access_sweep 在 debian:sid 容器（PR quick，debugoptimized）crash code 6 Aborted、utime 0、stime 469.694（毫秒）、maxrss 12MB、无控制台 stderr。
 - **根因**：原版 `run()`（per-cpu worker 线程，`thread_num >= 0`）在 do-while 前调 `get_testspecific_knob_value_int("mode"/"valmode")` → `logging_mark_knob_used()`（framework/logging.cpp:1480-1484，`#ifndef NDEBUG`）打印 `### Internal error: get_test_knob_value_xxx() called from outside the main thread!` 后 `abort()` → SIGABRT code 6。abort 发生在触碰 2GiB mmap 区域之前，故 utime=0、maxrss=12MB、stime≈0.47s 全部自洽。
 - **"静默"之谜**：子进程 stderr 被 dup2 到 memfd（logging.cpp:1074-1078），默认 verbosity 下只进 `-o quick.yaml` 的 `stderr messages` 字段，不进控制台——非丢失。
-- **环境差异真相**：本机/nightly openEuler 容器 `--buildtype=release`（NDEBUG → 检查被编译掉）故绿；PR quick 的 debian:sid 是唯一 debugoptimized+quick 消费者故挂。glibc 2.43 与容器均非因。
+- **环境差异真相**：本机/nightly openEuler 容器 `--buildtype=release`（NDEBUG → 检查被编译掉）故绿；PR quick 的 debian:sid 在事发当时（2026-09-25）是唯一的 debugoptimized+quick 消费者故挂（sanitizer.yaml 2026-09-27 才创建，同样 debugoptimized+quick，但自创建起就防御性禁用了本测试，从未真实执行过它）。glibc 2.43 与容器均非因。
 - **时间线**：2026-09-20 测试引入（437595f5，经 PR #148——其 CI build-cpu skipping，quick 从未在合入前执行过）→ 2026-09-25 合入后首个 PR run 炸 → issue #183 立案 → 5 分钟后 3a9e304e 加禁用 → 2026-10-17 d1743e8a 修根因（knob 读取移 init 缓存）→ **禁用至今未撤、修复后该测试从未在 debian:sid CI 验证过**。
 - **旁证**：nightly multi-os openEuler 容器（verify-params.py，release）一直在跑该测试且绿（CLOUD_DISABLE 不含它）。
 - **当前代码状态**：`tests/cpu/memory/random_access_sweep.cpp` 与 d1743e8a 修复版逐字节一致（md5 d34b4938…），run() 只读 init 缓存的旋钮值。
@@ -124,10 +124,10 @@ Expected: 无新增警告（对照基线）
 
 ```bash
 ./builddir/sdcshield -e zstd19 -t 2000 -n 1
-./builddir/sdcshield -e random_access_sweep -t 30 -n 4
+./builddir/sdcshield -e random_access_sweep -t 30000 -n 4   # -t 单位毫秒:30s 浸润
 ```
 
-Expected: 两条均 `exit: pass`
+Expected: 两条均 `exit: pass`（`-t 30` 字面值 = 30ms，仅跑单次迭代，不作浸润证据）
 
 - [ ] **Step 3: 提交并推 feature 分支**
 
@@ -176,3 +176,10 @@ Fixes #183
 - 覆盖度：issue 的两项"真正的工作"——判定 bug vs 环境（Task 1 实证 + 背景定案）、修复后撤禁用（Task 2-5）——均有对应任务。禁用点全量核对过：仅 pr.yaml:142 与 sanitizer.yaml:72 两处（verify-params.py 的 CLOUD_DISABLE 不含该测试，nightly 一直在跑）。
 - 无占位符；所有命令与期望输出具体。
 - Task 1 旧版文件引用（d1743e8a^）与 md5 校验值已在取证时核实（旧 651d0f64…，现 d34b4938…）。
+
+## 执行结果（2026-11-01，本节为权威记录，覆盖上文模板）
+
+- **Task 1 全过**：debugoptimized（对齐 CI）下旧版（d1743e8a^）1:1 复现 issue 签名（code 6 / Aborted / core-dump / cpu-mask XXXX / time-to-fail null / utime 0.000，`stderr messages:` 字段 4 条 `### Internal error: get_test_knob_value_xxx() called from outside the main thread!`）；现行版 `--quick -n4` `exit: pass`；文件还原后 md5 复核 d34b4938…、worktree 干净。
+- **Task 2/3 全过**：两 workflow 撤禁用，YAML 校验过；release 构建（既有 2 个 warning 均为 mesh_upi_{avx,sse}_sym.cpp 的历史告警，与本变更无关）；`zstd19 -t 2000 -n 1` 与 `random_access_sweep -t 30000 -n 4`（823 分片）均 `exit: pass`。实际提交 **30ded52d**（正文比上文模板更完整，含"当时 quick.yaml 工件里其实有错误消息"的反证）。
+- **Task 4 CI 试验**：PR **#411**，run **41286996741**（head 30ded52d）：build-cpu（debian:sid, debugoptimized）原始 + rerun×2 = **3 连绿**；工件 quick.yaml 每次 attempt 核验：**502 测试、`exit: pass`、`random_access_sweep` `result: pass`**。Multi-version 三腿、bot-coverage、pr-agent、lint、CodeQL 等其余 job 全绿。
+- **Task 5**：8 角度 code-review 处置——计划文档 3 处修正（本节即其一）、progress-log 追加结案条目、sanitizer 路径合入前本机 ASan+UBSan 验证 + 合入后 workflow_dispatch；框架层后续改进（knob 检查 NDEBUG 门控无 selftest 锁契约、sdc_stress_config 静默回退）另立 issue。

@@ -1425,3 +1425,31 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   因 main 期间增合已过期）、占位表删 smi_count 行、新增探针语义边界
   段; architecture.md 占位示例改 ist 独例 + InterruptMonitor 节注明
   ARM64 smi_count 绕过 InterruptMonitor 的原因。
+
+## 2026-11-01（issue #183 结案：random_access_sweep debian:sid "静默 abort" 根因定案 + 撤禁用）
+
+- **根因（三重证据：考古 + 静态取证 + 本机复现）**: 非环境（glibc 2.43/
+  容器均非因），是测试 bug × 构建等级——原版 run() 从 per-cpu worker
+  线程调 get_testspecific_knob_value_int, framework/logging.cpp:1479 的
+  #ifndef NDEBUG fail-loud 检查 abort()（SIGABRT code 6）。abort 发生在
+  触碰 2GiB mmap 区域之前, 故 utime=0/maxrss=12MB/stime 469.694(毫秒!)
+  自洽。"静默"是误读: 子进程 stderr dup2 到 memfd, 错误消息只进 -o
+  yaml 的 stderr messages 字段——**当时的 quick.yaml 工件里其实有 4 条
+  ### Internal error 消息**。环境差异真相: release 构建(NDEBUG)把检查
+  编译掉(本机/nightly openEuler 绿), debian:sid PR quick 是事发时唯一
+  debugoptimized+quick 消费者(挂)。
+- **考古**: 测试 2026-09-20 经 PR #148 合入, 该 PR 唯一 CI run 里
+  build-cpu skipping——quick 门禁从未在合入前执行过它; 09-25 炸、
+  issue 立案、5 分钟后 3a9e304e 加 --disable; 2026-10-17 d1743e8a 修
+  根因(knob 读取移 init 缓存)但禁用未撤——修复后该测试从未在
+  debian:sid CI 跑过, nightly openEuler(release)一直绿。
+- **本机复现(openEuler, debugoptimized 对齐 CI)**: 旧版(d1743e8a^)
+  --quick -n4 1:1 复现 issue 全签名; 现行版同命令 exit: pass。
+- **处置**: PR #411(30ded52d) 撤 pr.yaml/sanitizer.yaml 两处禁用。
+  CI 试验 run 41286996741: build-cpu 原始+rerun×2 三连绿, 工件 502
+  测试 exit: pass、random_access_sweep result: pass。计划文档
+  docs/superpowers/plans/2026-11-01-issue183-random-access-sweep-undisable.md
+  (含完整证据链)。
+- **移交(框架层系统性缺口, 另立 issue)**: knob-from-worker fail-loud
+  检查被 NDEBUG 门控(release 全绿盲区)+ 无 selftest 锁契约;
+  sdc_stress_config.h worker cache-miss 静默回退 default 同类风险。

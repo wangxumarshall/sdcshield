@@ -262,7 +262,7 @@ END {
     printf "\n" > M
     printf "**%d = %d pass（%d 直绿 + %d 有界）+ %d SKIP(legal) + %d BOUNDARY(gem5)**，零 FAIL、零非法 SKIP。\n\n", P + Q + S + Y, P + Q, P, Q, S, Y > M
     printf "- **128 列 = %d pass + %d SKIP(legal)** —— 对账 triage-128 §5（189 直绿 × 2 seed + 1 合法 SKIP：fmmla@128，两 seed 同格同理）；其中 %d 格为腿内 baked 有界（triage-128 §1 的 26 项 -O 覆盖的测试）。\n", p128 + q128, s128, q128 > M
-    printf "- **256 列 = %d pass** —— 对账 triage-256 §7（seed1 165 腿内直绿（164 默认自适应 + 1 格 acl 标定 baked）+ 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内 clamp 下限有界））；%d 个有界格 = %d 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——**clamp 下限 = 最小激发强度**，工作集较默认自适应几何缩小数个数量级，证据强度弱于直绿格、不构成满强度激发证据，triage-256 §5「证据强度限定」）+ %d 格 baked 直绿（acl dim=512 标定，Ruling B / triage-256 §1；此格按下行有界格计法计入、腿内直绿口径亦含它，两口径两属）。\n", p256 + q256, q256, n_to, q256 - n_to > M
+    printf "- **256 列 = %d pass** —— 对账 triage-256 §7（seed1 165 腿内直绿（164 默认自适应 + 1 格 acl 标定 baked）+ 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内 clamp 下限有界））；%d 个有界格 = %d 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ %d 格 baked 直绿（acl dim=512 标定，Ruling B / triage-256 §1；此格按下行有界格计法计入、腿内直绿口径亦含它，两口径两属）。\n", p256 + q256, q256, n_to, q256 - n_to > M
     printf "- **512 列 = %d pass + %d BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；%d 个有界格 = baked 26 项中绿 %d（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 %d（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 %d（acl：baked 512 被 extras 覆盖为 128）。\n", p512 + q512, y512, q512, bg, eg, bo > M
     printf "- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。\n" > M
 }
@@ -317,7 +317,7 @@ cat <<'HDR2'
 | 格值 | 含义 | 出处 |
 |---|---|---|
 | `pass` | 腿内默认/自适应几何下直绿（native：全核 `-t 2000` 实测；512：1 轮全量 golden 字节比对成立） | 各 summary / verdicts |
-| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128** = 26 项腿内 baked（triage-128 §1：逐字拷贝自 256 腿 seed2，构成同 @256——25 项 clamp 下限 + 1 项 `acl_gemm_sve.dim=512` 标定 baked（Ruling B，dim clamp [64,4096]、512 非下限）；两 seed 腿内有界实测）；**@256** = 25 格 seed1 有界重跑（triage-256 §5：clamp 下限一次通过、零上调——**clamp 下限 = 最小激发强度**，证据强度限定见彼处）+ seed2 腿内有界 + `acl_gemm_sve.dim=512` 标定 baked（triage-256 §1，Ruling B）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格） | 对应 triage 分节 |
+| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128** = 26 项腿内 baked（triage-128 §1：逐字拷贝自 256 腿 seed2，构成同 @256——25 项 clamp 下限 + 1 项 `acl_gemm_sve.dim=512` 标定 baked（Ruling B，dim clamp [64,4096]、512 非下限）；两 seed 腿内有界实测）；**@256** = 25 格 seed1 有界重跑（triage-256 §5：clamp 下限一次通过、零上调——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ seed2 腿内有界 + `acl_gemm_sve.dim=512` 标定 baked（triage-256 §1，Ruling B）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格） | 对应 triage 分节 |
 | `SKIP(legal: F64MM UNDEFINED <VL=256)` | 架构性合法 SKIP，唯一格 = (sve512_fmmla_arm, 128)，两 seed 同格同理 | triage-128 §2 + §3 逐字源码引文 |
 | `BOUNDARY(gem5: <标签>)` | gem5 侧限制边界，Ruling I 终局：`PMULL64` = gem5 无该 64-bit PMULL 编码（OpenSSL GHASH `pmull v0.1q`，2 格）；`DC-CIVAC` = SE 模式 `dc civac` 缓存维护路径 raise UndefinedInstruction（3 格）；`SIM-SPEED` = knob 在 clamp 下限或无杠杆，单轮指令量 × ~1400 仿真速超出实用预算（4 格）。native 两腿对应格全绿 | triage-512 §5.1/§5.2 |
 

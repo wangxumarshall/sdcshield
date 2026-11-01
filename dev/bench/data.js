@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793445338915,
+  "lastUpdate": 1793534278377,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -2915,6 +2915,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 20.3,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "47ec1c8bd9eadb6f90994573d4f1b57b72e26e2d",
+          "message": "Merge pull request #419 from wangxumarshall/feat/issue374-movbe-roundtrip-golden\n\nfix(tests): movbe 自逆往返中间值 golden + L1/L0 恒真族独立 golden + sched_storm 降 BETA（issue #374，15 commits）",
+          "timestamp": "2026-11-01T10:48:33Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/47ec1c8bd9eadb6f90994573d4f1b57b72e26e2d"
+        },
+        "date": 1793534277498,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 84010.926,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44930.945,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.733,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 30.838,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.832,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.914,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.835,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.705,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 29189.426,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.953,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.186,
             "unit": "s"
           }
         ]

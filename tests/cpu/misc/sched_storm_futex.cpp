@@ -75,5 +75,9 @@ static int sched_storm_futex_run(struct test *test, int cpu) {
 
 DECLARE_TEST(sched_storm_futex, "Scheduler-storm stimulus A: tight futex WAIT(1us timeout) self-wake loop; every wait drives the newidle_balance path (find_busiest_group, the 11-panic crash site); kernel errors observable via journalctl/vmcore")
     .test_run     = sched_storm_futex_run,
-    .quality_level = TEST_QUALITY_PROD,
+    /* issue #374: kernel-activity stimulus / negative control with NO
+     * SDC-detection semantics (detector is external: journalctl/vmcore).
+     * Downgraded PROD -> BETA so the default PROD set contains only tests
+     * with verification semantics (#334 grading); reachable via --beta. */
+    .quality_level = TEST_QUALITY_BETA,
 END_DECLARE_TEST

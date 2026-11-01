@@ -232,6 +232,11 @@ struct memcpy_rewr_state {
     struct mem_info_s gl_tester;          /* producer-shared source */
     std::atomic<unsigned char> mem_flag;  /* 1 once an SDC mismatch is seen */
     std::atomic<long long> product;      /* consumer iteration counter */
+    /* issue #374: the block-constant timer value the current gl_tester.b1
+     * content was seeded with (i ^ c). Written only inside the queue mutex
+     * (together with func_data_make's b1 memcpy), snapshotted by consumers
+     * inside the same mutex — see do_iot_schedule / iot_worker. */
+    uint64_t golden_cycles;
     int g_size;                           /* per-transfer payload */
     int g_size_t;                         /* scratch-copy payload */
     unsigned char a1[c_size];
@@ -304,7 +309,8 @@ static void func_struct_test1(memcpy_rewr_state *st, int size)
     memcpy(m_tester_p->b1, st->gl_tester.b1, size);
 }
 
-static void func_struct_test2(memcpy_rewr_state *st, int size)
+static void func_struct_test2(memcpy_rewr_state *st, int size,
+                              uint64_t golden_c, bool copied)
 {
     if (!m_tester_p)
         return;
@@ -312,6 +318,29 @@ static void func_struct_test2(memcpy_rewr_state *st, int size)
     memcpy(m_tester_p->b3, m_tester_p->b2, size);
     memcpy(m_tester_p->b5, m_tester_p->b2, size);
     memcpy(m_tester_p->b4, m_tester_p->b1, size);
+    /* issue #374: independent arithmetic golden for the transport chain
+     * m_tmp -> gl_tester.b1 -> b1. The b2..b5 cross-compare below only
+     * proves the copies agree WITH b1 (copy-vs-copy); b1 itself was never
+     * verified against what the producer put in. expected[i] = i ^ golden_c
+     * is computed in registers (never a memcpy / shared-buffer read), so a
+     * persistent memcpy/LSU fault anywhere in the chain surfaces here.
+     * `copied` guards the never-received-a-block case (b1 would be
+     * uninitialized malloc memory — the b2..b5 garbage-vs-garbage compare
+     * tolerates it, an arithmetic golden must not). */
+    if (copied) {
+        for (int i = 0; i < size; i++) {
+            unsigned char expected =
+                static_cast<unsigned char>(static_cast<uint64_t>(i) ^ golden_c);
+            if (m_tester_p->b1[i] != expected) {
+                log_error("memcpy_rewr: SDC on CPU %d: b1[%d]=0x%x expected=0x%x "
+                          "(arithmetic golden i^C, C=0x%llx)",
+                          device_info[thread_num].cpu_number, i,
+                          m_tester_p->b1[i], expected,
+                          (unsigned long long)golden_c);
+                st->mem_flag.store(1, std::memory_order_release);
+            }
+        }
+    }
     for (int i = 0; i < size; i++) {
         if (m_tester_p->b1[i] != m_tester_p->b2[i] || m_tester_p->b3[i] != m_tester_p->b1[i] ||
             m_tester_p->b4[i] != m_tester_p->b1[i] || m_tester_p->b5[i] != m_tester_p->b1[i]) {
@@ -419,6 +448,11 @@ static void *iot_worker(memcpy_rewr_state *st, struct test *test)
      * (test_time_condition). The upstream idle_time (64s) would park a
      * worker well past the test slot and deadlock shutdown. */
     const time_t wait_secs = 1;
+    /* issue #374: snapshot of the (b1, golden_cycles) pair taken inside the
+     * same critical section as the b1 copy; `copied` guards the
+     * never-received-a-block case (see func_struct_test2). */
+    uint64_t c_snap = 0;
+    bool copied = false;
     for (;;) {
         sleep_till.tv_sec = time(NULL) + wait_secs;
         sleep_till.tv_nsec = 0;
@@ -454,11 +488,13 @@ static void *iot_worker(memcpy_rewr_state *st, struct test *test)
             if (!stop) {
                 st->product.fetch_add(1, std::memory_order_relaxed);
                 func_struct_test1(st, st->g_size);
+                c_snap = st->golden_cycles;   /* issue #374: same lock as b1 */
+                copied = true;
                 stub = __iot_dequeue(conf, &pri);
             }
         }
         pthread_mutex_unlock(&conf->mutex);
-        func_struct_test2(st, st->g_size);
+        func_struct_test2(st, st->g_size, c_snap, copied);
         /* The upstream tool did __wake(&stub->args) here to release a producer
          * blocked in SYNCOP's __yield. Since our producers no longer block
          * (fire-and-forget into the MPSC queue) the stub's ownership now
@@ -477,10 +513,19 @@ static void *iot_worker(memcpy_rewr_state *st, struct test *test)
 static int do_iot_schedule(memcpy_rewr_state *st, iot_conf_t *conf,
                            call_stub_t *stub, int pri)
 {
-    for (int i =  0; i < st->g_size; i++)
-        m_tmp_p[i] = i ^ myget_cycles();
+    /* issue #374: block-constant fill — one timer read per block, recorded
+     * in st->golden_cycles, so the consumer's expected bytes are
+     * arithmetically recomputable (i ^ c). Same data class as before (time-
+     * varying across blocks, position-dependent within a block). */
+    const uint64_t c = myget_cycles();
+    for (int i = 0; i < st->g_size; i++)
+        m_tmp_p[i] = static_cast<unsigned char>(static_cast<uint64_t>(i) ^ c);
     pthread_mutex_lock(&conf->mutex);
     {
+        /* The golden_cycles write and func_data_make's gl_tester.b1 memcpy
+         * (inside __iot_enqueue) share this critical section, so a consumer
+         * always snapshots a consistent (b1, golden_cycles) pair. */
+        st->golden_cycles = c;
         __iot_enqueue(st, conf, stub, pri);
         pthread_cond_signal(&conf->cond);
     }
@@ -736,9 +781,16 @@ static int memcpy_rewr_init(struct test *test)
         return EXIT_FAILURE;
     }
 
-    /* Seed the shared producer source with a recognisable pattern once. */
+    /* Seed the shared producer source with a recognisable pattern once.
+     * issue #374: block-constant c0 (one timer read, recorded in
+     * st->golden_cycles) so the consumer can recompute the expected bytes
+     * arithmetically (i ^ c0) — a register-ALU golden independent of every
+     * memcpy/LSU transport in the chain under test. Before any producer
+     * runs, consumers copying this seed verify against c0 consistently. */
+    const uint64_t c0 = myget_cycles();
     for (int i = 0; i < st->g_size; i++)
-        st->gl_tester.b1[i] = static_cast<unsigned char>(i ^ myget_cycles());
+        st->gl_tester.b1[i] = static_cast<unsigned char>(static_cast<uint64_t>(i) ^ c0);
+    st->golden_cycles = c0;
 
     test->data = st;
 

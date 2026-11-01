@@ -149,5 +149,9 @@ static int sched_storm_hybrid_run(struct test *test, int cpu) {
 
 DECLARE_TEST(sched_storm_hybrid, "Scheduler-storm stimulus C: two threads pinned to one core doing alternating futex wait/wake ping-pong (1ms-timeout seq protocol, lost-wakeup-proof); every handoff = one sleep (newidle opportunity) + one wake-pullback (load_balance); kernel errors observable via journalctl/vmcore")
     .test_run     = sched_storm_hybrid_run,
-    .quality_level = TEST_QUALITY_PROD,
+    /* issue #374: kernel-activity stimulus / negative control with NO
+     * SDC-detection semantics (detector is external: journalctl/vmcore).
+     * Downgraded PROD -> BETA so the default PROD set contains only tests
+     * with verification semantics (#334 grading); reachable via --beta. */
+    .quality_level = TEST_QUALITY_BETA,
 END_DECLARE_TEST

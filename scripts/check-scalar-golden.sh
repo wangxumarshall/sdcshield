@@ -44,30 +44,37 @@ VALU_RE='[[:space:]](add|sub|eor|and|orr|bic|orn|mul|mla|mls|neg|abs|shl|sshll|u
 
 fail=0
 for sub in "$@"; do
-    # resolve mangled symbol + size via nm; local (t) and global (T) both fine
+    # resolve mangled symbol(s) + size via nm; local (t) and global (T) both fine.
+    # A substring can match MANY distinct static symbols (per-TU same-named
+    # inits) -- ALL of them are checked; a violation in any one is a failure
+    # (all-match semantics backported from check-bswap-golden.sh, where the
+    # movbe family's 15 same-named movbe_init instances require it).
     # nm -S fields: $1=addr $2=size $3=type $4=mangled-name
-    line=$(nm -S "$BIN" 2>/dev/null | awk -v s="$sub" '$4 ~ s && ($3 == "t" || $3 == "T") {print; exit}')
-    if [ -z "$line" ]; then
+    nmatch=0
+    for line in $(nm -S "$BIN" 2>/dev/null | awk -v s="$sub" '$4 ~ s && ($3 == "t" || $3 == "T") {print $1 ":" $2 ":" $4}'); do
+        nmatch=$((nmatch + 1))
+        addr=${line%%:*}
+        rest=${line#*:}
+        size=${rest%%:*}
+        mangled=${rest#*:}
+        end=$((0x$addr + 0x$size))
+        out=$(objdump -d "$BIN" --start-address=0x$addr --stop-address=$end 2>/dev/null)
+        insns=$(printf '%s\n' "$out" | grep -cE '^[[:space:]]+[0-9a-f]+:')
+        hits=$(printf '%s\n' "$out" | grep -cE "$VALU_RE")
+        if [ "$insns" -eq 0 ]; then
+            echo "FAIL  $sub [$mangled @0x$addr]: empty disassembly (hollow-pass guard)"
+            fail=1
+        elif [ "$hits" -gt 0 ]; then
+            echo "FAIL  $sub [$mangled @0x$addr]: $hits vector-ALU instruction(s) in golden path:"
+            printf '%s\n' "$out" | grep -E "$VALU_RE" | sed 's/^/        /' | head -5
+            fail=1
+        else
+            echo "PASS  $sub [$mangled @0x$addr]: $insns insns, 0 vector-ALU"
+        fi
+    done
+    if [ "$nmatch" -eq 0 ]; then
         echo "FAIL  $sub: symbol not found in $BIN (wrong name, or inlined away?)"
         fail=1
-        continue
-    fi
-    size=$(echo "$line" | awk '{print $2}')
-    addr=$(echo "$line" | awk '{print $1}')
-    mangled=$(echo "$line" | awk '{print $4}')
-    end=$((0x$addr + 0x$size))
-    out=$(objdump -d "$BIN" --start-address=0x$addr --stop-address=$end 2>/dev/null)
-    insns=$(printf '%s\n' "$out" | grep -cE '^[[:space:]]+[0-9a-f]+:')
-    hits=$(printf '%s\n' "$out" | grep -cE "$VALU_RE")
-    if [ "$insns" -eq 0 ]; then
-        echo "FAIL  $sub [$mangled]: empty disassembly (hollow-pass guard)"
-        fail=1
-    elif [ "$hits" -gt 0 ]; then
-        echo "FAIL  $sub [$mangled]: $hits vector-ALU instruction(s) in golden path:"
-        printf '%s\n' "$out" | grep -E "$VALU_RE" | sed 's/^/        /' | head -5
-        fail=1
-    else
-        echo "PASS  $sub [$mangled]: $insns insns, 0 vector-ALU"
     fi
 done
 

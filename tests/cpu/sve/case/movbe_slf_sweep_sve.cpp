@@ -226,6 +226,34 @@ static int movbe_slf_sweep_sve_init(struct test *test)
 }
 
 #if defined(__aarch64__)
+/* issue #374 review: noinline so the mechanical gate (scripts/
+ * check-bswap-golden.sh) can pin THIS symbol -- the byte-gather below is
+ * the golden recomputation, and if a future compiler SLP-vectorizes it
+ * back onto the SVE permute units under test, the gate fails it instead
+ * of silently reopening the symmetric-fault blind spot. */
+__attribute__((noinline))
+static void movbe_slf_sweep_verify_swapped(const uint8_t *priv,
+                                           const uint8_t *golden,
+                                           uint64_t total)
+{
+    for (uint64_t g = 0; g < total; g += 8) {
+        for (uint64_t b = 0; b < 8; ++b) {
+            uint8_t expected = golden[g + 7 - b];
+            if (priv[g + b] != expected) {
+                log_error("MovBE-SLF-sweep: in-place swapped buffer miscompare "
+                          "at byte %llu (group %llu, width 8): golden=0x%02X "
+                          "actual=0x%02X xor=0x%02X",
+                          (unsigned long long)(g + b), (unsigned long long)(g / 8),
+                          expected, priv[g + b],
+                          (uint8_t)(expected ^ priv[g + b]));
+                report_fail_msg("MovBE-SLF-sweep: in-place buffer != scalar-recomputed "
+                                "width-8 permutation at byte %llu",
+                                (unsigned long long)(g + b));
+            }
+        }
+    }
+}
+
 static int movbe_slf_sweep_sve_run(struct test *test, int cpu)
 {
     (void)cpu;
@@ -294,6 +322,28 @@ static int movbe_slf_sweep_sve_run(struct test *test, int cpu)
             }
         }
     }
+
+    /* issue #374: post-loop verification of the in-place swapped private
+     * copy (the SLF store target), which until now was only verified via
+     * the terminal restore -- a persistent svtbl mispermutation that is
+     * its own inverse cancels there and passed unnoticed. The TEST_LOOP
+     * body sweeps three element widths (2/4/8) and each width pass
+     * re-copies priv from the read-only golden before swapping in place,
+     * so the body's LAST width pass (8) leaves priv = perm-by-8(golden),
+     * the byte-reversal within each 8-byte group; TEST_LOOP only exits
+     * between complete bodies (and always runs at least one), so the
+     * terminal state is deterministic. The expected bytes are recomputed
+     * with a pure scalar byte-gather from golden -- no shift/or
+     * reassembly (nothing for GCC's bswap-idiom pass to fold into a REV)
+     * and no SVE instructions (off the svtbl unit under test), the same
+     * independence property the family's identity LUT provides for the
+     * 32-bit form, in the streaming shape this byte-oriented,
+     * up-to-256MB-configurable buffer requires (a second full-size
+     * expected buffer per thread would be unacceptable). priv is
+     * thread-local, so this sweep in the owning thread cannot race any
+     * worker. The hot loop and the per-iteration restore compare above
+     * are unchanged. */
+    movbe_slf_sweep_verify_swapped(priv, data->golden, total);
 
     return EXIT_SUCCESS;
 }

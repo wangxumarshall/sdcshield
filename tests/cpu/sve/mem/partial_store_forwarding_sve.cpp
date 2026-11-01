@@ -83,21 +83,42 @@ static int partial_store_forwarding_sve_run(struct test *test, int cpu) {
         int s_sz = 1 << (random32() % 4);
         uint64_t s_val = random64();
 
+        // 随机读偏移 (可能命中 store buffer 的部分数据)
+        uintptr_t l_off = random32() % (sizeof(real_buf) - 8);
+        int l_sz = 1 << (random32() % 4);
+
+        /* issue #374: 独立 golden —— store 之前捕获 load 范围的既有内容
+         * (发生在 store 之前, 不进入 store->load 转发窗口), 期望结果在
+         * 寄存器里拼接: 重叠字节取 s_val, 其余取 pre。原 real vs shadow
+         * 同源双写互比对对称性转发损坏盲。 */
+        uint64_t pre = sve_read_partial(real_buf + l_off, l_sz);
+
         // SVE 谓词控部分写 (真硬件谓词部分 store)
         sve_write_partial(real_buf + s_off, s_sz, s_val);
         sve_write_partial(shadow_buf + s_off, s_sz, s_val);
 
         __asm__ volatile("" ::: "memory");
 
-        // 随机读 (可能命中 store buffer 的部分数据)
-        uintptr_t l_off = random32() % (sizeof(real_buf) - 8);
-        int l_sz = 1 << (random32() % 4);
-
         uint64_t real_val = sve_read_partial(real_buf + l_off, l_sz);
         uint64_t shadow_val = sve_read_partial(shadow_buf + l_off, l_sz);
 
+        uint64_t expected = 0;
+        for (int b = 0; b < l_sz; ++b) {
+            uintptr_t p = l_off + static_cast<uintptr_t>(b);
+            uint64_t byte = (p >= s_off && p < s_off + static_cast<uintptr_t>(s_sz))
+                                ? ((s_val >> (8 * (p - s_off))) & 0xff)
+                                : ((pre >> (8 * b)) & 0xff);
+            expected |= byte << (8 * b);
+        }
+
+        if (real_val != expected) {
+            report_fail_msg("partial_store_forwarding_sve failed at offset %lu, size %d: "
+                            "expected 0x%016lx (independent splice golden), got 0x%016lx",
+                            l_off, l_sz, expected, real_val);
+        }
         if (real_val != shadow_val) {
-            report_fail_msg("partial_store_forwarding_sve failed at offset %lu, size %d: expected 0x%016lx, got 0x%016lx",
+            report_fail_msg("partial_store_forwarding_sve failed at offset %lu, size %d: "
+                            "expected 0x%016lx, got 0x%016lx (shadow divergence)",
                             l_off, l_sz, shadow_val, real_val);
         }
     }

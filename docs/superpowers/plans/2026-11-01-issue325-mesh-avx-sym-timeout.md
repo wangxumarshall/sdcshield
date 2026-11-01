@@ -387,3 +387,18 @@ git commit -s -m "fix(mesh): avx_sym/avx512_sym 超时修复——读流量总�
 | Minor·可维护性: 计划文档 checkbox 与实际不同步 | 成立 | 已修：本轮补勾 |
 
 第二轮验证（构建零警告）：全核双用例 -t 10 → 0 skip、exit: pass；-t 2 边沿 / -n 2 / 回归 zstd19 全 pass；`SDC_MESH_BUFFER_BYTES=1` → clamp 警告实测；默认值日志 `= 196.6 MiB（45%安全预算 ÷ 256 线程）` + maxrss 199.6 MiB 跟随。
+
+## 检视轮 2 处置（PR #414 第 5 bot 第二轮，commit 4e4d4acd 上）
+
+| 意见 | 定性 | 处置 |
+|---|---|---|
+| Important·内存: 64 MiB 下限在紧预算下抬到每测试整份预算,2×slices 并发实例合计超四源安全预算;budget=0 缩 1 块空转 | 成立 | 已修:下限改为 min(64MiB, budget÷(2×slices))——不超过本实例战役份额;budget==0 由 init 诚实 SKIP(TestResourceIssueSkipCategory) |
+| Important·可维护性: 文档表「min(45%物存÷线程,1GiB)」与合入代码(四源+下限+旧 env clamp)不符 | 成立 | 已修:§6 行与 §5.2 段更新为最终语义 |
+| Minor·正确性: 旧 env 负值经 strtoull 模 2^64 回绕成 ULLONG_MAX → 向上 clamp 16 TiB → memset OOM | 成立 | 已修:改 strtoll 解析、>0 为有效;负值/畸形串告警后走自适应(实测 -1/1GiB 两用例) |
+| Minor·正确性: 畸形串静默落自适应无告警 | 成立 | 已修:同上告警 |
+| Minor·可维护性: mesh_target_bytes 两孪生字节级复制 | 成立,合并属 #357 批 | 已加孪生同步注释(改必须双文件同步,#357 迁移时并入 sdc_target_workset_bytes 体系) |
+| Minor·可维护性: 值日志「÷ %d 线程」打印的是 consumers(2×cur×slices) | 成立 | 已修:标签改「÷ 2(战役)×%d(线程)×%d(slice)」 |
+| Minor·正确性: 读阶段新注释未引 #332(校验缺口),误导读者以为有内容校验 | 成立 | 已修:两文件读阶段注释补 #332 引用与诚实表述 |
+| Minor(R1 遗留): env 解析 base 0 八进制分叉 | 框架级 | 不改(同轮 1 处置) |
+
+第三轮验证(构建零警告):旧 env 四态实测(-1/1GiB 告警走自适应、=1 clamp 1MiB、=1073741824 值日志);全核双用例 -t 10 exit: pass(149 条 skip 为 -t 切进末段首轮的诚实截断,聚合 pass;maxrss 116.7 MiB 随共享机 MemAvailable 自适应);-t 2/-n 2/回归 zstd19 全 pass。budget==0 的 SKIP 路径为代码检视验证(需 cgroup/承诺耗尽环境才能实测触发)。

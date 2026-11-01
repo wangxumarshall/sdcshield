@@ -48,10 +48,15 @@ struct TestData {
 // (读流量总量恒定——每轮字节搬移与修复前同量级,「全线程全量读」访问
 // 模式不变),clamp [64 MiB, 1 GiB]:下限保默认工作集达 LLC 量级(跨核
 // 共享行的 snoop/mesh 流量正是本用例的互连压力语义,原始设计即
-// L1D-to-L1D;下限让位于预算本身,不越过 OOM 安全边界),上限收口低
-// 线程/超大内存主机的轮时长;显式 knob/env 不受该 clamp 约束(大足迹
+// L1D-to-L1D;下限不超过本实例战役份额,紧预算下让位于不超分,预算
+// 为 0 时诚实 SKIP),上限收口低线程/超大内存主机的轮时长;显式 knob/
+// env 不受该 clamp 约束(大足迹
 // 压力仍可显式申请,其超时语义由 #357 族级根治跟踪)。等待侧预算节流
 // 见 run 内 131072 一档自旋(同 SVE 侧先例)。
+/* 孪生同步:本函数与 mesh_upi_avx{,512}_sym.cpp 另一文件逐字节同款
+ * (全部日志/env 名/knob 均由 test->id 派生)——改此函数必须双文件同步;
+ * #357 族级四源迁移时应合并进 sdc_target_workset_bytes 体系(届时连
+ * SVE mesh 18 文件的同名函数一并收口)。 */
 static size_t mesh_target_bytes(struct test *test) {
     int64_t v = sdc_knob_int_clamped(test, "buffer_bytes", 0,
                                      1 << 20, 1ll << 44);
@@ -59,27 +64,31 @@ static size_t mesh_target_bytes(struct test *test) {
         sdc_env_knob_int_clamped(test->id, "buffer_bytes", &v, 1 << 20, 1ll << 44);
     /* 旧脚本兼容: SDC_MESH_BUFFER_BYTES 直接指定字节——套与 knob/env 同款
      * [1MiB,16TiB] clamp 与值日志(检视意见:裸通道下荒谬值会静默缩到
-     * num_blocks<1 兜底的 1 块 32 KiB,mesh 压力归零仍报 pass)。 */
+     * num_blocks<1 兜底的 1 块 32 KiB,mesh 压力归零仍报 pass)。负值经
+     * strtoull 会模 2^64 回绕成巨量再被向上 clamp 到 16 TiB(检视轮 2),
+     * 故用 strtoll 解析并以 >0 为有效;畸形串告警后走自适应,不再静默。 */
     if (v == 0) {
         if (const char *e = getenv("SDC_MESH_BUFFER_BYTES")) {
             char *end = nullptr;
-            unsigned long long b = strtoull(e, &end, 10);
+            long long b = strtoll(e, &end, 10);
             if (end && *end == '\0' && b > 0) {
-                if (b < (1ull << 20)) {
-                    log_warning("%s: SDC_MESH_BUFFER_BYTES=%llu 越界 (有效 %llu..%llu), 已 clamp 为 %llu",
+                if (b < (1 << 20)) {
+                    log_warning("%s: SDC_MESH_BUFFER_BYTES=%lld 越界 (有效 %d..%lld), 已 clamp 为 %d",
                                 test ? test->id : "(global)", b,
-                                1ull << 20, 1ull << 44, 1ull << 20);
-                    b = 1ull << 20;
-                } else if (b > (1ull << 44)) {
-                    log_warning("%s: SDC_MESH_BUFFER_BYTES=%llu 越界 (有效 %llu..%llu), 已 clamp 为 %llu",
+                                1 << 20, 1ll << 44, 1 << 20);
+                    b = 1 << 20;
+                } else if (b > (1ll << 44)) {
+                    log_warning("%s: SDC_MESH_BUFFER_BYTES=%lld 越界 (有效 %d..%lld), 已 clamp 为 %lld",
                                 test ? test->id : "(global)", b,
-                                1ull << 20, 1ull << 44, 1ull << 44);
-                    b = 1ull << 44;
+                                1 << 20, 1ll << 44, 1ll << 44);
+                    b = 1ll << 44;
                 }
-                log_warning("[压力映射] %s.buffer_bytes = %llu 字节 (来源: 旧脚本兼容 env SDC_MESH_BUFFER_BYTES)",
+                log_warning("[压力映射] %s.buffer_bytes = %lld 字节 (来源: 旧脚本兼容 env SDC_MESH_BUFFER_BYTES)",
                             test ? test->id : "(global)", b);
                 return (size_t)b;
             }
+            log_warning("%s: SDC_MESH_BUFFER_BYTES='%s' 无法解析为正整数, 已忽略, 走自适应默认",
+                        test ? test->id : "(global)", e);
         }
     }
     if (v > 0)
@@ -92,8 +101,10 @@ static size_t mesh_target_bytes(struct test *test) {
      * 承诺余量,sdc_budget_bytes,#310 OOM 前科)的 45% ÷(2 路战役均摊 ×
      * 线程数 × 并发 slice 数)。下限 64 MiB: 默认工作集达 LLC 量级(跨核
      * 共享行的 snoop/mesh 流量正是本用例的互连压力语义,原始设计即
-     * L1D-to-L1D)——下限让位于预算本身,不越过 OOM 安全边界;上限 1 GiB:
-     * 低线程/超大内存主机的轮时长与分配收口。 */
+     * L1D-to-L1D)——下限同时不超过本实例的战役份额 budget÷(2×slices),
+     * 紧预算环境里让位于不超分(检视轮 2:抬到整份预算会在 2×slices 个
+     * 并发实例间合计超四源安全预算);budget==0(限额/承诺耗尽)返回 0,
+     * 由 init 诚实 SKIP;上限 1 GiB: 低线程/超大内存主机的轮时长收口。 */
     int total = total_thread_count();
     int cur = thread_count();
     int slices = (cur > 0 && total > cur) ? (total + cur - 1) / cur : 1;
@@ -102,16 +113,17 @@ static size_t mesh_target_bytes(struct test *test) {
         consumers = 1;
     uint64_t budget = sdc_budget_bytes(900);
     uint64_t lo = 64ull << 20;
-    if (lo > budget)
-        lo = budget;
+    uint64_t share = budget / (uint64_t)(2 * slices);
+    if (lo > share)
+        lo = share;
     uint64_t b = budget / (uint64_t)consumers;
     if (b < lo)
         b = lo;
     if (b > (1ull << 30))
         b = 1ull << 30;
-    log_warning("[压力映射] %s.buffer_bytes = %llu 字节 (来源: 读流量总量恒定 45%%安全预算 ÷ %d 线程, clamp [64MiB..1GiB]) = %.1f MiB",
+    log_warning("[压力映射] %s.buffer_bytes = %llu 字节 (来源: 读流量总量恒定 45%%安全预算 ÷ 2(战役)×%d(线程)×%d(slice), clamp [64MiB..1GiB]) = %.1f MiB",
                 test ? test->id : "(global)", (unsigned long long)b,
-                consumers, (double)b / 1048576.0);
+                cur, slices, (double)b / 1048576.0);
     return b;
 }
 
@@ -126,6 +138,15 @@ static int mesh_upi_avx512_sym_init(struct test *test) {
     const size_t elem_bytes = sizeof(float);
     const size_t block_bytes = BLOCK_SIZE * elem_bytes;
     size_t target = mesh_target_bytes(test);
+    if (target == 0) {
+        /* 四源安全预算为 0(cgroup 限额/承诺余量耗尽)——任何缓冲分配都是
+         * 超分,诚实 SKIP 而非缩到 1 块兜底空转(检视轮 2 意见)。 */
+        log_skip(TestResourceIssueSkipCategory,
+                 "%s: four-source memory budget is zero (cgroup limit / "
+                 "commit headroom exhausted); cannot size a meaningful "
+                 "mesh buffer", "mesh_upi_avx512_sym");
+        return EXIT_SKIP;
+    }
     td->num_blocks = target / block_bytes;
     if (td->num_blocks < 1) td->num_blocks = 1;
     /* 块索引空间 64 位(R2):num_blocks 不再封顶(target 经 floor 除法而来,
@@ -257,7 +278,10 @@ static int mesh_upi_avx512_sym_run(struct test *test, int cpu) {
         // ---------- 读阶段：读取整个数组并校验 ----------
         // （读循环内不查 test_time_condition：40 次迭代预算撑不起按块
         // 检查的频度，预算耗尽的假「超时」会把好轮截断成废轮；轮时长已
-        // 由默认 sizing 钉在亚秒级，显式大缓冲的超时语义由 #357 跟踪。）
+        // 由默认 sizing 钉在亚秒级，显式大缓冲的超时语义由 #357 跟踪。
+        // 另注：本阶段校验是栈上自一致性比较（不对照写入值），对 mesh
+        // 载入路径的跨线程损坏不可见——校验能力缺口由 #332 立案重构，
+        // 勿据此以为有逐字节内容校验。）
         bool consistent = true;
         alignas(16) float store_buf[BLOCK_SIZE];
 

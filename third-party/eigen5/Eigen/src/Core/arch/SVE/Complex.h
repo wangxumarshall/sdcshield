@@ -289,15 +289,43 @@ EIGEN_DEVICE_FUNC inline void pscatter<std::complex<double>, PacketXcd>(std::com
 // N=1 needs no specialization: the generic PacketBlock<Packet,1> no-op in
 // GenericPacketMath.h already covers it (an N=1 instantiation here would be
 // ambiguous with it).
+//
+// Scatter form (mirrors the real PacketXd ptranspose, PacketMath.h):
+// complex m of packet i is scattered to buffer complex slot i + m*N, and
+// packet q is read back from slot q*NC — in bounds for ANY N and NC. The
+// earlier memory-bridge form indexed buf[i][q] with i < NC, which is out
+// of bounds whenever NC > N: the GEBP packet_cols4 tail instantiates
+// PacketBlock<PacketXcd, 4> (N=4) while the complex 1024-bit packet holds
+// NC=8 complexes — a genuine OOB read (GCC -Warray-bounds).
+//
+// Semantics: in square shapes (N == NC — every other instantiation: the
+// cols8 packer at PacketSize 2/4/8 and the RowMajor lhs packer) this is
+// the true complex-granularity transpose, out[q][m] = in[m][q], bit-for-bit
+// the same permutation as the memory-bridge form. In the one non-square
+// instantiation (cols4 tail, N=4 < NC=8) it produces exactly the layout
+// the GEBP consumer requires: buffer slot 4u+c holds rhs(k0+u, col c),
+// bitwise-identical to the packing loop's scalar tail
+// (8p+m = 4*(2p + m/4) + (m mod 4)) — the only layout the mixed
+// vector/scalar packing of one blockB buffer can consistently have.
 template <int N, std::enable_if_t<(N > 1), int> = 0>
 EIGEN_DEVICE_FUNC inline void ptranspose(PacketBlock<PacketXcd, N>& kernel) {
   constexpr int NC = unpacket_traits<PacketXcd>::size;
-  EIGEN_ALIGN_MAX std::complex<double> buf[N][NC];
-  for (int i = 0; i < N; i++) pstoreu<std::complex<double>>(buf[i], kernel.packet[i]);
-  std::complex<double> out[N][NC];
+  EIGEN_ALIGN_MAX std::complex<double> buffer[N * NC] = {};
+  // f64-lane view: lane l of a packet is complex m = l>>1, re/im r = l&1.
+  // It lands at buffer complex slot i + m*N, i.e. f64 index 2*(i + m*N) + r;
+  // the base pointer below carries the 2*i, so the per-lane index is
+  // independent of the packet: sidx[l] = (l>>1)*2*N + (l&1).
+  svuint64_t lane = svindex_u64(0, 1);
+  svuint64_t sidx = svadd_u64_x(svptrue_b64(),
+                                svmul_n_u64_x(svptrue_b64(),
+                                              svlsr_n_u64_x(svptrue_b64(), lane, 1),
+                                              static_cast<uint64_t>(2 * N)),
+                                svand_n_u64_x(svptrue_b64(), lane, 1));
+  for (int i = 0; i < N; i++)
+    svst1_scatter_u64index_f64(svptrue_b64(), reinterpret_cast<double*>(buffer) + 2 * i, sidx,
+                               kernel.packet[i].v);
   for (int q = 0; q < N; q++)
-    for (int i = 0; i < NC; i++) out[q][i] = buf[i][q];
-  for (int i = 0; i < N; i++) kernel.packet[i] = ploadu<PacketXcd>(out[i]);
+    kernel.packet[q] = PacketXcd(svld1_f64(svptrue_b64(), reinterpret_cast<const double*>(buffer) + 2 * q * NC));
 }
 
 //---------- reduction ----------

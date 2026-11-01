@@ -63,7 +63,7 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 # Fresh clone: run the vendored build.sh first (openssl/openblas/sleef/isa-l/
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
-./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent: ~480 on an SVE1 host, 298 on a no-SVE Kunpeng 920 (2026-10-31 re-measured on both hosts: 479/297 measured 2026-10-27 + spinlock_add_neon, which registers with no spec gate — predictions confirmed)
+./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent: 490 on an SVE1 host, ~299 on a no-SVE Kunpeng 920 (2026-11-01 merge-tree measured: 490/496/500 prod/q0/q-1 = main 2026-10-31 489 + spinlock_add_neon; no-SVE 299 = 297 (2026-10-27) + spinlock_add_neon + smi_count, prediction pending no-SVE re-measure)
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
 ./builddir/sdcshield --quality=-1 -e <test>   # include SKIP-level tests
@@ -124,8 +124,10 @@ END_DECLARE_TEST
   feat/eigen-p0-p3-fix — also cured the full-core auto timeouts
   `eigen_svd_cdouble_sve` 321s / `eigen_svd_bidiag_sve` 343s):
   `sdc_joint_dim_slice` = min(n_mem, n_run, clamp) — n_mem from a
-  per-NUMA-node three-source budget (phys×‰ / MemAvailable×0.9 / cgroup
-  v1+v2) against measured per-family RSS coefficients (RSS_RATIO_TABLE),
+  per-NUMA-node four-source budget (phys×‰ / MemAvailable×0.9 / cgroup
+  v1+v2 / CommitLimit−Committed_AS×0.9 when vm.overcommit_memory=2 —
+  no-op otherwise, issue #310) against measured per-family RSS
+  coefficients (RSS_RATIO_TABLE),
   n_run from a probe power-law fit × the AR all-core-slowdown table
   (family×topology), refined by a VmHWM feedback loop (per-slice EMA,
   median aggregation, 0.7× table floor). Explicit `-O <test>.mdim/n`
@@ -225,8 +227,10 @@ END_DECLARE_TEST
 - **PR review-fix loop** (agent-driven: five bots (four external SaaS + the local
   headless claude adversarial reviewer) → subagent critical triage →
   fix → loop → human merge; never auto-merge): `docs/build-deploy-pr-ci/pr-loop.md`;
-  engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot）; `/pr-loop` command
-  (`.claude/commands/`) and Trae rule (`.trae/rules/`) are content-twins.
-- **CI 无人值守分诊**（cron/双车道/熔断/kill switch 运维手册）:
-  `docs/build-deploy-pr-ci/ci-triage.md`; engine `scripts/ci_triage.py`（pr_loop 姊妹件,
-  main CI 红 → issue → headless agent 修复 → fix/ci-* PR）。
+  engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot;
+  unattended orchestration is task_loop's); `/pr-loop` and `/dev-loop` commands
+  (`.claude/commands/`) and Trae rules (`.trae/rules/`) are content-twins.
+- **task-loop 无人值守任务闭环**（统一编排引擎: CI 红/main 审查/会话/手建
+  issue → agent → PR 闭环;ci_triage 的泛化后继,含迁移说明）:
+  `docs/build-deploy-pr-ci/task-loop.md`;引擎 `scripts/task_loop.py`;
+  会话命令 `/dev-loop`。

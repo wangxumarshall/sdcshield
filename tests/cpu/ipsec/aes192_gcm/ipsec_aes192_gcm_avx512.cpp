@@ -27,6 +27,7 @@
 #define AES_IV_SIZE (12)
 #define GCM_TAG_SIZE (16)
 
+namespace { /* ODR: per-TU aes_gcm_avx512_data (2-file same-name hazard) */
 struct aes_gcm_avx512_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
@@ -35,6 +36,7 @@ struct aes_gcm_avx512_data {
     uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_tag[GCM_TAG_SIZE];
 };
+}
 
 static void aes_gcm_encrypt(const uint8_t *key, const uint8_t *iv, const uint8_t *in, uint8_t *out, uint8_t *tag, size_t len) {
     EVP_CIPHER_CTX *ctx = s_EVP_CIPHER_CTX_new();

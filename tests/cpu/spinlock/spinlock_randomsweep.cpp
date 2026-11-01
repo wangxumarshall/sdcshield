@@ -35,11 +35,13 @@ static inline void spin_unlock(std::atomic<uint64_t> &lock) {
     lock.store(0, std::memory_order_release);
 }
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     LockSlot slots[NUM_LOCKS];
     std::atomic<uint64_t> thread_idx;
     uint64_t local_sums[MAX_THREADS];
 };
+}
 
 static int spinlock_randomsweep_init(struct test *test) {
     auto *sd = new SharedData;

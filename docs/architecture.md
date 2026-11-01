@@ -53,8 +53,9 @@ The x86-64 implementation is the reference; ARM64 is a parallel port. Gating is
 
 - Placeholder tests for unimplemented-on-ARM features **must skip** with reason
   `"to be implemented (placeholder)"` (`EXIT_SKIP` from `test_init`, never
-  `EXIT_SUCCESS`). Examples: `tests/cpu/ist/ist.c`,
-  `tests/common/smi_count/smi_count.cpp`.
+  `EXIT_SUCCESS`). Example: `tests/cpu/ist/ist.c`.
+  (`tests/common/smi_count/smi_count.cpp` was one until the ARM64
+  CNTVCT_EL0 gap probe landed — 2026-10-31, issue #7.)
 - Real features get real implementations; truly-absent hardware (ARM has no
   CPU microcode/PPIN/MSR) stays a documented stub, not faked.
   `tests/common/mce_check/mce_check.cpp` is a *real* EDAC-backed test on ARM64.
@@ -159,8 +160,14 @@ Arch gating is **inside files** (`#ifdef __x86_64__` / `__aarch64__`) and
 `InterruptMonitorWorks` is `true` on linux x86-64 + aarch64. x86 counts MCE/TRM
 lines from `/proc/interrupts`; aarch64 counts EDAC `ce_count` + `ue_count`
 (controller-wide, placed at index 0). `count_smi_events()` uses `read_msr`
-(x86-only MSR 0x34 — no ARM equivalent, returns nullopt). `mce_check` is a
-special always-inserted test.
+(x86-only MSR 0x34 — no ARM equivalent, returns nullopt). The ARM64
+`smi_count` test therefore bypasses InterruptMonitor entirely — it is a
+CNTVCT_EL0 read-gap probe implemented inside the test itself, because no
+sampleable firmware-preemption counter exists on bare-metal ARM64 (see
+`tests/common/smi_count/smi_count.cpp` for the measured basis and the
+semantic boundary: the probe reports a per-CPU timing-noise map and cannot
+attribute gaps to firmware vs. hypervisor vs. kernel scheduling).
+`mce_check` is a special always-inserted test.
 
 ## Tests directory layout
 
@@ -181,8 +188,25 @@ link without symbol clash), `tests_set_sve` (aarch64 SVE, `-DEigen=EigenSVE`).
 `haveAes()`; list via `-s help`). The AES engine uses `#pragma GCC target`
 per-arch: x86 `_mm_aesenc_si128`, aarch64 `vaesmcq_u8(vaeseq_u8(...))` via
 `+crypto`. RNG state is per-thread (`thread_rng` union, 64-byte aligned). The
-framework **overrides libc seeding functions** (`framework/random.cpp:781-883`
+framework **overrides libc seeding functions** (`framework/random.cpp:850-952`
 `extern "C"` block — `srand` aborts, etc.).
+
+Threads spawned by test code with a raw `std::thread` never run the
+framework's init paths; their `thread_num` TLS is zero-initialized to 0,
+which used to alias worker 0's slot (`rngs[1]`) — a data race when several
+such threads call the RNG (issue #348, proven by ThreadSanitizer on
+`cache_stress_aggressor`). Since 2026-10-31 such threads get a private,
+lazily-seeded `thread_local` engine instead (`tls_engine` /
+`raw_thread_engine()`): the mixin is a fixed salt ^ a process-wide atomic
+counter and the seed material is the global engine's current state, so raw
+streams still depend on `-s`. Framework threads bind the exact slots they
+always used (`random_init_global` / `random_init_thread` / the
+`thread_num == -1` first-use fallback), so their streams stay bit-exact
+under `-s`. Caveat: which raw thread gets which counter value depends on
+scheduling, so per-raw-thread replay across runs is not guaranteed; and a
+detached raw thread whose *first* RNG call happens after the test finished
+could race the scheduler's `random_advance_seed()` on the global slot —
+join raw threads before `test_run`/`test_cleanup` returns.
 
 ## Eigen 5.0 SVE double packets (vendored)
 
@@ -215,8 +239,10 @@ All 21 eigen tests size their matrix dimension through `sdc_joint_dim_slice()`
 ```
 sdc_numa_probe()   nodes-with-memory + per-node MemFree + cpulist
       ↓
-sdc_budget_bytes() three-source min: phys×‰ / MemAvailable×0.9 /
-                   cgroup v1+v2 headroom; per-node share by MemFree
+sdc_budget_bytes() four-source min: phys×‰ / MemAvailable×0.9 /
+                   cgroup v1+v2 headroom / CommitLimit−Committed_AS×0.9
+                   (commit source only when vm.overcommit_memory=2,
+                   no-op otherwise — issue #310); per-node share by MemFree
       ↓            (zero-memory nodes fold into the fallback node —
                     on a node0-only host this degrades exactly to
                     the global model)

@@ -30,6 +30,7 @@
 #define XCBC_96_DIGEST_SIZE (12)
 #define XCBC_FULL_DIGEST_SIZE (16)
 
+namespace { /* ODR: per-TU aes_xcbc_avx_data (4-file same-name hazard) */
 struct aes_xcbc_avx_data {
     uint8_t aes_key[AES_KEY_SIZE];
     uint8_t aes_iv[AES_IV_SIZE];
@@ -39,6 +40,7 @@ struct aes_xcbc_avx_data {
     uint8_t *golden_ciphertext;            /* datasize bytes */
     uint8_t golden_mac[XCBC_96_DIGEST_SIZE];
 };
+}
 
 /* Helper function: AES-128-ECB encryption for XCBC */
 static void aes_ecb_encrypt(const uint8_t *key, const uint8_t *in, uint8_t *out) {

@@ -10,6 +10,7 @@
 #include <arm_neon.h>
 
 // 32 字节对齐的共享数据，用两个 128 位 NEON 向量表示 256 位
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct alignas(32) SharedData {
     uint8x16_t data0;              // 低 128 位
     uint8x16_t data1;              // 高 128 位
@@ -21,6 +22,7 @@ struct alignas(32) SharedData {
      * detectable, unlike the previous all-0/all-1 payloads. */
     uint64_t pattern[4];
 };
+}
 
 static int atomic_simd_256_init(struct test *test) {
     auto *sd = new SharedData;

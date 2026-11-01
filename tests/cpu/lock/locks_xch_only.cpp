@@ -25,12 +25,14 @@ struct SpinLock {
     }
 };
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     alignas(64) SpinLock lock;          // 自旋锁对象（1字节，对齐无特殊要求）
     alignas(64) uint64_t counter;       // 共享计数器
     std::atomic<uint64_t> thread_idx;   // 线程 ID 分配器
     uint64_t local_sums[MAX_THREADS];   // 每个线程的本地增量总和
 };
+}
 
 static int locks_xch_only_init(struct test *test) {
     auto *sd = new SharedData;

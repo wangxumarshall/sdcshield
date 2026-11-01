@@ -295,6 +295,31 @@ tests_set_base.add(
 # ist/ block above.
 # The arm-0102/ subdir holds trigger-format variants of existing test files
 # (kreg7/8, etc.) applying the verified core-179 trigger recipe.
+# The 2026-10-31 bulk registration (71 files) imports the remaining
+# core-179-family research probes that arrived with the d61b7de1 source drop:
+#   - misc/neon_rot_* (1src/fwd_probe/nop_gap/stale_reload/store_only/
+#     u32x4/u8x16 + the ldr_at_top_* sweep: dump/ldr4/ldr5/lsqfill(_v2)/mla/
+#     offdiag/prefetch/priv/rfport(_v2)/robfill(_np)/str3/str4(_checkall)/
+#     sub/tlbstress + rowmajor_{dualcmp,dump,gps,k2pureload,k4gap,k4bgap,
+#     k5far,scalar64,str3_checkall}) — NEON/asm variants with no x86 branch
+#   - misc/mrn_* 2src/3src/4src/dense/recross/keep8/diff_* family and the
+#     mrn_rmw_{fwd,diff,timing}_probe trio — aarch64 asm probes
+#   - misc/movbe_{dump_golden,l1d_vs_l2,l1d_variants,str_multiload} —
+#     ARM (ldr/rev) hot-loop variants of the movbe byte-swap family;
+#     NOTE: the movbe/movbe_dump/movbe_dump_probe_* base files themselves
+#     stay in tests/cpu/arm64/ (their registered home) — the copies under
+#     misc/ are unregistered duplicates and MUST NOT be added here
+#     (duplicate DECLARE_TEST id = duplicate symbol at link time).
+#   - misc/agu_stress_{1src,store_only,unaligned}, probe_{alu,asm}_fwd —
+#     AGU / forwarding probes with raw aarch64 asm
+#   - misc/sched_storm_{baseline,futex,hybrid,thread} — scheduler-activity
+#     stimulus family (core-179 panic root-cause follow-up; portable futex/
+#     clone syscalls but research-owned by the ARM core-179 testbed, kept
+#     aarch64-only like the rest of the family)
+#   - misc/stress_{fma,sub,xor}, core179_kernel_sdc_repro — ALU stress and
+#     the kernel-shaped repro payload
+#   - cache/cachebounce_sdc, cache_stress_civac (dc civac asm),
+#     memory/mem_disambig_alu (store-forwarding discrimination probe)
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
@@ -306,6 +331,77 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k7pattern.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k3res.cpp',
+            'misc/agu_stress_1src.cpp',
+            'misc/agu_stress_store_only.cpp',
+            'misc/agu_stress_unaligned.cpp',
+            'cache/cachebounce_sdc.cpp',
+            'cache/cache_stress_civac.cpp',
+            'misc/core179_kernel_sdc_repro.cpp',
+            'memory/mem_disambig_alu.cpp',
+            'misc/movbe_dump_golden.cpp',
+            'misc/movbe_l1d_vs_l2.cpp',
+            'misc/movbe_str_multiload.cpp',
+            'misc/mrn_nuke_2src_add.cpp',
+            'misc/mrn_nuke_2src_alu.cpp',
+            'misc/mrn_nuke_2src_and.cpp',
+            'misc/mrn_nuke_2src_eor.cpp',
+            'misc/mrn_nuke_2src_sub.cpp',
+            'misc/mrn_nuke_3src_alu.cpp',
+            'misc/mrn_nuke_4src_alu.cpp',
+            'misc/mrn_nuke_dense.cpp',
+            'misc/mrn_nuke_recross.cpp',
+            'misc/mrn_pairs_2src_alu_keep8.cpp',
+            'misc/mrn_pairs_2src_alu.cpp',
+            'misc/mrn_reloaded_2src_alu.cpp',
+            'misc/mrn_rmw_diff_footprint.cpp',
+            'misc/mrn_rmw_diff_timing_probe.cpp',
+            'misc/mrn_rmw_fwd_vs_diff.cpp',
+            'misc/mrn_rmw_fwd_vs_l1d.cpp',
+            'misc/mrn_rmw_timing_probe.cpp',
+            'misc/movbe_l1d_variants.cpp',
+            'misc/neon_rot_1src.cpp',
+            'misc/neon_rot_fwd_probe.cpp',
+            'misc/neon_rot_ldr_at_top_dump.cpp',
+            'misc/neon_rot_ldr_at_top_ldr4.cpp',
+            'misc/neon_rot_ldr_at_top_ldr5.cpp',
+            'misc/neon_rot_ldr_at_top_lsqfill.cpp',
+            'misc/neon_rot_ldr_at_top_lsqfill_v2.cpp',
+            'misc/neon_rot_ldr_at_top_mla.cpp',
+            'misc/neon_rot_ldr_at_top_offdiag.cpp',
+            'misc/neon_rot_ldr_at_top_prefetch.cpp',
+            'misc/neon_rot_ldr_at_top_priv.cpp',
+            'misc/neon_rot_ldr_at_top_rfport.cpp',
+            'misc/neon_rot_ldr_at_top_rfport_v2.cpp',
+            'misc/neon_rot_ldr_at_top_robfill_np.cpp',
+            'misc/neon_rot_ldr_at_top_robfill.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_dualcmp.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_dump.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_gps.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_k2pureload.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_k4bgap.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_k4gap.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_k5far.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_scalar64.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_str3_checkall.cpp',
+            'misc/neon_rot_ldr_at_top_str3.cpp',
+            'misc/neon_rot_ldr_at_top_str4_checkall.cpp',
+            'misc/neon_rot_ldr_at_top_str4.cpp',
+            'misc/neon_rot_ldr_at_top_sub.cpp',
+            'misc/neon_rot_ldr_at_top_tlbstress.cpp',
+            'misc/neon_rot_nop_gap.cpp',
+            'misc/neon_rot_stale_reload.cpp',
+            'misc/neon_rot_store_only.cpp',
+            'misc/neon_rot_u32x4.cpp',
+            'misc/neon_rot_u8x16.cpp',
+            'misc/probe_asm_fwd.cpp',
+            'misc/probe_alu_fwd.cpp',
+            'misc/sched_storm_baseline.cpp',
+            'misc/sched_storm_futex.cpp',
+            'misc/sched_storm_hybrid.cpp',
+            'misc/sched_storm_thread.cpp',
+            'misc/stress_fma.cpp',
+            'misc/stress_sub.cpp',
+            'misc/stress_xor.cpp',
         )
     )
 endif

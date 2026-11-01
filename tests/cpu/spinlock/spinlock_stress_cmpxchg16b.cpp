@@ -9,11 +9,13 @@
 #define MAX_THREADS 128
 
 // 16 字节对齐的结构体，使用 std::atomic<__int128> 管理
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct alignas(16) SharedData {
     std::atomic<__int128> value;               // 原子128位整数
     std::atomic<uint64_t> thread_idx;          // 线程 ID 分配器
     uint64_t local_sums[MAX_THREADS];          // 每个线程的本地增量总和
 };
+}
 
 static int spinlock_stress_cmpxchg16b_init(struct test *test) {
     auto *sd = new SharedData;

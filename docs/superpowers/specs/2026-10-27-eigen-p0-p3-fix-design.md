@@ -131,6 +131,22 @@ MemFree 最大者；无内存节点的 slice 的预算与线程数都记到 fall
 node0-only 机器：全部线程计入 node0、node_budget ≈ 全局 MemAvailable×0.9 →
 **精确退化为全局模型**（与验证行"行为与全局模型对照一致"自洽）。
 
+**v3 增补（2026-10-31, issue #310）— 第四源「承诺余量」**：前三源全物理
+口径，在 `vm.overcommit_memory=2`（strict）内核上会系统性越界——匿名私有
+承诺（含 fork 的 COW 记账）受 `CommitLimit = RAM×ratio/100 + swap` 硬限制，
+超限是 mmap/brk ENOMEM（bad_alloc 降档/线程级 SKIP），而 MemAvailable（物理
+空闲）与承诺余量独立（ratio=50 的 60GB+4GB swap 机：MemAvailable×0.9 可给
+~40GB，承诺余量只有 CommitLimit−Committed_AS）。新增
+`sdc_commit_headroom_bytes()`（sdc_stress_config.h）：仅 =2 时读
+/proc/meminfo 返回 `0.9×(CommitLimit−Committed_AS)`（承诺已满 → 0；0.9 与
+MemAvailable 源同"现读+折扣"哲学，折扣留给并行 slice sizing 与实际分配的
+时间窗 + 他进程并发抢承诺）；非 =2（CommitLimit 无强制力）或读失败 →
+UINT64_MAX 不约束（跳过，与"读失败跳过该来源"约定一致）。VmHWM 反馈替代
+不了本源：=2 下分配在 RSS 增长之前就被拒，降级样本到不了反馈写入点（幸存
+者偏差）→ c 低估 → n 膨胀 → 更多 ENOMEM。成为最小源时打一次
+`[承诺预算]` 诊断日志。x86 零调用方（sdc_numa.cpp 整文件 arch guard、
+两个直调测试在 tests_set_sve），行为不变。
+
 ### 4.3 `sdc_joint_dim_slice()`（联合求解核心，新）
 
 **拟合口径【v2/M3，防 SVD 内存倒退 2.4×】**：`sdc_calibrated_dim` 现有

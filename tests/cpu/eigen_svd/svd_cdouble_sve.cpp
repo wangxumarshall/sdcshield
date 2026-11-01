@@ -133,7 +133,7 @@ static int solve_once_cdouble_sve(int n)
  * un-initialised at 300). The preinit only writes an UPPER bound:
  *
  *   n_hi  = sqrt(budget650 / (workers × c_BDCSVD_C128)), clamped to
- *           [MDIM_MIN, MDIM_MAX] — the same three-source memory budget
+ *           [MDIM_MIN, MDIM_MAX] — the same four-source memory budget
  *           and RSS-table coefficient (sdc_rss_table_c(), not a literal —
  *           the table was re-calibrated once already: GEMM_F64
  *           0.0290→0.0315) the child's n_mem uses, with workers = the

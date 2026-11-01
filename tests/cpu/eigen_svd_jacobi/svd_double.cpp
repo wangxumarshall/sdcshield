@@ -51,5 +51,16 @@ DECLARE_TEST(eigen_svd_jacobi_double, "Eigen SVD (Singular Value Decomposition, 
   .test_init = eigen_svd_jacobi_double_init,
   .test_run = eigen_svd_jacobi_double_test::run,
   .test_cleanup = eigen_svd_jacobi_double_test::cleanup,
+  /* SKIP 级的来由与现状(补注, 2026-10-31, issue #322):
+   * 1) 级别继承自上游 Intel OpenDCDiag——其初始提交(91e4fc86)即
+   *    TEST_QUALITY_SKIP, 今日上游 master 仍如此, 仓库内无书面理由;
+   * 2) 上游模板是 init 共享 golden + 各 worker 线程重算比对, 跨线程
+   *    Eigen SIMD/标量路径分歧(堆分配对齐引导)会让 U/V 字节比对假失配
+   *    ——BDC 家族在本 fork 实测过同型故障(2026-10-24 修复, 见
+   *    CLAUDE.md)。本 fork 的 per-thread 同源 golden(46141ed4)同样覆盖
+   *    Jacobi 四件套, 该结构性风险已消除: 2026-10-31 鲲鹏 920 实测
+   *    --quality=-1 下 -n 2 与 -n 16×30s 四用例全 pass;
+   * 3) 维持 SKIP 是待满核多 seed 晋升验证(规则 2 口径)并与上游对齐;
+   *    显式运行: --quality=-1 -e <test>。 */
   .quality_level = TEST_QUALITY_SKIP,
 END_DECLARE_TEST

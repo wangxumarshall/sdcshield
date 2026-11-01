@@ -204,15 +204,30 @@ TEST(DataCompare, Float128)
 }
 #endif
 
-// x87 语义绑定:golden 位模式全部是 x87 80 位格式。aarch64 的 long double
-// 是 IEEE binary128,位模式完全不同,x86 golden 值在该架构上不成立——
-// 移植债记录于 issue #180,先按本文件 __x86_64__ 先例守卫。
-#ifdef __x86_64__
+// Float80 = long double; the format is per-architecture: x87 80-bit
+// extended on x86, IEEE binary128 on aarch64 (issue #180). The golden
+// bit patterns and the glibc %La rendering differ accordingly; the
+// type name does not — TS 18661-3 spells the "extended of binary64"
+// type _Float64x on both (= x87-80 on x86, = binary128/long double on
+// aarch64; verified __FLT64X_MANT_DIG__ 64 / 113 respectively).
 TEST(DataCompare, Float80)
 {
     using namespace SandstoneDataDetails;
     setlocale(LC_ALL, "C");     // ensure C locale, so we get periods as decimal separators
     EXPECT_STREQ(type_name(Float80Data), "_Float64x");
+#ifdef __aarch64__
+    EXPECT_EQ(format_type_helper(0.L), "00000000000000000000000000000000 (0x0p+0)");
+    EXPECT_EQ(format_type_helper(-1.L), "bfff0000000000000000000000000000 (-0x1p+0)");
+    EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::max()), "7ffeffffffffffffffffffffffffffff (0x1.ffffffffffffffffffffffffffffp+16383)");
+    EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::min()), "00010000000000000000000000000000 (0x1p-16382)");
+    EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::denorm_min()), "00000000000000000000000000000001 (0x0.0000000000000000000000000001p-16382)");
+    EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::epsilon()), "3f8f0000000000000000000000000000 (0x1p-112)");
+    EXPECT_EQ(format_type_helper(1 + std::numeric_limits<long double>::epsilon()), "3fff0000000000000000000000000001 (0x1.0000000000000000000000000001p+0)");
+    EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::infinity()), "7fff0000000000000000000000000000 (inf)");
+    EXPECT_EQ(format_type_helper(-std::numeric_limits<long double>::infinity()), "ffff0000000000000000000000000000 (-inf)");
+    EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::quiet_NaN()), "7fff8000000000000000000000000000 (nan)");
+    EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::signaling_NaN()), "7fff4000000000000000000000000000 (nan)");
+#else
     EXPECT_EQ(format_type_helper(0.L), "00000000000000000000 (0x0p+0)");
     EXPECT_EQ(format_type_helper(-1.L), "bfff8000000000000000 (-0x8p-3)");
     EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::max()), "7ffeffffffffffffffff (0xf.fffffffffffffffp+16380)");
@@ -224,8 +239,8 @@ TEST(DataCompare, Float80)
     EXPECT_EQ(format_type_helper(-std::numeric_limits<long double>::infinity()), "ffff8000000000000000 (-inf)");
     EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::quiet_NaN()), "7fffc000000000000000 (nan)");
     EXPECT_EQ(format_type_helper(std::numeric_limits<long double>::signaling_NaN()), "7fffa000000000000000 (nan)");
-}
 #endif
+}
 
 TEST(DataCompare, Float64)
 {
@@ -756,14 +771,86 @@ int test_floats_prototypes_cpp(void)
     return 0;
 }
 
-// x87 语义绑定:Float80 的 IS_* 分类宏按 x87 80 位布局解读,aarch64
-// (long double = binary128)上 117 项误判——移植债记录于 issue #180,
-// 先守卫 x86-only。
-#ifdef __x86_64__
 TEST(FloatGeneration, new_random_float_prototypes) {
     // briefly verify C interface
     ASSERT_EQ(0, test_floats_prototypes_c());
     ASSERT_EQ(0, test_floats_prototypes_cpp());
+}
+
+#ifdef __aarch64__
+// Runtime pin of the aarch64 Float80 = binary128 adaptation (issue #180):
+// real long double values produced by the compiler/libc (independent of
+// our bitfield code) must decode through the Float80 field view exactly
+// as IEEE 754 binary128 defines them, and the IS_* predicates must
+// classify accordingly. Constant expressions cannot read across union
+// members (and GCC 12's bit_cast rejects unions), so this proof runs.
+TEST(Float80Binary128, LayoutAndPredicates)
+{
+    Float80 v;
+
+    v = 1.0L;
+    EXPECT_EQ(v.sign, 0u);
+    EXPECT_EQ(v.exponent, 0x3fffu);
+    EXPECT_EQ(v.mantissa_hi, 0u);
+    EXPECT_EQ(v.mantissa_lo, 0u);
+
+    v = -2.0L;
+    EXPECT_EQ(v.sign, 1u);
+    EXPECT_EQ(v.exponent, 0x4000u);
+    EXPECT_EQ(v.mantissa_hi, 0u);
+    EXPECT_EQ(v.mantissa_lo, 0u);
+
+    v = std::numeric_limits<long double>::max();
+    EXPECT_EQ(v.exponent, FLOAT80_INFINITY_EXPONENT - 1);
+    EXPECT_EQ(v.mantissa_hi, FLOAT80_MANTISSA_HI_MASK);
+    EXPECT_EQ(v.mantissa_lo, FLOAT80_MANTISSA_LO_MASK);
+    EXPECT_TRUE(IS_MAX(v));
+    EXPECT_TRUE(IS_FINITE(v));
+
+    v = std::numeric_limits<long double>::min();
+    EXPECT_EQ(v.exponent, 1u);
+    EXPECT_EQ(v.mantissa_hi, 0u);
+    EXPECT_EQ(v.mantissa_lo, 0u);
+    EXPECT_FALSE(IS_DENORMAL(v));
+
+    v = std::numeric_limits<long double>::denorm_min();
+    EXPECT_EQ(v.exponent, 0u);
+    EXPECT_EQ(v.mantissa_hi, 0u);
+    EXPECT_EQ(v.mantissa_lo, 1u);
+    EXPECT_TRUE(IS_DENORMAL(v));
+    EXPECT_FALSE(IS_ZERO(v));
+
+    v = std::numeric_limits<long double>::infinity();
+    EXPECT_EQ(v.exponent, FLOAT80_INFINITY_EXPONENT);
+    EXPECT_EQ(v.mantissa_hi, 0u);
+    EXPECT_EQ(v.mantissa_lo, 0u);
+    EXPECT_TRUE(IS_INF(v));
+    EXPECT_FALSE(IS_FINITE(v));
+    EXPECT_FALSE(IS_NAN(v));
+
+    v = std::numeric_limits<long double>::quiet_NaN();
+    EXPECT_EQ(v.exponent, FLOAT80_NAN_EXPONENT);
+    EXPECT_TRUE(IS_NAN(v));
+    EXPECT_TRUE(IS_QNAN(v));
+    EXPECT_FALSE(IS_SNAN(v));
+
+    v = std::numeric_limits<long double>::signaling_NaN();
+    EXPECT_TRUE(IS_NAN(v));
+    EXPECT_TRUE(IS_SNAN(v));
+    EXPECT_FALSE(IS_QNAN(v));
+
+    v = 0.0L;
+    EXPECT_TRUE(IS_ZERO(v));
+    EXPECT_FALSE(IS_NEGATIVE(v));
+    EXPECT_FALSE(IS_DENORMAL(v));
+
+    v = -0.0L;
+    EXPECT_TRUE(IS_ZERO(v));
+    EXPECT_TRUE(IS_NEGATIVE(v));
+
+    // field-view construction round-trips through as_float
+    EXPECT_EQ(new_float80(0, 0x3fff, 0, 0).as_fp(), 1.0L);
+    EXPECT_EQ(new_float80(1, 0x3fff, 0, 0).as_fp(), -1.0L);
 }
 #endif
 

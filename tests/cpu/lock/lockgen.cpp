@@ -12,11 +12,13 @@
 #define ARRAY_SIZE (1 << 20)      // 1M 个 64 位元素 = 8MB（超出 L3 缓存，产生 TLB 压力）
 // 可调整：1<<22 (32MB) 或更大以增大 TLB 压力
 
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
 struct SharedData {
     std::unique_ptr<std::atomic<uint64_t>[]> array;  // 原子数组
     std::atomic<uint64_t> thread_idx;                // 线程 ID 分配器
     uint64_t local_sums[MAX_THREADS];                // 每个线程的本地增量总和
 };
+}
 
 static int lockgen_init(struct test *test) {
     auto *sd = new SharedData;

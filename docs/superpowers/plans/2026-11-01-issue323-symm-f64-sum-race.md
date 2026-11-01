@@ -89,7 +89,7 @@ SKIP，零校验）。机理链（每步均有代码依据）：
 - Produces: `static size_t mesh_target_bytes(struct test *test)`（四源自适应，
   返回 0 = 预算耗尽 → init 诚实 SKIP）；run 内三处节流等待 + `round_aborted` 标签。
 
-- [ ] **Step 1.1: 头部 include 与注释重写**
+- [x] **Step 1.1: 头部 include 与注释重写**
 
 `#include <sandstone.h>` 块后增加 `#include "sdc_stress_config.h"`（在
 `#ifdef __aarch64__` 内，与 sym 孪生同位）。删除 :95-113 的旧 sizing 注释段
@@ -97,7 +97,7 @@ SKIP，零校验）。机理链（每步均有代码依据）：
 :32-59 的注释段（孪生同步，"双文件"改"三文件"，补一句「f64 孪生由 #323
 补齐，#414 当时只改了 sym 对」）。
 
-- [ ] **Step 1.2: 替换 mesh_target_bytes 为四源版**
+- [x] **Step 1.2: 替换 mesh_target_bytes 为四源版**
 
 删除现 :114-128 的 `static size_t mesh_target_bytes(void)`，替换为 sym 孪生
 :60-142 的逐字节同款（签名改 `(struct test *test)`，函数体不变——所有日志/
@@ -115,7 +115,7 @@ env 名均由 `test->id` 派生，自动正确）。init 内 `mesh_target_bytes(
     }
 ```
 
-- [ ] **Step 1.3: 三处等待换 131072 节流 + round_aborted 标签**
+- [x] **Step 1.3: 三处等待换 131072 节流 + round_aborted 标签**
 
 写等待（原 :235-239）替换为：
 
@@ -150,7 +150,7 @@ round_aborted:
 
 （原 `if (!validated_any)` 前的 `}` 位置调整，SKIP 文案不变。）
 
-- [ ] **Step 1.4: 构建零警告 + 行为验证**
+- [x] **Step 1.4: 构建零警告 + 行为验证**
 
 ```bash
 SDC_BUILD_JOBS=20 ./scripts/build.sh
@@ -161,13 +161,13 @@ SDC_BUILD_JOBS=20 ./scripts/build.sh
 值日志出现；`result: pass`（不再是 8/8 SKIP——四源 sizing 下默认缓冲
 clamp ≤1 GiB ÷ 线程，轮次亚秒级，真实校验多轮）。
 
-- [ ] **Step 1.5: SDC_STRESS_CONFIG_CN.md 同步**
+- [x] **Step 1.5: SDC_STRESS_CONFIG_CN.md 同步**
 
 「NEON mesh FP 对」小节标题与首行改为三文件
 （`mesh_upi_avx_sym / mesh_upi_avx512_sym / mesh_upi_avx512_symm_f64`），
 补一句「symm_f64 由 #323 补齐（#414 当时只改了 sym 对）」。
 
-- [ ] **Step 1.6: Commit**
+- [x] **Step 1.6: Commit**
 
 ```bash
 git add tests/cpu/mesh/mesh_upi_avx512_symm_f64.cpp docs/SDC_STRESS_CONFIG_CN.md
@@ -197,7 +197,7 @@ result: pass(修复前同配置 8/8 SKIP);84 次短跑扫描无回归。"
 - Produces: `TestData::expected_total`（double，init 一次写入、此后只读——
   无竞态）；`block_value` 不变（#332 引用它作家族先例，签名勿动）。
 
-- [ ] **Step 2.1: 头部文档 Global sum 段重写（:24-31）**
+- [x] **Step 2.1: 头部文档 Global sum 段重写（:24-31）**
 
 替换为闭式口径：期望总和是缓冲内容的确定性函数（`block_value` 纯函数、
 每块 4096 元素恰 128 个完整 32 残差周期 → 每块和与块号无关 = 33792.0，
@@ -205,7 +205,7 @@ result: pass(修复前同配置 8/8 SKIP);84 次短跑扫描无回归。"
 读侧逐元素累加与期望常量字节比对；无跨线程/跨轮累加状态 → 结构性无竞态；
 且比旧「读和==写和」严格更强（写前损坏双盲 → 单边可见）。
 
-- [ ] **Step 2.2: TestData 与 init 改造**
+- [x] **Step 2.2: TestData 与 init 改造**
 
 `struct TestData` 删 `std::atomic<uint64_t> global_sum;`，增
 `double expected_total;`。init 中删 `td->global_sum.store(0, …);`，增：
@@ -220,7 +220,7 @@ result: pass(修复前同配置 8/8 SKIP);84 次短跑扫描无回归。"
     td->expected_total = per_block * (double)td->num_blocks;
 ```
 
-- [ ] **Step 2.3: 写循环删累加、读循环换期望源**
+- [x] **Step 2.3: 写循环删累加、读循环换期望源**
 
 写循环删 `local_sum` 累加、整段 CAS 重试循环（:216-229）及其注释块。
 读循环删快照 `expected_sum_bits`（:241-248，含其历史注释——该快照竞态
@@ -233,12 +233,12 @@ result: pass(修复前同配置 8/8 SKIP);84 次短跑扫描无回归。"
 失败日志改 `"thread %d read_sum=%a expected=%a (deterministic golden)"`，
 `report_fail_msg` 文案改 `"cross-core FP sum mismatch vs deterministic golden"`。
 
-- [ ] **Step 2.4: 重置段删 global_sum 清零**
+- [x] **Step 2.4: 重置段删 global_sum 清零**
 
 胜者四连 store 删 `td->global_sum.store(0, …);`（其余三个计数器保留——
 轮屏障机制仍需）。
 
-- [ ] **Step 2.5: 构建零警告 + 验证**
+- [x] **Step 2.5: 构建零警告 + 验证**
 
 ```bash
 SDC_BUILD_JOBS=20 ./scripts/build.sh
@@ -249,7 +249,7 @@ for i in 1 2 3 4 5; do ./builddir/sdcshield -e mesh_upi_avx512_symm_f64 -t 2 -n 
 期望：pass；`grep -c global_sum tests/cpu/mesh/mesh_upi_avx512_symm_f64.cpp` = 0。
 （Step 4 做竞态针对性扫掠。）
 
-- [ ] **Step 2.6: Commit**
+- [x] **Step 2.6: Commit**
 
 ```bash
 git add tests/cpu/mesh/mesh_upi_avx512_symm_f64.cpp
@@ -283,14 +283,14 @@ vals 损坏双盲,闭式校验单边可见。#332 的家族 golden 重构方向(
 - Produces: 写侧 `block_ok`（逐 lane 立即读回，硬 FAIL）；读侧 `fma_ok` /
   `store_ok`（诚实命名的分立判定）。
 
-- [ ] **Step 3.1: 头部文档读写阶段描述更新（:17-23）**
+- [x] **Step 3.1: 头部文档读写阶段描述更新（:17-23）**
 
 写阶段补「每块存储后立即逐 lane 读回比对，硬 FAIL（#332 缺口 B 先行项
 模式，先例 avx512_sym）——本文件唯一的字节级写入内容校验」；读阶段改述为
 三检：闭式聚合和（内容）、FMA 链 vs 标量 golden（计算路径分歧——**非**
 数据校验）、store_buf 自比较（私有 store/reload 通路）。
 
-- [ ] **Step 3.2: 写侧加立即读回（store + __sync_synchronize 之后）**
+- [x] **Step 3.2: 写侧加立即读回（store + __sync_synchronize 之后）**
 
 ```c
             /* 写侧立即读回:本文件唯一逐 lane 写入内容校验(#332 缺口 B 的
@@ -320,7 +320,7 @@ vals 损坏双盲,闭式校验单边可见。#332 的家族 golden 重构方向(
             }
 ```
 
-- [ ] **Step 3.3: 读侧 consistent 拆分与精确失败语义**
+- [x] **Step 3.3: 读侧 consistent 拆分与精确失败语义**
 
 `bool consistent = true;` → `bool fma_ok = true;` + `bool store_ok = true;`
 （分立置位/分立 break，注释分别声明检出边界：FMA 检计算路径分歧不检内存
@@ -353,7 +353,7 @@ vals 损坏双盲,闭式校验单边可见。#332 的家族 golden 重构方向(
         }
 ```
 
-- [ ] **Step 3.4: 构建零警告 + 验证 + Commit**
+- [x] **Step 3.4: 构建零警告 + 验证 + Commit**
 
 ```bash
 SDC_BUILD_JOBS=20 ./scripts/build.sh
@@ -378,7 +378,7 @@ store_ok 诚实命名,失败信息逐项精确到「计算路径分歧(非数据
 
 ### Task 4: 全量验证电池 + 收尾
 
-- [ ] **Step 4.1: 竞态针对性扫掠**（修复后无假阳性；对照修复前 84 跑）
+- [x] **Step 4.1: 竞态针对性扫掠**（修复后无假阳性；对照修复前 84 跑）
 
 ```bash
 fails=0; for n in 4 8; do for buf in 67108864 100663296 134217728; do \
@@ -390,7 +390,7 @@ fails=0; for n in 4 8; do for buf in 67108864 100663296 134217728; do \
 期望 `fails=0`。本测试无 RNG 消费（block_value 确定性），方差源是调度
 时序——扫掠即多 seed 等价物，如实陈述。
 
-- [ ] **Step 4.2: 端到端 + 全核 + 回归**
+- [x] **Step 4.2: 端到端 + 全核 + 回归**
 
 ```bash
 ./builddir/sdcshield -e mesh_upi_avx512_symm_f64 -t 30 -n 8 -v   # pass + [压力映射]
@@ -398,12 +398,12 @@ fails=0; for n in 4 8; do for buf in 67108864 100663296 134217728; do \
 ./builddir/sdcshield -e zstd19 -t 2000 -n 1                      # exit: pass
 ```
 
-- [ ] **Step 4.3: x86 目检 + gem5 边界声明**
+- [x] **Step 4.3: x86 目检 + gem5 边界声明**
 
 mesh f64 为 `#ifdef __aarch64__` 专属（`#else` 占位 SKIP 不动）→ x86 零
 接触。NEON f64 无 HWCAP 缺口、本机原生可跑 → gem5-fi 规则不适用（如实陈述）。
 
-- [ ] **Step 4.4: push 分支 + PR `Fixes #323` + 检视 + merge + issue 收尾**
+- [x] **Step 4.4: push 分支 + PR `Fixes #323` + 检视 + merge + issue 收尾**
 
 分支 `fix/issue323-mesh-symm-f64-sum-race`；PR 体含机理链与验证摘录；
 code-reviewer 检视处置后 merge（编排者已授权）；issue #323 评论收口。
@@ -416,3 +416,17 @@ code-reviewer 检视处置后 merge（编排者已授权）；issue #323 评论�
 - 无占位符：全部代码块完整可落地。
 - 命名一致：`expected_total`/`fma_ok`/`store_ok`/`block_ok`/`round_aborted`
   各任务间一致；`block_value` 签名不动（#332 依赖）。
+
+## 执行后记（2026-11-01 收尾轮）
+
+- **rebase**：分支重放到 origin/main（基线 d6dc42e7 → 04c60ac3 一线，4 commit
+  重放为 64594dc1/eb744f58/91a00be5/9d8b6680），本 PR 两文件在 main 上零
+  改动、零冲突；rebase 后全量重建 + 验证电池复跑全绿。
+- **追加 commit 04c60ac3 ci(lint)**：main 侧 #419 引入的
+  `scripts/check-bswap-golden.sh` 小写 `valu` 变量撞 codespell 字典，把每个
+  后续 PR 的 lint（merge 树全树扫描）打红（#427 lint FAILURE 实测即此因，
+  本 PR 未触碰该文件）。按 #337 先例重命名 `valu`→`vec_alu`（标识符重命名
+  优于豁免清单），本地 codespell 2.4.3 全树 0 hit，CI lint 复绿。
+- **观察（不入本 PR，报编排者）**：main 侧 `tests/cpu/mesh/mesh_upi_sse_sym.cpp:202`
+  有既有 `%u` vs `uint64_t` 格式串警告（#414 系列带入，全量干净重建实测唯一
+  警告，非本 diff 引入——本文件 TU 强制重编零警告）。

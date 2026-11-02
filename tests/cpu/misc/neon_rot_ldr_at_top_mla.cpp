@@ -71,6 +71,11 @@ static int neon_rot_ldr_at_top_mla_init(struct test *test) {
     data->srcB = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
     data->scratch = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
     data->expected = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    if (!data->srcA || !data->srcB || !data->scratch || !data->expected) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_mla: buffer alloc failed");
+        return EXIT_SKIP;
+    }
 
     memset_random(data->srcA, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t));
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t));
@@ -113,6 +118,13 @@ static int neon_rot_ldr_at_top_mla_run(struct test *test, int cpu) {
 
     uint32x4_t *temp = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
     uint32x4_t *dst  = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    if (!temp || !dst) {
+        free(temp);
+        free(dst);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_mla: run buffer alloc failed");
+        return EXIT_SKIP;
+    }
 
     TEST_LOOP(test, 1 << 13) {
         for (int i = 0; i < NEON_ROT_LDR_AT_TOP_MLA_COUNT; i++) {

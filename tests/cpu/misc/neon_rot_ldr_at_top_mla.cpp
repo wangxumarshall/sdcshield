@@ -16,8 +16,9 @@
  *   case 1: mla-style: acc = add(mul)   (accumulate via explicit add)
  *   case 2: mls-style: acc = sub(mul)
  *   case 3: veor (parent control op, unchanged semantics)
- * 32-bit lanes chosen because mla/mls are s32-only on this ISA; sources
- * are masked to 16-bit magnitudes (products can still reach the s32 sign
+ * 32-bit lanes (the mul/mla/mls family is 32-bit-lane-only on this ISA;
+ * historically spelled s32, now u32 — see below); sources
+ * are masked to 16-bit magnitudes (products can still reach the sign
  * bit — bit-exactness comes from uint32_t mod-2^32 arithmetic), golden
  * precomputed in init via scalar independent recomputation (issue #373).
  * Run-side builtins are u32-typed (bit-identical mul/add/sub v.4s
@@ -59,7 +60,7 @@ static inline uint32x4_t load_vec(const void *addr) {
 }
 
 /* keep every lane a 16-bit magnitude (0x0000ffff mask) so products stay
- * small — note they CAN still set the s32 sign bit (0xffff*0xffff =
+ * small — note they CAN still set the sign bit (0xffff*0xffff =
  * 0xFFFE0001); the golden below is bit-exact via uint32_t mod-2^32
  * arithmetic, not via no-overflow. Narrowing lives in the scalar golden
  * loop (issue #373) — masked values are bit-identical either way. */
@@ -93,8 +94,8 @@ static int neon_rot_ldr_at_top_mla_init(struct test *test) {
 
     /* golden (issue #373): scalar independent recomputation — narrowing +
      * mul/add/sub/eor in pure C integer ops on the scalar pipeline, never the
-     * NEON units under test. uint32_t arithmetic is bit-exact with the s32
-     * vector ops because both reduce mod 2^32 — NOT because products stay in
+     * NEON units under test. uint32_t arithmetic is bit-exact with the
+     * u32 vector ops because both reduce mod 2^32 — NOT because products stay in
      * s32 range (0xffff*0xffff = 0xFFFE0001 does set the sign bit; ~600
      * lanes per run overflow). Keep uint32_t here: an int32_t rewrite of
      * a*b+a would be signed-overflow UB.
@@ -160,10 +161,17 @@ static int neon_rot_ldr_at_top_mla_run(struct test *test, int cpu) {
              * only to the u32 spelling: without the barrier the sub, this
              * case's whole "mls-style" identity, vanishes from the -O2/-O3
              * binary (verified: with it, the per-case mul/mla/mul+sub/eor
-             * sequence matches the s32 original). */
+             * sequence matches the s32 original).
+             * case 1 spells vmlaq_u32 directly instead of
+             * vaddq_u32(vmulq_u32(a,b),a): the bare mul+add chain has the
+             * same refolding exposure (a*b+a -> a*(b+1) is bit-identical
+             * mod 2^32 so the golden stays green while the accumulate
+             * chain this test exists to excite silently disappears);
+             * vmlaq lowers to a single mla v.4s with no folding surface
+             * (PR #393 review r2). */
             switch (i % 4) {
                 case 0: res = vmulq_u32(a, b); break;
-                case 1: res = vaddq_u32(vmulq_u32(a, b), a); break;
+                case 1: res = vmlaq_u32(a, a, b); break;
                 case 2: {
                     uint32x4_t p = vmulq_u32(a, b);
                     __asm__ volatile ("" : "+w" (p));
@@ -198,7 +206,7 @@ static int neon_rot_ldr_at_top_mla_cleanup(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(neon_rot_ldr_at_top_mla, "Algebraic variant of ldr_at_top: rotation mul/mla-style/mls-style/eor in s32 lanes (MAC pipe + accumulate chain signature test)")
+DECLARE_TEST(neon_rot_ldr_at_top_mla, "Algebraic variant of ldr_at_top: rotation mul/mla-style/mls-style/eor in 32-bit lanes, u32-typed (MAC pipe + accumulate chain signature test)")
     .test_init    = neon_rot_ldr_at_top_mla_init,
     .test_run     = neon_rot_ldr_at_top_mla_run,
     .test_cleanup = neon_rot_ldr_at_top_mla_cleanup,

@@ -67,6 +67,33 @@ TEST_F(CodeBufferTestFixture, AllocatingBufferAtParticularAddress) {
 #endif // __x86_64__
 
 // ======================================================================
+// Page size tests -- the single canonical implementation lives in
+// sandstone_page.h and reaches this file via sandstone_test_utils.h.
+// These lock the contract the framework's ROUND_UP_TO_PAGE users
+// (mmap/mprotect alignment, thread-stack guards) rely on.  Runs on
+// all architectures.
+// ======================================================================
+TEST(PageSizeTest, MatchesSysconf)
+{
+    EXPECT_EQ(sandstone_page_size(), static_cast<unsigned>(sysconf(_SC_PAGESIZE)));
+}
+
+TEST(PageSizeTest, IsPowerOfTwo)
+{
+    unsigned ps = sandstone_page_size();
+    EXPECT_NE(ps, 0u);
+    EXPECT_EQ(ps & (ps - 1), 0u);
+}
+
+TEST(PageSizeTest, RoundUpToPageRoundsUpToNextPage)
+{
+    unsigned ps = sandstone_page_size();
+    EXPECT_EQ(ROUND_UP_TO_PAGE(1), ps);           // sub-page rounds up to one page
+    EXPECT_EQ(ROUND_UP_TO_PAGE(ps), ps);         // page-aligned value is unchanged
+    EXPECT_EQ(ROUND_UP_TO_PAGE(ps + 1), 2 * ps); // first byte of page 2
+}
+
+// ======================================================================
 // Weighted Test Picker Tests
 // ======================================================================
 class WeightedPickerTestFixture : public ::testing::Test {

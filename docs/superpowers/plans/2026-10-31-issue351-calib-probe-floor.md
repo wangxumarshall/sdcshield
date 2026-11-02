@@ -57,3 +57,40 @@ x86-64 参考链的 sizing 结果与 init 成本被实质改变——rule 5 违�
 ## 3. 交付
 
 commit 1: 本 plan 文档;commit 2: 修复(framework/sdc_stress_config.h + docs/architecture.md, 同一逻辑单元)→ push fix/issue-351 → PR(Closes #351)→ issue 回帖报告。
+
+## 4. 检视跟进附录(2026-11-02, R1/R2——登记 scope 演进, 修正 §3 交付承诺漂移)
+
+§1.3 修复方案(4 条)与 §3 交付承诺(2 commits)只覆盖原始审计范围;PR #377
+开出后经两轮检视(local-claude 第 5 bot)驱动出以下追加单元,各自独立
+commit、独立验证,在此登记,防「按 plan/PR 描述审计 PR」时漏项:
+
+### R1(2026-11-02, 意见锚定 77bb6381)
+
+- `661d604d` fix(framework): fit 差分 + <100ms probe 档致噪组合加运行期
+  log_warning——检视指出该组合可编译、可静默运行,a_ms 虚高 → n_run 偏小
+  → 激发维度静默欠压,对 SDC 检测工具是覆盖率损失;从纯注释约束升为运行
+  期告警(本 plan §1.3 之外的新增行为, 即检视所指 scope drift)。
+- `f4e72e33` docs(spec/plan): §4.3 M3 100ms 阈值机制勘误——活代码三处
+  把 spec §4.3 引为 100.0 的规范性出处,参数化后机制已变而 spec/plan
+  未同步。
+
+### R2(2026-11-02, 意见锚定 f4e72e33)
+
+- `3d424004` fix(framework): fit 出参恢复第 8 参历史位次、probe_floor_ms
+  殿后——§1.3 条目 1 原定「置于 fit 出参之前」使字面量 0/NULL(『显式
+  不要 fit』的旧写法)经 int→double 隐式转换静默重绑 probe_floor_ms=0.0,
+  probe 抬档循环永假且无告警;该位次设计被检视推翻,以本条为准。
+- `3bdc9001` fix(framework): R1 告警守卫改判 probe 档**实测时长**(原判
+  入参,floor=100 但 hi 截断漏报、慢求解器+缺省 1.0 误报,两个方向都
+  错)+ `sdc_m3_probe_floor_ms` 具名常量统一守卫/联合求解实参/告警文案
+  三处口径。
+- `317de9ba` docs(spec/plan): 勘误段与运行期告警对齐——『可编译、无运行
+  期报错』『缺省会静默拿到 1.0』与 661d604d 后的代码直接矛盾。
+- `ddd87bba` docs(architecture): 『byte-identical』过度声明改为「同 1ms
+  停点与代码路径、计时抖动内一致」(§1.3 条目 1 与 §2.2 的 byte-identical
+  措辞同此口径理解——校准依赖墙钟计时, 不可字节复现)。
+- 本 commit: 本附录 + PR 描述同步(改动清单/验证证据更新至 R2 终态)。
+
+至此 PR 共 9 commits、5 文件(159+ 行净增);7 参存量调用(x86-64 `#else`
+链)源码自始零改动。
+

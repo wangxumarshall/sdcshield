@@ -357,6 +357,7 @@ if host_machine.cpu_family() == 'aarch64'
             'cache/llc_randomized_load.cpp',
             'cache/llc_uniform_load.cpp',
             'cache/l3_execute.cpp',
+            'cache/flushed_memcpy.cpp',
             'misc/core179_kernel_sdc_repro.cpp',
             'memory/mem_disambig_alu.cpp',
             'misc/movbe_dump_golden.cpp',

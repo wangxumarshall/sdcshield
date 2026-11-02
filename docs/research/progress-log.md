@@ -1636,9 +1636,13 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   二进制）；--list-tests 三档 570/580/584（SKIP 4 = eigen_svd_jacobi*4、
   BETA 10 差集具名核对 = 旧 6 个 + sched_storm×4）。SVE2/SME 被过滤用例
   4 个（sve2_cross_precision_arm、sme_fmopa_{za,stress}_arm、
-  sme_za_tileview_arm）具名清点。538 目标全量构建唯一 warning =
-  mesh_upi_sse_sym.cpp:202 %u/uint64_t（三树 blob 83073563 同源，main 侧
-  既有非本 PR 引入）。
+  sme_za_tileview_arm）具名清点。**目标数对账（R3 补）**: 538 = 26162e44
+  树在 SSL-disabled 降级配置下的目标数，613 = 同树 install/ 齐备后
+  reconfigure（#458 meson.build 变化触发）的目标数——同一棵树两次构建，
+  目标差 = ipsec/openblas/sleef 等组回归；「唯一 warning =
+  mesh_upi_sse_sym.cpp:202 %u/uint64_t」归属 538 降级树构建（三树 blob
+  83073563 同源，main 侧既有非本 PR 引入；613 与 169 目标重编构建均零
+  warning）。
 - **表格口径**: 自「源码全量（选择期过滤前）」改为「0xd02 SVE1 主机实测
   （vendored 依赖齐备构建，选择期过滤后）」，数字 487/501 → 570/584；
   BETA 具名列表补 sched_storm×4（与表值 10 一致）。
@@ -1679,3 +1683,28 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
     标注 + 口径披露处置）。
 - **验证**: 文档-only commit（CLAUDE/README/progress-log），二进制 f34e96d10250
   不变（570/580/584 计数与 zstd19 回归 pass 均已实测）。
+
+## 2026-11-02（PR #413 R3 检视处置：390 身份限定 + 归因修正 + reconfigure 修复路径 + 目标数对账）
+
+- **当前 head 意见 5 条（local-claude 行级，13:47 检视）**:
+  - **#19 采纳（README:344/CLAUDE.md:72-73/footnote 三处）**: 「实测 390」的
+    测量宿主身份零佐证且与 R2 驳回 v2 数字的身份标准构成双重标准——390
+    降格为「记录实测」并加「测量宿主身份未经独立复核（出自会话自称 0xd01
+    机的记录，本 PR-loop 宿主机为 0xd02 无法复现）」限定。
+  - **#20 采纳（README:126）**: 221→570 差距单一归因「vendored 组」是错误
+    归因（≥93 例来自晚于 2026-09-12 的源码新增 + 宿主机差异）——改为
+    「差值 = 镜像未含的 vendored 组 + 晚于该二进制的源码新增用例 + 测量
+    宿主机差异，未逐项拆解」。
+  - **#21 部分采纳/部分驳回（README:388）**: 采纳——588 锚点句补 4 例
+    质量分级（全 PROD，grep 实证行号）与能力主机推导值（PROD 574）；
+    驳回表格口径回迁「源码全量」——R1 已实证旧口径从未真实
+    host-independent（501 < 过滤后 502 逻辑矛盾，它就是 0xd02 过滤后
+    带滞后值），588 锚点已在 footnote 承担 host-independent 职责。
+  - **#22 采纳（README:344/388 两处）**: 降级陷阱「锁死」改「禁用」并补
+    修复路径「install/ 齐备后 meson setup --reconfigure builddir 即恢复
+    检测，无需推倒重建」（R1 台账自证 reconfigure 恢复）。
+  - **#23 采纳（progress-log）**: 538/613 两目标数补对账：538 = 26162e44
+    树 SSL-disabled 降级配置目标数，613 = 同树 install/ 齐备后 reconfigure
+    目标数，warning 归属 538 降级树构建。
+- **验证**: 文档-only commit；570/580/584 计数与 zstd19 回归 pass 已实测
+  （b9df4cb3 树，二进制不变）。

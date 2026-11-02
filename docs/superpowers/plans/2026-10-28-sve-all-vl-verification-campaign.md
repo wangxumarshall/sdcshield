@@ -106,6 +106,7 @@ git commit -s -m "docs(campaign): SVE 全 VL 验证清单——tag∪name 枚举
 
 **Interfaces:**
 - Consumes: Task 1 的 `sve-test-list.txt`。
+- Consumes: 仓库既有 `extract-summary.sh`（已在库，`git ls-files` 可复核；Step 1 的机械提取工具——issue #403 同步补行，此前 Step 调用而清单无行，属清单-步骤失配镜像）。
 - Produces: 256 档 seed1/seed2 两个 `exit: pass`（或分诊后的边界格），triage 表驱动 Task 7。
 
 - [ ] **Step 1: seed1 全量跑（过夜预算）**
@@ -315,6 +316,7 @@ git push -u origin feat/sve-se-prctl-stub-2026-10-28
 
 **Interfaces:**
 - Consumes: Task 5 的可跑通 SE 二进制路径；Task 1 清单。
+- Consumes: 仓库既有 `gem5-512-extract.sh`（已在库，`git ls-files` 可复核；Step 3 的机械提取工具——issue #403 同步补行，此前 Step 调用而清单无行，属清单-步骤失配镜像）。
 - Produces: 512 档 188 格证据。
 
 - [ ] **Step 1: 标定仿真速（5 个代表用例）**
@@ -337,18 +339,23 @@ rm -rf m5out   # spike 标定会在 cwd 产生 gem5 输出目录，清掉防入�
 
 - [ ] **Step 2: 批处理脚本**
 
-`gem5-512-batch.sh`（并行度 64——本机 128 核，gem5 单线程；**与任何构建错峰**）。骨架如下——与仓库实际入库版一致的关键语义（批时身份记录、断点续跑、`batch.tsv` 逐格追加——Files 行声明的入库证据全部由脚本产出，不再自相矛盾）；完整版（`--one` 单测模式、baked `-O` 数组、PR #307 检视加固注释）以本 Task Create 的 `gem5-512-batch.sh` 为准：
+`gem5-512-batch.sh`（并行度 20——控制器修正案 2：标定实测单实例 RSS ≤ ~1.2 GB，20 路典型 ~24 GB，远低于 57 GB 可用；本机 128 核，gem5 单线程；**与任何构建错峰**）。骨架如下——与仓库实际入库版一致的关键语义（批时身份记录、断点续跑、`batch.tsv` 逐格追加、执行形状 `-f no --ignore-timeout`、绿格统计取 `exit: pass` 内容行——Files 行声明的入库证据全部由脚本产出，不再自相矛盾）；完整版（`--one` 单测模式、baked `-O` 数组、`list.effective` 清单契约过滤（PR #307 #21）、逐行 stdout 回显、PR #307 检视加固注释）以本 Task Create 的 `gem5-512-batch.sh` 为准：
 
 ```bash
 #!/bin/bash
 # SVE 全 VL campaign — gem5 SE 512-bit leg. Usage: ./gem5-512-batch.sh
-# 每 gem5 实例独占工作目录（gem5 把 m5out 写进 cwd，64 路并发共用 cwd 会互相覆写）。
+# 每 gem5 实例独占工作目录（gem5 把 m5out 写进 cwd，多路并发共用 cwd 会互相覆写）。
+# 执行形状（Task 5 裁定）：-f no（nofork——gem5 SE 无异步信号投递/跨 fork mmap 共享，
+# fork 模式结构性不可行）+ --ignore-timeout。
 # 裁定 E：每格一行 O_APPEND 追加 gem5-512/batch.tsv（<test>\trc=<n>\twall=<n>s\t
 # <exit-line>\t<sim-exit-line>\tsrc=batch——入库溯源记录，gem5-512-extract.sh 的
 # 机械提取与 provenance audit 以它为唯一输入）；批时二进制身份 write_identity()
 # 写 gem5-512/identity.txt（extract 以批时记录盖戳 verdicts 头，防 rebuild 后
 # 张冠李戴）；断点续跑：rc=0 已收口的格 touch .done 跳过，超时/崩溃格不标记、
 # 幂等重跑重新执行（batch.tsv 追加写、提取取末行，新行覆盖旧行）。
+# 绿格统计取内容行 exit: pass——rc=0 不蕴含 pass（无 --fatal-skips 下诚实的
+# init-skip 亦退 0 且印 exit: pass；rc=0+exit 行被抑制 = ANOMALY never auto-pass，
+# 口径详见 gem5-512-extract.sh 头注释）。
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LIST="$HERE/sve-test-list.txt"
@@ -364,17 +371,21 @@ write_identity() {
         "$(date '+%F %T')" > "$OUT/identity.txt"
 }
 run_one() {
-    local t="$1" extra="" rc start end exitline simexit
-    if [ -f "$OUT/$t.done" ]; then   # 断点续跑：末行 rc=0 已收口即跳过
-        awk -F'\t' -v t="$t" '$1==t{last=$2} END{exit !(last=="rc=0"||last=="")}' \
-            "$OUT/batch.tsv" 2>/dev/null && return 0
-        rm -f "$OUT/$t.done"         # 陈旧标记（非 rc=0 收口）→ 重跑
+    local t="$1" extra="" rc start end exitline simexit; local -a extra_args=()
+    if [ -f "$OUT/$t.done" ]; then   # 断点续跑：末行 rc=0 已收口（或无矛盾行）即跳过
+        lastrc=$(awk -F'\t' -v t="$t" '$1==t{last=$2} END{print last}' \
+            "$OUT/batch.tsv" 2>/dev/null || true)
+        if [ "$lastrc" = "rc=0" ] || [ -z "$lastrc" ]; then return 0; fi
+        rm -f "$OUT/$t.done"         # 陈旧标记（末行为非 rc=0 收口的矛盾行）→ 重跑
     fi
     [ -f "$OUT/identity.txt" ] || write_identity
     extra=$(awk -v t="$t" 'index($0, t "|")==1 {print substr($0, length(t)+2); exit}' \
         "$OVR" 2>/dev/null || true)
+    read -r -a extra_args <<< "${extra:-}"   # 词分割不 glob（PR #307 #13 语义）：裸 $extra 的 * 会展开打到 $OUT/$t.d
     mkdir -p "$OUT/$t.d"; start=$(date +%s)
-    ( cd "$OUT/$t.d" && timeout 3600 env G5="$G5" "$RUN" "$BIN" -e "$t" -t 500 -n 1 $extra --vl 4 ) \
+    ( cd "$OUT/$t.d" && timeout 3600 env G5="$G5" "$RUN" "$BIN" \
+        -e "$t" -t 500 -n 1 -f no --ignore-timeout \
+        ${extra_args[@]+"${extra_args[@]}"} --vl 4 ) \
         > "$OUT/$t.log" 2>&1
     rc=$?; end=$(date +%s)
     exitline=$(grep -a -m1 "^exit: " "$OUT/$t.log" || true)
@@ -385,8 +396,8 @@ run_one() {
 }
 export -f run_one; export LIST OVR OUT G5 RUN BIN
 [ -f "$OUT/identity.txt" ] || write_identity
-xargs -a "$LIST" -P 64 -I{} bash -c 'run_one "$@"' _ {}
-echo "green cells: $(awk -F'\t' '$2=="rc=0"' "$OUT/batch.tsv" | wc -l) / $(wc -l < "$LIST")"
+xargs -a "$LIST" -P 20 -I{} bash -c 'run_one "$@"' _ {}
+echo "cells with 'exit: pass': $(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null || echo 0) / $(wc -l < "$LIST")"
 ```
 
 - [ ] **Step 3: 执行、机械提取与分诊**

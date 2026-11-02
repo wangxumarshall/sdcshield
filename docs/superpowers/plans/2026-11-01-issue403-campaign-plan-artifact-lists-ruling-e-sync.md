@@ -52,7 +52,7 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
 ### Task 1: 同步计划文档工件清单 + 验证 + commit
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-10-28-sve-all-vl-verification-campaign.md`（6 处：Global Constraints 总纲、Task 2 Files、Task 2 Step 1、Task 3 Files、Task 6 Files、Task 8 Interfaces+Step 1——实 diff 亦为 6 hunk，枚举与计数一致）
+- Modify: `docs/superpowers/plans/2026-10-28-sve-all-vl-verification-campaign.md`（6 处：Global Constraints 总纲、Task 2 Files、Task 2 Step 1、Task 3 Files、Task 6 Files、Task 8 Interfaces+Step 1——此 6 处枚举 = e63b0345 单 commit 的编辑位置，其单 commit diff 为 6 hunk；PR 净 diff（`git diff 6fdf040d..HEAD -- <该文件> | grep -c '^@@'`）实测 8 hunk，多出的 @@ -317/-331 是 round-1 处置 commit 对 Task 6 内嵌骨架的关键语义对齐——计数主张按单 commit / 净 diff 双口径分列，勿混用）
 
 **Interfaces:**
 - Consumes: 裁定 E 协议事实（triage-256.md §1 / triage-128.md §0/§6 / .gitignore / 实际入库工件集）。

@@ -79,8 +79,19 @@ unsigned char *SandstoneTestThreadAttributes::allocate_stack_block()
     size_t guard = GuardSize();
     size_t size = thread_count() * (THREAD_STACK_SIZE + guard) + guard;
     void *map = mmap(nullptr, size, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    if (map == MAP_FAILED)
+    if (map == MAP_FAILED) {
+        /*
+         * Safe fallback (the default stacks each carry a one-page guard), but
+         * not a silent one: the enhanced guard geometry would be lost with no
+         * trace, the same blind spot issue #396 condemns.  One diagnostic per
+         * process, next to the only nullptr producer.
+         */
+        const char *err = strerror_for_mmap();  // capture errno before fprintf
+        fprintf(stderr, "%s: mmap(%zu) for per-thread stacks failed: %s -- "
+                        "falling back to the default thread stacks (no guard region between them)\n",
+                program_invocation_name, size, err);
         return nullptr;
+    }
 
     auto ptr = static_cast<unsigned char *>(map);
 

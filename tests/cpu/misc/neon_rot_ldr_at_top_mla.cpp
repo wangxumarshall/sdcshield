@@ -12,7 +12,7 @@
  * eor-as-control) to test whether the SDC trigger tolerates the different
  * ALU latency/throughput structure of the Kunpeng 920 SIMD MAC pipe, and
  * whether corruption signatures change under accumulation chains:
- *   case 0: mulq_s32 then reinterpret   (pure multiply, long latency)
+ *   case 0: mulq then reinterpret         (pure multiply, long latency)
  *   case 1: mla-style: acc = add(mul)   (accumulate via explicit add)
  *   case 2: mls-style: acc = sub(mul)
  *   case 3: veor (parent control op, unchanged semantics)
@@ -20,6 +20,10 @@
  * are masked to 16-bit magnitudes (products can still reach the s32 sign
  * bit — bit-exactness comes from uint32_t mod-2^32 arithmetic), golden
  * precomputed in init via scalar independent recomputation (issue #373).
+ * Run-side builtins are u32-typed (bit-identical mul/add/sub v.4s
+ * instructions, well-defined wrapping) so the deliberate sign-bit-setting
+ * products stay UBSan-clean — the s32-typed spelling is signed-overflow
+ * UB under GCC's elementwise builtin lowering (issue #390).
  * Same skeleton otherwise: 3rd ldr at top + 2-src loads + rotating ALU +
  * back-to-back str/str; memcmp in cold path.
  * @endparblock
@@ -119,12 +123,30 @@ static int neon_rot_ldr_at_top_mla_run(struct test *test, int cpu) {
             uint32x4_t b = load_vec(&data->srcB[i]);
             uint32x4_t res;
 
-            int32x4_t sa = vreinterpretq_s32_u32(a);
-            int32x4_t sb = vreinterpretq_s32_u32(b);
+            /* u32-typed builtins: bit-identical to the s32 spelling (two's
+             * complement mul/add/sub — same mul/mla/sub v.4s instructions),
+             * but wrapping is well-defined. GCC lowers these vector
+             * builtins elementwise, so under -fsanitize=undefined the s32
+             * spelling turns every sign-bit-setting product (~600
+             * lanes/run, the deliberate 16-bit operand domain of issue
+             * #373) into scalar signed-overflow UB that halts the nightly
+             * sanitizer CI (issue #390: '60669 * 52334 cannot be
+             * represented in type int'). The uint32_t scalar golden
+             * (issue #373) matches the u32 vector ops mod 2^32 exactly.
+             * case 2's empty asm forces the product to materialize so GCC
+             * cannot refold a*b-b into (a-1)*b — a rewrite GCC 12 applies
+             * only to the u32 spelling: without the barrier the sub, this
+             * case's whole "mls-style" identity, vanishes from the -O2/-O3
+             * binary (verified: with it, the per-case mul/mla/mul+sub/eor
+             * sequence matches the s32 original). */
             switch (i % 4) {
-                case 0: res = vreinterpretq_u32_s32(vmulq_s32(sa, sb)); break;
-                case 1: res = vreinterpretq_u32_s32(vaddq_s32(vmulq_s32(sa, sb), sa)); break;
-                case 2: res = vreinterpretq_u32_s32(vsubq_s32(vmulq_s32(sa, sb), sb)); break;
+                case 0: res = vmulq_u32(a, b); break;
+                case 1: res = vaddq_u32(vmulq_u32(a, b), a); break;
+                case 2: {
+                    uint32x4_t p = vmulq_u32(a, b);
+                    __asm__ volatile ("" : "+w" (p));
+                    res = vsubq_u32(p, b);
+                } break;
                 case 3: res = veorq_u32(a, b); break;
             }
 

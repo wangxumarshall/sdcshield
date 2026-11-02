@@ -1150,14 +1150,13 @@ endif
 # width (128/256/512/1024) and a vector-length-agnostic dispatcher picks the
 # variant that matches the worker's pinned tier at run time.
 if host_machine.cpu_family() == 'aarch64'
-    # --- Eigen payload: one instantiation per VL tier (design §4.7) --------
+    # --- Eigen payload: one instantiation per VL tier, table-driven --------
     # Eigen's SVE packet types are compile-time fixed-width and appear as
     # struct members, so a single VLA TU is impossible at the C++ language
     # level (twice-confirmed spike). Build the payload sources once per tier,
     # each under its own Eigen namespace and its own symbol namespace; the
     # dispatch TUs below pick the matching one at run time.
     # Real-packet payloads are valid at every tier we build.
-    eigen_gemm_body_sources = files('eigen_gemm/gemm_double_max_arm_body.cpp')
     # Complex payloads are valid at every tier since the ptranspose scatter
     # rewrite (issue #410): the earlier memory-bridge form indexed buf[N][NC]
     # with i < NC — out of bounds at 1024-bit (NC = 8 > N = 4 in the GEBP
@@ -1165,48 +1164,53 @@ if host_machine.cpu_family() == 'aarch64'
     # (third-party/eigen5/Eigen/src/Core/arch/SVE/Complex.h) is in bounds for
     # any N/NC and is bit-identical to the old permutation in every square
     # shape, so all four tiers are built.
-    eigen_svd_body_sources = files('eigen_svd/svd_cdouble_sve_body.cpp')
-
-    foreach spec : [['gemm', '128'], ['gemm', '256'], ['gemm', '512'], ['gemm', '1024'],
-                    ['svd', '128'], ['svd', '256'], ['svd', '512'], ['svd', '1024']]
-        kind = spec[0]
-        tier = spec[1]
-        eigen_tier_args = [
-            '-march=armv8.2-a+sve',
-            '-msve-vector-bits=' + tier,
-            '-DEIGEN_ARM64_SVE_VL=' + tier,
-            '-DEigen=EigenSVE' + tier,
-        ]
-        if kind == 'gemm'
-            eigen_tier_args += '-DGEMM_TEST_NAMESPACE=gemm_vl' + tier
-            eigen_srcs = eigen_gemm_body_sources
-        else
-            eigen_tier_args += '-DSVD_TEST_NAMESPACE=svd_vl' + tier
-            eigen_srcs = eigen_svd_body_sources
-        endif
-        eigen_vl_a = static_library(
-            'tests_eigen_' + kind + '_vl' + tier,
-            sources : eigen_srcs,
-            dependencies: [
-                eigen3_dep,
-                boost_dep,
-            ],
-            build_by_default: false,
-            include_directories: [
-                tests_common_incdirs,
-            ],
-            c_args : [
-                tests_common_c_args,
-                eigen_tier_args,
-            ],
-            cpp_args : [
-                tests_common_cpp_args,
-                eigen_tier_args,
-                '-DEIGEN_ARM64_USE_SVE',
-                sve_bitpattern_exempt,
-            ],
-        )
-        sandstone_tests += [eigen_vl_a]
+    # Table-driven (2026-11-02 eigen SVE unification, design §3):
+    #   [body-source, namespace-prefix] — library name = tests_eigen_<pfx>_vl<t>
+    # The existing svd/gemm prefixes keep their library names; the per-tier
+    # symbol namespace is now injected uniformly as
+    # -DEIGEN_SVE_BODY_NS=<pfx>_vl<t> (the body TUs' old
+    # SVD_TEST_NAMESPACE/GEMM_TEST_NAMESPACE macros are unified into the one
+    # body contract: make_data/solve_once/run_body(test,cpu)/cleanup — see
+    # tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h).
+    eigen_sve_body_specs = [
+        ['eigen_svd/svd_cdouble_sve_body.cpp',       'svd'],
+        ['eigen_gemm/gemm_double_max_arm_body.cpp', 'gemm'],
+    ]
+    foreach spec : eigen_sve_body_specs
+        body_src = spec[0]
+        pfx = spec[1]
+        foreach tier : ['128', '256', '512', '1024']
+            eigen_tier_args = [
+                '-march=armv8.2-a+sve',
+                '-msve-vector-bits=' + tier,
+                '-DEIGEN_ARM64_SVE_VL=' + tier,
+                '-DEigen=EigenSVE' + tier,
+                '-DEIGEN_SVE_BODY_NS=' + pfx + '_vl' + tier,
+            ]
+            eigen_vl_a = static_library(
+                'tests_eigen_' + pfx + '_vl' + tier,
+                sources : body_src,
+                dependencies: [
+                    eigen3_dep,
+                    boost_dep,
+                ],
+                build_by_default: false,
+                include_directories: [
+                    tests_common_incdirs,
+                ],
+                c_args : [
+                    tests_common_c_args,
+                    eigen_tier_args,
+                ],
+                cpp_args : [
+                    tests_common_cpp_args,
+                    eigen_tier_args,
+                    '-DEIGEN_ARM64_USE_SVE',
+                    sve_bitpattern_exempt,
+                ],
+            )
+            sandstone_tests += [eigen_vl_a]
+        endforeach
     endforeach
 
     # --- Dispatch TUs: deliberately vector-length agnostic ---------------

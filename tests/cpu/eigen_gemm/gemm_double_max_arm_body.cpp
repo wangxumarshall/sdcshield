@@ -11,7 +11,10 @@
  * spike). The workaround is not to make one TU adaptive but to compile the
  * same source N times, each with its own Eigen namespace
  * (-DEigen=EigenSVEn) and its own exported symbol namespace
- * (-DGEMM_TEST_NAMESPACE=gemm_vln); the dispatch TU picks the variant whose
+ * (-DEIGEN_SVE_BODY_NS=gemm_vln — macro unified across all Eigen SVE body
+ * TUs 2026-11-02, was -DGEMM_TEST_NAMESPACE; the build now derives it from
+ * the [body-source, namespace-prefix] table in tests/cpu/meson.build);
+ * the dispatch TU picks the variant whose
  * width matches the worker's pinned VL.
  */
 #include <sandstone.h>
@@ -27,17 +30,39 @@
 #include <arm_sve.h>
 #include <device/cpu/arm64/arm64_vl.h>
 
-#ifndef GEMM_TEST_NAMESPACE
-#  error "GEMM_TEST_NAMESPACE must be defined by the build (one namespace per VL tier)"
+#ifndef EIGEN_SVE_BODY_NS
+#  error "EIGEN_SVE_BODY_NS must be defined by the build (one namespace per VL tier)"
 #endif
 
-namespace GEMM_TEST_NAMESPACE {
+namespace EIGEN_SVE_BODY_NS {
 
 using namespace Eigen;
 
 typedef Matrix<double, Dynamic, Dynamic> Mat;
 
 constexpr int kRerollEvery = 16;
+
+/* Per-child dimension holder (2026-11-02 unification): the dispatcher's
+ * test_init sizes the dimension (knob/env > joint solver) and stores it
+ * here via make_data; run_body reads it back from test->data. Replaces
+ * both the extern global this TU read pre-T6 and the per-call parameter
+ * the T6 signature carried — the dispatcher only passes (test, cpu) now,
+ * same shape as the SVD pair's body contract. Layout is identical at
+ * every tier (plain int), so the dispatcher treats it as an opaque void*. */
+struct gemm_sve_data { int dim; };
+
+void *make_data(int dim)
+{
+    auto *d = new gemm_sve_data;
+    d->dim = dim;
+    return d;
+}
+
+void cleanup(struct test *test)
+{
+    delete static_cast<gemm_sve_data *>(test->data);
+    test->data = nullptr;
+}
 
 static void fill_rand(Mat &m)
 {
@@ -49,13 +74,13 @@ static void fill_rand(Mat &m)
 /* The dispatch TU has already pinned this worker to the tier this variant
  * was compiled for and verified the readback; here we only run the payload.
  * (Keeping the pin in the dispatcher means it happens exactly once per test
- * execution, not once per variant.) T6: the dimension arrives as a
- * parameter — the child init sizes it (knob/env > joint solver) and the
- * dispatcher passes it per call; the extern global this TU used to read is
- * gone. */
-int run_body(struct test *test, int cpu, int dim)
+ * execution, not once per variant.) T6: the child init sizes the dimension
+ * (knob/env > joint solver); since the 2026-11-02 unification it arrives
+ * through test->data (see gemm_sve_data above), not as a parameter. */
+int run_body(struct test *test, int cpu)
 {
     (void)cpu;
+    const int dim = static_cast<gemm_sve_data *>(test->data)->dim;
     /* T10 bad_alloc 降级(m2, 对齐 eigen_sparse 先例): 分配/求解段包窄
      * catch(仅 std::bad_alloc)→ 线程级 SKIP——资源性失败不是 SDC 不打红;
      * 比对段(memcmp_or_fail → report_fail)恒在 catch 之外, SDC 误配必须
@@ -137,4 +162,4 @@ int solve_once(int dim)
     return 0;
 }
 
-}  // namespace GEMM_TEST_NAMESPACE
+}  // namespace EIGEN_SVE_BODY_NS

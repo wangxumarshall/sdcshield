@@ -185,6 +185,16 @@ static uint64_t spinlock_add_neon_now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+/* 任何 FAIL 迹象的统一记账点（绿跑 unlink 的保守条件，见 cleanup）：
+ * 新增检测通道 / FAIL 分支时必须调用本函数——漏调用 = 该路径红跑的
+ * logverif 取证文件被当绿跑误删且无告警（PR#341 轮3 检视 :827：递增点
+ * 分散的演进风险，集中到单一命名函数使契约可见）。RELAXED 原子（多线程
+ * 并发递增，#16 同款纪律；cleanup 在 join 后 quiescent 读） */
+static inline void spinlock_add_neon_note_fail(struct SpinlockAddNeonData *d)
+{
+    __atomic_fetch_add(&d->log_fail_lines, 1, __ATOMIC_RELAXED);
+}
+
 /* 纯函数 NEON 内核：4 组 x (a,b,c,d) 向量链 x 4 轮 vfma。确定性（IEEE 单
  * 舍入 FMA），无共享状态。
  * g 是向量槽基（每步处理 4 个 float32x4 = 16 float）：循环上界派生自
@@ -419,10 +429,9 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         const enum SpinlockAddNeonAcquire acq = spinlock_add_neon_acquire(d, cpu, &stall_ns);
         if (acq != SPINLOCK_ACQUIRE_OK) {
             const char *verdict;
-            /* 通道C FAIL 记入 log_fail_lines（绿跑 unlink 的保守条件之一，
-             * 见 cleanup）：通道C 检出时 logverif 文件保留，供回看失败前
-             * 的逐次迭代记录 */
-            __atomic_fetch_add(&d->log_fail_lines, 1, __ATOMIC_RELAXED);
+            /* 通道C FAIL = 保留 logverif 文件的迹象（供回看失败前的逐次
+             * 迭代记录）；经 note_fail 统一记账（契约见其注释） */
+            spinlock_add_neon_note_fail(d);
             /* verdict/report 只断言证据支持的结论（PR#341 轮1 检视 :302）：
              * 确认窗能证明的是签名（epoch 静止 + CAS 持续失败），不能证明
              * 根因——「释放写丢失」与「持锁者整窗未运行（被抢占/限流，如
@@ -532,14 +541,12 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
             if (n > 0 && write(d->log_fd, buf, (size_t)n) < 0) { /* best effort */ }
             if (ok)
                 logged++;
-            else
-                /* 红 FAIL 行计入 log_fail_lines（write 失败也计——出现过
-                 * 数据 miscompare 即保留文件，见 cleanup 的绿跑 unlink 条
-                 * 件）；多线程并发递增，RELAXED 原子（#16 同款纪律） */
-                __atomic_fetch_add(&d->log_fail_lines, 1, __ATOMIC_RELAXED);
         }
 
         if (!ok) {
+            /* 数据 miscompare = 保留文件的迹象（红行是否实际写出无关——
+             * logverif 降级禁用时同样计数；经 note_fail 统一记账） */
+            spinlock_add_neon_note_fail(d);
             log_error("spinlock_add_neon: data miscompare cpu=%d iter=%lu slot=%d — "
                       "full 64-float in/out/golden dump:",
                       cpu, (unsigned long)iter, slot);
@@ -818,7 +825,8 @@ static int spinlock_add_neon_cleanup(struct test *test)
              * 置，长战役绿跑文件线性堆积直至写满 /var/tmp（检视实测 3s 单
              * 线程 718 文件/29.2MB）。保守删除条件：通道B 对账全绿
              * （ret==EXIT_SUCCESS）∧ 全程零红 FAIL 行/FAIL 迹象
-             * （log_fail_lines==0——数据 SDC 红行与通道C FAIL 都计入）∧
+             * （log_fail_lines==0——数据 miscompare 与通道C FAIL 经
+             * note_fail 统一计入，新增 FAIL 路径的记账契约见其注释）∧
              * 非 selftest（阳性自检必 FAIL，取证文件保留）——任何检出迹象
              * 都保留文件；log_fd>=0 保证只删本轮自有文件（pid 复用 EEXIST
              * 降级时不动上一轮遗留）。unlink 失败 best-effort log_warning

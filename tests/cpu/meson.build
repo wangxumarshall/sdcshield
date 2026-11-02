@@ -863,10 +863,16 @@ endif
 # 停滞看门狗 + 锁行 64B dump（硬锁死签名）。NEON 内核 aarch64 专属，
 # 仅 aarch64 构建（spinlock_unaligned 同款门）——非 aarch64 构建不含
 # 本用例（无占位注册，文件内亦无永不编译的死分支）。
+# spinlock_stale_read(_xchg)：CORE179 读路径缺陷类探针（CAS/xchg 两差分
+# 臂，纯 std::atomic，无内在函数；因面向 ARM64 病机现象、避免改变 x86
+# 参考集，同样仅 aarch64 构建）。2026-11-02 自 arm64-sdc-fuzzing/opendcdiag
+# 研究仓逐字节迁移。
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
             'spinlock_add/spinlock_add_neon.cpp',
+            'spinlock_add/spinlock_stale_read.cpp',
+            'spinlock_add/spinlock_stale_read_xchg.cpp',
         )
     )
 endif

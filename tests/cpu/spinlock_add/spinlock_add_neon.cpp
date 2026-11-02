@@ -91,10 +91,17 @@
  * :526/:338）：fracture-per-fork 架构下每子进程各建一个 <pid>.log、行预
  * 算随 fork 重置（每切片每线程重新计 10000），长跑呈每秒数百个碎片文件
  * 而非单一连续日志——-f no（nofork 单进程）才是真正的单文件 10000 行/
- * 线程；绿跑（通道B 对账全绿 ∧ 零红 FAIL 行 ∧ 非 selftest）cleanup 时
- * 删除本轮文件，长期战役绿跑稳态存活文件数 = O(当前并发子进程数)；任何
- * 检出迹象（数据 SDC 红行、通道C FAIL、通道B 对账失败）或 selftest 阳性
- * 自检保留文件作取证。
+ * 线程；绿跑（通道B 对账全绿 ∧ 零红 FAIL 行 ∧ 非 selftest ∧ 未开
+ * logverif_retain）cleanup 时删除本轮文件，长期战役绿跑稳态存活文件数
+ * = O(当前并发子进程数)；任何检出迹象（数据 SDC 红行、通道C FAIL、通道B
+ * 对账失败）或 selftest 阳性自检保留文件作取证。-O
+ * spinlock_add_neon.logverif_retain=1（默认 0）保留绿跑文件供人工审计
+ * （PR#341 轮4 检视 :834：golden 为 init 同源预计算，init/run 一致同错
+ * 时三通道全绿，logverif 行是绿跑期唯一可人工核对的计算值迹）——代价
+ * 是回到无界堆积，长战役慎用。红跑文件为取证设计、无上限无轮转（轮4
+ * 检视 :825 边界）：嘈杂共享机上的饥饿假阳性 FAIL 亦逐切片留档（实测
+ * 速率 ~840MB/天量级），长战役操作员须自行巡检清理 /var/tmp——上限/
+ * 轮转与取证完整性冲突，按取证优先保留此边界并在此声明。
  *
  * Deviation note (documented): 内核为自包含 NEON intrinsics（本仓 neon_rot
  * 家族同范式）；第三方库（openblas/sleef）计算负载变体为后续独立单元。
@@ -170,6 +177,7 @@ struct SpinlockAddNeonData {
     uint64_t *local_counts;   /* SLOTS，锁内与 shared 同窗递增 */
     int log_fd;
     int logverif;             /* knob: 0/1 */
+    int logverif_retain;      /* knob: 0/1——绿跑保留 logverif 文件（审计用） */
     int selftest;             /* knob: 0=off 1=stall 2=data */
     volatile int stall_armed;
     char log_path[128];       /* logverif 文件路径：绿跑 cleanup unlink 用 */
@@ -591,6 +599,13 @@ static int spinlock_add_neon_init(struct test *test)
      * run 线程禁止直接读）；必须用 testspecific 变体——-O testid.key=value
      * 的键按测试 id 定域，NULL-test 裸键查不到 */
     d->logverif = get_testspecific_knob_value_int(test, "logverif", 0) != 0;
+    /* logverif_retain（0/1，默认 0）：绿跑是否保留逐次验证日志。默认删
+     * （修 #9/#14 的长战役绿跑堆积写满 /var/tmp）；=1 时绿跑也保留——
+     * golden 为 init 同源内核预计算，init/run 一致同错的系统性错误三通
+     * 道全绿，logverif 行是绿跑期唯一可人工审计的计算值迹（PR#341 轮4
+     * 检视 :834），需要审计时显式打开；代价是回到无界堆积（见 header
+     * 生命周期披露），长战役慎用 */
+    d->logverif_retain = get_testspecific_knob_value_int(test, "logverif_retain", 0) != 0;
     const char *st = get_testspecific_knob_value_string(test, "selftest", "off");
     /* 未知取值 fail loudly 而非静默映射 0（igzip level knob 先例：静默钳
      * 0 会让部署自检纪律被一个 typo 无声击穿——selftest=Stall 之类错值
@@ -827,11 +842,14 @@ static int spinlock_add_neon_cleanup(struct test *test)
              * （ret==EXIT_SUCCESS）∧ 全程零红 FAIL 行/FAIL 迹象
              * （log_fail_lines==0——数据 miscompare 与通道C FAIL 经
              * note_fail 统一计入，新增 FAIL 路径的记账契约见其注释）∧
-             * 非 selftest（阳性自检必 FAIL，取证文件保留）——任何检出迹象
-             * 都保留文件；log_fd>=0 保证只删本轮自有文件（pid 复用 EEXIST
-             * 降级时不动上一轮遗留）。unlink 失败 best-effort log_warning
-             * 不升格为检测失败（诊断附属哲学同 init 打开降级路径） */
-            if (ret == EXIT_SUCCESS && d->selftest == 0 &&
+             * 非 selftest（阳性自检必 FAIL，取证文件保留）∧ 非
+             * logverif_retain（审计旋钮，PR#341 轮4 检视 :834——绿跑的
+             * 人工审计迹需求与堆积治理由显式旋钮分交操作员）——任何检出
+             * 迹象都保留文件；log_fd>=0 保证只删本轮自有文件（pid 复用
+             * EEXIST 降级时不动上一轮遗留）。unlink 失败 best-effort
+             * log_warning 不升格为检测失败（诊断附属哲学同 init 打开降
+             * 级路径） */
+            if (ret == EXIT_SUCCESS && d->selftest == 0 && d->logverif_retain == 0 &&
                     __atomic_load_n(&d->log_fail_lines, __ATOMIC_RELAXED) == 0 &&
                     unlink(d->log_path) != 0)
                 log_warning("spinlock_add_neon: cannot unlink green-run log %s "

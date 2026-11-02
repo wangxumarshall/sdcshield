@@ -128,7 +128,7 @@ docs/superpowers/inventory/sve-all-vl-campaign/extract-summary.sh $LOG $LIST doc
 ```
 Expected: `exit: pass`。注意：eigen_svd_cdouble_sve / eigen_svd_bidiag_sve 有全核 TIMEOUT 前科（node0 带宽，见 memory eigen-mdim-memory-measurement）；若这两格 TIMEOUT → 进 Step 3 分诊，不算本步失败。
 
-- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 文件名（含 stdout 捕获、`cp` 回拷、`extract-summary.sh` 三行的 /tmp 源与目标文件名）一律相应改为 `LCG1002`，非仅 `-s` 与 `.log` 两处——否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`。
+- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 文件名（含 stdout 捕获、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 四行的 /tmp 源与目标文件名）一律相应改为 `LCG1002`，非仅 `-s` 与 `.log` 两处——否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`。
 
 - [ ] **Step 3: 分诊**
 
@@ -166,12 +166,13 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --dump-cpu-info 2>&1 | grep
 ```
 Expected: `ARM64 spec: SVE yes (max VL 128 bits) | SVE2 no | SME no | SME2 no`。
 
-- [ ] **Step 2/3/4:** 与 Task 2 Step 1-3 相同（**完整继承**其命令块全部行——stdout 捕获、`cp` 回拷、`extract-summary.sh` 提取各行均在内；下方命令块按被继承的完整形态改写，非仅主命令示意），外加 env 前缀；全部 `native-256` 文件名前缀相应改为 `native-128`（替换范围同 Task 2 Step 2 注记）：
+- [ ] **Step 2/3/4:** 与 Task 2 Step 1-3 相同（**完整继承**其命令块全部行——cd/`LIST` 等与 Task 2 逐字相同的原样行原封继承，stdout 捕获、`echo` 退出码、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 提取各行均在下方命令块内按继承形态示出；下方命令块按被继承的完整形态改写，非仅主命令示意），外加 env 前缀；全部 `native-256` 文件名前缀相应改为 `native-128`（替换范围同 Task 2 Step 2 注记）：
 ```bash
 # seed1（seed2 同理：LCG1001→LCG1002 文件名全量替换，替换范围见 Task 2 Step 2 注记）
 LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log
 SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-128-LCG1001.stdout 2>&1
 echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
+tail -5 /tmp/native-128-LCG1001.stdout
 cp /tmp/native-128-LCG1001.stdout docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.stdout.txt   # 裁定 E：stdout 跑完即回拷入库（防 /tmp 随重启丢失）
 docs/superpowers/inventory/sve-all-vl-campaign/extract-summary.sh $LOG $LIST docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.summary.txt   # 裁定 E：机械提取入库 summary
 ```
@@ -364,7 +365,9 @@ rm -rf m5out   # spike 标定会在 cwd 产生 gem5 输出目录，清掉防入�
 # 从未产出，已入库 verdicts 身份头为 extract 时重算，见其头注 RECOMPUTED AT
 # EXTRACT TIME；照本骨架重跑将产出 identity.txt）；断点续跑：rc=0 已收口的格 touch .done 跳过，超时/崩溃格不标记、
 # 幂等重跑重新执行（batch.tsv 追加写、提取取末行，新行覆盖旧行）。
-# 绿格统计取内容行 exit: pass（口径与入库版末行一致）——速览近似而非判定：rc=0
+# 绿格统计取内容行 exit: pass（分子口径与入库版末行一致；分母分叉——骨架取原始
+# $LIST，入库版取 list.effective（PR #307 #21 清单契约过滤，骨架免列），清单含
+# 注释/空行/`|time` 后缀行时两者分叉）——速览近似而非判定：rc=0
 # 不蕴含 pass，exit: pass 行亦不区分 pass 与诚实 init-skip（overlay 抑制 per-test
 # yaml，无日志行可判——tick 地板是唯一机械句柄）；权威判定 = gem5-512-extract.sh
 # （rc=0 && exit: pass && tick≥地板），本 echo 仅收尾速览（口径详见其头注释）。
@@ -388,7 +391,9 @@ run_one() {
         lastrc=$(awk -F'\t' -v t="$t" '$1==t{last=$2} END{print last}' \
             "$OUT/batch.tsv" 2>/dev/null || true)
         if [ "$lastrc" = "rc=0" ] || [ -z "$lastrc" ]; then return 0; fi
-        rm -f "$OUT/$t.done"         # 陈旧标记（末行为非 rc=0 收口的矛盾行）→ 重跑
+        echo "NOTE: $t carries .done but its last batch.tsv row is $lastrc" >&2
+        echo "      (stale marker, pre-2026-10-30 attempted-semantics) — re-running" >&2
+        rm -f "$OUT/$t.done"         # 陈旧标记（末行为非 rc=0 收口的矛盾行）→ 告警后重跑（入库版 :109-110 同款审计告警——陈旧 .done 被强制重跑须可观测）
     fi
     [ -f "$OUT/identity.txt" ] || write_identity
     extra=$(awk -v t="$t" 'index($0, t "|")==1 {print substr($0, length(t)+2); exit}' \
@@ -412,7 +417,7 @@ export LIST OVR OUT G5 RUN BIN
 [ -f "$OUT/identity.txt" ] || write_identity
 xargs -a "$LIST" -P 20 -I{} bash -c 'run_one "$@"' _ {}
 n=$(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null)   # 零匹配 grep 已印 0（|| echo 0 会双 0）；文件缺失捕获空
-echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$LIST")"
+echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$LIST")"   # 分母 = 原始清单；入库版分母 = list.effective（PR #307 #21，骨架免列）
 ```
 
 - [ ] **Step 3: 执行、机械提取与分诊**

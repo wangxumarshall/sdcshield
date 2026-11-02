@@ -39,7 +39,11 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
 
 - 纯 .md 改动：不碰任何代码、脚本、数据文件、`.gitignore` 本身（裁定 E 方向
   正确，错的是计划文本——反向「放开 .log 入库」会塞进 152-383 MB 级 yaml，
-  违背裁定 E，不做）。
+  违背裁定 E，不做。**round-4 豁免追记**：处置 commit b1d5a470 修改了入库脚本
+  `gem5-512-batch.sh` 统计行——round-3 曾裁定「移交后续独立单元」，round-4 意见
+  #32 推翻该裁定当场修复（骨架已修 `${n:-0}` 而入库版保留双 0 缺陷 = 修复留在
+  不会执行的文档镜像里、缺陷留在会执行的脚本里）；这是本约束的唯一脚本触碰，
+  记录以 git log/PR 描述为准、后续轮次不在此逐条追写）。
 - 影响面已核：`grep -rEn 'native-256-<seed>|native-128-<seed>|<test>\.log|全部日志'`
   （-E 必需——BRE 下 `|` 为字面量，无 -E 原样执行零命中，无法复现下述结论）——命中
   三类：目标计划文档（campaign.md 各 Files/矩阵输入行）+ 本实施计划自身（根因描述
@@ -60,7 +64,7 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
 ### Task 1: 同步计划文档工件清单 + 验证 + commit
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-10-28-sve-all-vl-verification-campaign.md`（6 处：Global Constraints 总纲、Task 2 Files、Task 2 Step 1、Task 3 Files、Task 6 Files、Task 8 Interfaces+Step 1——此 6 处枚举 = e63b0345 单 commit 的编辑位置，其单 commit diff 为 6 hunk；PR 净 diff（`git diff 6fdf040d..HEAD -- <该文件> | grep -c '^@@'`）实测 8 hunk，多出的 @@ -317/-331 是 d7ca9374（round-1，骨架语义化重写：write_identity/batch.tsv 追加/断点续跑）与 9fa0787b（round-2，关键语义对齐：P=20、`-f no --ignore-timeout`、read -a 防 glob、`exit: pass` 口径）两轮处置的叠加——计数主张按单 commit / 净 diff 双口径分列，勿混用）
+- Modify: `docs/superpowers/plans/2026-10-28-sve-all-vl-verification-campaign.md`（6 处：Global Constraints 总纲、Task 2 Files、Task 2 Step 1、Task 3 Files、Task 6 Files、Task 8 Interfaces+Step 1——此 6 处枚举 = e63b0345 单 commit 的编辑位置，其单 commit diff 为 6 hunk；PR 净 diff（`git diff 6fdf040d..HEAD -- <该文件> | grep -c '^@@'`）的 hunk 数随处置轮次对该文件的每次编辑而增长——round-2 时点 8（多出的 @@ -317/-331 是 d7ca9374 round-1 骨架语义化重写与 9fa0787b round-2 关键语义对齐的叠加），此后处置轮次又新增（Goal 计数注记、Task 3 示意块、Task 6 Step 4 计数等，337e4a9c 起）；净 diff hunk 计数**以 git diff 实测为准、此处不逐轮追写**（与 commit 形态段同款非自指口径——本文档自身已被多轮修改，写死计数每轮即被自身推翻）——计数主张按单 commit / 净 diff 双口径分列，勿混用）
 
 **Interfaces:**
 - Consumes: 裁定 E 协议事实（triage-256.md §1 / triage-128.md §0/§6 / .gitignore / 实际入库工件集）。

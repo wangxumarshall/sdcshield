@@ -123,7 +123,7 @@ run 模式需 root（sudo）、幂等可重入（已安装/活跃服务自动跳
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
-预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（487 全量上界），少的是镜像内未含的 vendored 计算库测试组；用例计数口径见「用例质量分级」。
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（0xd02 依赖齐备全量 570，见「用例质量分级」），少的是镜像内未含的 vendored 计算库测试组；用例计数口径见「用例质量分级」。
 
 > **旧二进制判读警示**：2026-09-12 预构建二进制是 eigen 满核假阳修复（2026-10-24）**之前**的构建——其上 `eigen_svd_double`/`eigen_sparse` 的满核 FAIL 按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；"满核挂 = SDC 嫌疑"的判读规则仅适用于含修复的构建。用旧二进制跑 24h 战役脚本须显式恢复旧白名单（含修复的源码构建不需要、也不应设置）：
 >
@@ -345,7 +345,7 @@ bash scripts/run/sdc_machine_scan.sh                         # 无 root 降级�
 
 ### ARM64 spec 策略与默认用例集（2026-10-27 起）
 
-sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `arm64_requires` 与 `arm64_min_vl_bits`（`framework/sandstone.h`）过滤，只保留芯片能执行的用例——默认用例数 **host-dependent**：SVE1 主机（HiSilicon MIDR part 0xd02，SVE-256/无 SVE2/SME）实测 486 PROD（`--quality=0` 496、`--quality=-1` 500；2026-11-02 迁移 +21 PROD 后待重测，推算 507/517/521）；无 SVE 鲲鹏 920（HiSilicon MIDR part 0xd01，TaiShan v110）2026-11-02 实测 **439 PROD**（`--quality=0` 547、`--quality=-1` 551，含 121 迁移用例 + 7 arm_add 新探针 + 14 个 _neon 变体 + 9 个 633 cache 族新测试后的口径；完整时序链见「用例质量分级」footnote）。
+sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `arm64_requires` 与 `arm64_min_vl_bits`（`framework/sandstone.h`）过滤，只保留芯片能执行的用例——默认用例数 **host-dependent**：SVE1 主机（HiSilicon MIDR part 0xd02，SVE-256/无 SVE2/SME，gcc + 全部 vendored 依赖齐备构建）2026-11-02 迁移前树实测 **570** PROD（`--quality=0` 580、`--quality=-1` 584；历史 486/490 系列及其 +121 迁移推算 507/517/521 为降级口径——新 worktree 在 `third-party/*/install` 就位**之前**做 `meson setup` 会把 OpenSSL/OpenBLAS/SLEEF 组锁死为 disabled、得到 ~488 的降级计数，复测前先确认 install/ 齐备）；无 SVE 鲲鹏 920（HiSilicon MIDR part 0xd01，TaiShan v110）2026-11-02 实测 **439 PROD**（`--quality=0` 547、`--quality=-1` 551，含 121 迁移用例 + 7 arm_add 新探针 + 14 个 _neon 变体 + 9 个 633 cache 族新测试后的口径；完整时序链见「用例质量分级」footnote，勿跨树相减）。
 
 - `-e` / `--test-list-file` **旁路过滤**：显式请求的用例仍会注册，能力不足时诚实 SKIP（附理由）。
 - **控制线程**在 `test_init` 前 pin 到芯片最大档（aux 线程与 worker 继承，init golden 与 run lane 档位一致）；每个 SVE/SVE2 worker 重新 pin 并校验读回——pin 被拒 = SKIP，读回不符 = FAIL。
@@ -384,16 +384,16 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 
 ### 用例质量分级
 
-| 级别 | 名称 | 运行条件 | 实有数量（源码全量，选择期过滤前） |
+| 级别 | 名称 | 运行条件 | 实有数量（0xd02 SVE1 主机实测，选择期过滤后） |
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 4 |
-| 0 | BETA | `quality >= 0` | 110 |
-| 2 | PROD（默认）| `quality >= 2` | 538 |
-| | **合计** | | **652** |
+| 0 | BETA | `quality >= 0` | 10 |
+| 2 | PROD（默认）| `quality >= 2` | 570 |
+| | **合计** | | **584** |
 
-> 上表为 ARM64 gcc 构建的源码全量口径，含 2026-11-02 opendcdiag 研究仓迁移增量 +121（21 PROD + 100 BETA `sdc_fuzz_*`）+ 同日 arm_add 新探针 +7 PROD + _neon 变体 +14 PROD + 633 cache 族新测试 +9 PROD（2026-11-01 复核口径 501 = 487 PROD + 10 BETA + 4 SKIP 基础上叠加）。运行时实际数量随芯片 spec 过滤：SVE1 主机（HiSilicon MIDR part 0xd02）2026-11-01 实测 490 PROD（q0/q-1 = 496/500），同日 issue #374 将 `sched_storm×4`（内核调度刺激/负对照，无 SDC 检出语义）自 PROD 降级 BETA 后复核 **486 PROD**（q0/q-1 集合不变；迁移后推算 507/517/521，待该主机重测）；无 SVE 鲲鹏 920（HiSilicon MIDR part 0xd01，TaiShan v110）**2026-11-02 实测 439 PROD / 547 q0 / 551 q-1**（= 同日迁移后 409/517/521 + arm_add 7 + _neon 14 + cache 族 9 PROD；旧推算 299 已过时——2026-10-31 bulk 注册 +71 等未计入，这正是此前"待无 SVE 主机实测复核"的兑现）。cn23154 复现分支（clang/libc++，含 SME 用例）2026-09-28 实测：默认 322，`--quality=-1` 全量 333。
+> 上表为 0xd02 SVE1 主机（HiSilicon MIDR part 0xd02，SVE-256/无 SVE2/SME，gcc + 全部 vendored 依赖齐备构建——OpenSSL/OpenBLAS/SLEEF/isa-l/acl/GMP 组全链接）的实测口径：2026-11-02 迁移前树 `--list-tests` 实测 **570** PROD（`--quality=0` 580、`--quality=-1` 584），SKIP 4 + BETA 10 分解即表值——2026-11-02/03 main 侧合入的 opendcdiag 迁移增量（+121 = 21 PROD + 100 BETA `sdc_fuzz_*`）与 arm_add +7 / `_neon` 变体 +14 / 633 cache 族 +9 PROD **不在本表数字内**，迁移后该主机待重测；`arm64_requires` SVE2/SME 与 `arm64_min_vl_bits` 高档门控用例在本机被选择期过滤、不含于表内。**降级构建陷阱**：新 worktree 在 `third-party/*/install` 就位之前做 `meson setup`，会把 OpenSSL/OpenBLAS/SLEEF 等组锁死为 disabled（构建日志 `SSL tests disabled. Run third-party/openssl/build.sh to enable`），同一棵树得到 ~488 的降级计数——本表数字的构建必须先齐备 install/ 再 setup。历史 490/486/487 系列计数即该降级口径（含 `d61b7de1` 88 文件批增量的树同样如此）。无 SVE 鲲鹏 920（HiSilicon MIDR part 0xd01，TaiShan v110）2026-11-02 实测 439 PROD / 547 q0 / 551 q-1（= 同日迁移后 409/517/521 + arm_add 7 + `_neon` 14 + cache 族 9 PROD，main 侧记录；勿跨树相减）。cn23154 复现分支（clang/libc++ 工具链，含 sve512 专项家族与 SME 用例）2026-09-28 实测：默认 PROD 列出 322，`--quality=-1` 全量 333；与参考平台的差值来自构建条件与平台可用性差异，未做逐项拆解。
 
-- **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`、`sched_storm×4`、`sdc_fuzz_000`–`sdc_fuzz_099`（100 个 core179 复现器，2026-11-02 迁移）
+- **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`、`sched_storm_{baseline,futex,hybrid,thread}`（×4，issue #374 自 PROD 降级——内核调度刺激/负对照，无 SDC 检出语义）
 - **SKIP（`--quality=-1`）**：`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`
 
 ### 占位用例的诚实跳过

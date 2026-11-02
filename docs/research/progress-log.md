@@ -1597,3 +1597,43 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
 - **移交(框架层系统性缺口, 另立 issue)**: knob-from-worker fail-loud
   检查被 NDEBUG 门控(release 全绿盲区)+ 无 selftest 锁契约;
   sdc_stress_config.h worker cache-miss 静默回退 default 同类风险。
+
+## 2026-11-02（PR #413 R1 检视处置：计数口径实测同步 + 降级构建陷阱定案 + 分支线性化）
+
+- **意见 2 条（local-claude 行级，均处置）**: ①490/390 异树并置口径错配——
+  采纳核心（数字换本机 0xd02 实测，各数标注测量树、勿跨树相减）；其「当前树
+  SVE1 ≥581」推算驳回（把无 SVE 机 d61b7de1 88 文件批增量 +91 错套 SVE1 机
+  ——批内用例多被 SVE2/SME 门控剔除，0xd02 默认集净增 0，实测 证伪）；
+  ②cortex x3b/firestorm 特征位别名非 MIDR 身份——采纳（simd-arm.conf:139/141
+  实证：0xd01 TaiShan 命中 "Apple M1 Firestorm-equivalent" 条目 = 按特征位
+  匹配；身份锚改 MIDR part 0xd02/0xd01，弃 dump 标签）。
+- **降级构建陷阱（本轮核心发现，git-sanity 红逼出来的）**: 本 worktree 新建
+  时 ignored 目录（third-party/*/install）为空，前一命在 install/ 齐备前做了
+  `meson setup`——OpenSSL/OpenBLAS/SLEEF 组被锁死 disabled（构建日志
+  `SSL tests disabled. Run third-party/openssl/build.sh to enable`），
+  26162e44 树得到 488/498/502 的**降级计数**（ipsec×70、openblas×5、
+  sleef×2、fisttp_arm 等全缺，488 列表实测 openblas=0/sleef=0/ipsec=0）；
+  install/ 后被补齐（cp -p 保留 9-19 mtime 掩盖了时序），#458 的 meson.build
+  变化触发 ninja regen→reconfigure 重新检测到 vendored OpenSSL——同树完整
+  构建 = **570/580/584**（依赖组齐备实证：openblas×5/sleef×2/isal×11/
+  gmp×4/acl_gemm×2/ipsec×70；SKIP 4 + BETA 10 分解不变，缺失组全为 PROD）。
+  历史 490/486/487 系列计数即降级口径（计数链 490 → #374 −4 = 486 →
+  e95e4514 探针 +1 = 487/501（#433 表格数）→ d238f567 第二探针 +1 = 488，
+  全程降级口径）。README/CLAUDE 已写入警示：复测前先确认 install/ 齐备再
+  meson setup。
+- **线性化（git-sanity 红的修复）**: CI `check-git-history.sh` 禁止 PR 分支
+  含 merge commit——merge commit f713d678 违规红。cherry-pick 55c36ccb +
+  046c60c5 重放到 origin/main（7f0b9c7c）成线性链，冲突解与 merge 版同文
+  （344df32b/f34e96d1，双 commit Signed-off-by 齐、零 merge），A' 树与
+  f713d678 树 diff 仅 #458 的 4 文件（文档状态等价实证）。
+- **验证**: SDC_BUILD_JOBS=8 linear 树 613 目标 BUILD_EXIT=0（reconfigure
+  后 vendored 依赖全检测）；zstd19 -t 2000 -n 1 → exit: pass（f34e96d10250
+  二进制）；--list-tests 三档 570/580/584（SKIP 4 = eigen_svd_jacobi*4、
+  BETA 10 差集具名核对 = 旧 6 个 + sched_storm×4）。SVE2/SME 被过滤用例
+  4 个（sve2_cross_precision_arm、sme_fmopa_{za,stress}_arm、
+  sme_za_tileview_arm）具名清点。538 目标全量构建唯一 warning =
+  mesh_upi_sse_sym.cpp:202 %u/uint64_t（三树 blob 83073563 同源，main 侧
+  既有非本 PR 引入）。
+- **表格口径**: 自「源码全量（选择期过滤前）」改为「0xd02 SVE1 主机实测
+  （vendored 依赖齐备构建，选择期过滤后）」，数字 487/501 → 570/584；
+  BETA 具名列表补 sched_storm×4（与表值 10 一致）。

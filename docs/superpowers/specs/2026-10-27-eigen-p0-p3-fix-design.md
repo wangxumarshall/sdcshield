@@ -294,15 +294,24 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   wait_for_children 用 **parent** 的 test_timeout(parent 的
   current_test_duration)，parent 的 preinit 已写 min（9a82f53b）→
   parent 的 test_duration 把 -t 夹钳到 min → parent 的等待宽限随 knob
-  缩放——exec child（fresh 字段恒 0，走 DefaultTestDuration=1s →
-  恰好一次完整迭代后退出）不会被 300s floor 误杀（实测 `-f exec -t
+  缩放——exec child 不会被 300s floor 误杀（实测 `-f exec -t
   2000 -n 1 -O mdim=4000`：一次迭代 556.5s 后 exit: pass，无 SIGQUIT，
-  loop-count 1）。残留语义瑕疵如实记录：exec child 自身的
-  desired/minimum_duration 恒 0（M_DIM 日志行实证），且 `-t` 不经
-  save_test_knob_args 重放到 exec child（既有框架属性，只重放 knob
-  参数）——exec child 恒走默认 1s 目标 = 恰好一次迭代，与 fork 模式的
-  多迭代语义不同；完整对齐需把时长参数并入 exec argv 协议（框架设计项，
-  超出本 PR 范围）。
+  loop-count 1）。
+  【2026-11-02 再勘误，PR#384 检视 R3（意见 4440012682）——机理更正】
+  上述"exec child 走 DefaultTestDuration=1s = 恰好一次迭代"的机理记载
+  **错误**：exec child 的迭代目标不是本地默认时长，而是 parent 在
+  test_duration()（含 min 夹钳）算出后经 **shmem->current_test_endtime**
+  传入的共享时限（sandstone_run.cpp:1913 计算 → :1961 写入 → :1703 才
+  spawn；exec child 的 worker 循环 sandstone_run.cpp:633
+  `!wallclock_deadline_has_expired(sApp->shmem->current_test_endtime)`
+  读该共享值，从不本地调 test_duration()）——**fork/exec 迭代语义完全
+  一致**，不存在"恒一次迭代 vs 多迭代"的分歧。实测反例：`-f exec -t
+  30000 -n 1 -O mdim=600` → loop-count **5**（30s 时限内 5 次迭代，非
+  1 次），与 fork 同语义。因此原提出的"把时长参数并入 exec argv 协议"
+  设计项**建立在假前提上，撤回**。残留语义瑕疵如实收窄为：exec child
+  自身的 test 结构 desired/minimum_duration 字段恒 0（M_DIM 日志行
+  实证）——纯字段语义瑕疵，迭代时长与超时执法均经 shmem/parent 与 fork
+  完全一致，无功能后果。
 - **gemm_double_max_arm**：同样迁移 + 接入时间校准（【v2/M8】它同样
   无校准，v1 漏列）。
 

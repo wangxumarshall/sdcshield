@@ -160,21 +160,26 @@ in-repo 调用者,潜伏缺陷修复)。
   `sandstone_page_size()`/`ROUND_UP_TO_PAGE`,头内联是硬需求;shmem
   布局消费 dwPageSize 恰是修复的正确性收益(4K 页系统数值不变;16K 页
   WoA 上布局取整到真实页而非硬编码 4096)。
-- **不动 `framework/sandstone_test_utils.h`(R2 归因勘误后重述)**:该
-  头是单测专用副本(刻意脱离 sandstone_p.h 依赖,自注「copied from
-  sandstone_p.h because sandstone_p.h creates too many dependencies」)。
-  初版排除理由「上游本来就 `#include <sys/mman.h>`(:20,Windows 从来
-  不可编译)」**是错误归因(R2 检视证伪,worker 复核属实)**:仓库自带
-  `sysdeps/windows/sys/mman.h`(PROT_*/MAP_*/mmap/mprotect 全套声明),
-  framework_incdir 前置使 `<sys/mman.h>` 在 Windows 解析到该 shim
-  (logging.cpp:39 的 angle include 即同一机制)——mman.h 不构成阻断;
-  真阻断点是 :33 的 `sysconf(_SC_PAGESIZE)`,与 sandstone_p.h 修掉的
-  同一缺陷。仍排除在本 issue 外的真实依据:(a) 独立文件、独立用途
-  (unittests 目标 `build_by_default: false` + `native: true`,不进默认
-  构建口径);(b) unittests 目标 meson.build:348-369 **无条件编入
-  `sysdeps/linux/malloc.cpp`**,单修 test_utils.h:33 救不了整个目标在
-  Windows 的可编译性,属另一个工作单元;(c) 修法与 sandstone_p.h 相同
-  (镜像 5 行 _WIN32 分支),建议随存量阻断修复单开 issue 一并处理。
+- **不动 `framework/sandstone_test_utils.h`(R2 归因勘误 + R3 引入史
+  勘误后重述)**:该头是单测专用副本(刻意脱离 sandstone_p.h 依赖,自注
+  「copied from sandstone_p.h because sandstone_p.h creates too many
+  dependencies」)。初版排除理由「上游本来就 `#include <sys/mman.h>`
+  (:20,Windows 从来不可编译)」**是错误归因(R2 检视证伪,worker 复核
+  属实)**:仓库自带 `sysdeps/windows/sys/mman.h`(PROT_*/MAP_*/
+  mmap/mprotect 全套声明),framework_incdir 前置使 `<sys/mman.h>` 在
+  Windows 解析到该 shim(logging.cpp:39 的 angle include 即同一机制)
+  ——mman.h 不构成阻断;真阻断点是 :33 的 `sysconf(_SC_PAGESIZE)`。
+  **R3 勘误(引入史)**:`git show 1f06467e -- framework/
+  sandstone_test_utils.h` 实证该 commit 恰是本回归的引入点之一——加
+  :21 `#include <unistd.h>` 并把 `ROUND_UP_TO(value, 4096U)` 改为
+  sysconf 版函数;即修复前(硬编码 4096)该文件 Windows 可编译,其
+  sysconf 是 **1f06467e 引入的回归点**(非存量)。仍排除修复的真实
+  依据(R2/R3 复核后口径):(a) unittests 目标事实上 Linux-only——
+  `build_by_default: false` + `native: true`(不进默认构建口径)且
+  meson.build:348-369 **无条件编入 `sysdeps/linux/malloc.cpp`**,单修
+  test_utils.h:33 救不了该目标的 Windows 可编译性;(b) 修法与
+  sandstone_p.h 相同(getpagesize 镜像分支),属独立工作单元,
+  建议 unittests 目标 Windows 化单开 issue 一并处理。
 
 ## 安全性论证
 
@@ -188,6 +193,24 @@ in-repo 调用者,潜伏缺陷修复)。
   24H2 可为 16 KB),但经上游既有 plumbing;缓存一次的行为保留
   (函数级 static,与两侧现状同构)。
 - **竞态**:与现状同构(函数级 static + 写同值,良性)。
+
+## 已知缺陷与遗留(R3 检视披露,超出本 issue 范围,建议单开 issue)
+
+- **ROUND_UP_TO_PAGE 对 ≥4GiB 64 位操作数回绕(存量,本 PR 未加重)**:
+  `sandstone_page_size()` 返回 `unsigned`(32 位契约),`ROUND_UP_TO` 的
+  `~((n)-1)` 掩码在 unsigned 上求补、64 位 AND 中零扩展——worker 实测
+  (逐字宏 + unsigned 供值编译运行):`ROUND_UP_TO_PAGE(4GiB+123) =
+  16384`(期望 0x100004000)、`ROUND_UP_TO_PAGE(8GiB+5) = 16384`(期望
+  0x200000000)。无钳制活调用点:logging.cpp:368 的 mmap 长度(st.st_size
+  为 64 位,>4GiB 消息文件时映射截断而读取仍按原大小遍历→越界 SIGSEGV)。
+  1f06467e 之前的 `ROUND_UP_TO(value, 4096U)` 同为 32 位掩码——纯存量;
+  修复需改跨平台共享契约(unsigned → size_t,影响 9+ 个 Linux 活调用
+  点),属独立工作单元与独立验证,不在本 PR 顺手改,建议单开 issue。
+- **CI Windows 编译防线(R1-10 遗留,R3 补充事实)**:仓库根自带
+  `meson-cross-win32.ini`([binaries] 预期 /usr/bin/x86_64-w64-mingw32-gcc
+  + wine exe_wrapper)却无任何 CI job 消费(multi-os-verify.yml 全部
+  ubuntu)。防线此刻建立即恒红——上述 4 个存量 sysconf 阻断 TU 修复前
+  Windows 构建本就失败;防线必须与存量阻断修复一体规划,建议单开 issue。
 
 ## 验证(rule 2;R2 后口径)
 
@@ -300,3 +323,35 @@ finding + 4 Minor 行级),逐条批判性处置:
    移除注入不产生新破坏。
 6. **文档「改动(1 文件)」过时**(Minor,**采纳**):改动节改为
    R2 后最终口径(2 个代码文件,两个工作单元)。
+
+## 检视修正(PR #407 review R3,2026-11-02,head d521d0bf)
+
+第 5 bot 对 head d521d0bf 的 4 条 Minor 行级意见(无 Critical/Important
+finding)+ 并行补审 review 对 head ad208e0e 的 3 条行级意见中仍适用于
+当前代码的 2 条,逐条处置:采纳 3、变通 3:
+
+1. **32 位页大小契约对 ≥4GiB 操作数回绕**(Minor,内存,**变通·遗留**):
+   worker 实测确认(见「已知缺陷与遗留」节,本机编译逐字宏复现
+   ROUND_UP_TO_PAGE(4GiB+123)=16384);存量缺陷(1f06467e 之前同为
+   32 位掩码,本 PR 未加重),修复需改跨平台共享契约(unsigned →
+   size_t),超出本 issue 范围——记录 + 建议单开 issue,不顺手改。
+2. **PR 标题「恢复 Windows 可编译性」过度声明**(Minor,**采纳**):
+   PR 标题改为「解除 Windows 编译单点阻断」口径,与本文档一致。
+3. **PR 正文停留在 d4f711a0 幽灵设计**(Minor,**采纳**):PR 正文按
+   R2 后最终形态重写(getpagesize shim、2 个代码文件、26 TU 诚实口径、
+   最终验证证据、完整提交清单)。
+4. **meson-cross-win32.ini 无 CI job 消费**(Minor,**变通·遗留**):
+   cross 文件存在属实(worker 复核仓库根,预期 /usr/bin/x86_64-w64-
+   mingw32-gcc + wine);防线此刻建立即恒红(存量阻断修复前 Windows
+   构建本就失败),须与存量阻断修复一体规划,建议单开 issue(见
+   「已知缺陷与遗留」节)。
+5. **(并行补审,仍适用)test_utils.h 引入史归因再勘误**(Important,
+   **采纳**):git 实证 1f06467e 恰是 test_utils.h sysconf 的引入点
+   (加 :21 unistd.h + 4096U→sysconf 函数)——它是本 issue 回归点
+   之一、非存量;排除修复的真实理由修正为「unittests 目标事实上
+   Linux-only」(见设计依据节勘误后口径)。
+6. **(并行补审,仍适用)非原子惰性初始化 pattern**(Minor,并发,
+   **变通**):两侧分支沿用 `static cached; if (!cached)` 形态——C/C++
+   TU 共存的公共分母(magic static 仅 C++11 可用,3 个 C TU 不可用)、
+   与 sysconf 侧 1f06467e 以来形态同构、写值恒同、Windows 侧 9 个
+   使用点全为主线程上下文,形式竞争实践良性,维持现状。

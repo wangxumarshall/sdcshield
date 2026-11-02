@@ -162,6 +162,15 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ./builddir/sdcshield --list-tests        # 列出默认 PROD 用例——数量随芯片能力过滤（见「测试用例与检测能力」）
 ```
 
+> **openEuler 22.03/20.03 宿主机直编**（GCC 10 的 libstdc++ 缺 `<barrier>` 等 C++23 符号）：meson 会用 `cpp.has_header('barrier')` 探测并自动注入 `framework/compat/` 的 polyfill（与容器构建同一套注入，24.03+ 不注入、构建结果不变）；旧编译器不支持 `gnu++23`，setup 时显式指定 `-Dcpp_std=gnu++20` 即可：
+>
+> ```bash
+> PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release -Dcpp_std=gnu++20
+> ./scripts/build.sh
+> ```
+>
+> 完整的多版本/SP 验证仍走容器路径（`./container-build.sh 22.03 SP3`），两者互不影响。
+>
 > 构建统一走 `./scripts/build.sh`：默认 `-j` = `nproc`/2（共享服务器保护），`SDC_BUILD_JOBS` 可覆盖（见 `scripts/build.sh` 头注释）。ARM64 要求 Eigen 5.0+（系统 3.3.x 在 GCC 12+ 编译失败）；仓库自带 `third-party/eigen5/`（5.0.1），aarch64 直接 `include_directories` 指向它、无需系统安装，`PKG_CONFIG_PATH` 仅为兼容 x86 路径保留。
 >
 > 五个 `build.sh` 均可选：任一 `install/` 缺失时 meson 打提示并跳过对应测试组或回退系统库（isa-l 缺失回退系统 `libisal`，两者皆无才剔除 `isal_*`；acl 缺失时 `acl_gemm`/`fisttp_arm` 不构建，SVE 变体不受影响）——不阻断构建。选型依据（向量 FMA GEMM > 哈希/加密 > 压缩 > SVE 超越函数）见 [SDC_RESEARCH_for_SDCShield-负载设计.md](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md)（31 篇文献综合）。

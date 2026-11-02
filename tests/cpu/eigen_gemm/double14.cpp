@@ -35,8 +35,9 @@ typedef Matrix < double, Dynamic, Dynamic > Mat;
 #if defined(__aarch64__) && defined(__linux__)
 /* 联合求解 sizing 探针(T9): 谱系契约(检视 #51: 填充与 run() 的
  * fill_rand 同谱系, 均匀随机 [-1,1))已单点收口至 gemm_solve_probe.h
- * (issue #389, 含 T6 gemm_double_max_arm_body 源头共 8→1)——填充唯一
- * 定义, 漂移在编译期不可能。 */
+ * (issue #389, 含 T6 gemm_double_max_arm_body 源头共 8→1)——填充唯一定义, 探针副本间
+ * 漂移在编译期不可能; probe↔run() 谱系契约仍需与 fill_rand 手工
+ * 同步演化(无编译期绑定, 检视 #392-R3)。 */
 static int gemm_solve_once(int n)
 {
     return gemm_probe::solve_once<Mat>(n);

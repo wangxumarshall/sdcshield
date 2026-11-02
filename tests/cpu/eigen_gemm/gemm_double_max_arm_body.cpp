@@ -107,8 +107,9 @@ int run_body(struct test *test, int cpu, int dim)
 
 /* 联合求解探针 (T6): 计时载荷——构两张 Mat + 同谱系填充 + 一次乘法,
  * 结果丢弃只为计时(禁止标量参考实现, 速度差数倍会错标时间模型)。
- * 谱系契约(检视 #51)与填充实现已单点收口至 gemm_solve_probe.h
- * (issue #389, 8→1); 本函数保留 extern 符号供 dispatcher 按 tier 链接
+ * 填充实现已单点收口至 gemm_solve_probe.h(issue #389, 8→1);谱系
+ * 契约(检视 #51)的 probe 侧随之单源化, probe↔run() 侧仍需与
+ * fill_rand 手工同步演化(无编译期绑定, 检视 #392-R3); 本函数保留 extern 符号供 dispatcher 按 tier 链接
  * (gemm_double_max_arm.cpp 的 GEMM_TEST_NAMESPACE 声明)。
  * 执行线程语义: 本函数在 test_init 的 aux 线程上被 sdc_joint_dim_slice
  * 逐档调用; 框架在 test_init 前已把控制线程 pin 到选定档, init 线程继承

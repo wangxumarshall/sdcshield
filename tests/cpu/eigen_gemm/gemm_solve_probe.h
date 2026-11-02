@@ -74,7 +74,11 @@ static void fill_pair(Mat &a, Mat &b)
      * 写入即越界——release 构建(本仓 meson b_ndebug=if-release)下 Eigen
      * operator() 无边界检查, 静默堆越界写 UB。assert 在 debug 构建抓
      * 误用; release 下 NDEBUG 展开为 ((void)0), 探针机器码与计时不受
-     * 影响(检视 #392-R1)。 */
+     * 影响(检视 #392-R1)。
+     * 防护边界如实声明(检视 #392-R3): release 产品二进制中本断言为
+     * 空, 防护等级与所依赖的 Eigen operator() 的 NDEBUG 行为对齐——
+     * 未来调用方在 release 下的误用防线是 wrapper 的同文件可见性与
+     * 检视流程, 非运行期检查; 这是 assert 语义的设计权衡而非遗漏。 */
     assert(a.cols() == a.rows() && b.rows() == a.rows()
            && b.cols() == a.rows());
     const int n = a.rows();

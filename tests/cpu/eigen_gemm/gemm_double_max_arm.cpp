@@ -211,12 +211,12 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
     /* 显式 knob/env 档(issue #352, 与 SVD 修复同构): child 对显式 mdim
      * 逐字采用(dim = knob, 不与 n_hi 取 min), duration 模型必须跟着
      * knob 缩放, 否则 knob > n_hi 的显式档落在 300 s 硬宽限被 SIGQUIT
-     * 误杀。读取通道与 clamp 范围与 child 完全一致, 两处取值恒相同。 */
+     * 误杀。读取通道经 sdc_knob_or_env_clamped 单一实现, 与 child 恒
+     * 相同(PR#384 检视, 意见 4432271425: 此前 preinit+child 四份逐字
+     * 拷贝纯靠手工同步, 任一侧单独改动即静默重开误杀窗口)。 */
     int n_model = n_hi;
-    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
-    if (knob == 0)
-        sdc_env_knob_int_clamped("eigen_gemm_double_max_arm", "mdim", &knob,
-                                 MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "eigen_gemm_double_max_arm",
+                                           "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0)
         n_model = (int)knob;
 
@@ -279,10 +279,8 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
      * class). Flagged as T7/T9 input (footprint-aware AR entry or
      * per-test compensation); no code change in this round. */
     int dim;
-    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
-    if (knob == 0)
-        sdc_env_knob_int_clamped("eigen_gemm_double_max_arm", "mdim", &knob,
-                                 MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "eigen_gemm_double_max_arm",
+                                           "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0) {
         dim = (int)knob;
     } else {

@@ -563,6 +563,28 @@ static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
     return 1;
 }
 
+/* 显式 knob→env 兜底读取的单一真源【PR#384 检视, 意见 4432271425】:
+ * 该序列(knob 通道 sdc_knob_int_clamped(def=0) → 未显式配置时 env 通道
+ * sdc_env_knob_int_clamped 兜底)此前在 eigen_gemm/gemm_double_max_arm 与
+ * eigen_svd/svd_cdouble_sve 两文件的 preinit + child test_init 四处逐字
+ * 复制, "两处取值恒相同"的不变式纯靠手工同步——任一侧单独改动(clamp
+ * 范围/env 串/回退序)即静默重开 issue #352 的误杀窗口, 而两文件头注释
+ * 明文邀请的 MDIM_MAX opt-in 实验恰是最可能触发单侧改动的场景。调用方
+ * (preinit 与 child)必须经由本函数 + 同一 (test_id, lo, hi) 读取同一
+ * 旋钮, 读取通道的不变式由单一实现钉住(lo/hi 仍由调用方传参——同文件
+ * 同一宏两处传参, 值一致由宏单一真源承担)。返回 0 = 未显式配置(调用方
+ * 走自适应)。内部序列与原四份拷贝逐字一致, 日志/缓存语义零变化。 */
+static inline int64_t sdc_knob_or_env_clamped(struct test *test,
+                                              const char *test_id,
+                                              const char *key,
+                                              int64_t lo, int64_t hi)
+{
+    int64_t knob = sdc_knob_int_clamped(test, key, 0, lo, hi);
+    if (knob == 0)
+        sdc_env_knob_int_clamped(test_id, key, &knob, lo, hi);
+    return knob;
+}
+
 /* ------------------------------------------------------------------ */
 /* 内存自适应默认值                                                    */
 /* ------------------------------------------------------------------ */

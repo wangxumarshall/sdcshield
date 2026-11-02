@@ -231,8 +231,9 @@ static int size_matrix_preinit(struct test *test)
      * 否则任何 knob > n_hi 的显式大维度档都落在 300 s 硬宽限
      * (5×t(n_hi)×0.95+30 s 远小于一次 2×t(knob) 完整迭代) 被
      * SIGQUIT 误杀——迁移前 preinit 的 timeout 恰是随 knob 缩放的,
-     * 此处恢复该契约。读取通道与 clamp 范围与 child 完全一致,
-     * 两处取值恒相同。
+     * 此处恢复该契约。读取通道经 sdc_knob_or_env_clamped 单一实现,
+     * 与 child 恒相同(PR#384 检视, 意见 4432271425: 此前 preinit+child
+     * 四份逐字拷贝纯靠手工同步, 任一侧单独改动即静默重开误杀窗口)。
      *
      * 【PR#384 检视, 意见 4432271415】显式档的 duration 必须按全核
      * 全迭代 ar×2×t(knob) 建模: 一次 run 侧迭代 = golden 首算 + DUT
@@ -251,10 +252,8 @@ static int size_matrix_preinit(struct test *test)
      *     最坏 ~213 s, 距 300 s floor 留 ~25% 裕量), 且 n_run 在本
      *     host class 恒把 child n 压在时间侧——显式档恰恰绕过这层
      *     保护, 才必须把 AR 显式放进模型。 */
-    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
-    if (knob == 0)
-        sdc_env_knob_int_clamped("eigen_svd_cdouble_sve", "mdim", &knob,
-                                 MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "eigen_svd_cdouble_sve",
+                                           "mdim", MDIM_MIN, MDIM_MAX);
 
     double iter_s;
     if (knob > 0) {
@@ -357,10 +356,8 @@ static int sve_probe_and_init(struct test *test)
      * (注: n=1100 是定点实验档; auto 档在同一 run_budget_ms 下实测最坏
      * ~213 s, 见上方 size_matrix_preinit 注释, 两个口径不矛盾.) */
     int dim;
-    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
-    if (knob == 0)
-        sdc_env_knob_int_clamped("eigen_svd_cdouble_sve", "mdim", &knob,
-                                 MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "eigen_svd_cdouble_sve",
+                                           "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0) {
         dim = (int)knob;
     } else {

@@ -49,8 +49,8 @@ LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.log
 | LCG:1001 | 190/190 (+mce_check) | 166 | 25 | 0 | 0 | 0 | `exit: pass`（exit=0） | 03:55-07:06 ≈ 3h11m |
 | LCG:1002（26 项有界重跑） | 190/190 (+mce_check) | 191 | 0 | 0 | 0 | 0 | `exit: pass`（exit=0） | 09:24-10:01 ≈ 37m |
 
-- 两 seed 的 pass 计数均含 mce_check（seed1：165 清单腿内直绿（164 默认自适应 + 1 格
-  acl 标定 baked）+ 25 超时格走 §5 有界重跑 + mce_check = 191 执行 166 绿；
+- 两 seed 的 pass 计数均含 mce_check（seed1：165 清单腿内绿（164 默认自适应直绿 +
+  1 格 acl 标定 baked）+ 25 超时格走 §5 有界重跑 + mce_check = 191 执行 166 绿；
   seed2：190 清单腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内有界）
   + mce_check = 191 执行 191 绿）。
 - 「有界」的语义与证据强度：本表与 §5/§7 的「有界（重跑）」一律 = knob **clamp 下限**的
@@ -250,13 +250,15 @@ operating system error` 计数全 0，两 summary result 列无此类值）。�
 
 ## 7. 结论
 
-**native 256 档两 seed 全绿（165 格腿内直绿 = 164 格默认自适应 + 1 格 acl 标定
-baked，另有 25 格 clamp 下限最小强度有界绿；直绿与有界两者证据强度不等价——
+**native 256 档两 seed 全绿（165 格腿内绿 = 164 格默认自适应直绿 + 1 格 acl 标定
+baked，另有 25 格 clamp 下限最小强度有界绿；默认自适应直绿与有界绿（1 格 acl
+标定 + 25 格 clamp 下限，几何均远小于自适应档）两者证据强度不等价——
 §5「证据强度限定」），Task 2 收口**：
 
 - **绿格（矩阵 190 清单格 × 2 seed = 380 格）**：
-  - seed1（LCG:1001）：165 格腿内直绿（164 格默认自适应几何 + 1 格 acl_gemm_sve
-    dim=512 标定 baked，Ruling B/§1）+ 25 格有界重跑绿（§5 表，全部 clamp 下限一次
+  - seed1（LCG:1001）：165 格腿内绿（164 格默认自适应直绿 + 1 格 acl_gemm_sve
+    dim=512 标定 baked，Ruling B/§1——baked 有界几何，证据强度与有界绿同向受限）+
+    25 格有界重跑绿（§5 表，全部 clamp 下限一次
     通过、零上调 = 最小激发强度）= **190/190**；另有框架追加 mce_check 绿。
   - seed2（LCG:1002，26 项有界重跑腿）：190 格腿内绿（164 格默认自适应直绿 + 1 格
     acl 标定 baked + 25 格腿内 clamp 下限有界）= **190/190**；mce_check 绿。

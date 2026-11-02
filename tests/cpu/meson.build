@@ -141,6 +141,9 @@ if host_machine.cpu_family() == 'aarch64'
         when : memcpy_rewr_dep,
         if_true : files(
             'memory/memcpy_rewr.cpp',
+            # NEON variant shares the original .conf via the same
+            # MEMCPY_REWR_SRC_DIR define (arm_add/memcpy_rewr_neon.cpp)
+            'arm_add/memcpy_rewr_neon.cpp',
         )
     )
 endif
@@ -904,6 +907,14 @@ if host_machine.cpu_family() == 'aarch64'
             'arm_add/str_instruction_stress.cpp',
             'arm_add/cache_stress_clflush.cpp',
             'arm_add/cache_stress_memcpy.cpp',
+            'arm_add/memcpy0_neon.cpp',
+            'arm_add/memcpy1_neon.cpp',
+            'arm_add/memcpy_l1d_size_neon.cpp',
+            'arm_add/memcpy_l2_cache_size_neon.cpp',
+            'arm_add/memcpy_l3_cache_size_neon.cpp',
+            'arm_add/memcpy_sem_neon.cpp',
+            'arm_add/memcpy_shuffle_neon.cpp',
+            'arm_add/memcpy_shuffle_v2_neon.cpp',
         )
     )
 endif

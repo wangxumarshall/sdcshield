@@ -22,9 +22,14 @@
  * 本头文件刻意不 include 任何 Eigen 头: gemm_double_max_arm_body.cpp
  * 以 -DEigen=EigenSVEn 宏改名后按 tier 编译, 这里出现 Eigen:: 符号
  * 会被宏劫持; std 头(<cassert>/<complex>/<cstdint>/<type_traits>)不受
- * 影响。 */
+ * 影响。include 块置于架构守门之内(检视 #392-R3): 守门内的 namespace
+ * 是这些头的唯一消费者, x86-64 预处理视角下本头展开为空壳(rule 5
+ * x86 untouched 构造成立, 非勘误口径); SVD 侧 sandstone_eigen_common.h
+ * 的守门外 include 因其在 x86 也编译而属必需, 与此处不同。 */
 #ifndef GEMM_SOLVE_PROBE_H
 #define GEMM_SOLVE_PROBE_H
+
+#if defined(__aarch64__) && defined(__linux__)
 
 #include <cassert>
 #include <complex>
@@ -32,8 +37,6 @@
 #include <type_traits>
 
 #include "../eigen_splitmix_lineage.h"
-
-#if defined(__aarch64__) && defined(__linux__)
 
 namespace gemm_probe {
 

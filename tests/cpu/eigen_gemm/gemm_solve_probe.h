@@ -45,30 +45,19 @@ namespace gemm_probe {
 template <typename T> struct is_std_complex : std::false_type {};
 template <typename T> struct is_std_complex<std::complex<T>> : std::true_type {};
 
-/* 值域公式: 均匀随机 [-1,1), 档位常量见 eigen_splitmix_lineage.h。 */
-inline double probe_value(std::uint64_t h)
-{
-    return (double)(h % sandstone_splitmix::kRangeSteps)
-           / sandstone_splitmix::kRangeScale - 1.0;
-}
-
-/* 哈希流推进一拍: x = x*K3 + K1 再 xorshift32(splitmix 雪崩)。 */
-inline std::uint64_t probe_stream(std::uint64_t x)
-{
-    x = x * sandstone_splitmix::kAvalanche + sandstone_splitmix::kGolden;
-    x ^= x >> 32;
-    return x;
-}
-
-/* 填充一对 n×n 方阵: 初始流 h = r*K1 ^ col*K2 经 xorshift/乘/xorshift
- * 终结化; 标量分支 a←h、b←h2(1 拍), complex 分支 a←(h,h2)、
- * b←(h3,h4)(3 拍)——与收口前的三个变体逐位一致(float 经
- * (Scalar) 先算 double 再收窄)。 */
+/* 填充一对 n×n 方阵: 家族无关的公式原语(初始流终结化 coord_finalize/
+ * 单拍推进 advance/值域映射 to_range)取自 ../eigen_splitmix_lineage.h
+ * (检视 #392-R4 单源化), 本侧只持家族相关的流编排——标量分支
+ * a←h、b←h2(1 拍), complex 分支 a←(h,h2)、b←(h3,h4)(3 拍), 与收口前
+ * 的三个变体逐位一致(float 经 (Scalar) 先算 double 再收窄)。 */
 template <typename Mat>
 static void fill_pair(Mat &a, Mat &b)
 {
     using Scalar = typename Mat::Scalar;
     constexpr bool kComplex = is_std_complex<Scalar>::value;
+    using sandstone_splitmix::advance;
+    using sandstone_splitmix::coord_finalize;
+    using sandstone_splitmix::to_range;
     /* 契约: a、b 为同维 n×n 方阵。本 header 是共享基础设施(8 个 wrapper
      * 使用方之外的未来调用方可直接 include), 尺寸不符时下方 b(r, col)
      * 写入即越界——release 构建(本仓 meson b_ndebug=if-release)下 Eigen
@@ -84,21 +73,18 @@ static void fill_pair(Mat &a, Mat &b)
     const int n = a.rows();
     for (int r = 0; r < n; ++r)
         for (int col = 0; col < n; ++col) {
-            std::uint64_t h = (std::uint64_t)r * sandstone_splitmix::kGolden
-                            ^ (std::uint64_t)col * sandstone_splitmix::kMix;
-            h ^= h >> 32;
-            h *= sandstone_splitmix::kAvalanche;
-            h ^= h >> 32;
+            std::uint64_t h = coord_finalize((std::uint64_t)r,
+                                             (std::uint64_t)col);
             if constexpr (kComplex) {
-                std::uint64_t h2 = probe_stream(h);
-                std::uint64_t h3 = probe_stream(h2);
-                std::uint64_t h4 = probe_stream(h3);
-                a(r, col) = Scalar(probe_value(h),  probe_value(h2));
-                b(r, col) = Scalar(probe_value(h3), probe_value(h4));
+                std::uint64_t h2 = advance(h);
+                std::uint64_t h3 = advance(h2);
+                std::uint64_t h4 = advance(h3);
+                a(r, col) = Scalar(to_range(h),  to_range(h2));
+                b(r, col) = Scalar(to_range(h3), to_range(h4));
             } else {
-                std::uint64_t h2 = probe_stream(h);
-                a(r, col) = (Scalar)probe_value(h);
-                b(r, col) = (Scalar)probe_value(h2);
+                std::uint64_t h2 = advance(h);
+                a(r, col) = (Scalar)to_range(h);
+                b(r, col) = (Scalar)to_range(h2);
             }
         }
 }

@@ -22,8 +22,11 @@
  * 值域档位; 以及 l2c/mmu/dep-chain 等测试的散列 tweak)——它们与本文
  * 件无共享谱系契约, 不随本头演化, 改本头不影响其行为(这是预期而
  * 非漂移)。勿将它们收口进本谱系(虚假耦合)。
- * 公式结构(初始流构造/流推进拍数/complex 分支形态)由各使用方按其
- * 填充结构持有, 不在本文件范围。
+ * 公式结构划分(检视 #392-R4): 家族无关的公式原语(初始流终结化
+ * coord_finalize/单拍推进 advance/值域映射 to_range)在本文件单点,
+ * 两家族逐字同构、演化只改本文件; 家族相关的流编排(GEMM 方阵对
+ * 标量双流/complex 四流、SVD 单矩阵+complex (h,h2) 双值及拍数)由
+ * 各使用方持有。
  *
  * 本头文件刻意无架构守门、不 include 任何 Eigen/boost 头: 两个使用方
  * 家族的源文件在 x86-64 参考构建中也编译, 这里只出现 std 常量——
@@ -51,6 +54,36 @@ inline constexpr unsigned kRangeSteps = 2000u;
 inline constexpr double kRangeScale = 1000.0;
 static_assert(kRangeSteps == 2u * static_cast<unsigned>(kRangeScale),
               "[-1,1) uniform coverage requires kRangeSteps == 2*kRangeScale");
+
+/* ---- 家族无关的公式原语(检视 #392-R4): 初始流终结化/单拍推进/值域
+ * 映射在两家族逐字同构, 与家族相关的填充结构(流的拍数与用法)不同——
+ * 原语在此单点, 演化(如 xorshift 量、二段雪崩)只改本文件, 两家族
+ * 编译期同步; 各使用方只保留家族相关的流编排。inline -O3 内联后与
+ * 手写展开生成相同机器码(objdump 规范化对比实证)。 ---- */
+
+/* 初始流终结化: (r,c) 坐标混合 → 首个哈希值。 */
+inline std::uint64_t coord_finalize(std::uint64_t r, std::uint64_t c)
+{
+    std::uint64_t h = r * kGolden ^ c * kMix;
+    h ^= h >> 32;
+    h *= kAvalanche;
+    h ^= h >> 32;
+    return h;
+}
+
+/* 单拍推进: x = x*K3 + K1 再 xorshift32(splitmix 雪崩)。 */
+inline std::uint64_t advance(std::uint64_t x)
+{
+    x = x * kAvalanche + kGolden;
+    x ^= x >> 32;
+    return x;
+}
+
+/* 值域映射: 哈希 → 均匀随机 [-1,1)。 */
+inline double to_range(std::uint64_t h)
+{
+    return (double)(h % kRangeSteps) / kRangeScale - 1.0;
+}
 
 }  // namespace sandstone_splitmix
 

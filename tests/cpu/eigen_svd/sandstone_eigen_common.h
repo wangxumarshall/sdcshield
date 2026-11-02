@@ -168,28 +168,22 @@ template <typename SVD, int Dim> struct EigenSVDTest
      * 改值域只改该头, 勿在此内联魔数。 */
     static int sizing_probe(int n)
     {
-        using sandstone_splitmix::kAvalanche;
-        using sandstone_splitmix::kGolden;
-        using sandstone_splitmix::kMix;
-        using sandstone_splitmix::kRangeScale;
-        using sandstone_splitmix::kRangeSteps;
+        using sandstone_splitmix::advance;
+        using sandstone_splitmix::coord_finalize;
+        using sandstone_splitmix::to_range;
         Mat m(n, n);
         using Scalar = typename Mat::Scalar;
         for (int r = 0; r < n; ++r)
             for (int c = 0; c < n; ++c) {
-                std::uint64_t h = (std::uint64_t)r * kGolden
-                                ^ (std::uint64_t)c * kMix;
-                h ^= h >> 32;
-                h *= kAvalanche;
-                h ^= h >> 32;
+                std::uint64_t h = coord_finalize((std::uint64_t)r,
+                                                 (std::uint64_t)c);
                 if constexpr (boost::is_complex<Scalar>::value) {
-                    std::uint64_t h2 = h * kAvalanche + kGolden;
-                    h2 ^= h2 >> 32;
+                    std::uint64_t h2 = advance(h);
                     m(r, c) = Scalar(
-                        (typename Scalar::value_type)((double)(h % kRangeSteps) / kRangeScale - 1.0),
-                        (typename Scalar::value_type)((double)(h2 % kRangeSteps) / kRangeScale - 1.0));
+                        (typename Scalar::value_type)to_range(h),
+                        (typename Scalar::value_type)to_range(h2));
                 } else {
-                    m(r, c) = (Scalar)((double)(h % kRangeSteps) / kRangeScale - 1.0);
+                    m(r, c) = (Scalar)to_range(h);
                 }
             }
         Mat u, v;

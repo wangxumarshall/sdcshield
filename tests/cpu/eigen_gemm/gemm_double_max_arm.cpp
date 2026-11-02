@@ -196,6 +196,11 @@ static int solve_once_gemm(int n)
  * count deviate, but only in the safe direction above.
  */
 #define GEMM_T1024_S 0.1260    /* quiet fill+multiply at N=1024, seconds */
+/* PR#384 检视 R3 (意见 4440012669): the compute-family AR table entry
+ * understates ceiling-footprint GEMM 3x (effective AR ~15, measured —
+ * see the init CAVEAT below); the explicit-tier anti-kill floor (min)
+ * scales its full-core AR by this factor. */
+#define GEMM_AR_CAVEAT_X 3.0
 
 static int eigen_gemm_double_max_arm_preinit(struct test *test)
 {
@@ -249,8 +254,25 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
          * 模型(无 0.95 裕量), -t 小值档 target 被夹钳到单迭代, timeout
          * (5×min+30)随之随 knob 缩放。auto 分支不写: auto 单迭代由
          * run_budget=200s×AR 表值设计收在 300s floor 内(本 host class
-         * 内存侧先绑住, n_run 非绑定侧)。 */
-        test->minimum_duration = (int)(iter_s * 1000.0);   /* ms */
+         * 内存侧先绑住, n_run 非绑定侧)。
+         * 【PR#384 检视 R3, 意见 4440012669】min 的全核口径再乘 CAVEAT
+         * 低估系数(GEMM_AR_CAVEAT_X=3×): 仅表值口径的 min 裕量只有
+         * 433s/264s≈1.6×(mdim=4096 全核 -t 小值档), 而 GEMM_T1024_S 系
+         * 本机 256-bit quiet 定标——VL=128 档实测每迭代慢 1.78×(2026-11-02,
+         * -n 1 -O mdim=2048: 每内层迭代 1.757s→3.133s), 与 CAVEAT 有效
+         * AR≈15 叠加后 kill 阈值 5×ar_table=25 被 15×1.78=26.7 打穿
+         * (计入 T1024 立方模型 -9% 低估更甚), timeout=5×min+30 在该档
+         * 贴线/击穿。min 是反 kill 地板, 须以最坏真实单迭代为口径:
+         * ×3 后 VL=128 叠加最坏仍有 5×15/(15×1.78)≈2.8× 裕量(计入
+         * -9% ≈2.5×)。workers==1 不放大: CAVEAT 3× 是全核争抢效应,
+         * 单 worker 自争抢为 1, -n 1 显式档单迭代语义保持(意见
+         * 4439402781); desired 维持表值标称口径(时间预算目标, 非反
+         * kill 地板)。SVD 侧不加: 其 mem 族表值 25 实测低估仅 1.56×
+         * (39), 5×25/(39×1.78)≈1.8× 裕量仍足。中间 worker 档
+         * (1<w<全核) min 随之更保守——二值闸门裁定见意见 4439402800/
+         * 4440012653(保守方向, 插值无标定数据反开 kill 窗)。 */
+        test->minimum_duration = (int)(iter_s * 1000.0
+                * (workers > 1 ? GEMM_AR_CAVEAT_X : 1.0));   /* ms */
     } else {
         double ar = sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe());
         iter_s = ar * 2.0 * GEMM_T1024_S * std::pow((double)n_hi / 1024.0, 3.0);
@@ -343,9 +365,10 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
 
     double gb = (double)dim * dim * 8.0 * 4.0 / (1 << 30);
     log_info("N=%d (~%.2f GB per thread; sized in child init: knob/env, else "
-             "联合求解 min(n_mem, n_run); preinit desired_duration %d ms is the "
-             "upper-bound model; override with -O eigen_gemm_double_max_arm.mdim=N)",
-             dim, gb, test->desired_duration);
+             "联合求解 min(n_mem, n_run); preinit desired_duration %d ms, "
+             "minimum_duration %d ms (显式档: CAVEAT 加权单迭代下限, -t 夹钳); "
+             "override with -O eigen_gemm_double_max_arm.mdim=N)",
+             dim, gb, test->desired_duration, test->minimum_duration);
     return EXIT_SUCCESS;
 }
 

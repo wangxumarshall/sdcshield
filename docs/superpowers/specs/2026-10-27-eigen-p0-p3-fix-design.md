@@ -282,6 +282,20 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   上确定性 SIGQUIT）。GEMM auto 分支维持 f6783077 原模型（ar×2×t(n_hi)
   不随 worker 数折算——与联合求解 per_solve=run_budget/(ar×2) 同一口
   径，全框架统一的拓扑表习语）。
+  【2026-11-02 勘误，PR#384 检视 R3（意见 4440012669）】GEMM 显式档 min
+  的全核口径再加 CAVEAT 低估系数 3×（min=3×ar×2×t(knob)，仅
+  workers>1）：仅表值口径的 min 裕量只有 433s/264s≈1.6×（mdim=4096 全核
+  -t 小值档），而 GEMM_T1024_S 系本机 256-bit quiet 定标——VL=128 档实测
+  每迭代慢 1.78×（2026-11-02，-n 1 -O mdim=2048：每内层迭代
+  1.757s→3.133s），与 CAVEAT 有效 AR≈15 叠加后 kill 阈值
+  5×ar_table=25 被 15×1.78=26.7 打穿（计入 T1024 立方 -9% 低估更甚）
+  ——×3 后（min=30×t(knob)）VL=128 叠加最坏仍有 5×15/(15×1.78)≈2.8×
+  裕量。workers==1 不放大（CAVEAT 3× 是全核争抢效应，-n 1 单迭代语义
+  保持）；desired 维持表值标称口径；SVD 侧不加（其 mem 族表值 25 实测
+  低估仅 1.56×=39，按同档因子折算 5×25/(39×1.78)≈1.8× 裕量仍足；SVD
+  自身档因子未单独标定，按同代 GEMM 实测折算）。中间 worker 档
+  （1<w<全核）min 随之更保守——与意见 4439402800/4440012653 的二值闸门
+  裁定一致（保守方向不误杀，插值无标定数据反开 kill 窗）。
   天然修复 exec_each_test 模式
   preinit 不跑导致 g_dim 恒 300 的分歧（LSP 核实修正 #3）；
   **exec 模式下 desired_duration 的说明【v2 修正】：`test_duration()`
@@ -305,9 +319,17 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   spawn；exec child 的 worker 循环 sandstone_run.cpp:633
   `!wallclock_deadline_has_expired(sApp->shmem->current_test_endtime)`
   读该共享值，从不本地调 test_duration()）——**fork/exec 迭代语义完全
-  一致**，不存在"恒一次迭代 vs 多迭代"的分歧。实测反例：`-f exec -t
-  30000 -n 1 -O mdim=600` → loop-count **5**（30s 时限内 5 次迭代，非
-  1 次），与 fork 同语义。因此原提出的"把时长参数并入 exec argv 协议"
+  一致**，不存在"恒一次迭代 vs 多迭代"的分歧。实测反例（两层循环
+  结构：块=fracture 重 init（内层预算 fracture_loop_count=5），块内
+  worker 循环至共享时限/预算先到者）：`-f exec -t 30000 -n 1 -O
+  mdim=600` → 7 个块（前 6 块每块 loop-count **5** = fracture 预算
+  跑满未被时限截断，末块 loop-count **3** = 30s 共享时限在块内截断，
+  共 33 次内层迭代填满 30s）；旧机理（child 本地 1s）预测每块
+  loop-count ≈2（内层单迭代实测 0.92-1.1s，1s 时限内至多 2 次）——
+  实测 5 证伪。min 夹钳同经共享时限传入：`-f exec -t 2000 -n 1 -O
+  mdim=600` → 单块 3.3s / loop-count 3 = 夹钳后 min 3236ms 的口径
+  （原始 -t 2000ms 预测 loop-count 2、本地 1s 预测 1），与 fork 同
+  语义。因此原提出的"把时长参数并入 exec argv 协议"
   设计项**建立在假前提上，撤回**。残留语义瑕疵如实收窄为：exec child
   自身的 test 结构 desired/minimum_duration 字段恒 0（M_DIM 日志行
   实证）——纯字段语义瑕疵，迭代时长与超时执法均经 shmem/parent 与 fork

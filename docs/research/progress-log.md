@@ -28,8 +28,10 @@
 ### 实证
 
 - 修正后文档三处段落见 fix/issue-395 分支 diff；`mem_disambig_alu_sve` 有界单测
-  回归（`-t 2000 -n 1 -O buffer_bytes=4096`）→ `exit: pass`；纯文档改动，构建
-  零新警告，x86-64 零触碰。
+  回归（`-t 2000 -n 1 -O mem_disambig_alu_sve.buffer_bytes=4096`）→ `exit: pass`
+  （原条目误脱 test-id 前缀——裸 `buffer_bytes` 键无测试读取，按 test_knobs.cpp
+  TestKeyWrapper 拼键规则是静默 no-op，误脱已补正；处置轮按带前缀命令实测复跑
+  同绿）；纯文档改动，构建零新警告，x86-64 零触碰。
 
 ### 下一步
 

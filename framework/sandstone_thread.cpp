@@ -93,8 +93,10 @@ unsigned char *SandstoneTestThreadAttributes::allocate_stack_block()
         /*
          * Safe fallback (the default stacks each carry a one-page guard), but
          * not a silent one: the enhanced guard geometry would be lost with no
-         * trace, the same blind spot issue #396 condemns.  One diagnostic per
-         * process, next to the only nullptr producer.
+         * trace, the same blind spot issue #396 condemns.  One diagnostic
+         * line per forked test child: thread_attributes is a function-local
+         * static first constructed in each child, so a persistently failing
+         * machine prints one line per test, not one line for the whole run.
          */
         const char *err = strerror_for_mmap();  // capture errno before fprintf
         fprintf(stderr, "%s: mmap(%zu) for per-thread stacks failed: %s -- "

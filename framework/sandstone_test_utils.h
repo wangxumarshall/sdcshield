@@ -19,19 +19,42 @@
 #define SANDSTONE_TEST_UTILS_H
 #include <sys/mman.h>
 #include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <cstdint>
 #include <map>
 
 // These macros have been copied from sandstone_p.h because sandstone_p.h creates
 // too many dependencies to get under unit-test.  Eventually we should refactor
 // simple macros like this out of sandstone_p.h to  break these dependencies
+// (keep this copy in sync with the sandstone_p.h original)
 #define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
+static inline bool sandstone_is_valid_page_size(long page_size)
+{
+    return page_size > 0 && (page_size & (page_size - 1)) == 0;
+}
+
+// No safe fallback page size exists and logging may not be initialized yet,
+// so write the diagnosis to stderr directly and abort — fail loudly, never
+// cache garbage.  See the twin in sandstone_p.h for the full rationale.
+static __attribute__((unused, noinline, noreturn)) void sandstone_page_size_fatal(long page_size)
+{
+    fprintf(stderr, "internal error: unusable page size from sysconf(_SC_PAGESIZE): 0x%lx\n",
+            (unsigned long)page_size);
+    abort();
+}
+
 static inline unsigned sandstone_page_size()
 {
     static long cached = 0;
-    if (!cached)
-        cached = sysconf(_SC_PAGESIZE);
-    return unsigned(cached);
+    long page_size = __atomic_load_n(&cached, __ATOMIC_ACQUIRE);
+    if (__builtin_expect(!page_size, false)) {
+        page_size = sysconf(_SC_PAGESIZE);
+        if (__builtin_expect(!sandstone_is_valid_page_size(page_size), false))
+            sandstone_page_size_fatal(page_size);
+        __atomic_store_n(&cached, page_size, __ATOMIC_RELEASE);
+    }
+    return unsigned(page_size);
 }
 #define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, sandstone_page_size())
 

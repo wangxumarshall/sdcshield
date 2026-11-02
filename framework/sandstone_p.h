@@ -76,6 +76,8 @@ extern "C" {
 
 /* align to a power of 2 */
 #define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
+#include <stdio.h>
+#include <stdlib.h>
 
 /*
  * Page size used for mmap/mprotect alignment.  MUST match the system's actual
@@ -85,6 +87,22 @@ extern "C" {
  * sysconf(_SC_PAGESIZE) (getpagesize() through the sysdeps/windows shim on
  * Windows) and cache it.
  */
+static inline bool sandstone_is_valid_page_size(long page_size)
+{
+    return page_size > 0 && (page_size & (page_size - 1)) == 0;
+}
+
+/* There is no safe fallback page size (a hardcoded one breaks kernels with
+ * bigger pages, see the comment above) and logging may not be initialized
+ * yet, so write the diagnosis to stderr directly and abort — like
+ * malloc.cpp's null_pointer_consumption().  Fail loudly, never cache garbage. */
+static __attribute__((unused, noinline, noreturn)) void sandstone_page_size_fatal(long page_size)
+{
+    fprintf(stderr, "internal error: unusable page size from sysconf(_SC_PAGESIZE): 0x%lx\n",
+            (unsigned long)page_size);
+    abort();
+}
+
 #ifdef __cplusplus
 extern "C++"
 {
@@ -98,9 +116,14 @@ static inline unsigned sandstone_page_size(void)
     return (unsigned)cached;
 #else
     static long cached = 0;
-    if (!cached)
-        cached = sysconf(_SC_PAGESIZE);
-    return (unsigned)cached;
+    long page_size = __atomic_load_n(&cached, __ATOMIC_ACQUIRE);
+    if (__builtin_expect(!page_size, false)) {
+        page_size = sysconf(_SC_PAGESIZE);
+        if (__builtin_expect(!sandstone_is_valid_page_size(page_size), false))
+            sandstone_page_size_fatal(page_size);
+        __atomic_store_n(&cached, page_size, __ATOMIC_RELEASE);
+    }
+    return (unsigned)page_size;
 #endif
 }
 #ifdef __cplusplus

@@ -4,6 +4,8 @@
  */
 
 
+#include <array>
+#include <thread>
 #include <vector>
 #include "gtest/gtest.h"
 
@@ -125,4 +127,45 @@ TEST_F(WeightedPickerTestFixture, Entry_0_1_is_33_66_percent) {
 
     ASSERT_NEAR(0.333333 * 1000, counts["Op1"], 100);
     ASSERT_NEAR(0.666666 * 1000, counts["Op2"], 100);
+}
+
+// ---- sandstone_page_size() (issue #446) ----
+// The lazy-init cache must be race-free, must never cache a sysconf failure,
+// and must fail loudly (direct stderr diagnostic + abort) on an unusable page size.
+
+TEST(PageSize, ReturnsPositivePowerOfTwoMatchingSysconf) {
+    unsigned ps = sandstone_page_size();
+    EXPECT_GT(ps, 0u);
+    EXPECT_EQ(ps & (ps - 1), 0u);
+    EXPECT_EQ(ps, static_cast<unsigned>(sysconf(_SC_PAGESIZE)));
+}
+
+TEST(PageSize, ValidPageSizesAccepted) {
+    EXPECT_TRUE(sandstone_is_valid_page_size(1));
+    EXPECT_TRUE(sandstone_is_valid_page_size(4096));
+    EXPECT_TRUE(sandstone_is_valid_page_size(65536));
+}
+
+TEST(PageSize, InvalidPageSizesRejected) {
+    EXPECT_FALSE(sandstone_is_valid_page_size(0));
+    EXPECT_FALSE(sandstone_is_valid_page_size(-1));          // sysconf() failure value
+    EXPECT_FALSE(sandstone_is_valid_page_size(4097));         // not a power of two
+    EXPECT_FALSE(sandstone_is_valid_page_size(0xFFFFFFFF));  // (unsigned)-1
+}
+
+TEST(PageSize, FatalOnUnusablePageSize) {
+    EXPECT_DEATH(sandstone_page_size_fatal(-1), "unusable page size");
+}
+
+TEST(PageSize, ConcurrentCallsAgree) {
+    std::array<unsigned, 8> results{};
+    std::vector<std::thread> threads;
+    for (auto &r : results)
+        threads.emplace_back([&r] { r = sandstone_page_size(); });
+    for (auto &t : threads)
+        t.join();
+    for (unsigned r : results) {
+        EXPECT_EQ(r, results[0]);
+        EXPECT_GT(r, 0u);
+    }
 }

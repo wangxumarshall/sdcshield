@@ -217,7 +217,12 @@ echo "batch end:   $(date '+%F %T')"
 # Zero-match "0\n0" fix: grep -c already prints 0 (and exits 1) on zero matches,
 # so `|| echo 0` appends a SECOND 0 — the command substitution captures two
 # lines. ${n:-0} prints a single 0 both on zero matches and on a missing
-# batch.tsv (grep then prints nothing). Same shape as the campaign.md Task 6
-# Step 2 skeleton (kept in sync — PR #418 round-4 review finding).
+# batch.tsv (grep then prints nothing). NUMERATOR kept in sync with the
+# campaign.md Task 6 Step 2 skeleton (PR #418 round-4 review finding; round-5
+# finding #40 scoped the sync claim to the numerator — the denominator
+# intentionally differs: this full version counts the list-contract-filtered
+# list.effective (PR #307 #21) while the skeleton defers that filtering and
+# counts the raw $LIST, so the two totals diverge once the raw list carries
+# comment/blank/"|time" suffix lines).
 n=$(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null)
 echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$OUT/list.effective")"

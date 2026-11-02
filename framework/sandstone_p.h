@@ -20,7 +20,16 @@
 #include <limits.h>
 
 #ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
+/* 宏守卫:尊重 TU 既有的选择(如某 TU 明确想要非 lean 的 windows.h,
+ * 应在包含本头之前自行 #define 或提前 include <windows.h>)。
+ * NOMINMAX:不依赖 mingw-w64 minwindef.h 私有的 #ifndef __cplusplus
+ * 守卫——向 MSVC/clang-cl 迁移时 min/max 宏会破坏 std::min/std::max。 */
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <windows.h>     /* GetSystemInfo() for sandstone_page_size() */
 #else
 #  include <unistd.h>      /* sysconf(_SC_PAGESIZE) for sandstone_page_size() */

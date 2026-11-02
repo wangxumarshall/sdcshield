@@ -130,7 +130,7 @@ docs/superpowers/inventory/sve-all-vl-campaign/extract-summary.sh $LOG $LIST doc
 ```
 Expected: `exit: pass`。注意：eigen_svd_cdouble_sve / eigen_svd_bidiag_sve 有全核 TIMEOUT 前科（node0 带宽，见 memory eigen-mdim-memory-measurement）；若这两格 TIMEOUT → 进 Step 3 分诊，不算本步失败。
 
-- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 文件名（含 stdout 捕获、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 四行的 /tmp 源与目标文件名）一律相应改为 `LCG1002`，非仅 `-s` 与 `.log` 两处——否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`。
+- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 字样——共 5 行（`LOG=` 行的日志路径、stdout 捕获重定向、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 目标的 /tmp 源与目标文件名）——一律相应改为 `LCG1002`，非仅 `-s` 与 `.log` 两处。否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`（漏改 `LOG=` 行则 seed2 的 `-o` 覆写 seed1 的 .log、LCG1002 summary 提取自 seed1 输出——证据污染）。
 
 - [ ] **Step 3: 分诊**
 
@@ -351,7 +351,13 @@ rm -rf m5out   # spike 标定会在 cwd 产生 gem5 输出目录，清掉防入�
 
 - [ ] **Step 2: 批处理脚本**
 
-`gem5-512-batch.sh`（并行度 20——控制器修正案 2：标定实测单实例 RSS ≤ ~1.2 GB，20 路典型 ~24 GB，远低于 57 GB 可用；本机 128 核，gem5 单线程；**与任何构建错峰**）。骨架如下——与仓库实际入库版一致的关键语义（批时身份记录、断点续跑、`batch.tsv` 逐格追加、执行形状 `-f no --ignore-timeout`、绿格统计取 `exit: pass` 内容行——Files 行声明的入库证据全部由脚本产出，不再自相矛盾。骨架的执行语义重写系 PR #418 round-1/round-2 检视处置产物，超出本计划原始目标（工件清单同步），为消除「入库证据声明与同页内嵌脚本矛盾」而做，处置记录见 commit d7ca9374/9fa0787b；骨架与入库版双份同源逻辑仅以注释文字维系同步、无机械校验——同步纪律已实测失效过一次（round-3 只修骨架统计行、round-4 检视才补修入库脚本），分歧一律以本 Task Create 的入库版为准）；完整版（`--one` 单测模式、baked `-O` 数组、`list.effective` 清单契约过滤（PR #307 #21——骨架 `xargs` 直喂原始 `$LIST` 不止统计分母分叉，是**执行输入缺陷**：清单含注释行时会作 bogus `-e` 参数被真实执行、`|time` 后缀名格的 batch.tsv 行全部落空）、重复名守卫（list.effective 同名校验——同名并发 `--one` 实例会互覆 `.d`/`.log`，开跑前即失败，PR #307 #19）、重复键守卫（gem5-overrides.txt 单键单行契约校验——双键会使矩阵标注未用过的 knob，PR #307 #32）、批间二进制变更告警（full batch 对照 identity 记录、变更即大声警告）、逐行 stdout 回显、PR #307 检视加固注释）以本 Task Create 的 `gem5-512-batch.sh` 为准：
+`gem5-512-batch.sh`（并行度 20——控制器修正案 2：标定实测单实例 RSS ≤ ~1.2 GB，20 路典型 ~24 GB，远低于 57 GB 可用；本机 128 核，gem5 单线程；**与任何构建错峰**）。骨架如下——只承载**结构语义**（批时身份记录、断点续跑、`batch.tsv` 逐格追加、执行形状 `-f no --ignore-timeout`、绿格统计口径）。骨架与入库版是双份同源逻辑、仅以注释文字维系同步（无机械校验，纪律已失效过一次——round-3 只修骨架统计行、round-4 检视才补修入库脚本）；**分歧一律以本 Task Create 的 `gem5-512-batch.sh` 为准，骨架不可照抄执行**。已知分叉（勿以骨架结果对照入库证据）：
+
+- **执行输入缺陷**：骨架 `xargs` 直喂原始 `$LIST`——清单含注释行时会作 bogus `-e` 参数被真实执行、`|time` 后缀名格的 batch.tsv 行全部落空；入库版先过滤 `list.effective`（PR #307 #21）。
+- **结果级分叉**：骨架主命令缺 26 项 baked `-O` 降容数组（native-256 腿裁定 D 同集）——无降容则 `eigen_svd_bidiag_sve`/`eigen_svd_cdouble_sve` 等全核 TIMEOUT 前科用例收不了口，照骨架跑出的 pass/timeout 格分布与入库证据分叉。
+- **完整版另有的特性**（骨架均缺）：`--one` 单测模式、重复名守卫（同名并发 `--one` 实例互覆 `.d`/`.log`，开跑前即失败，PR #307 #19）、重复键守卫（gem5-overrides.txt 单键单行契约，双键使矩阵标注未用过的 knob，PR #307 #32）、批间二进制变更告警（full batch 对照 identity 记录、变更即大声警告）、逐行 stdout 回显、PR #307 检视加固注释。
+
+（骨架的执行语义重写系 PR #418 round-1/round-2 检视处置产物，超出本计划原始目标（工件清单同步），为消除「入库证据声明与同页内嵌脚本矛盾」而做，处置记录见 commit d7ca9374/9fa0787b。）
 
 ```bash
 #!/bin/bash
@@ -367,11 +373,12 @@ rm -rf m5out   # spike 标定会在 cwd 产生 gem5 输出目录，清掉防入�
 # 从未产出，已入库 verdicts 身份头为 extract 时重算，见其头注 RECOMPUTED AT
 # EXTRACT TIME；照本骨架重跑将产出 identity.txt）；断点续跑：rc=0 已收口的格 touch .done 跳过，超时/崩溃格不标记、
 # 幂等重跑重新执行（batch.tsv 追加写、提取取末行，新行覆盖旧行）。
-# 绿格统计 = 末行为 exit: pass 的唯一测试数（与入库版末行同款幂等口径：batch.tsv
-# 为追加写，重跑已绿格会追加新 pass 行——行计数双计，取每测试末行即幂等）；分母
-# 与执行输入分叉——骨架 xargs 直喂原始 $LIST（清单含注释行时会作 bogus -e 参数被
-# 真实执行、`|time` 后缀名格 batch.tsv 行全部落空），入库版先过滤 list.effective
-# （PR #307 #21，骨架免列）——速览近似而非判定：rc=0
+# 绿格统计 = 原始清单内、末行为 exit: pass 的唯一测试数（与入库版同款清单约束 +
+# 幂等口径：batch.tsv 为追加写，重跑已绿格会追加新 pass 行——行计数双计，取清单内
+# 每测试末行即幂等且分子≤分母由构造保证）；分母与执行输入分叉——骨架 xargs 直喂
+# 原始 $LIST（清单含注释行时会作 bogus -e 参数被真实执行、`|time` 后缀名格
+# batch.tsv 行全部落空），入库版分子/分母均取先过滤的 list.effective（PR #307
+# #21，骨架免列）——速览近似而非判定：rc=0
 # 不蕴含 pass，exit: pass 行亦不区分 pass 与诚实 init-skip（overlay 抑制 per-test
 # yaml，无日志行可判——tick 地板是唯一机械句柄）；权威判定 = gem5-512-extract.sh
 # （rc=0 && exit: pass && tick≥地板），本 echo 仅收尾速览（口径详见其头注释）。
@@ -404,6 +411,8 @@ run_one() {
         "$OVR" 2>/dev/null || true)
     read -r -a extra_args <<< "${extra:-}"   # 词分割不 glob（PR #307 #13 语义）：裸 $extra 的 * 会展开打到 $OUT/$t.d
     mkdir -p "$OUT/$t.d"; start=$(date +%s)
+    # 完整版主命令此处另注入 26 项 baked -O 降容数组（结果级分叉，见 Step 2 引言）：
+    # 骨架缺之则 eigen_svd_bidiag/cdouble_sve 等全核 TIMEOUT 前科用例收不了口。
     ( cd "$OUT/$t.d" && timeout 3600 env G5="$G5" "$RUN" "$BIN" \
         -e "$t" -t 500 -n 1 -f no --ignore-timeout \
         ${extra_args[@]+"${extra_args[@]}"} --vl 4 ) \
@@ -420,9 +429,9 @@ export -f run_one write_identity   # write_identity 亦须导出：run_one 内�
 export LIST OVR OUT G5 RUN BIN
 [ -f "$OUT/identity.txt" ] || write_identity
 xargs -a "$LIST" -P 20 -I{} bash -c 'run_one "$@"' _ {}
-n=$(awk -F'\t' '{ last[$1] = $4 } END { c = 0; for (t in last) if (last[t] == "exit: pass") c++; print c }' \
-    "$OUT/batch.tsv" 2>/dev/null)   # 末行=exit: pass 的唯一测试数（幂等：重跑追加行不再双计）；零行单 0；文件缺失捕获空
-echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$LIST")"   # 分母 = 原始清单（xargs 同喂它，执行输入同款免列——见上注）；入库版分母 = list.effective（PR #307 #21）
+n=$(awk -F'\t' 'FILENAME == ARGV[1] { list[$1] = 1; next } $1 in list { last[$1] = $4 } END { c = 0; for (t in last) if (last[t] == "exit: pass") c++; print c }' \
+    "$LIST" "$OUT/batch.tsv" 2>/dev/null)   # 清单内、末行=exit: pass 的唯一测试数（幂等 + 分子≤分母构造保证）；零行单 0；文件缺失捕获空
+echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$LIST")"   # 分母 = 原始清单（xargs 同喂它，执行输入同款免列——见 Step 2 引言）；入库版分子/分母均取 list.effective（PR #307 #21）
 ```
 
 - [ ] **Step 3: 执行、机械提取与分诊**

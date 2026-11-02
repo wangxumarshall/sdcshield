@@ -88,21 +88,31 @@
  * 输出前 4 元素/验证结果，PASS 绿（\033[32m）、FAIL 红（\033[31m）；
  * 每线程 10000 行上限后转仅记失败（防日志爆炸），失败行永不受上限约束，
  * 失败时追加全 64 float 对照 dump。logverif=0 时完全不触碰 /var/tmp；
- * logverif=1 但打开失败（环境不可用）时 log_warning 降级禁用日志、测试
- * 照跑（诊断附属不升格为检测失败）。文件口径与生命周期（PR#341 轮1 检视
- * :526/:338）：fracture-per-fork 架构下每子进程各建一个 <pid>.log、行预
- * 算随 fork 重置（每切片每线程重新计 10000），长跑呈每秒数百个碎片文件
- * 而非单一连续日志——-f no（nofork 单进程）才是真正的单文件 10000 行/
- * 线程；绿跑（通道B 对账全绿 ∧ 零红 FAIL 行 ∧ 非 selftest ∧ 未开
+ * logverif=1 但打开失败（环境不可用或后缀重试耗尽）时 log_warning 降级
+ * 禁用日志、测试照跑（诊断附属不升格为检测失败；'W' 级告警默认
+ * verbosity 不显示、须 -v，见 init 降级注释）。文件口径与生命周期
+ * （PR#341 轮1 检视 :526/:338）：fracture 架构下每切片各建一个
+ * <pid>.log、行预算随切片重置（fork 起新子进程、-f no 同进程重跑
+ * init+run——run 局部变量每切片归零），fork 模式长跑呈每秒数百个碎片
+ * 文件而非单一连续日志；-f no 并非「单文件 10000 行/线程」的例外
+ * （PR#341 轮6 检视 :95）——retain=0 时同名文件每绿切片 unlink 后
+ * 重建（内容不跨切片累积，绿跑终态存活 0），retain=1 时同 pid 每切片
+ * 撞名走后缀（见 retain 段）；10000 行/线程上限的可达路径是单切片大
+ * 循环（--max-test-loop-count 自带禁用 fracture，实测 20000 循环恰
+ * 10000 行）。绿跑（通道B 对账全绿 ∧ 零红 FAIL 行 ∧ 非 selftest ∧ 未开
  * logverif_retain）cleanup 时删除本轮文件，长期战役绿跑稳态存活文件数
  * = O(当前并发子进程数)；任何检出迹象（数据 SDC 红行、通道C FAIL、通道B
  * 对账失败）或 selftest 阳性自检保留文件作取证。-O
  * spinlock_add_neon.logverif_retain=1（默认 0）保留绿跑文件供人工审计
  * （PR#341 轮4 检视 :834：golden 为 init 同源预计算，init/run 一致同错
  * 时三通道全绿，logverif 行是绿跑期唯一可人工核对的计算值迹）——代价
- * 是回到无界堆积，长战役慎用；堆积使 pid 复用/回绕后新切片撞同名遗留
- * 文件，init 以 <pid>-<n>.log 后缀退格重试（上限 64，约 13 天连续战役
- * 耗尽后才降级，PR#341 轮5 检视 :740），审计文件名因而不是恒定 <pid>.log。
+ * 是回到无界堆积，长战役慎用；撞名遗留文件有两形态（PR#341 轮6 检视
+ * :766）：fork 模式 pid 复用/回绕（本机 pid_max=4194304、实测 ~240
+ * 切片/s ≈ 4.8h/圈，上限 64 ≈ 13 天连续战役才耗尽，轮5 检视 :740）
+ * 与 -f no 同 pid 每切片必撞（无需回绕，烧穿速率 = fracture 率，实测
+ * 本机 36-65 切片/s 随载、65 格 1-3s 烧穿，耗尽后逐切片降级、
+ * logverif 死亡直至 rm 旧文件），init 以 <pid>-<n>.log 后缀退格重试，
+ * 审计文件名因而不是恒定 <pid>.log。
  * 红跑文件为取证设计、无上限无轮转（轮4
  * 检视 :825 边界）：嘈杂共享机上的饥饿假阳性 FAIL 亦逐切片留档（实测
  * 速率 ~840MB/天量级），长战役操作员须自行巡检清理 /var/tmp——上限/
@@ -764,18 +774,22 @@ static int spinlock_add_neon_init(struct test *test)
 
     if (d->logverif) {
         /* 首选 /var/tmp/spinlock_add_neon_<pid>.log；EEXIST 时以
-         * <pid>-<n>.log 递增后缀重试（PR#341 轮5 检视 :740）——retain=1
-         * （及红跑取证文件无上限留档）长战役下 pid 空间回绕（本机
-         * pid_max=4194304，实测节奏 ~240 切片/s ≈ 4.8h/圈）后，每圈同
-         * pid 切片都命中上一圈保留文件，若直接降级则该 pid 的 logverif
-         * 在整个战役期持续死亡；后缀重试使每圈退一格，上限
-         * SPINLOCK_ADD_NEON_LOG_OPEN_TRIES（~4.8h/圈 × 64 ≈ 13 天连续
-         * 战役）耗尽才降级——重试仍全 O_EXCL，「绝不写已存在文件」的
-         * 防预植语义不变（注入伪 PASS/稀释 FAIL 行需向已存在文件追加，
-         * O_EXCL 恒拒绝；后缀名可预测不构成新攻击面：防御目标是拒绝写
-         * 已存在文件而非隐藏文件名，预植 <pid>-1.log 与预植 <pid>.log
-         * 同等难度且同等被拒）。cleanup 对应：unlink 的是本轮实际打开
-         * 的 log_path（含后缀），不动上一圈遗留。 */
+         * <pid>-<n>.log 递增后缀重试（PR#341 轮5 检视 :740）——重试仍全
+         * O_EXCL，「绝不写已存在文件」的防预植语义不变（注入伪 PASS/
+         * 稀释 FAIL 行需向已存在文件追加，O_EXCL 恒拒绝；后缀名可预测
+         * 不构成新攻击面：防御目标是拒绝写已存在文件而非隐藏文件名，
+         * 预植 <pid>-1.log 与预植 <pid>.log 同等难度且同等被拒）。
+         * 撞名走后缀的场景（retain=1 及红跑取证文件无上限留档时）有二：
+         * fork 模式长战役 pid 空间回绕（本机 pid_max=4194304，实测节奏
+         * ~240 切片/s ≈ 4.8h/圈）后每圈同 pid 切片命中上一圈保留文件，
+         * 若直接降级则该 pid 的 logverif 在整个战役期持续死亡，后缀重试
+         * 使每圈退一格，上限 SPINLOCK_ADD_NEON_LOG_OPEN_TRIES（~4.8h/圈
+         * × 64 ≈ 13 天连续战役）耗尽才降级；-f no（nofork 调试模式，
+         * PR#341 轮6 检视 :766）同 pid 每切片必撞——框架对每切片同进程
+         * 重跑本 init、无需 pid 回绕，烧穿速率 = fracture 率（实测本机
+         * 36-65 切片/s 随载，65 格 1-3s 烧穿），耗尽后逐切片降级、rm
+         * 旧文件即可恢复。cleanup 对应：unlink 的是本轮实际打开的
+         * log_path（含后缀），不动上一圈遗留。 */
         for (int attempt = 0; attempt <= SPINLOCK_ADD_NEON_LOG_OPEN_TRIES; ++attempt) {
             if (attempt == 0)
                 snprintf(d->log_path, sizeof d->log_path,
@@ -792,12 +806,17 @@ static int spinlock_add_neon_init(struct test *test)
             /* logverif 是 opt-in 诊断附属、不是检测契约：环境不可用（只读
              * /var/tmp、SELinux 拒绝、O_NOFOLLOW 命中预植 symlink 的
              * ELOOP，或后缀重试耗尽——同 pid 遗留文件数已超
-             * SPINLOCK_ADD_NEON_LOG_OPEN_TRIES，rm 旧文件即可恢复）时
+             * SPINLOCK_ADD_NEON_LOG_OPEN_TRIES，rm 旧文件即可恢复；
+             * -f no 同 pid 每切片撞名即此形态，见上）时
              * 降级为禁用日志继续跑——检测通道 A/B/C 不受影响，环境问题
              * 不与 SDC 检出共享退出码、不污染战役自动分诊（cpufreq/thermal
              * 缺失优雅降级同哲学，PR#328 二轮检视 :326）。用 log_warning
              * 而非 log_error：后者会把本用例标 Failed（message_common_check
-             * 对 'E' 前缀调 logging_mark_thread_failed）。 */
+             * 对 'E' 前缀调 logging_mark_thread_failed）。可见性边界
+             * （PR#341 轮6 检视 :766）：'W' 级告警在默认 verbosity 不
+             * 显示（logging status_level('W')=VERBOSE(1)），须 -v——
+             * nofork+retain 长跑烧穿后逐切片降级在默认输出下静默，操作
+             * 员要看到降级须 -v（实测同场景默认 0 条、-v 6s 348 条）。 */
             log_warning("spinlock_add_neon: cannot open %s (errno %d: %s) — "
                         "per-verification log disabled, test continues "
                         "(logverif is a diagnostic aid, not a detection "

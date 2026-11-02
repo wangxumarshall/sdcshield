@@ -35,6 +35,17 @@
  *                        墙钟（重启确认窗），反复停摆以区分性签名 FAIL、
  *                        不以 hard-lockup CONFIRMED 定罪
  *
+ * 检出时延边界（PR#341 轮1 检视 :13/:233 披露义务，框架 deadline 语义、
+ * 测试内不可消除）：通道C 的 FROZEN 判定自身需 ~11s（10s 看门狗 + 1s 确认
+ * 窗 + dump 落盘）、NO_PROGRESS 判定需 ~40s（3 次预算重置 + 第 4 窗口）——
+ * 冻结/停滞事件若在 -t 窗口尾部不足上述时延处开始，父进程在 deadline 先
+ * 置 TimedOut 并对子进程走 SIGTERM→20s→SIGKILL 处决阶梯
+ * （terminate_children），FAIL 消息与 64B dump 不及产出，以墙收收场——
+ * 恰是本测试声称消灭的形态在窗口尾部的残留（-t 60s 默认下尾部 ~11s/60s
+ * ≈18% 对 FROZEN 口径不闭合）。acquire 循环只认自身预算、不查
+ * test_time_condition 是有意取舍：等待者查时间条件并提前放弃 = 把检出
+ * 机会让渡给墙收，判定完整性优先。此边界在此声明而非静默存在。
+ *
  * 三通道自检（部署到新机器后必跑，coherence_probe SELFTEST_W 同款纪律——
  * 阳性通过后阴性结果才有意义；错值 fail loudly 而非静默 off，防 typo 无声
  * 击穿部署纪律）：

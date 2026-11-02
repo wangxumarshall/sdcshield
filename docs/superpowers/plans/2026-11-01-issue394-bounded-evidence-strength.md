@@ -1,6 +1,6 @@
 # 256 腿 25 个有界格「证据强度限定」语义修正 Implementation Plan（issue #394）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task — **read the「⚠ 执行勘误」block below BEFORE executing any Task: Task 2/3/4 原文部分口径已被证伪，以勘误块与入库交付文本为准，勿按原文回写已证伪口径**. Steps use checkbox (`- [ ]`) syntax for tracking.
 > 本会话为 task-loop 派发的单 agent 缺陷修复任务，按工作契约顺序**本会话内联执行**（executing-plans）。
 
 **Goal:** 修正 triage-256.md 把「clamp 下限起步、首次通过即止」的 25 个有界重跑格呈现为与直绿格等价绿格的正确性缺陷——在分诊表、生成器产物矩阵与 README 三处为这 25 格补上**最小激发强度**的证据强度限定，使「native 256 档两 seed 全绿 / 边界格 = 0」结论不再把最小激发强度证据当满强度证据。

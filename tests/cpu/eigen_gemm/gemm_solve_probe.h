@@ -19,10 +19,12 @@
  *
  * 本头文件刻意不 include 任何 Eigen 头: gemm_double_max_arm_body.cpp
  * 以 -DEigen=EigenSVEn 宏改名后按 tier 编译, 这里出现 Eigen:: 符号
- * 会被宏劫持; std 头(<complex>/<cstdint>/<type_traits>)不受影响。 */
+ * 会被宏劫持; std 头(<cassert>/<complex>/<cstdint>/<type_traits>)不受
+ * 影响。 */
 #ifndef GEMM_SOLVE_PROBE_H
 #define GEMM_SOLVE_PROBE_H
 
+#include <cassert>
 #include <complex>
 #include <cstdint>
 #include <type_traits>
@@ -59,6 +61,14 @@ static void fill_pair(Mat &a, Mat &b)
 {
     using Scalar = typename Mat::Scalar;
     constexpr bool kComplex = is_std_complex<Scalar>::value;
+    /* 契约: a、b 为同维 n×n 方阵。本 header 是共享基础设施(8 个 wrapper
+     * 使用方之外的未来调用方可直接 include), 尺寸不符时下方 b(r, col)
+     * 写入即越界——release 构建(本仓 meson b_ndebug=if-release)下 Eigen
+     * operator() 无边界检查, 静默堆越界写 UB。assert 在 debug 构建抓
+     * 误用; release 下 NDEBUG 展开为 ((void)0), 探针机器码与计时不受
+     * 影响(检视 #392-R1)。 */
+    assert(a.cols() == a.rows() && b.rows() == a.rows()
+           && b.cols() == a.rows());
     const int n = a.rows();
     for (int r = 0; r < n; ++r)
         for (int col = 0; col < n; ++col) {

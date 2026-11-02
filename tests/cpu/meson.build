@@ -352,6 +352,7 @@ if host_machine.cpu_family() == 'aarch64'
             'cache/cachebounce_sdc.cpp',
             'cache/cache_stress_civac.cpp',
             'cache/cache_stress_clflush_2.cpp',
+            'cache/cache_stress_memcpy_2.cpp',
             'misc/core179_kernel_sdc_repro.cpp',
             'memory/mem_disambig_alu.cpp',
             'misc/movbe_dump_golden.cpp',

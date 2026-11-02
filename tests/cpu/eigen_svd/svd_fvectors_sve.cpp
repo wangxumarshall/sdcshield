@@ -97,7 +97,7 @@ DECLARE_TEST(eigen_svd_fvectors_sve, "Eigen SVD (Singular Value Decomposition) s
   .test_init = eigen_svd_fvectors_sve_init,
   .test_run = eigen_svd_fvectors_sve_run,
   .test_cleanup = eigen_svd_fvectors_sve_cleanup,
-  .fracture_loop_count = 2,
+  .fracture_loop_count = 5,   /* 镜像 eigen_svd_fvectors 原值(NEON 版;非模板 eigen_svd 的 2) */
   .quality_level = TEST_QUALITY_PROD,
   .arm64_requires = ARM64_REQUIRES_SVE,
 END_DECLARE_TEST

@@ -42,25 +42,48 @@ placeholder honesty / AGENTS.md 诚实性——不以不可复核的工件充当
 - Consumes: 无（纯文档）。
 - Produces: 无（纯文档）。
 
-- [ ] **Step 1: 重写 §4 段末论据句**——结构性结论声明「仅由机制论证独撑」；尸体比
+- [x] **Step 1: 重写 §4 段末论据句**——结构性结论声明「仅由机制论证独撑」；尸体比
   对降格为「未留档的一次性观察（不列入论据链）」并注明不可复审计实的原因，处置句
   原样保留。
 
-- [ ] **Step 2: 内部一致性核验**——diff 恰为该一处段；grep 全文确认「比对一致」不再
+- [x] **Step 2: 内部一致性核验**——diff 恰为该一处段；grep 全文确认「比对一致」不再
   出现在论据地位；头部环境事件 2 / §4 另注 / §7 与新表述无矛盾。
 
-- [ ] **Step 3: 构建零新警告** `./scripts/build.sh`（纯 .md 不触编译，按规则 2 全链
+- [x] **Step 3: 构建零新警告** `./scripts/build.sh`（纯 .md 不触编译，按规则 2 全链
   走实跑，引用真实输出）。
 
-- [ ] **Step 4: 回归** `./builddir/sdcshield -e zstd19 -t 2000 -n 1` → `exit: pass`
+- [x] **Step 4: 回归** `./builddir/sdcshield -e zstd19 -t 2000 -n 1` → `exit: pass`
   （引用真实输出）。
 
-- [ ] **Step 5: commit -s + push fix/issue-401**（`git branch --show-current` 确认非
+- [x] **Step 5: commit -s + push fix/issue-401**（`git branch --show-current` 确认非
   main）。
 
 ### Task 2: PR + issue 报告
 
-- [ ] **Step 6: `gh pr create --base main --head fix/issue-401`**，正文含 Closes #401
+- [x] **Step 6: `gh pr create --base main --head fix/issue-401`**，正文含 Closes #401
   + 根因/改动/验证证据。
 
-- [ ] **Step 7: 报告贴回 issue #401**；工作区回到干净 main。
+- [x] **Step 7: 报告贴回 issue #401**；工作区回到干净 main。
+
+---
+
+## 执行记录（2026-11-02 追加，PR #415 检视闭环）
+
+本计划由 PR #415（fix/issue-401）执行交付；与计划原文的偏差如实记录如下：
+
+- **commit 数**：原「单 commit」约束被检视-修复闭环超越——e61c0fd6 交付 Task 1
+  初版后，local-claude 检视 round 1/2/3 各追加修正 commit（d5fac31c、e1ff708c、
+  3b88dc70，round 3 的 866f05bd/e61199b2/b4da0546，及本执行记录 commit），每个
+  commit 仍是一补丁一单元（CLAUDE.md 规则 1），与「单 commit」约束的原始意图
+  （单一逻辑单元交付）不冲突但如实记录超出。
+- **文本演进**：Step 1 草拟的目标文本（「仅由机制论证独撑」确定级结论）在 round 1
+  改为证据地位分层（「预期是结构性」，外推强度「预期」而非「确定」）；§7 结论③
+  在 round 2/3 随动传播强度并拆分跨 seed/跨腿维度；§4 一次性观察句补指代解读的
+  事后性披露、「数量级级」笔误修正。逐项依据见各 commit message。
+- **Step 2 的教训**：初版联动核验 grep 只查「结构性|跨 seed」两词，措辞不同的
+  §7 ③「天然产生」逃过——round 2 意见指出后，核验口径改为全文通读 + 多词 grep
+  （「预期/确定/天然/必然/一定/无疑」）。
+- **Step 7 口径**：报告已贴回 issue #401 评论串（PR 链接与后续跟踪记录在案）；
+  多 worktree 并行环境下本 worktree 为 PR #415 专属、保持 fix/issue-401，无
+  「回干净 main」动作（该步骤原意「交付后不滞留特性分支状态」，worktree
+  生命周期由编排层管理，如实记录差异）。

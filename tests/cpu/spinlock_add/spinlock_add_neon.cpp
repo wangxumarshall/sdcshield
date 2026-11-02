@@ -81,7 +81,9 @@
  * 内核纯函数、out 缓冲线程栈私有、计数对（shared/local）同在临界区内
  * 更新（不一致窗口小于 locks.cpp 先例）、日志 O_APPEND 单次 write()。
  *
- * 逐次验证日志（-O spinlock_add_neon.logverif=1，默认 0）：
+ * 逐次验证日志（-O spinlock_add_neon.logverif=1，默认 0；logverif/
+ * logverif_retain 错值（非 0/1）fail loudly 见 init，键名 typo 为框架级
+ * 已知缺口、在此披露）：
  * /var/tmp/spinlock_add_neon_<pid>.log，每行 = 迭代号/线程/输入前 4 元素/
  * 输出前 4 元素/验证结果，PASS 绿（\033[32m）、FAIL 红（\033[31m）；
  * 每线程 10000 行上限后转仅记失败（防日志爆炸），失败行永不受上限约束，
@@ -602,14 +604,36 @@ static int spinlock_add_neon_init(struct test *test)
     /* knob 读取（init/main 线程，random_access_sweep 纪律：缓存进 test->data，
      * run 线程禁止直接读）；必须用 testspecific 变体——-O testid.key=value
      * 的键按测试 id 定域，NULL-test 裸键查不到 */
-    d->logverif = get_testspecific_knob_value_int(test, "logverif", 0) != 0;
+    /* logverif / logverif_retain 是 0/1 布尔旋钮：错值（=2、=-1…）fail
+     * loudly 而非静默钳 1（PR#341 轮5 检视 :608，selftest 旋钮同段纪律
+     * :610-613）——retain 静默钳 1 会「以为没开实际开了」（无界堆积照
+     * 发），反向错值静默钳 0 则审计文件照删；键名 typo（logverif_
+     * rettain）框架侧静默忽略未知键（test_knobs 无 set-vs-used 交叉核
+     * 对，framework/test_knobs.cpp:145-152——框架级已知缺口）测试侧
+     * 不可见、无法在此防御，值域校验是测试侧可闭合的部分 */
+    int logverif_raw = get_testspecific_knob_value_int(test, "logverif", 0);
     /* logverif_retain（0/1，默认 0）：绿跑是否保留逐次验证日志。默认删
      * （修 #9/#14 的长战役绿跑堆积写满 /var/tmp）；=1 时绿跑也保留——
      * golden 为 init 同源内核预计算，init/run 一致同错的系统性错误三通
      * 道全绿，logverif 行是绿跑期唯一可人工审计的计算值迹（PR#341 轮4
      * 检视 :834），需要审计时显式打开；代价是回到无界堆积（见 header
      * 生命周期披露），长战役慎用 */
-    d->logverif_retain = get_testspecific_knob_value_int(test, "logverif_retain", 0) != 0;
+    int logverif_retain_raw = get_testspecific_knob_value_int(test, "logverif_retain", 0);
+    /* (unsigned)cast 使负值（若框架解析出）一并落入 >1 分支 */
+    if ((unsigned)logverif_raw > 1u || (unsigned)logverif_retain_raw > 1u) {
+        log_error("spinlock_add_neon: invalid logverif=%d / "
+                  "logverif_retain=%d knob value(s) (valid: 0 or 1, default "
+                  "0) — failing loudly so a wrong value cannot silently "
+                  "flip the verification-log / audit-retention setting "
+                  "(selftest knob discipline)",
+                  logverif_raw, logverif_retain_raw);
+        /* 与 selftest 错值路径同约束：仅 d 本身已分配，就地释放返回，
+         * 不能 goto fail——会跨越下方 floats_total 的初始化（C++ 禁止） */
+        free(d);
+        return EXIT_FAILURE;
+    }
+    d->logverif = logverif_raw != 0;
+    d->logverif_retain = logverif_retain_raw != 0;
     const char *st = get_testspecific_knob_value_string(test, "selftest", "off");
     /* 未知取值 fail loudly 而非静默映射 0（igzip level knob 先例：静默钳
      * 0 会让部署自检纪律被一个 typo 无声击穿——selftest=Stall 之类错值

@@ -35,7 +35,8 @@
 
 - 若 128 核 / 62 GiB node0-only 那台机器的 BMC / 持久日志仍可及：补 ipmitool
   SEL / pstore / journalctl -b -1 取证，给 2026-10-29 ~09:01 重启定性（triage-256
-  §7 观察项②；当时未取证，事后取证窗口大概率已流失，如实声明边界即可）。
+  §7 观察项②；当时未取证，各取证面是否仍可及未经实测——BMC SEL 跨重启持久、
+  journal `--list-boots` 可枚举历史 boot，如实声明边界即可）。
 
 ---
 

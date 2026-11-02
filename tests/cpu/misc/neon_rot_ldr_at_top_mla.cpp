@@ -67,10 +67,10 @@ static inline uint32x4_t load_vec(const void *addr) {
 
 static int neon_rot_ldr_at_top_mla_init(struct test *test) {
     auto *data = static_cast<NeonRotLdrAtTopMlaData *>(malloc(sizeof(NeonRotLdrAtTopMlaData)));
-    data->srcA = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
-    data->srcB = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
-    data->scratch = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
-    data->expected = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    data->srcA = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    data->srcB = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    data->scratch = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    data->expected = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
 
     memset_random(data->srcA, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t));
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t));
@@ -111,8 +111,8 @@ static int neon_rot_ldr_at_top_mla_init(struct test *test) {
 static int neon_rot_ldr_at_top_mla_run(struct test *test, int cpu) {
     auto *data = static_cast<NeonRotLdrAtTopMlaData *>(test->data);
 
-    uint32x4_t *temp = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
-    uint32x4_t *dst  = static_cast<uint32x4_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    uint32x4_t *temp = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
+    uint32x4_t *dst  = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
 
     TEST_LOOP(test, 1 << 13) {
         for (int i = 0; i < NEON_ROT_LDR_AT_TOP_MLA_COUNT; i++) {

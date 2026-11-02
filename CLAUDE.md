@@ -66,7 +66,9 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent:
                                                #   SVE1 host (MIDR part 0xd02): 570 PROD / 580 q0 / 584 q-1
                                                #     (2026-11-02 pre-migration merge-tree measured, gcc + full vendored deps
-                                               #      incl. OpenSSL/OpenBLAS/SLEEF groups; the historical
+                                               #      incl. OpenSSL/OpenBLAS/SLEEF groups, excl. crt_builtins ×2
+                                               #      (clang-17 libclang_rt.builtins.a probe missed on this host,
+                                               #      +2 PROD where present — README footnote); the historical
                                                #      486/490 series and its +121 extrapolation 507/517/521 are
                                                #      the degraded caliber — a fresh-worktree
                                                #      `meson setup` BEFORE third-party/*/install is populated

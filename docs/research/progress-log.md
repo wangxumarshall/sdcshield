@@ -1629,11 +1629,12 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
 - **线性化（git-sanity 红的修复）**: CI `check-git-history.sh` 禁止 PR 分支
   含 merge commit——merge commit f713d678 违规红。cherry-pick 55c36ccb +
   046c60c5 重放到 origin/main（7f0b9c7c）成线性链，冲突解与 merge 版同文
-  （344df32b/f34e96d1，双 commit Signed-off-by 齐、零 merge），A' 树与
+  （344df32b/cd5d570e，双 commit Signed-off-by 齐、零 merge），A' 树与
   f713d678 树 diff 仅 #458 的 4 文件（文档状态等价实证）。
 - **验证**: SDC_BUILD_JOBS=8 linear 树 613 目标 BUILD_EXIT=0（reconfigure
-  后 vendored 依赖全检测）；zstd19 -t 2000 -n 1 → exit: pass（f34e96d10250
-  二进制）；--list-tests 三档 570/580/584（SKIP 4 = eigen_svd_jacobi*4、
+  后 vendored 依赖全检测）；zstd19 -t 2000 -n 1 → exit: pass（cd5d570e
+  线性树二进制，amend 前树构建、docs-only amend 不改二进制）；
+  --list-tests 三档 570/580/584（SKIP 4 = eigen_svd_jacobi*4、
   BETA 10 差集具名核对 = 旧 6 个 + sched_storm×4）。SVE2/SME 被过滤用例
   4 个（sve2_cross_precision_arm、sme_fmopa_{za,stress}_arm、
   sme_za_tileview_arm）具名清点。**目标数对账（R3 补）**: 538 = 26162e44
@@ -1677,12 +1678,14 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   - **#12 采纳（历史轮次、与 #16 合并处置）**: 表格口径迁移的 host-independent
     锚点缺失——588 锚点补入 footnote（见 #16 处置）。
   - **v2 #9 不采信（历史轮次）**: 其「本机 MIDR=0x481fd010（0xd01）实测
-    388/396/400」——本机 /proc/cpuinfo 实测 CPU part=0xd02（v2 会话在本机
-    跑、其机身份声称与事实不符），388/396/400 无本机实测来源；虽与
-    390−4+2 独立推算吻合，但不以「实测」名义写入文档（390 保留原测量树
-    标注 + 口径披露处置）。
-- **验证**: 文档-only commit（CLAUDE/README/progress-log），二进制 f34e96d10250
-  不变（570/580/584 计数与 zstd19 回归 pass 均已实测）。
+    388/396/400」——本 PR-loop 宿主机 /proc/cpuinfo 实测 CPU part=0xd02，
+    本机任何记录口径（降级 488/498/502、齐备 570/580/584）都不产 388；
+    原句「v2 会话在本机跑」的检视机归属断言不可核验（多板环境检视机 ≠
+    宿主机，R6 更正）——但无论 v2 产自哪台机，其宿主身份未经独立复核，
+    虽与 390−4+2 独立推算吻合，不以「实测」名义写入文档（390 保留原
+    测量树标注 + 口径披露处置，R4 算术定案独立成立）。
+- **验证**: 文档-only commit（CLAUDE/README/progress-log），二进制与 R1
+  cd5d570e 线性树构建相同（570/580/584 计数与 zstd19 回归 pass 均已实测）。
 
 ## 2026-11-02（PR #413 R3 检视处置：390 身份限定 + 归因修正 + reconfigure 修复路径 + 目标数对账）
 
@@ -1734,3 +1737,73 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
     处置链，progress-log 台账可溯源）。
 - **验证**: 文档-only commit（README/CLAUDE/progress-log + PR body）；
   570/580/584 计数与 zstd19 回归 pass 已实测（7d7331cd 树二进制不变）。
+
+## 2026-11-02（PR #413 R6 检视处置：f34e96d1 悬空引用补真 + crt_builtins 第 6 静默守卫披露 + 06:36 迟到批机器错位驳回）
+
+- **R6 collect（15:37 首导 / 17:00 复导，意见集未变）**: 当前 head 意见
+  仍为 R5 三条（15:11 检视锚定 51feddbd）——#37 已由 R5 以 PR 标题元数据
+  处置（标题不再断言「实测 390」），#38/#39 维持 RESIDUAL（计数事实三处
+  全文复制、footnote 句法可读性——结构性去重与句法打磨归后续文档 PR
+  专项）。06:36 UTC（14:36）迟到检视批 #30–#35（锚 b9df4cb3，R4/R5
+  collect 标历史轮次未处置）按「仍适用于当前代码」全量复核：
+  - **#32 部分采纳（progress-log:1632/1635/1684）**: R1 线性化台账把「双
+    commit」枚举与二进制验证锚写到 f34e96d1——实证 f34e96d1 =
+    f34e96d10250b98d8b9225ea8e18eac81c245336（父 344df32b、作者日期与
+    cd5d570e 同为 11:26:50、主题为旧数版「487/501→488/502」），即 R1
+    commit 被 docs-only amend（降级数 488/502 修正为 570/584）前的原始
+    哈希；`git branch -a --contains f34e96d1` 为空——未推送的悬空对象，
+    远端审计者不可解析（#32 检视在其克隆内 cat-file 报 Not a valid
+    object name 与此一致）。采纳：三处引用补真为已推送的 cd5d570e
+    （1632 双 commit 枚举；1635/1684 二进制锚，保留 amend 前构建出处
+    说明）。驳回「整段验证记录悬空」：验证主张实际锚定在已推送的
+    344df32b/cd5d570e 线性链（git log --format='%h %p' 可复核），仅三处
+    哈希引用未随 amend 更新；git diff f34e96d1 cd5d570e = 纯文档 3
+    文件，docs-only amend 不改二进制，二进制验证等价成立。
+  - **#30 机器错位驳回 + 实质缺口采纳（Critical：「三档各少 2、真实
+    572/582/586、注册总数 590」）**: 三重实证驳回其对文档口径的指控——
+    ① 本机直测（/proc/cpuinfo CPU part 0xd02 + sve、127 核）三档 =
+    570/580/584（本日复测）；② 注册总数 588：readelf `tests` 段地址窗
+    [0xcb7b00,0xcd0f40) 内 `_test_*` 结构体恰 588 个 = 584 列出 + 4 具名
+    被滤，`_test_mce_check` 在段外（0xca9520，special_tests 注入、不经
+    选择期过滤），nm 全量 589 = 588 + 1 恰好闭合；③ 全源名旁路普查：
+    601 个 DECLARE_TEST 源名经 `--test-list-file`（掺 zzz_bogus_test_name
+    对照、走装载报错路径）→ 13 个未注册 = examples（simple_add/
+    vector_add）+ gpu（ze_memcpy/ze_matmul_elemwise）+ fuzzing×2 + ifs×3
+    + atomic_simd_{128,256}_unaligned×2（meson 注释目标）+ crt_builtins×2，
+    601 − 13 = 588，与 nm 双路互证。其「590/572/582/586」属另一构建口径：
+    crt_builtins 探针（tests/cpu/arithmetic_arm/meson.build:111-123、
+    tests/cpu/sve/meson.build:272-279，硬编码 clang-17
+    `libclang_rt.builtins.a` 路径）命中的构建多注册 crt_builtins/
+    crt_builtins_sve（PROD×2）→ 注册 590、0xd02 侧 PROD 572；本机该库
+    不存在（test -f 实测 ABSENT）故不在本口径。**采纳其实质缺口（#26
+    同型第 6 例）**: R4 齐备清单漏此探针——README:388 footnote 与
+    CLAUDE.md 计数块补披露。其 400+186 跨机并集推算方法驳回（两机构建
+    配置不同，不可跨机相加）；其「能力主机 PROD 574」与 R3 #21 已写入
+    文档的推导一致，无新主张。
+  - **#31 驳回（Critical：「降级陷阱叙事在 PR 循环所在机器上不可能发生
+    + 数字应为 572/582/586」）**: 机器前提错位——其全部「本机」证据
+    （MIDR 0x481fd010、firestorm 48-d01-00、无 SVE、--list-tests
+    388/396/400、build.ninja 10:35 再生成）属另一台检视机，与本 PR-loop
+    宿主机（0xd02 + sve，/proc/cpuinfo 实测）不符；R1 降级叙事发生在
+    本机，有导出清单（pr413-listtests-*.txt 488/498/502）与构建日志
+    （SSL-disabled 538 目标 → install/ 齐备 reconfigure 后 613 目标）
+    佐证；「572/582/586」随 #30 一并驳回（系有 crt 库构建的另一口径）。
+  - **#33 采纳事实内核（R2 台账更正）+ 驳回诉求**: 可核验部分成立——
+    R2 台账原句「v2 会话在本机跑」把检视机等同宿主机，多板环境下该
+    归属断言不可核验，R6 已将该句更正（见 R2 节）；但其诉求（把
+    388/396/400 写回文档为「实测」）驳回——该组数字的宿主身份同样
+    未经独立复核，且 R4 算术定案（no-SVE q-1 天花板 586−207=379 < 398）
+    与 R5 处置（0xd01 侧一律「历史记录、归因不可考、待复测定值」）
+    独立于身份争议成立，文档现状即其正确处置。
+  - **#34 变通（与 PR #461 数字冲突）**: #461 为另一台机（0xd01 侧）、
+    另一 worker 的 PR，超出本 PR 处置范围（本 worker 只碰本 PR）；本
+    PR 文档全部带 0xd02/0xd01 机器限定语，两 PR 各自机器限定后不构成
+    同题矛盾；合并顺序与文本冲突由人工 merge gate 裁决。
+  - **#35 已处置（scope drift）**: R4 #28（PR body 更新）+ R5 #37（标题
+    更新）已覆盖，无新内容。
+- **验证**: 文档-only commit（README/CLAUDE/progress-log），x86-64 非回归
+  = 纯文档无代码路径；SDC_BUILD_JOBS=8 ./scripts/build.sh → ninja no
+  work to do、BUILD_EXIT=0、0 警告；zstd19 -t 2000 -n 1 → exit: pass
+  （version: sdcshield-cd5d570e857a-dirty，docs-only 不改二进制）；
+  --list-tests 三档 570/580/584 本日复测复现；588 注册锚点经 nm 段窗 +
+  旁路普查双路实证（见 #30）；crt 探针本机未命中经 test -f 实测。

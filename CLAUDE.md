@@ -131,14 +131,18 @@ END_DECLARE_TEST
   n_run from a probe power-law fit × the AR all-core-slowdown table
   (family×topology), refined by a VmHWM feedback loop (per-slice EMA,
   median aggregation, 0.7× table floor). Explicit `-O <test>.mdim/n`
-  bypasses sizing; the `[内存越界]`/`[欠压力]` expected-memory warning
-  (inside the aarch64+linux guard — x86-64 prints none) fires only
-  for the ten SVD template-family users (knob routed through the
-  joint layer via `calibrated_auto_dim`) — gemm/sparse/sve/bidiag
-  callers still short-circuit the knob in their own init (before the
-  arch guard), no warning yet (T11b follow-up;
-  10/21 eigen cases covered). The pre-fix "ULP-level sporadic failure
-  under full-core multithreading" advice is obsolete.
+  bypasses sizing; the explicit-knob `[内存越界]`/`[欠压力]`
+  expected-memory warning (the T11 block sits inside the
+  aarch64+linux guard — x86-64 prints none for explicit knobs; the
+  tags themselves also fire on x86-64 from the arch-agnostic
+  `sdc_auto_square_dim`/`sdc_auto_linear_count` adaptive paths)
+  fires only for the ten SVD template-family users (knob routed
+  through the joint layer via `calibrated_auto_dim`) —
+  gemm/sparse/sve/bidiag callers still short-circuit the knob in
+  their own init (before the arch guard), no warning yet (T11b
+  follow-up; 10/21 eigen cases covered). The pre-fix "ULP-level
+  sporadic failure under full-core multithreading" advice is
+  obsolete.
 - **Vector capability (SVE/SVE2/SME, VL/SVL tiers) is per-host — probe it,
   never assume it.** Measured lab hosts differ widely: some expose SVE with a
   pinnable VL and no SVE2/SME, some expose the full SVE2 set + SME/SME2 at a

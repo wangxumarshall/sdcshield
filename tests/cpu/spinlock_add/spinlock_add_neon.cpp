@@ -261,7 +261,12 @@ static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddN
         if ((++spins & (SPINLOCK_ADD_NEON_SPIN_CLOCK_PERIOD - 1)) == 0) {
             const uint64_t waited = spinlock_add_neon_now_ns() - t0;
             if (waited > limit) {
-                uint64_t epoch0 = d->line->epoch;
+                /* epoch/holder 是跨锁共享字段：等待者无锁读并发于持锁者
+                 * 临界区写——C++20 中 volatile 无跨线程语义，plain 读-写对
+                 * 构成 data race（形式 UB）；RELAXED 原子读消除之，ARM64
+                 * 对齐 8B 单拷贝原子、与 plain ldr 同码（行为不变、语义有
+                 * 定义，PR#341 轮1 检视 :205） */
+                uint64_t epoch0 = __atomic_load_n(&d->line->epoch, __ATOMIC_RELAXED);
                 uint64_t c0 = spinlock_add_neon_now_ns();
                 uint64_t c_prev = c0;
                 const uint64_t gap_limit =
@@ -275,7 +280,7 @@ static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddN
                         break;
                     }
                     expected = 0;
-                    if (d->line->epoch != epoch0) {
+                    if (__atomic_load_n(&d->line->epoch, __ATOMIC_RELAXED) != epoch0) {
                         flowed = true;
                         break;
                     }
@@ -289,7 +294,7 @@ static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddN
                             break;
                         }
                         gap_restarts++;
-                        epoch0 = d->line->epoch;
+                        epoch0 = __atomic_load_n(&d->line->epoch, __ATOMIC_RELAXED);
                         c0 = now;
                         c_prev = now;
                         continue;
@@ -346,15 +351,22 @@ static void spinlock_add_neon_release(struct SpinlockAddNeonData *d)
 static void spinlock_add_neon_dump_line(struct SpinlockAddNeonData *d, int cpu,
                                         uint64_t stall_ns, const char *verdict)
 {
+    /* 逐元素 RELAXED 原子读（PR#341 轮1 检视 :205）：dump 时其余 worker
+     * 仍在自旋/CAS/临界区——lock_word/epoch/holder 与本读并发，plain
+     * volatile 读是 data race 的一半（形式 UB）；ARM64 对齐 8B 单拷贝原子，
+     * RELAXED 与 plain ldr 同码 */
     const volatile uint64_t *q = reinterpret_cast<const volatile uint64_t *>(d->line);
+    uint64_t v[8];
+    for (int i = 0; i < 8; ++i)
+        v[i] = __atomic_load_n(&q[i], __ATOMIC_RELAXED);
     log_error("spinlock_add_neon: LOCK STALL %.3fs on cpu %d — %s; lock cacheline 64B dump: "
               "lock_word=0x%016lX epoch=%lu holder=%lu magic=0x%016lX "
               "pad=[0x%016lX,0x%016lX,0x%016lX,0x%016lX]%s",
               (double)stall_ns / 1e9, cpu, verdict,
-              (unsigned long)q[0], (unsigned long)q[1], (unsigned long)q[2],
-              (unsigned long)q[3], (unsigned long)q[4], (unsigned long)q[5],
-              (unsigned long)q[6], (unsigned long)q[7],
-              q[3] == SPINLOCK_ADD_NEON_MAGIC
+              (unsigned long)v[0], (unsigned long)v[1], (unsigned long)v[2],
+              (unsigned long)v[3], (unsigned long)v[4], (unsigned long)v[5],
+              (unsigned long)v[6], (unsigned long)v[7],
+              v[3] == SPINLOCK_ADD_NEON_MAGIC
                   ? " (magic intact — 8-byte window signature)"
                   : " (MAGIC ALSO CORRUPTED — wider blast radius)");
 }
@@ -416,11 +428,20 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         }
 
         /* C: 临界区——锁字同行元数据 + 计数对（通道B 靶，同窗更新）。
-         * epoch 不用 ++（C++20 弃用 volatile 复合操作）：显式读-改-写。 */
+         * epoch/holder 写走 RELAXED 原子（PR#341 轮1 检视 :205）：锁内单
+         * 写者，但等待者确认窗/dump 的无锁读并发于本写——C++20 下 plain
+         * volatile 写+他线程读是 data race（形式 UB），原子化写侧消除之；
+         * RELAXED 保持锁内单写者语义（同步已由 lock_word 的
+         * acquire/release 承担），ARM64 对齐 8B 与原 plain str 同码。
+         * shared_counter/local_counts 无锁外读者（cleanup 在 join 后
+         * quiescent 读），plain 计数保持。epoch 经显式原子读-改-写（不用
+         * volatile ++，C++20 弃用复合操作） */
         d->shared_counter[0]++;
         d->local_counts[slot]++;
-        d->line->holder = (uint64_t)cpu;
-        d->line->epoch = d->line->epoch + 1;
+        __atomic_store_n(&d->line->holder, (uint64_t)cpu, __ATOMIC_RELAXED);
+        __atomic_store_n(&d->line->epoch,
+                         __atomic_load_n(&d->line->epoch, __ATOMIC_RELAXED) + 1,
+                         __ATOMIC_RELAXED);
 
         /* 自检 stall：首个进临界区的线程持锁 15s（> 看门狗 10s + 确认窗 1s
          * + 裕量——模拟冻结须长于两段式全检出时延，否则确认窗内其他线程

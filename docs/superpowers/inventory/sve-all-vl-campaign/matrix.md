@@ -82,7 +82,7 @@
 ## 3. fmmla@128 合法 SKIP 的逐字源码引文（T3 minor fix）
 
 triage-128 §2 曾意译此注释（丢了 measured-SIGILL 关键句）；按裁定本矩阵补**逐字**引用
-——`tests/cpu/arm64/sve512_fmmla_arm.cpp:193-196`（当前基线）：
+——`tests/cpu/arm64/sve512_fmmla_arm.cpp:209-212`（当前基线）：
 
 ```c
     /* F64MM needs a 256-bit segment to hold its 2x2 double matrix: at

@@ -12,14 +12,14 @@
 #   gem5-512-verdicts.txt                512 腿逐用例判定（Task 6）
 #   gem5-overrides.txt                   512 腿额外降容表，16 条（Task 6）
 #   triage-512.md                        §0 头部块（逐字引用进矩阵头部）
-#   tests/cpu/arm64/sve512_fmmla_arm.cpp :193-196（fmmla@128 SKIP 的逐字源码引文，
+#   tests/cpu/arm64/sve512_fmmla_arm.cpp :209-212（fmmla@128 SKIP 的逐字源码引文，
 #                                        T3 minor fix：triage-128 曾意译丢句，此处补逐字）
 #
 # 纪律（brief Step 1）：每一格的值都由本脚本从上述工件机械推导，**不许手填**。
 # 脚本内嵌的字面量只有四类，均为对已入库文档的引用而非数据编造：
 #   (a) triage 分节号引用（triage-256 §1+§5 / triage-128 §1+§2 / triage-512 §0+§5.1+§5.2）；
 #   (b) 9 个 512 边界格的机制性理由短标签（内容归类引自 triage-512 §5.1/§5.2）；
-#   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :193-196）；
+#   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :209-212）；
 #   (d) §4 表体的 † 弱证据行标记集合 = 5 个 PR #316 已修复越界缺陷测试
 #       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）。
 #
@@ -90,16 +90,16 @@ awk -F'|' '$0 ~ /^[A-Za-z0-9_]+\|/ {
 # ---- triage-512 §0 头部块（逐字；sed 界定首尾标题，剥标题本身与空行）。
 sed -n '/^## 0\./,/^## 1\./p' "$TRI512" | sed '1d;$d' | sed '/^$/d' > "$TMP/sec0.quote"
 
-# ---- fmmla@128 源码逐字引文（tests/cpu/arm64/sve512_fmmla_arm.cpp:193-196）。
+# ---- fmmla@128 源码逐字引文（tests/cpu/arm64/sve512_fmmla_arm.cpp:209-212）。
 # 内容断言（PR #307 #11）：行号是活源码上的脆弱锚——上游漂移一行即静默
 # 错引；断言引文恰 4 行且含门调用与实测 SIGILL 句，漂移即 FATAL。
-sed -n '193,196p' "$FMMLA_SRC" > "$TMP/fmmla.quote"
+sed -n '209,212p' "$FMMLA_SRC" > "$TMP/fmmla.quote"
 quote_ok=1
 grep -q 'arm64_require_sve_vl(test, 256, 1024)' "$TMP/fmmla.quote" || quote_ok=0
 grep -q 'raises SIGILL (measured 2026-10-27 on silicon' "$TMP/fmmla.quote" || quote_ok=0
 [ "$(wc -l < "$TMP/fmmla.quote")" -eq 4 ] || quote_ok=0
 [ "$quote_ok" -eq 1 ] \
-    || { echo "ERROR: fmmla quote drift: $FMMLA_SRC:193-196 no longer holds the expected 4 lines (gate call 'arm64_require_sve_vl(test, 256, 1024)' + measured-SIGILL sentence) — re-anchor the sed range" >&2; exit 2; }
+    || { echo "ERROR: fmmla quote drift: $FMMLA_SRC:209-212 no longer holds the expected 4 lines (gate call 'arm64_require_sve_vl(test, 256, 1024)' + measured-SIGILL sentence) — re-anchor the sed range" >&2; exit 2; }
 
 # ---- 主生成：awk 依次加载 8 个输入；END 段产 (a) 表体 (b) §5 汇总算术块。
 #      任一断言失败 → exit 1，不写产物。
@@ -144,7 +144,7 @@ function cls(c, arr) {
 
 END {
     # 128 列合法双 seed SKIP 钉死集合（PR #307 #8）：唯一格 = fmmla（理由
-    # 内容引自 triage-128 §2 + 源码 :193-196）。任何其它测试双 seed skip
+    # 内容引自 triage-128 §2 + 源码 :209-212）。任何其它测试双 seed skip
     # 都不许静默套用该标签——FATAL 交人工分诊。
     legal_skip["sve512_fmmla_arm"] = "F64MM UNDEFINED <VL=256"
 
@@ -340,7 +340,7 @@ cat <<'HDR2'
 ## 3. fmmla@128 合法 SKIP 的逐字源码引文（T3 minor fix）
 
 triage-128 §2 曾意译此注释（丢了 measured-SIGILL 关键句）；按裁定本矩阵补**逐字**引用
-——`tests/cpu/arm64/sve512_fmmla_arm.cpp:193-196`（当前基线）：
+——`tests/cpu/arm64/sve512_fmmla_arm.cpp:209-212`（当前基线）：
 
 ```c
 HDR2

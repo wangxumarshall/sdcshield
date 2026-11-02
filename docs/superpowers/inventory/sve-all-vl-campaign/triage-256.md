@@ -217,8 +217,9 @@ operating system error` 计数全 0，两 summary result 列无此类值）。�
 - **移交 Task 7 的观察项（非阻断）**：① mem_disambig_alu_sve 超时杀灭迟滞（1280 s，
   cpu-mask 空洞、avg-freq 0.0）——框架侧可评估改进；② seed2 首跑死亡时刻与该迟滞
   窗口重合（环境事件 2，因果未证）；③ 自适应几何与 300 s 超时预算的组合在 62 GiB
-  node0-only 主机上产生 25 格超时（seed1 实测事实；名单跨 seed/后续腿不变的外推
-  强度为「预期」而非「确定」，论据分层见 §4）——后续腿（128/512）如遇同类格
+  node0-only 主机上产生 25 格超时（seed1 实测事实；名单跨 seed 不变的外推强度为
+  「预期」而非「确定」，论据分层见 §4；跨腿维度无此论证——几何按档自适应，
+  名单复现未证，故指引保持「如遇」条件式）——后续腿（128/512）如遇同类格
   直接按本表 clamp 下限协议有界化即可。
 - **证据文件**：`native-256-LCG1001.summary.txt` / `native-256-LCG1002.summary.txt`
   （extract-summary.sh 机械提取，各 190 行，exit 行在内）；`native-256-LCG1002.stdout.txt`

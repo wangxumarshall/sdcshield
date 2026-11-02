@@ -31,6 +31,15 @@ struct CBNData {
 };
 }
 
+static inline uint32x4_t cbn_ld_vec(const uint32_t *a) {
+    uint32x4_t v;
+    __asm__ volatile("ldr %q0, [%1]" : "=w"(v) : "r"(a) : "memory");
+    return v;
+}
+static inline void cbn_st_vec(uint32_t *a, uint32x4_t v) {
+    __asm__ volatile("str %q0, [%1]" :: "w"(v), "r"(a) : "memory");
+}
+
 static int cachebounce_neon_init(struct test *test) {
     auto *d = new CBNData;
     if (!d) return EXIT_FAILURE;
@@ -54,15 +63,17 @@ static int cachebounce_neon_run(struct test *test, int cpu) {
     uint32x4_t local = vdupq_n_u32(0);         /* register golden */
 
     do {
-        /* NEON load-modify-store on a line shared by every core */
-        uint32x4_t v = vld1q_u32(slot);
+        /* NEON RMW on a line shared by every core — slot accesses
+         * via asm (intrinsic store->load pairs get GCC-forwarded,
+         * silently degrading the verify to constant-true) */
+        uint32x4_t v = cbn_ld_vec(slot);
         v = vaddq_u32(v, vdupq_n_u32(1));
-        vst1q_u32(slot, v);
+        cbn_st_vec(slot, v);
         local = vaddq_u32(local, vdupq_n_u32(1));
     } while (test_time_condition(test));
 
     /* the shared slot must hold exactly this core's own iterations */
-    uint32x4_t mem = vld1q_u32(slot);
+    uint32x4_t mem = cbn_ld_vec(slot);
     uint32x4_t diff = veorq_u32(mem, local);
     if (vmaxvq_u32(diff) != 0) {
         report_fail_msg("cachebounce_neon: cpu %d slot mismatch: "

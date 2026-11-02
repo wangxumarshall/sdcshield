@@ -33,6 +33,14 @@
 - 变体统一模型(逐位等价已推导):初始流 `h = r*0x9E3779B97F4A7C15 ^ col*0xC2B2AE3D27D4EB4F; h^=h>>32; h*=0xD6E8FEB86659FD93; h^=h>>32;` 推进一拍 `x = x*0xD6E8FEB86659FD93 + 0x9E3779B97F4A7C15; x^=x>>32;` 值域 `(double)(h % 2000u)/1000.0 - 1.0`(均匀 [-1,1))。标量:a←h,b←h2(1 拍);complex:a←(h,h2),b←(h3,h4)(3 拍)。`(Scalar)value` 对 double 恒等、对 float 是先算 double 再收窄(与旧 `(float)((double)…)` 逐位同)、对 `std::complex<double>` 用 `Scalar(v1,v2)`。
 - `sdc_joint_dim_slice(struct test*, const char *knob, const struct sdc_joint_args *, int solve_once(int))`(framework/sdc_stress_config.h:960)。
 - 本机(无 SVE Kunpeng 920):7 个非 SVE GEMM 测试原生可跑;`eigen_gemm_double_max_arm` 本机只可验 SKIP 路径。
+  > **勘误(2026-11-02, PR #392 检视 R2)**: 本条主机事实有误——实机为 cortex
+  > x3b(family-model 0x48-d02), SVE-256(`--dump-cpu-info` 实测: `SVE vector
+  > length: 256 bits`, SVE2/SME 无)。`eigen_gemm_double_max_arm` 本机真机可跑
+  > 且 **exit: pass**(vl256 默认档; `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 降档跑
+  > vl128 亦 pass); vl512/1024 已在 gem5-fi(`/home/sdc/wangxu/gem5-fi`, SE
+  > `arm_chaos.py`, 真同源 dual kernel 直接 include 收口后 header)以新旧
+  > checksum 逐位一致实证(见 PR 描述「SVE 4 档运行矩阵」)。执行时按实机
+  > 能力走了真机+gem5 路径, 本 plan 的 SKIP 路径预设未被执行。
 
 ---
 
@@ -464,6 +472,13 @@ Expected: 每测试 `exit: pass`(引用真实输出进报告)。
 ./builddir/sdcshield -e eigen_gemm_double_max_arm -t 2000 -n 1 2>&1 | tail -3
 ```
 Expected: 本机无 SVE → 诚实 SKIP(reason 不变)。**gem5-fi 规则评估写进报告**:本次改动对 body 是纯结构转发(填充逻辑与逐位一致性已由 harness + Task 4 Step 4 的指令级对比证明,wrapper 不含任何 SVE 语义/SVE intrinsic,模板具现化与 VL 无关);若 Task 4 Step 4 逐指令一致则运行时行为等价有静态证明,gem5-fi 侧不再引入新信息——按规则如实声明该边界与依据,不冒充跑过。
+
+> **勘误(2026-11-02, PR #392 检视 R2)**: 本 Step 的预设与上同源有误——实机
+> SVE-256, 该命令真机 `exit: pass`(非 SKIP); 且 gem5-fi 存在
+> (`/home/sdc/wangxu/gem5-fi`)。实际执行超出本 Step 预设: vl128/256 真机
+> pass + vl512/1024 gem5-fi 真同源 dual(直接 include 收口后 header)与收口前
+> mirror 的 checksum 逐位一致(见 PR 描述)。本 Step 原文保留以记录计划时
+> 认知, 不作为验证边界依据。
 
 - [ ] **Step 4: x86-64 非回归(按检视)**
 

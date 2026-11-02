@@ -107,6 +107,10 @@ if host_machine.cpu_family() == 'aarch64'
         'movbe_dump_probe_h.cpp',
         'movbe_dump_probe_x.cpp',
         'movbe_dump_probe_xn.cpp',
+        'locv_a1_mrn_bypass_gap.cpp',
+        'locv_a2_mrn_split_consumer.cpp',
+        'locv_a3_mrn_split_gap.cpp',
+        'locv_b_pair_remote_store.cpp',
         # NOTE: neon_rot_ldr_at_top_rowmajor.cpp and its k*/sve* variant
         # family live in tests/cpu/misc/ + tests/cpu/sve/ (registered in
         # tests/cpu/meson.build). This directory's copy was a byte-identical

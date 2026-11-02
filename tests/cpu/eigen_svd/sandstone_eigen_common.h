@@ -15,6 +15,7 @@
 
 #include <sandstone.h>
 #include "sdc_stress_config.h"
+#include "../eigen_splitmix_lineage.h"
 
 #include <boost/type_traits/is_complex.hpp>
 #include <Eigen/Eigenvalues>
@@ -161,28 +162,34 @@ template <typename SVD, int Dim> struct EigenSVDTest
      * 且随维度恶化、BDCSVD<complex> 0.47~0.70×; 对照
      * eigen_sparse 侧同谱系 probe 实测 0.95×)。splitmix 散列
      * [-1,1)(complex 独立 re/im)与随机阵同谱系, 校准计时
-     * 口径与 run 期单解一致。改这里的值域/结构必须与
-     * fill_matrix_random 同步演化。 */
+     * 口径与 run 期单解一致。改填充结构必须与 fill_matrix_random
+     * 同步演化; 魔数/值域档位取自 ../eigen_splitmix_lineage.h 单一
+     * 事实源(与 eigen_gemm 家族的 fill_pair 共享, 检视 #392-R1)——
+     * 改值域只改该头, 勿在此内联魔数。 */
     static int sizing_probe(int n)
     {
+        using sandstone_splitmix::kAvalanche;
+        using sandstone_splitmix::kGolden;
+        using sandstone_splitmix::kMix;
+        using sandstone_splitmix::kRangeScale;
+        using sandstone_splitmix::kRangeSteps;
         Mat m(n, n);
         using Scalar = typename Mat::Scalar;
         for (int r = 0; r < n; ++r)
             for (int c = 0; c < n; ++c) {
-                std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                                ^ (std::uint64_t)c * 0xC2B2AE3D27D4EB4Full;
+                std::uint64_t h = (std::uint64_t)r * kGolden
+                                ^ (std::uint64_t)c * kMix;
                 h ^= h >> 32;
-                h *= 0xD6E8FEB86659FD93ull;
+                h *= kAvalanche;
                 h ^= h >> 32;
                 if constexpr (boost::is_complex<Scalar>::value) {
-                    std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                                     + 0x9E3779B97F4A7C15ull;
+                    std::uint64_t h2 = h * kAvalanche + kGolden;
                     h2 ^= h2 >> 32;
                     m(r, c) = Scalar(
-                        (typename Scalar::value_type)((double)(h % 2000u) / 1000.0 - 1.0),
-                        (typename Scalar::value_type)((double)(h2 % 2000u) / 1000.0 - 1.0));
+                        (typename Scalar::value_type)((double)(h % kRangeSteps) / kRangeScale - 1.0),
+                        (typename Scalar::value_type)((double)(h2 % kRangeSteps) / kRangeScale - 1.0));
                 } else {
-                    m(r, c) = (Scalar)((double)(h % 2000u) / 1000.0 - 1.0);
+                    m(r, c) = (Scalar)((double)(h % kRangeSteps) / kRangeScale - 1.0);
                 }
             }
         Mat u, v;

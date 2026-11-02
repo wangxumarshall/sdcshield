@@ -3,12 +3,14 @@
  * Copyright 2026.
  * SPDX-License-Identifier: Apache-2.0
  *
- * 谱系契约(检视 #51)在此单点承载: probe 填充必须与各测试 run() 的
+ * 谱系契约(检视 #51)在 GEMM 家族承载: probe 填充必须与各测试 run() 的
  * fill_rand(frandom_scale(2.0) - 1.0, 均匀随机 [-1,1))同谱系——splitmix
  * 确定性哈希满足该契约, 且不依赖 init aux 线程上未定义的 per-thread RNG
  * 状态。GEMM 计时对数值不敏感(无 SVD 式 deflation 路径), 谱系由分布
  * 一致性满足; 填充 O(n²) 相对乘法 O(n³) 已计入探针计时(保守方向)。
- * 改这里的值域/结构必须与各 run() 的 fill_rand 同步演化。
+ * 改填充结构必须与各 run() 的 fill_rand 同步演化; 魔数/值域档位则取自
+ * ../eigen_splitmix_lineage.h 单一事实源(与 eigen_svd 家族的
+ * sizing_probe 共享, 检视 #392-R1)——改值域只改该头, 勿在此内联魔数。
  *
  * 收口背景(issue #389): 本填充曾以 8 份逐字副本分散在 double14 /
  * gemm_{double,float,cdouble}_dynamic_square{,_dump} 7 个 T9 文件与
@@ -29,6 +31,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "../eigen_splitmix_lineage.h"
+
 #if defined(__aarch64__) && defined(__linux__)
 
 namespace gemm_probe {
@@ -38,16 +42,17 @@ namespace gemm_probe {
 template <typename T> struct is_std_complex : std::false_type {};
 template <typename T> struct is_std_complex<std::complex<T>> : std::true_type {};
 
-/* 值域公式: 均匀随机 [-1,1), 2000 档千分之一步长。 */
+/* 值域公式: 均匀随机 [-1,1), 档位常量见 eigen_splitmix_lineage.h。 */
 inline double probe_value(std::uint64_t h)
 {
-    return (double)(h % 2000u) / 1000.0 - 1.0;
+    return (double)(h % sandstone_splitmix::kRangeSteps)
+           / sandstone_splitmix::kRangeScale - 1.0;
 }
 
 /* 哈希流推进一拍: x = x*K3 + K1 再 xorshift32(splitmix 雪崩)。 */
 inline std::uint64_t probe_stream(std::uint64_t x)
 {
-    x = x * 0xD6E8FEB86659FD93ull + 0x9E3779B97F4A7C15ull;
+    x = x * sandstone_splitmix::kAvalanche + sandstone_splitmix::kGolden;
     x ^= x >> 32;
     return x;
 }
@@ -72,8 +77,8 @@ static void fill_pair(Mat &a, Mat &b)
     const int n = a.rows();
     for (int r = 0; r < n; ++r)
         for (int col = 0; col < n; ++col) {
-            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
+            std::uint64_t h = (std::uint64_t)r * sandstone_splitmix::kGolden
+                            ^ (std::uint64_t)col * sandstone_splitmix::kMix;
             h ^= h >> 32;
             h *= 0xD6E8FEB86659FD93ull;
             h ^= h >> 32;

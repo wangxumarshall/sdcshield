@@ -80,8 +80,14 @@
 
 #include "sandstone.h"
 #include "sandstone_p.h" /* selftest=stall 前置条件校验须读生效测试时长
-                          * sApp->current_test_duration（公开 API 无时长
-                          * 访问器；mce_check/smi_count 同款先例） */
+                          * sApp->current_test_duration（公开 API 无时长访
+                          * 问器）。耦合诚实声明（PR#341 轮1 检视 :76）：本报
+                          * 告文件是全仓唯一解引用 sApp 私有单例的测试
+                          * （grep 'sApp->' tests/ 仅命中此处；mce_check/
+                          * smi_count include sandstone_p.h 仅为传递可见
+                          * interrupt_monitor.hpp，不读其成员）——框架重构
+                          * 该私有成员（sandstone_p.h）时恰好只破坏本测试；
+                          * 日后出现公开时长访问器时应改走之 */
 #include <cerrno>   /* errno：logverif 打开失败降级路径使用；不依赖框架头链
                      * 传递包含（PR#328 三轮检视 :368——上游 include 整理时
                      * 偶然可见性会静默破碎） */

@@ -67,11 +67,21 @@ static inline uint32x4_t load_vec(const void *addr) {
 
 static int neon_rot_ldr_at_top_mla_init(struct test *test) {
     auto *data = static_cast<NeonRotLdrAtTopMlaData *>(malloc(sizeof(NeonRotLdrAtTopMlaData)));
+    if (!data) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_mla: data alloc failed");
+        return EXIT_SKIP;
+    }
     data->srcA = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
     data->srcB = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
     data->scratch = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
     data->expected = static_cast<uint32x4_t *>(aligned_alloc_safe(64, NEON_ROT_LDR_AT_TOP_MLA_COUNT * sizeof(uint32x4_t)));
     if (!data->srcA || !data->srcB || !data->scratch || !data->expected) {
+        free(data->srcA);
+        free(data->srcB);
+        free(data->scratch);
+        free(data->expected);
+        free(data);
         log_skip(TestResourceIssueSkipCategory,
                  "neon_rot_ldr_at_top_mla: buffer alloc failed");
         return EXIT_SKIP;

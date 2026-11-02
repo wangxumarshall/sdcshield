@@ -53,11 +53,21 @@ static inline uint64x2_t load_vec(const void *addr) {
 
 static int neon_rot_stale_reload_init(struct test *test) {
     auto *data = static_cast<NeonRotStaleReloadData *>(malloc(sizeof(NeonRotStaleReloadData)));
+    if (!data) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_stale_reload: data alloc failed");
+        return EXIT_SKIP;
+    }
     data->srcA = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
     data->srcB = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
     data->srcref = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
     data->expected = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
     if (!data->srcA || !data->srcB || !data->srcref || !data->expected) {
+        free(data->srcA);
+        free(data->srcB);
+        free(data->srcref);
+        free(data->expected);
+        free(data);
         log_skip(TestResourceIssueSkipCategory,
                  "neon_rot_stale_reload: buffer alloc failed");
         return EXIT_SKIP;
@@ -111,7 +121,6 @@ static int neon_rot_stale_reload_run(struct test *test, int cpu) {
      * C11 requires size to be a multiple of alignment (glibc tolerates a
      * violation, ASan aborts on it) */
     uint64x2_t *temp_buf = static_cast<uint64x2_t *>(aligned_alloc_safe(64, (NEON_ROT_STALE_RELOAD_COUNT + 1) * sizeof(uint64x2_t)));
-    uint64x2_t *temp = temp_buf + 1;
     uint64x2_t *dst = static_cast<uint64x2_t *>(aligned_alloc_safe(64, NEON_ROT_STALE_RELOAD_COUNT * sizeof(uint64x2_t)));
     if (!temp_buf || !dst) {
         free(temp_buf);
@@ -120,6 +129,7 @@ static int neon_rot_stale_reload_run(struct test *test, int cpu) {
                  "neon_rot_stale_reload: run buffer alloc failed");
         return EXIT_SKIP;
     }
+    uint64x2_t *temp = temp_buf + 1;
 
     /* prefill: first-pass loads read valid data; res always rewrites the
      * same values, so every pass is self-consistent */

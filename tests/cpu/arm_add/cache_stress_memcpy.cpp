@@ -75,7 +75,7 @@ static int cache_stress_memcpy_run(struct test *test, int cpu) {
 
         /* verify against the independent golden */
         if (memcmp(d->dst, d->golden, CSM_SIZE) != 0) {
-            for (size_t i = 0; i < CSM_SIZE / 8; i += 8) {
+            for (size_t i = 0; i < CSM_SIZE / 8; ++i) { /* full scan (was sampled i += 8) */
                 if (d->golden[i] != d->dst[i]) {
                     report_fail_msg("cache_stress_memcpy: dst qword %zu "
                                     "differs from golden with NO flush "

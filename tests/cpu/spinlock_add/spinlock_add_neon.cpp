@@ -150,10 +150,17 @@ static uint64_t spinlock_add_neon_now_ns(void)
 }
 
 /* 纯函数 NEON 内核：4 组 x (a,b,c,d) 向量链 x 4 轮 vfma。确定性（IEEE 单
- * 舍入 FMA），无共享状态。 */
+ * 舍入 FMA），无共享状态。
+ * g 是向量槽基（每步处理 4 个 float32x4 = 16 float）：循环上界派生自
+ * SPINLOCK_ADD_NEON_FLOATS/4 而非字面量——若以 16 写死，将来调大 FLOATS
+ * 会让 kernel 只写每 slot out[] 前 64 float，而 run 的 memcmp 按 FLOATS
+ * 比对到 kernel 从未写入的未初始化字节，静默变成假 FAIL 机器；
+ * static_assert 锁住 16-float 步进对 FLOATS 可整除 */
+static_assert(SPINLOCK_ADD_NEON_FLOATS % 16 == 0,
+              "kernel group step covers 4 x float32x4 = 16 floats");
 static void spinlock_add_neon_kernel(const float *in, float *out)
 {
-    for (int g = 0; g < 16; g += 4) {
+    for (int g = 0; g < SPINLOCK_ADD_NEON_FLOATS / 4; g += 4) {
         float32x4_t a = vld1q_f32(in + g * 4 + 0);
         float32x4_t b = vld1q_f32(in + g * 4 + 4);
         float32x4_t c = vld1q_f32(in + g * 4 + 8);

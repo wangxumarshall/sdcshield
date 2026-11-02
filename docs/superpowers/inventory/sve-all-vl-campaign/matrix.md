@@ -312,7 +312,7 @@ pass 仅构成「同条件可跑绿」证据，**不构成基线洁净性证据*
 
 **570 = 560 pass（469 直绿 + 91 有界）+ 1 SKIP(legal) + 9 BOUNDARY(gem5)**，零 FAIL、零非法 SKIP。
 
-- **128 列 = 189 pass + 1 SKIP(legal)** —— 对账 triage-128 §5（两 seed 各 189 腿内绿 = 163 默认自适应直绿 + 26 格腿内 baked 有界（= 25 项 clamp 下限 + 1 项 acl 标定，构成同 §2 legend @128；clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）；189 与 26 计数对账 triage-128 §5，163/25/1 拆分口径对账 triage-256 §1/§7），另有 1 合法 SKIP：fmmla@128，两 seed 同格同理。
+- **128 列 = 189 pass + 1 SKIP(legal)** —— 对账 triage-128 §5（两 seed 各 189 腿内绿 = 163 默认自适应直绿 + 26 格腿内 baked 有界（= 25 项 clamp 下限 + 1 项 acl 标定，构成同 §2 legend @128；clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）；189 与 26 计数对账 triage-128 §5（该表收口口径未携带限定语义），163/25/1 拆分与限定语义对账 triage-256 §1/§5/§7），另有 1 合法 SKIP：fmmla@128，两 seed 同格同理。
 - **256 列 = 190 pass** —— 对账 triage-256 §7（seed1 165 腿内绿（164 格默认自适应直绿 + 1 格 acl 标定 baked）+ 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内 clamp 下限有界））；26 个有界格 = 25 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ 1 格 baked 腿内绿（acl dim=512 标定，Ruling B / triage-256 §1——baked 有界几何、证据强度与有界绿同向受限，非默认自适应直绿等同；按下行有界格计法计入 26 有界格之列、亦计入 165 腿内绿之列，两口径两属）。
 - **512 列 = 181 pass + 9 BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；39 个有界格 = baked 26 项中绿 25（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 15（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 1（acl：baked 512 被 extras 覆盖为 128）。
 - **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。

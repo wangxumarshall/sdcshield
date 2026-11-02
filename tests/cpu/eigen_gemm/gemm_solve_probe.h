@@ -80,7 +80,7 @@ static void fill_pair(Mat &a, Mat &b)
             std::uint64_t h = (std::uint64_t)r * sandstone_splitmix::kGolden
                             ^ (std::uint64_t)col * sandstone_splitmix::kMix;
             h ^= h >> 32;
-            h *= 0xD6E8FEB86659FD93ull;
+            h *= sandstone_splitmix::kAvalanche;
             h ^= h >> 32;
             if constexpr (kComplex) {
                 std::uint64_t h2 = probe_stream(h);

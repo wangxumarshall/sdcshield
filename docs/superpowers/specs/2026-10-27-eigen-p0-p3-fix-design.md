@@ -270,13 +270,25 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   -O mdim=4000 → 320.6 s SIGQUIT）——与 #352 头条失败模式同型的确定性
   kill 路径。auto 分支**不写**：`-t 2000 -n 1` 标准冒烟必须保持秒级
   （auto 单迭代由 run_budget=140 s 设计收在 300 s floor 内），且
-  -n 1 下 n_hi 撞 MDIM_MAX，写 min 会把冒烟拉到 t(6000) 分钟级。天然修复 exec_each_test 模式
+  -n 1 下 n_hi 撞 MDIM_MAX，写 min 会把冒烟拉到 t(6000) 分钟级。
+  【2026-11-02 勘误，PR#384 检视（意见 4439402781/4439402765）】
+  gemm_double_max_arm 显式档同步 SVD 的两处同构缺口：(a) workers==1 时
+  ar 取 1（与 svd f23e2fd9 同构——AR 表值是全核口径，单 worker 自争抢为
+  1；不折算则 -n 1 显式档裸跑 target 被拉到 ~ar 倍 t(knob)，compute 表值
+  5.0 → ~4.76 次迭代，标准 `-t … -n 1` 回归路径的单迭代语义破坏）；
+  (b) 显式档兼写 minimum_duration=ar×2×t(knob)（与 svd 9a82f53b 同构
+  ——compute 族表值 5.0 在大足迹下实测低估 3×，`-t 2000 -O mdim=4096`
+  全核单迭代 ≈242-264s 距 300s floor 余量不足 20%，表值档 host class
+  上确定性 SIGQUIT）。GEMM auto 分支维持 f6783077 原模型（ar×2×t(n_hi)
+  不随 worker 数折算——与联合求解 per_solve=run_budget/(ar×2) 同一口
+  径，全框架统一的拓扑表习语）。
+  天然修复 exec_each_test 模式
   preinit 不跑导致 g_dim 恒 300 的分歧（LSP 核实修正 #3）；
   **exec 模式下 desired_duration 的说明【v2 修正】：`test_duration()`
   在父进程用 preinit 写入的值（fork 模式有效）；exec 模式子进程无
   preinit 但父进程有 → desired_duration 经 fork 前的 test 结构不随 exec
   传递，exec child 走 `-t`/默认时长（v1 表述"走 -t 兜底"结论不变，
-  机理更正为：preinit 在 exec 父进程也运行，仅子进程映像不继承写值）**。
+  机理更正为：preinit 在 exec 父进程也运行，仅子进程映像不继承写值）**
 - **gemm_double_max_arm**：同样迁移 + 接入时间校准（【v2/M8】它同样
   无校准，v1 漏列）。
 

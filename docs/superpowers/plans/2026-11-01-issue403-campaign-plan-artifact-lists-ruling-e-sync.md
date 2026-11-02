@@ -13,7 +13,7 @@ docs/superpowers/inventory/sve-all-vl-campaign/` 会**零警告静默丢掉全�
 （目录级 add 对被忽略文件不告警，实测复现），矩阵将引用从未入库的文件。本计划把
 计划文档的工件清单与消费描述同步到裁定 E（运动实际执行的协议）。
 
-**Architecture:** 纯文档改动（0 代码语义变化，单文件 5 处编辑 + 本计划文档）。
+**Architecture:** 纯文档改动（0 代码语义变化，单文件 6 处编辑 + 本计划文档）。
 在计划文档中：(1) Global Constraints 增补一条「证据工件协议（裁定 E）」总纲，
 声明不入库/入库工件全集与 `git add` 的静默跳过语义（把「静默丢证据」从陷阱变成
 已声明的预期行为，并禁止 `git add -f` 强塞）；(2) Task 2/3/6 的 `.log` Create 行
@@ -52,7 +52,7 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
 ### Task 1: 同步计划文档工件清单 + 验证 + commit
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-10-28-sve-all-vl-verification-campaign.md`（5 处：Global Constraints 总纲、Task 2 Files、Task 2 Step 1、Task 3 Files、Task 6 Files、Task 8 Interfaces+Step 1）
+- Modify: `docs/superpowers/plans/2026-10-28-sve-all-vl-verification-campaign.md`（6 处：Global Constraints 总纲、Task 2 Files、Task 2 Step 1、Task 3 Files、Task 6 Files、Task 8 Interfaces+Step 1——实 diff 亦为 6 hunk，枚举与计数一致）
 
 **Interfaces:**
 - Consumes: 裁定 E 协议事实（triage-256.md §1 / triage-128.md §0/§6 / .gitignore / 实际入库工件集）。
@@ -62,7 +62,7 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
   `.log` 路径全部命中忽略规则；dummy `.log` + 目录级 `git add` 零警告、零暂存
   （静默丢证据）；grep 计划 :90/:131/:294/:398/:403 原文与 issue 引用一致。
 
-- [ ] **Step 2: 按上述 Architecture 施加 5 处编辑**。
+- [ ] **Step 2: 按上述 Architecture 施加 6 处编辑**。
 
 - [ ] **Step 3: 改后一致性核验**——(a) grep 计划全文：所有 `.log` 的 Create/矩阵
   输入主张均带「不入库」标注或已改为 `.summary.txt`；(b) 计划声称的入库工件

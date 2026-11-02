@@ -577,6 +577,7 @@ tests_set_sve.add(
         'eigen_svd/svd_float_sve.cpp',
         'eigen_svd/svd_fvectors_sve.cpp',
         'eigen_svd_jacobi/svd_float_sve.cpp',
+        'eigen_svd_jacobi/svd_fvectors_sve.cpp',
     )
 )
 

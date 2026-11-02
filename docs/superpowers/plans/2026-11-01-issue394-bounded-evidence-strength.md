@@ -32,6 +32,15 @@
 >    实际执行的等价验证（已过）：`bash -n matrix-gen.sh` + `./matrix-gen.sh` exit 0
 >    （内置 FATAL 断言全过）+ 再生成 diff 逐 hunk 判读恰为预期文本改动、190 行表体
 >    零变化。
+> 5. **缩比口径「从 4.0~36.7 GiB 级收到 KB~MiB 级」（Task 2 Step 3 引导句）与
+>    「工作集较默认自适应几何缩小数个数量级」（Task 3 Step 1 printf / Task 4
+>    Step 1 README 从句）已被按族分档证伪**——两个 dense SVD 族收缩最浅
+>    （bidiag ≈23 MiB 级、cdouble ≈2.2 GiB 级，维数缩比仅 ×32/×4.3），重执行须按
+>    交付文本 triage-256 §5 的按族量级表述；交付侧「数个数量级」已删（README/
+>    matrix-gen.sh/matrix.md/triage-256.md 四文件 grep 零命中）。
+> 6. **「2 s 定时压测跑满」（Task 2 Step 3 结论段）为假**——交付实测非每格打满
+>    （50 次中 2 格显著低于预算、最浅 858.7 ms ≈ 43%；10 次预算的 92%~99%；38 次
+>    打满），重执行按 triage-256 §5 现行分布描述改写，不得回退为「跑满」。
 
 ## Global Constraints
 

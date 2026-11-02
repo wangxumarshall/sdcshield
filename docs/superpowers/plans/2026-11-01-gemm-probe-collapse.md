@@ -430,8 +430,11 @@ Expected: 4 库全部构建成功、零警告(`-msve-vector-bits=TIER` × `-DEig
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
-git stash   # 或对比 origin/main 构建的旧库, 取其一; 用同一工具链同一 -O 级
-# 构建 origin/main 基线:
+# 基线构建走独立 worktree(检视 #392-R4 勘误: 原稿此处为 `git stash`——
+# 时序上收口改动尚未提交, stash 回退 8 个 wrapper 与 SVD 头的修改却留下
+# 未跟踪的新 header(分裂树), 下游 Task 5/6 会在旧码上构建回归并提交出
+# 孤儿 header 的空壳 PR; 且全文档无 stash pop。勿在工作树上 stash, 一律
+# worktree 对比——工具链与 -O 级由同一 builddir 配置保证):
 git worktree add /tmp/gemm-main-baseline origin/main 2>/dev/null || true
 # (在 baseline 内 meson/ninja 构建 vl128 库后:)
 objdump -d <baseline>/builddir/tests_eigen_gemm_vl128/libtests_eigen_gemm_vl128.a.p/gemm_double_max_arm_body.cpp.o \
@@ -439,6 +442,7 @@ objdump -d <baseline>/builddir/tests_eigen_gemm_vl128/libtests_eigen_gemm_vl128.
 objdump -d builddir/tests_eigen_gemm_vl128/libtests_eigen_gemm_vl128.a.p/gemm_double_max_arm_body.cpp.o \
         --disassemble='gemm_vl128::solve_once' > /tmp/solve_once_new.asm
 diff /tmp/solve_once_old.asm /tmp/solve_once_new.asm && echo "INSTRUCTION-IDENTICAL"
+git worktree remove /tmp/gemm-main-baseline --force 2>/dev/null || true
 ```
 Expected: 二者指令序列一致(或仅符号重定位偏移差异、逻辑零差异)。若逻辑有差异:分析是否仅内联边界造成的寄存器分配差——**报告里必须如实引用 diff 原文**;若逐指令一致,这是强于 gem5-fi 单次运行的等价证据。此步失败不阻塞提交(harness 已证逐位一致),但报告必须如实呈现。
 

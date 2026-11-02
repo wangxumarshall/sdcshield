@@ -276,8 +276,14 @@ retired (issue #351): the threshold is now a parameter, `probe_floor_ms`.
 Its default 1.0 restores the historical noise-floor semantics for every
 existing 7-argument caller — the x86-64 `#else` legacy chains
 (`eigen_sparse`, the SVD template family) and aarch64-non-Linux — so their
-calibrated operating points and init probe cost are byte-identical to the
-pre-#302 behavior. The 100 ms M3 floor (fixed-overhead share < 10%, needed
-by the difference-based `sdc_fit` `a_ms` extraction) is carried explicitly
+calibration is semantically equivalent to the pre-#302 behavior: identical
+1 ms probe stopping threshold and code path, with calibrated operating
+points and init probe cost reproducing within timing jitter (calibration
+is wall-clock-dependent and thus not byte-reproducible; the PR-measured
+`mdim` 473 vs the 476 pre-#302 baseline is such jitter). The 100 ms M3
+floor (fixed-overhead share < 10%, needed
+by the difference-based `sdc_fit` `a_ms` extraction; bound to the named
+constant `sdc_m3_probe_floor_ms`, with a runtime `log_warning` whenever
+the probe tier's measured duration falls short of it) is carried explicitly
 by the joint solver on its ARM64-only path; no non-migrated consumer sees
 it.

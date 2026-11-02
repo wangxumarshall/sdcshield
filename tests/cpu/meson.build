@@ -327,6 +327,15 @@ if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
             'arm-0102/arm0102_kreg_mask.cpp',
+            'arm-0102/arm0102_fma_f32.cpp',
+            'arm-0102/arm0102_fma_f64.cpp',
+            'arm-0102/arm0102_ins_ext.cpp',
+            'arm-0102/arm0102_kreg_logic.cpp',
+            'arm-0102/arm0102_kreg_mask_dump.cpp',
+            'arm-0102/arm0102_kreg_mask_vceq.cpp',
+            'arm-0102/arm0102_kreg_not.cpp',
+            'arm-0102/arm0102_kreg_select.cpp',
+            'arm-0102/arm0102_swizzle.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',

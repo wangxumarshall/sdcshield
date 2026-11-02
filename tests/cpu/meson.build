@@ -572,6 +572,7 @@ tests_set_sve.add(
     if_true : files(
         'eigen_gemm/gemm_double_max_arm.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
+        'eigen_svd/svd_double_sve.cpp',
     )
 )
 
@@ -1175,6 +1176,7 @@ if host_machine.cpu_family() == 'aarch64'
     eigen_sve_body_specs = [
         ['eigen_svd/svd_cdouble_sve_body.cpp',       'svd'],
         ['eigen_gemm/gemm_double_max_arm_body.cpp', 'gemm'],
+        ['eigen_svd/svd_double_sve_body.cpp',      'svd_f64'],
     ]
     foreach spec : eigen_sve_body_specs
         body_src = spec[0]

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 190 个 SVE1 用例在 VL=128/256/512 三档采集真实通过证据（570 格矩阵），发现即修。（计数口径：计划撰写时点预期 188 用例/564 格，清单定稿 190——`wc -l sve-test-list.txt` = 190、matrix.md 实收 190×3=570 格；正文 Task 6/8 与 Goal 按定稿值，Task 1 命令块内「预期 188/≈189」为历史时点预期原文。）
+**Goal:** 为 190 个 SVE1 用例在 VL=128/256/512 三档采集真实通过证据（570 格矩阵），发现即修。（计数口径：计划撰写时点预期 188 用例/564 格，清单定稿 190——`wc -l sve-test-list.txt` = 190、matrix.md 实收 190×3=570 格；正文 Task 6/8 与 Goal 按定稿值，Task 1 命令块内「预期 188/≈189」为历史时点预期原文。计数对齐与 Task 6 骨架执行语义对齐系 PR #418 检视处置轮次追加、超出 issue #403「.log 入库主张消歧」原始边界——因与本同步产出的工件协议注记交织于同一 hunk 邻域不再拆分 PR，处置按轮次独立 commit（git log 逐轮可追溯）+ PR 描述逐轮记录。）
 
 **Architecture:** native 两腿（128=env 降 spec / 256=原生）在本机全量跑 `--test-list-file`；512 腿走 gem5-fi SE 真二进制，先补 `prctl(PR_SVE_GET_VL/SET_VL)` stub 打通框架 VL 探测（A′），时间盒失败则回退 FS（A）。修复走独立 commit 三档重验。
 
@@ -166,10 +166,14 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --dump-cpu-info 2>&1 | grep
 ```
 Expected: `ARM64 spec: SVE yes (max VL 128 bits) | SVE2 no | SME no | SME2 no`。
 
-- [ ] **Step 2/3/4:** 与 Task 2 Step 1-3 相同（**完整继承**其命令块全部行——stdout 捕获、`cp` 回拷、`extract-summary.sh` 提取各行均在内；下方命令块仅示意 sdcshield 主命令的 env 前缀变化），外加 env 前缀；全部 `native-256` 文件名前缀相应改为 `native-128`（替换范围同 Task 2 Step 2 注记）：
+- [ ] **Step 2/3/4:** 与 Task 2 Step 1-3 相同（**完整继承**其命令块全部行——stdout 捕获、`cp` 回拷、`extract-summary.sh` 提取各行均在内；下方命令块按被继承的完整形态改写，非仅主命令示意），外加 env 前缀；全部 `native-256` 文件名前缀相应改为 `native-128`（替换范围同 Task 2 Step 2 注记）：
 ```bash
-SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o native-128-LCG1001.log -Y
-SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1002 -o native-128-LCG1002.log -Y
+# seed1（seed2 同理：LCG1001→LCG1002 文件名全量替换，替换范围见 Task 2 Step 2 注记）
+LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log
+SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-128-LCG1001.stdout 2>&1
+echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
+cp /tmp/native-128-LCG1001.stdout docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.stdout.txt   # 裁定 E：stdout 跑完即回拷入库（防 /tmp 随重启丢失）
+docs/superpowers/inventory/sve-all-vl-campaign/extract-summary.sh $LOG $LIST docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.summary.txt   # 裁定 E：机械提取入库 summary
 ```
 **特别关注**：128 档下 `eigen_svd_cdouble_sve` / `eigen_gemm_double_max_arm` 的 per-tier 分发（128 变体必须被选中而非 SKIP/FAIL）；`sleef_sve` 的 128..1024 门。SKIP 类异常全部记录理由并逐条判合法性（本机不应出现 HWCAP 类 SKIP）。
 

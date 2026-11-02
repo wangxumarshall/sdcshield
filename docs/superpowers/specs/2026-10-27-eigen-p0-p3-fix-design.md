@@ -141,18 +141,24 @@ node0-only 机器：全部线程计入 node0、node_budget ≈ 全局 MemAvailab
 逐差），系数 a 用扣除 b 后的值；两者取一，推荐 (a)（改动最小）。
 `sdc_calibrated_dim` 增加出参 `{a_ms, p}`（默认 nullptr 保持现签名兼容）。
 
-> **勘误（机制更新，2026-10-31，issue #351 / PR #377）**：上文 (a) 的
+> **勘误（机制更新，2026-10-31，issue #351 / PR #377；2026-11-02 R2 复核）**：
+> 上文 (a) 的
 > 「probe 档抬升阈值 <1ms→<100ms」经参数化后**不再是 `sdc_calibrated_dim`
 > 的模板缺省行为**，而是带 fit 出参消费方的**显式实参**——现签名为
-> `sdc_calibrated_dim(..., double probe_floor_ms = 1.0, struct sdc_fit *fit = nullptr)`
-> （framework/sdc_stress_config.h）：模板缺省 `1.0` 恢复 `f84966bc` 之前
+> `sdc_calibrated_dim(..., struct sdc_fit *fit = nullptr, double probe_floor_ms = 1.0)`
+> （framework/sdc_stress_config.h；fit 保持 `f84966bc` 前第 8 参历史位次，
+> probe_floor_ms 殿后——字面量 `0`/`NULL` 作第 8 实参仍绑 fit，double
+> 字面量误入则编译报错）：模板缺省 `1.0` 恢复 `f84966bc` 之前
 > 存量 7 参链（跨 arch，含 x86-64 `#else` 分支）的 1ms 历史噪声底语义
 > （rule 5，调用点源码零改动）；**需要本节 M3 固定开销口径的调用方必须
-> 显式传 `100.0`**（现役唯一者 = 联合求解 `sdc_joint_dim_slice`，ARM-only，
-> 连同 `&fit` 一起传）。按本 spec 实现**新的 fit 消费方时切勿依赖缺省**：
-> 缺省 1.0 下差分扣 b 的 `a_ms` 会被固定开销与 1ms 级计时噪声污染
-> （a_ms 虚高 → n_run 偏小 → 激发维度欠压），且该错误组合可编译、
-> 无运行期报错。
+> 显式传 `sdc_m3_probe_floor_ms`（=100.0，具名常量三处绑定）**（现役唯一者
+> = 联合求解 `sdc_joint_dim_slice`，ARM-only，连同 `&fit` 一起传）。按本
+> spec 实现**新的 fit 消费方时切勿依赖缺省**：缺省 1.0 下差分扣 b 的
+> `a_ms` 会被固定开销与 1ms 级计时噪声污染（a_ms 虚高 → n_run 偏小 →
+> 激发维度欠压）。该错误组合可编译；PR #377 起有运行期 `log_warning`
+> 兜底（判据为 probe 档**实测时长** < `sdc_m3_probe_floor_ms`，非传参值
+> ——传对参数但 hi 截断致档位抬不上去同样告警），但告警不修正结果，
+> 仍必须显式传参。
 
 ```c
 n_opt = min(

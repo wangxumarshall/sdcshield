@@ -251,6 +251,12 @@ END {
     p128 = cnt128["pass"]; q128 = cnt128["bounded"]; s128 = cnt128["skip"]; y128 = cnt128["boundary"]
     p256 = cnt256["pass"]; q256 = cnt256["bounded"]; s256 = cnt256["skip"]; y256 = cnt256["boundary"]
     p512 = cnt512["pass"]; q512 = cnt512["bounded"]; s512 = cnt512["skip"]; y512 = cnt512["boundary"]
+    # 256 列对账行叙述数字断言：下行 printf 的手写口径数字（164/1/25/190，165=164+1 派生）
+    # 与 %d 计算值锁死——工件数据漂移时 FATAL，而非静默产出叙述与计算自相矛盾的对账行。
+    if (p256 != 164)        { printf "FATAL: 256 narrative expects 164 default-adaptive (got %d)\n", p256 > "/dev/stderr"; fatal = 1 }
+    if (n_to != 25)         { printf "FATAL: 256 narrative expects 25 bounded reruns (got %d)\n", n_to > "/dev/stderr"; fatal = 1 }
+    if (q256 - n_to != 1)   { printf "FATAL: 256 narrative expects 1 baked calibration (got %d)\n", q256 - n_to > "/dev/stderr"; fatal = 1 }
+    if (p256 + q256 != 190) { printf "FATAL: 256 narrative expects 190/190 cells (got %d)\n", p256 + q256 > "/dev/stderr"; fatal = 1 }
     M = OUT "/math.md"
     printf "| 列 | pass（直绿） | pass(bounded) | SKIP(legal) | BOUNDARY(gem5) | 合计 |\n" > M
     printf "|---|---|---|---|---|---|\n" > M
@@ -265,6 +271,9 @@ END {
     printf "- **256 列 = %d pass** —— 对账 triage-256 §7（seed1 165 腿内直绿（164 默认自适应 + 1 格 acl 标定 baked）+ 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内 clamp 下限有界））；%d 个有界格 = %d 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ %d 格 baked 直绿（acl dim=512 标定，Ruling B / triage-256 §1；此格按下行有界格计法计入、腿内直绿口径亦含它，两口径两属）。\n", p256 + q256, q256, n_to, q256 - n_to > M
     printf "- **512 列 = %d pass + %d BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；%d 个有界格 = baked 26 项中绿 %d（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 %d（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 %d（acl：baked 512 被 extras 覆盖为 128）。\n", p512 + q512, y512, q512, bg, eg, bo > M
     printf "- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。\n" > M
+    # END 尾 fatal 复检：覆盖上方 §5 汇总块新设的叙述数字断言（漂移即整体 exit 1，
+    # 拼装阶段不执行，matrix.md 不会被产出半成品对账行）。
+    if (fatal) exit 1
 }
 ' "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$TMP/knob_baked.tsv" "$TMP/knob_extra.tsv" \
   || { echo "ERROR: matrix generation assertions failed" >&2; exit 1; }

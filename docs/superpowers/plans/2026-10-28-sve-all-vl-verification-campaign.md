@@ -130,7 +130,7 @@ docs/superpowers/inventory/sve-all-vl-campaign/extract-summary.sh $LOG $LIST doc
 ```
 Expected: `exit: pass`。注意：eigen_svd_cdouble_sve / eigen_svd_bidiag_sve 有全核 TIMEOUT 前科（node0 带宽，见 memory eigen-mdim-memory-measurement）；若这两格 TIMEOUT → 进 Step 3 分诊，不算本步失败。
 
-- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 字样——共 5 行（`LOG=` 行的日志路径、stdout 捕获重定向、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 目标的 /tmp 源与目标文件名）——一律相应改为 `LCG1002`，非仅 `-s` 与 `.log` 两处。否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`（漏改 `LOG=` 行则 seed2 的 `-o` 覆写 seed1 的 .log、LCG1002 summary 提取自 seed1 输出——证据污染）。
+- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 字样——共 5 行（`LOG=` 行的日志路径、stdout 捕获重定向、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 目标的 /tmp 源与目标文件名）——一律相应改为 `LCG1002`，**外加 RNG 种子参数 `-s LCG:1001`→`-s LCG:1002`**（带冒号、非文件名——「LCG1001 字样」按字符串匹配不命中它，须单独改；漏改则 seed2 以 seed1 的 RNG 运行而全部产出标 LCG1002，双 seed 独立性零报警丢失）。否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`（漏改 `LOG=` 行则 seed2 的 `-o` 先覆写 seed1 的原始 yaml——**seed1 分诊源丢失**；此时 LCG1002 summary 名实仍符（覆写后 `$LOG` 内容已是 seed2 输出），「summary 提取自 seed1 输出」仅在 `-s` 与 `LOG=` 同时漏改时才发生——两种漏改都是证据污染）。
 
 - [ ] **Step 3: 分诊**
 
@@ -170,7 +170,9 @@ Expected: `ARM64 spec: SVE yes (max VL 128 bits) | SVE2 no | SME no | SME2 no`�
 
 - [ ] **Step 2/3/4:** 与 Task 2 Step 1-3 相同（**完整继承**其命令块全部行——cd/`LIST` 等与 Task 2 逐字相同的原样行原封继承，stdout 捕获、`echo` 退出码、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 提取各行均在下方命令块内按继承形态示出；下方命令块按被继承的完整形态改写，非仅主命令示意），外加 env 前缀；全部 `native-256` 文件名前缀相应改为 `native-128`（替换范围同 Task 2 Step 2 注记）：
 ```bash
-# seed1（seed2 同理：LCG1001→LCG1002 文件名全量替换，替换范围见 Task 2 Step 2 注记）
+# seed1（seed2 同理：全部 LCG1001 字样改 LCG1002——含 5 个文件名行与 RNG 种子参数
+# -s LCG:1001→-s LCG:1002（带冒号、非文件名，勿漏——漏则 seed2 以 seed1 RNG 运行
+# 而产出全标 LCG1002，零报警）；替换范围详见 Task 2 Step 2 注记）
 cd /home/sdc/wangxu/sdcshield-main
 LIST=docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
 LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log
@@ -419,7 +421,9 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield -e <test> -t 2000 -n 1   # 
 ```bash
 # 原子形态：全部断言失败点均在首个 stdout 输出之前，直接 `> matrix.md` 会在
 # 脚本启动瞬间（shell O_TRUNC）把既有矩阵清空为 0 字节（实测复现）——
-# .new + mv 隔离失败路径。
+# .new + mv 隔离失败路径。cd 行与 Task 2/3 命令块同款（矩阵脚本内部路径自
+# 解析，但重定向目标 .new/matrix.md 是 cwd 相对路径——非仓库根 cwd 下会写错位置）。
+cd /home/sdc/wangxu/sdcshield-main
 docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh > docs/superpowers/inventory/sve-all-vl-campaign/matrix.md.new && mv docs/superpowers/inventory/sve-all-vl-campaign/matrix.md.new docs/superpowers/inventory/sve-all-vl-campaign/matrix.md
 ```
 （计划撰写时点的草案指令「执行者写 10 行以内的 awk/grep 管道」系事前形态，实际执行产出即 matrix-gen.sh，以入库脚本为准；本轮同步实测：成功路径重定向输出与入库 matrix.md diff 为空、exit=0；失败路径（断输入副本复现 exit=2）直接重定向把既有 matrix.md 清空为 0 字节、.new+mv 形态下既有文件原样保留仅 .new 残留 0 字节。）

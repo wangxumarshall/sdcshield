@@ -616,7 +616,7 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  * 存量链, 含 x86-64 #else 分支)签名与行为不变(rule 5, issue #351——
  * probe_floor_ms 缺省值即 f84966bc 之前的历史噪声底语义, 不得随 ARM
  * 侧 M3 口径联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)
- * 显式传 100.0。fit 保持 f84966bc 之前的第 8 参历史位次、
+ * 显式传 sdc_m3_probe_floor_ms(100.0)。fit 保持 f84966bc 之前的第 8 参历史位次、
  * probe_floor_ms 殿后: 字面量 0/NULL 作第 8 实参(『显式不要 fit』的
  * 旧写法)仍绑 fit 而非经 int→double 隐式转换静默重绑
  * probe_floor_ms=0.0——后者使 probe 抬档循环永假、外推基数退回微档
@@ -631,6 +631,12 @@ struct sdc_fit {
     double a_ms;    /* t(n)=a_ms·n^p 单解幂律系数(ms, 已扣固定开销) */
     double p;       /* 幂指数(k_floor 修正后) */
 };
+
+/* M3 固定开销口径的 probe 档下限(ms), spec §4.3 M3: 差分扣 b 要求
+ * probe 档**实测时长**不低于该值——固定开销(构造/预处理)在计时中
+ * 占比 <10%, 幂律系数不被抬高。消费方共三处(fit 差分守卫 / 联合求解
+ * 显式实参 / 告警文案), 由本常量绑定, M3 重标定只改一处。 */
+static constexpr double sdc_m3_probe_floor_ms = 100.0;
 
 template <typename F>
 static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
@@ -654,10 +660,11 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
      *     (实测稀疏 Cholesky 规则带状 probe 在 64 档仅 0.1ms, 外推
      *     失控)——跨 arch 存量 7 参调用(x86-64 #else 链)byte-identical
      *     沿用此口径, 不得随 ARM 侧 M3 口径联动改动(rule 5)。
-     *   - 100.0(spec §4.3 M3): 固定开销(构造/预处理)在计时中占比
-     *     <10%, 幂律系数不被抬高(实测 sve 模型 t(N)=243.4·(N/4400)³+1
-     *     的 +1 项在 N=300 档占 93%, 系数虚高 ~14×, 立方根收缩 2.4×)
-     *     ——仅由联合求解(ARM-only)显式传入, 与其 fit 差分扣 b 配套。 */
+     *   - sdc_m3_probe_floor_ms(100.0, spec §4.3 M3): 固定开销(构造/
+     *     预处理)在计时中占比 <10%, 幂律系数不被抬高(实测 sve 模型
+     *     t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高
+     *     ~14×, 立方根收缩 2.4×)——仅由联合求解(ARM-only)显式传入,
+     *     与其 fit 差分扣 b 配套。 */
     int p1 = lo;
     double t1 = probe(p1);
     while (t1 < probe_floor_ms && p1 * 2 <= hi) {
@@ -722,22 +729,25 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                     ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
                     : "");
     if (fit) {
-        /* M3 有效性告警: 差分扣 b 要求 probe 档 ≥100ms(固定开销占比
-         * <10%, spec §4.3 M3); probe_floor_ms 缺省 1.0 是存量 7 参链的
-         * 历史噪声底语义(issue #351), 与 fit 差分组合即是致噪源——
-         * a_ms 虚高 → n_run 偏小 → 激发维度静默欠压。该误用组合可
-         * 编译、无报错, 在此从静默变有声; 现役调用方无一触发(联合
-         * 求解显式传 100.0, 存量链不传 fit)。 */
-        if (probe_floor_ms < 100.0)
-            log_warning("[时间校准] %s.%s: fit 差分扣 b 口径要求 "
-                        "probe_floor_ms≥100(固定开销占比<10%%, spec §4.3 "
-                        "M3), 实传 %.1f——a_ms 将被固定开销与计时噪声污染"
-                        "(a_ms 虚高→n_run 偏小→激发欠压), M3 消费方应显式"
-                        "传 100.0", test_id, knob, probe_floor_ms);
+        /* M3 有效性告警: 差分扣 b 的前提是 probe 档**实测时长** t1 ≥
+         * sdc_m3_probe_floor_ms(固定开销占比 <10%, spec §4.3 M3)——
+         * 判据取实测 t1 而非入参 probe_floor_ms(PR #377 检视: 只查入参
+         * 两个方向都判错——floor=100.0 但 hi 截断致档位抬不上去同样是
+         * 致噪源; 反之慢求解器在缺省 1.0 下 lo 档实测已 ≥100ms, 差分
+         * 本干净, 不应告警)。实测 t1 不足时 a_ms 虚高 → n_run 偏小 →
+         * 激发维度静默欠压, 在此从静默变有声。 */
+        if (t1 < sdc_m3_probe_floor_ms)
+            log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
+                        "fit 差分扣 b 的固定开销占比<10%%前提未达成"
+                        "(spec §4.3 M3), a_ms 将被固定开销与计时噪声污染"
+                        "(a_ms 虚高→n_run 偏小→激发欠压); 检查 probe_floor_ms"
+                        " 传参(M3 消费方应显式传 %.0f)与 knob hi 是否足以"
+                        "抬升 probe 档", test_id, knob, t1,
+                        sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
         /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
          *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p
          * b≈0 时严格退化为 a = t1/p1^p。差分在 b 为常数的模型下精确,
-         * 常规档(b 占比 <10%, 与联合求解显式传入的 probe_floor_ms=100.0
+         * 常规档(b 占比 <10%, 与联合求解显式传入的 sdc_m3_probe_floor_ms
          * 配套)与 b 主导的对抗档都成立; 代价是对差分 (t2−t1) 的测量
          * 噪声敏感(p1/mid 档位拉得越开越稳)。退化保护(档位重合/计时
          * 持平/非有限/非正)回退
@@ -1083,14 +1093,14 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
             per_solve = 1;
         /* 探针上限 = knob hi(不用 n_mem 截断): 差分基线 (p1, mid) 拉得
          * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 探针档
-         * 下限(下方显式实参, spec §4.3 M3——模板缺省 1.0 是存量 7 参
-         * 链的历史语义, 不得联动改动, issue #351)约束(终点档起每档
-         * ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem 无关。返回值弃用(其内
-         * 向外推是未扣 b 的保守口径), 只取 fit。 */
+         * 下限(下方显式实参 sdc_m3_probe_floor_ms, spec §4.3 M3——模板
+         * 缺省 1.0 是存量 7 参链的历史语义, 不得联动改动, issue #351)
+         * 约束(终点档起每档 ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem 无关。
+         * 返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit。 */
         struct sdc_fit fit;
         sdc_calibrated_dim(a->lo, a->hi, per_solve,
                            test ? test->id : "(global)", knob, 3.0,
-                           solve_once, &fit, 100.0);
+                           solve_once, &fit, sdc_m3_probe_floor_ms);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
             double nr = std::pow((double)a->run_budget_ms
                                  / (ar * 2.0 * fit.a_ms), 1.0 / fit.p);

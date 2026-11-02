@@ -52,7 +52,11 @@ inline constexpr std::uint64_t kAvalanche = 0xD6E8FEB86659FD93ull;
  * 全部探针与 run() 的分布契约且无运行期信号, 以下编译期锁定。 */
 inline constexpr unsigned kRangeSteps = 2000u;
 inline constexpr double kRangeScale = 1000.0;
-static_assert(kRangeSteps == 2u * static_cast<unsigned>(kRangeScale),
+/* 精确 double 比较(检视 #392-R5): static_cast<unsigned>(kRangeScale) 截断
+ * 只锁整数部分——kRangeScale 的小数编辑(1000.0→1000.25)会静默穿过整数
+ * 断言而覆盖契约缩为 [-1, 0.9985)。2.0*kRangeScale(指数+1, 精确)与
+ * unsigned→double(该值域精确)均无舍入, 等值比较封死小数漂移。 */
+static_assert(static_cast<double>(kRangeSteps) == 2.0 * kRangeScale,
               "[-1,1) uniform coverage requires kRangeSteps == 2*kRangeScale");
 
 /* ---- 家族无关的公式原语(检视 #392-R4): 初始流终结化/单拍推进/值域

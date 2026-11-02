@@ -552,3 +552,167 @@ git checkout main && git status   # 期望 clean
 - 覆盖: issue 验收建议(「共享 header helper 参数化 Scalar,7 份收敛 1 份,编译期不可能漂移」)→ Task 2+3;第 8 份(收口完整性)→ Task 4;验证(rule 2)→ Task 1/5;报告契约 → Task 6。T10 模板处置在 Task 6 Step 4 报告中有明确评估输出(非遗漏)。
 - 类型一致: `gemm_probe::solve_once<Mat>(int n) -> int`、`fill_pair(Mat&, Mat&)` 与 8 个消费方签名核对一致;`sdc_joint_dim_slice(..., int solve_once(int))` 函数指针匹配。
 - 占位符: Task 1 Step 3 的 `cmp_case` 骨架在正文标注「实现时删除」并给出最终结构,其余步骤均为可执行实码。
+
+
+## 附录: 逐位一致性 harness 最终版归档(检视 #392-R3 补录, 2026-11-02)
+
+> 检视意见: 本 plan 的 Task 1 计划版 harness(含 `cmp_case` 自 declared 骨架)与
+> PR 描述引用的实际输出(3 行分组格式)不是同一程序, 实际执行的 harness 为
+> /tmp 一次性产物且已丢失——bit-identical 证据链无法从仓库工件复现。本附录
+> 归档实际执行的 harness 最终版源码与 2026-11-02 复原重跑的真实输出(新实现
+> 路径为收口后 header 经 R1-R3 全部处置的当前状态, 旧实现逐字提取自
+> 66d83e8d 收口前副本, 提取源文件在源码头注中标明)。
+
+编译与运行命令(2026-11-02 实测):
+
+```
+g++ -O3 -std=c++20 -I third-party/eigen5 -I tests/cpu/eigen_gemm \
+    -o /tmp/gemm_probe_bitcmp /tmp/gemm_probe_bitcmp.cpp
+/tmp/gemm_probe_bitcmp
+```
+
+实际输出(2026-11-02 复原重跑, 与 PR 描述引用逐字一致):
+
+```
+PASS n=1: double/float/complex a,b,c all bit-identical
+PASS n=33: double/float/complex a,b,c all bit-identical
+PASS n=64: double/float/complex a,b,c all bit-identical
+RESULT: ALL BIT-IDENTICAL (exit 0)
+```
+
+harness 最终版源码:
+
+```c++
+/* gemm_probe_bitcmp — 逐位一致性 harness (PR #392 验证工件)。
+ * 2026-11-02 复原重跑(检视 #392-R3: 原一次性 /tmp 工件已失, 按实际
+ * 输出格式复原, 本源码随 plan 文档归档)。
+ * 旧实现逐字提取自 66d83e8d(收口前 merge-base):
+ *   double  <- tests/cpu/eigen_gemm/gemm_double_dynamic_square.cpp
+ *   float   <- tests/cpu/eigen_gemm/gemm_float_dynamic_square.cpp
+ *   cdouble <- tests/cpu/eigen_gemm/gemm_cdouble_dynamic_square.cpp
+ * 新实现 include 收口后的 tests/cpu/eigen_gemm/gemm_solve_probe.h。
+ * 对比 n∈{1,33,64} × {double,float,complex} 的 a/b/c 逐位(memcmp)。 */
+#include <Eigen/Core>
+
+#include <complex>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> DMat;
+typedef Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic> FMat;
+typedef Eigen::Matrix<std::complex<double>, Eigen::Dynamic, Eigen::Dynamic> CMat;
+
+#include "gemm_solve_probe.h"
+
+/* ---- 旧实现(逐字提取, 仅变量名 a/b/c/n 适配 harness 签名) ---- */
+static void old_solve(DMat &a, DMat &b, DMat &c, int n)
+{
+    a.resize(n, n); b.resize(n, n);
+    for (int r = 0; r < n; ++r)
+        for (int col = 0; col < n; ++col) {
+            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
+                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
+            h ^= h >> 32;
+            h *= 0xD6E8FEB86659FD93ull;
+            h ^= h >> 32;
+            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h2 ^= h2 >> 32;
+            a(r, col) = (double)(h % 2000u) / 1000.0 - 1.0;
+            b(r, col) = (double)(h2 % 2000u) / 1000.0 - 1.0;
+        }
+    c = a * b;
+}
+
+static void old_solve(FMat &a, FMat &b, FMat &c, int n)
+{
+    a.resize(n, n); b.resize(n, n);
+    for (int r = 0; r < n; ++r)
+        for (int col = 0; col < n; ++col) {
+            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
+                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
+            h ^= h >> 32;
+            h *= 0xD6E8FEB86659FD93ull;
+            h ^= h >> 32;
+            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h2 ^= h2 >> 32;
+            a(r, col) = (float)((double)(h % 2000u) / 1000.0 - 1.0);
+            b(r, col) = (float)((double)(h2 % 2000u) / 1000.0 - 1.0);
+        }
+    c = a * b;
+}
+
+static void old_solve(CMat &a, CMat &b, CMat &c, int n)
+{
+    a.resize(n, n); b.resize(n, n);
+    for (int r = 0; r < n; ++r)
+        for (int col = 0; col < n; ++col) {
+            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
+                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
+            h ^= h >> 32;
+            h *= 0xD6E8FEB86659FD93ull;
+            h ^= h >> 32;
+            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h2 ^= h2 >> 32;
+            std::uint64_t h3 = h2 * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h3 ^= h3 >> 32;
+            std::uint64_t h4 = h3 * 0xD6E8FEB86659FD93ull
+                             + 0x9E3779B97F4A7C15ull;
+            h4 ^= h4 >> 32;
+            a(r, col) = std::complex<double>(
+                (double)(h % 2000u) / 1000.0 - 1.0,
+                (double)(h2 % 2000u) / 1000.0 - 1.0);
+            b(r, col) = std::complex<double>(
+                (double)(h3 % 2000u) / 1000.0 - 1.0,
+                (double)(h4 % 2000u) / 1000.0 - 1.0);
+        }
+    c = a * b;
+}
+
+/* ---- 新实现(收口后 header, 经 solve_once 同路径) ---- */
+template <typename Mat>
+static void new_solve(Mat &a, Mat &b, Mat &c, int n)
+{
+    a.resize(n, n); b.resize(n, n);
+    gemm_probe::fill_pair(a, b);
+    c = a * b;
+}
+
+template <typename Mat>
+static bool cmp_mat(const Mat &x, const Mat &y)
+{
+    return x.rows() == y.rows() && x.cols() == y.cols()
+        && std::memcmp(x.data(), y.data(),
+                       (size_t)x.rows() * x.cols() * sizeof(typename Mat::Scalar)) == 0;
+}
+
+template <typename Mat>
+static bool run_one(int n)
+{
+    Mat a1, b1, c1, a2, b2, c2;
+    old_solve(a1, b1, c1, n);
+    new_solve(a2, b2, c2, n);
+    return cmp_mat(a1, a2) && cmp_mat(b1, b2) && cmp_mat(c1, c2);
+}
+
+int main()
+{
+    int fails = 0;
+    for (int n : {1, 33, 64}) {
+        bool d = run_one<DMat>(n), f = run_one<FMat>(n), c = run_one<CMat>(n);
+        if (d && f && c)
+            std::printf("PASS n=%d: double/float/complex a,b,c all bit-identical\n", n);
+        else {
+            ++fails;
+            std::printf("FAIL n=%d: double=%d float=%d complex=%d\n", n, d, f, c);
+        }
+    }
+    if (!fails)
+        std::printf("RESULT: ALL BIT-IDENTICAL (exit 0)\n");
+    return fails ? 1 : 0;
+}
+```

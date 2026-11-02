@@ -25,11 +25,20 @@
  * 影响。include 块置于架构守门之内(检视 #392-R3): 守门内的 namespace
  * 是这些头的唯一消费者, x86-64 预处理视角下本头展开为空壳(rule 5
  * x86 untouched 构造成立, 非勘误口径); SVD 侧 sandstone_eigen_common.h
- * 的守门外 include 因其在 x86 也编译而属必需, 与此处不同。 */
+ * 的守门外 include 因其在 x86 也编译而属必需, 与此处不同。
+ * 守门边界(检视 #392-R5): 只守 __aarch64__、不附 __linux__——本头零
+ * Linux 依赖(纯 std 头), 而 gemm_double_max_arm_body.cpp(meson 门控
+ * 仅 cpu_family=='aarch64', 无 OS 谓词)的 solve_once 转发无 #else 回退,
+ * 本头必须在其整个编译域(aarch64 全 OS)可见, 否则 aarch64-非 Linux
+ * 构建从可编译收窄为硬编译错误(收口前该 TU 的内联实现无 OS 守门)。
+ * 7 个 T9 wrapper 自带 __aarch64__&&__linux__ 守门(其 aarch64 路径走
+ * sdc_joint_dim_slice 联合求解, 依赖框架 __linux__ 实现; 非 Linux 下
+ * wrapper 关闭、mdim 回退 legacy 链, 不引用本头)——是本守门的真子集,
+ * 不受放宽影响。 */
 #ifndef GEMM_SOLVE_PROBE_H
 #define GEMM_SOLVE_PROBE_H
 
-#if defined(__aarch64__) && defined(__linux__)
+#if defined(__aarch64__)
 
 #include <cassert>
 #include <complex>
@@ -103,5 +112,5 @@ static int solve_once(int n)
 
 }  // namespace gemm_probe
 
-#endif  /* __aarch64__ && __linux__ */
+#endif  /* __aarch64__ */
 #endif  /* GEMM_SOLVE_PROBE_H */

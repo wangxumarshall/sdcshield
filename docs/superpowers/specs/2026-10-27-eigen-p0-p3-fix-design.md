@@ -246,7 +246,21 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   恰随 knob 缩放）。现 preinit 与 child 同通道同 clamp 读 knob/env，
   n_model=knob（显式）或 n_hi（auto）；`gemm_double_max_arm`（§4.5
   末项）同步同构修复。child 里
-  `sdc_joint_dim_slice` per-node 精算。天然修复 exec_each_test 模式
+  `sdc_joint_dim_slice` per-node 精算。
+  【2026-11-02 勘误，PR#384 检视（意见 4432271415）】显式档的
+  duration 模型须按**全迭代** ar×2×t(knob) 建模（一次 run 侧迭代 =
+  golden 首算 + DUT 两次 BDCSVD，全核下每次吃 AR 争抢；与 gemm 修复
+  f6783077 及联合求解自身的迭代模型 per_solve=run_budget/(ar×2) 同构）：
+  只乘 0.95×t(knob) 时 timeout=4.75×t(knob)+30s，kill 条件
+  AR_real>~2.4，而单内存节点最坏 child 实测有效 AR≈39——多 worker
+  显式档必被误杀，#352 失败模式只对 -n 1 真正闭合。ar 取内存密集族
+  表值（与 auto 分支 ar_fam 同族）；workers==1 时取 1（表值是全核
+  口径，单 worker 自争抢为 1；不折算则 -n 1 显式档裸跑 target 被拉到
+  ~ar 倍 t(knob)，`-t … -n 1` 标准回归路径的单迭代语义破坏）。auto
+  分支维持 t(n_hi)×0.95 不变：其 AR 保护来自联合求解 AR-aware 的
+  n_run（run_budget=140s 档，实测最坏 ~213s，距 300s floor 留 ~25%
+  裕量），且 n_run 在本 host class 恒把 child n 压在时间侧——显式档
+  恰恰绕过这层保护，才必须把 AR 显式放进模型。天然修复 exec_each_test 模式
   preinit 不跑导致 g_dim 恒 300 的分歧（LSP 核实修正 #3）；
   **exec 模式下 desired_duration 的说明【v2 修正】：`test_duration()`
   在父进程用 preinit 写入的值（fork 模式有效）；exec 模式子进程无

@@ -147,8 +147,28 @@ static int solve_once_cdouble_sve(int n)
  *           node_cpus), so n_hi tracks it on every host class — not
  *           just the 127-worker reference the value was historically
  *           hard-coded to.
- *   dur   = t(n_hi) × 0.95,  t(N) = 243.4s·(N/4400)³ + 1s  (x3b fit,
+ *   auto:  dur = t(n_hi) × 0.95,  t(N) = 243.4s·(N/4400)³ + 1s  (x3b fit,
  *           within ±2% of the measured points at N>=2400).
+ *   knob:  dur = ar × 2 × t(knob) × 0.95 (PR#384 review, id 4432271415):
+ *           the explicit tier bypasses the joint solver's AR-aware n_run
+ *           protection VERBATIM, so the all-core contention must go into
+ *           the model explicitly — the FULL iteration is golden-prime +
+ *           DUT (two BDCSVDs), each eating the AR slowdown. This is
+ *           isomorphic to the gemm fix (f6783077) and to the joint
+ *           solver's own iteration model (per_solve =
+ *           run_budget/(ar×2)). ar = the memory-bound family table
+ *           value (the family the auto branch's ar_fam uses; measured
+ *           worst-child AR≈39 on the single-memory-node host class vs
+ *           kill tolerance AR>~2.4 under the old 0.95×t-only model);
+ *           workers == 1 takes ar = 1 — the table value is a FULL-CORE
+ *           figure and a lone worker contends only with itself, so the
+ *           ungated table value would stretch a -n 1 explicit run to
+ *           ~ar×t(knob) (breaking the one-iteration semantics of the
+ *           standard `-t … -n 1` regression lane). The AUTO branch keeps
+ *           the t(n_hi)×0.95 model: its AR protection is the solver's
+ *           own AR-aware n_run (run_budget=140 s tier, measured worst
+ *           ~213 s — ~25% inside the 300 s hard grace), and n_run pins
+ *           child n on the time side on this host class.
  *
  * Child n <= n_hi holds for the AUTO branch only: the child returns
  * min(n_mem, n_run, hi), n_mem uses
@@ -197,16 +217,39 @@ static int size_matrix_preinit(struct test *test)
      * (5×t(n_hi)×0.95+30 s 远小于一次 2×t(knob) 完整迭代) 被
      * SIGQUIT 误杀——迁移前 preinit 的 timeout 恰是随 knob 缩放的,
      * 此处恢复该契约。读取通道与 clamp 范围与 child 完全一致,
-     * 两处取值恒相同。 */
-    int n_model = n_hi;
+     * 两处取值恒相同。
+     *
+     * 【PR#384 检视, 意见 4432271415】显式档的 duration 必须按全核
+     * 全迭代 ar×2×t(knob) 建模: 一次 run 侧迭代 = golden 首算 + DUT
+     * 两次 BDCSVD, 全核下每次都吃 AR 争抢——与 gemm 修复(f6783077)
+     * 及联合求解自身的迭代模型(per_solve = run_budget/(ar×2))同构。
+     * 只乘 0.95×t(knob) 时 timeout = 4.75×t(knob)+30 s, kill 条件
+     * AR_real > ~2.4, 而 sve_probe_and_init 的 run_budget_ms 注释实测
+     * 单内存节点最坏 child 有效 AR≈39——多 worker 显式档必被误杀,
+     * #352 的失败模式只对 -n 1 真正闭合。三个口径:
+     *   - ar 取内存密集族表值(与本测试 auto 分支的 ar_fam 同族);
+     *   - workers == 1 时取 1: AR 表值是全核口径, 单 worker 自争抢
+     *     为 1(物理定义); 不折算则 -n 1 显式档裸跑 target 被拉到
+     *     ~ar 倍 t(knob), 标准回归路径(-t … -n 1)的单迭代语义破坏;
+     *   - auto 分支维持 t(n_hi)×0.95(P0-1 §4.5 原模型): 其 AR 保护
+     *     来自联合求解 AR-aware 的 n_run(run_budget=140 s 档, 实测
+     *     最坏 ~213 s, 距 300 s floor 留 ~25% 裕量), 且 n_run 在本
+     *     host class 恒把 child n 压在时间侧——显式档恰恰绕过这层
+     *     保护, 才必须把 AR 显式放进模型。 */
     int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
     if (knob == 0)
         sdc_env_knob_int_clamped("eigen_svd_cdouble_sve", "mdim", &knob,
                                  MDIM_MIN, MDIM_MAX);
-    if (knob > 0)
-        n_model = (int)knob;
 
-    double iter_s = 243.4 * std::pow((double)n_model / 4400.0, 3.0) + 1.0;
+    double iter_s;
+    if (knob > 0) {
+        double ar = workers > 1
+                ? sdc_ar_factor(SDC_FAM_MEM_BOUND, sdc_numa_probe()) : 1.0;
+        iter_s = ar * 2.0
+               * (243.4 * std::pow((double)knob / 4400.0, 3.0) + 1.0);
+    } else {
+        iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
+    }
     test->desired_duration = (int)(iter_s * 950.0);   /* ms, -5% margin */
     return EXIT_SUCCESS;
 }

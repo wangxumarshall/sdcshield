@@ -289,6 +289,20 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   preinit 但父进程有 → desired_duration 经 fork 前的 test 结构不随 exec
   传递，exec child 走 `-t`/默认时长（v1 表述"走 -t 兜底"结论不变，
   机理更正为：preinit 在 exec 父进程也运行，仅子进程映像不继承写值）**
+  【2026-11-02 勘误，PR#384 检视（意见 4439402775）处置实录】该 v2 修正
+  的 kill 推论在当前 head 不成立（执法在 parent 侧）：超时执法是
+  wait_for_children 用 **parent** 的 test_timeout(parent 的
+  current_test_duration)，parent 的 preinit 已写 min（9a82f53b）→
+  parent 的 test_duration 把 -t 夹钳到 min → parent 的等待宽限随 knob
+  缩放——exec child（fresh 字段恒 0，走 DefaultTestDuration=1s →
+  恰好一次完整迭代后退出）不会被 300s floor 误杀（实测 `-f exec -t
+  2000 -n 1 -O mdim=4000`：一次迭代 556.5s 后 exit: pass，无 SIGQUIT，
+  loop-count 1）。残留语义瑕疵如实记录：exec child 自身的
+  desired/minimum_duration 恒 0（M_DIM 日志行实证），且 `-t` 不经
+  save_test_knob_args 重放到 exec child（既有框架属性，只重放 knob
+  参数）——exec child 恒走默认 1s 目标 = 恰好一次迭代，与 fork 模式的
+  多迭代语义不同；完整对齐需把时长参数并入 exec argv 协议（框架设计项，
+  超出本 PR 范围）。
 - **gemm_double_max_arm**：同样迁移 + 接入时间校准（【v2/M8】它同样
   无校准，v1 漏列）。
 

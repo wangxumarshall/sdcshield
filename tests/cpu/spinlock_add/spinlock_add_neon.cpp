@@ -79,7 +79,14 @@
  * 每线程 10000 行上限后转仅记失败（防日志爆炸），失败行永不受上限约束，
  * 失败时追加全 64 float 对照 dump。logverif=0 时完全不触碰 /var/tmp；
  * logverif=1 但打开失败（环境不可用）时 log_warning 降级禁用日志、测试
- * 照跑（诊断附属不升格为检测失败）。
+ * 照跑（诊断附属不升格为检测失败）。文件口径与生命周期（PR#341 轮1 检视
+ * :526/:338）：fracture-per-fork 架构下每子进程各建一个 <pid>.log、行预
+ * 算随 fork 重置（每切片每线程重新计 10000），长跑呈每秒数百个碎片文件
+ * 而非单一连续日志——-f no（nofork 单进程）才是真正的单文件 10000 行/
+ * 线程；绿跑（通道B 对账全绿 ∧ 零红 FAIL 行 ∧ 非 selftest）cleanup 时
+ * 删除本轮文件，长期战役绿跑稳态存活文件数 = O(当前并发子进程数)；任何
+ * 检出迹象（数据 SDC 红行、通道C FAIL、通道B 对账失败）或 selftest 阳性
+ * 自检保留文件作取证。
  *
  * Deviation note (documented): 内核为自包含 NEON intrinsics（本仓 neon_rot
  * 家族同范式）；第三方库（openblas/sleef）计算负载变体为后续独立单元。
@@ -157,6 +164,10 @@ struct SpinlockAddNeonData {
     int logverif;             /* knob: 0/1 */
     int selftest;             /* knob: 0=off 1=stall 2=data */
     volatile int stall_armed;
+    char log_path[128];       /* logverif 文件路径：绿跑 cleanup unlink 用 */
+    uint64_t log_fail_lines;  /* 红 FAIL 行 / FAIL 迹象计数（RELAXED 原子递增，
+                               * cleanup join 后 quiescent 读）——绿跑 unlink
+                               * 的保守条件：任何检出迹象都保留文件取证 */
 };
 
 static uint64_t spinlock_add_neon_now_ns(void)
@@ -400,6 +411,10 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         const enum SpinlockAddNeonAcquire acq = spinlock_add_neon_acquire(d, cpu, &stall_ns);
         if (acq != SPINLOCK_ACQUIRE_OK) {
             const char *verdict;
+            /* 通道C FAIL 记入 log_fail_lines（绿跑 unlink 的保守条件之一，
+             * 见 cleanup）：通道C 检出时 logverif 文件保留，供回看失败前
+             * 的逐次迭代记录 */
+            __atomic_fetch_add(&d->log_fail_lines, 1, __ATOMIC_RELAXED);
             /* verdict/report 只断言证据支持的结论（PR#341 轮1 检视 :302）：
              * 确认窗能证明的是签名（epoch 静止 + CAS 持续失败），不能证明
              * 根因——「释放写丢失」与「持锁者整窗未运行（被抢占/限流，如
@@ -509,6 +524,11 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
             if (n > 0 && write(d->log_fd, buf, (size_t)n) < 0) { /* best effort */ }
             if (ok)
                 logged++;
+            else
+                /* 红 FAIL 行计入 log_fail_lines（write 失败也计——出现过
+                 * 数据 miscompare 即保留文件，见 cleanup 的绿跑 unlink 条
+                 * 件）；多线程并发递增，RELAXED 原子（#16 同款纪律） */
+                __atomic_fetch_add(&d->log_fail_lines, 1, __ATOMIC_RELAXED);
         }
 
         if (!ok) {
@@ -675,8 +695,8 @@ static int spinlock_add_neon_init(struct test *test)
     d->shared_counter[0] = 0;
 
     if (d->logverif) {
-        char path[128];
-        snprintf(path, sizeof(path), "/var/tmp/spinlock_add_neon_%d.log", (int)getpid());
+        snprintf(d->log_path, sizeof d->log_path,
+                 "/var/tmp/spinlock_add_neon_%d.log", (int)getpid());
         /* O_CREAT|O_EXCL：/var/tmp 为 1777 粘滞目录、pid 可预测，O_NOFOLLOW
          * 只拦预植符号链接（ELOOP）、拦不住预植普通文件（chmod 666 绕过，
          * 受害进程 O_TRUNC 后 O_APPEND 写入 = 攻击者可实时读/注入伪 PASS
@@ -687,7 +707,7 @@ static int spinlock_add_neon_init(struct test *test)
          * 告知操作员可清理），取证文件不被清空、跨轮追加混淆亦不复存在
          * （原 O_TRUNC 截断方案由此移除：O_EXCL 保证文件必为本轮新建，
          * 截断无对象）。O_APPEND 保留：同轮多线程共享 fd 的原子追加。 */
-        d->log_fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW, 0644);
+        d->log_fd = open(d->log_path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW, 0644);
         if (d->log_fd < 0) {
             /* logverif 是 opt-in 诊断附属、不是检测契约：环境不可用（只读
              * /var/tmp、SELinux 拒绝、O_NOFOLLOW/O_EXCL 命中预植 symlink/
@@ -702,7 +722,7 @@ static int spinlock_add_neon_init(struct test *test)
                         "per-verification log disabled, test continues "
                         "(logverif is a diagnostic aid, not a detection "
                         "contract)",
-                        path, errno, strerror(errno));
+                        d->log_path, errno, strerror(errno));
             d->log_fd = -1;
         }
     }
@@ -783,8 +803,25 @@ static int spinlock_add_neon_cleanup(struct test *test)
                 ret = EXIT_FAILURE;
             }
         }
-        if (d->log_fd >= 0)
+        if (d->log_fd >= 0) {
             close(d->log_fd);
+            /* 绿跑 unlink（PR#341 轮1 检视 #9/:526、#14/:338）：fracture-
+             * per-fork 架构下每子进程各建一个 <pid>.log、行预算随 fork 重
+             * 置，长战役绿跑文件线性堆积直至写满 /var/tmp（检视实测 3s 单
+             * 线程 718 文件/29.2MB）。保守删除条件：通道B 对账全绿
+             * （ret==EXIT_SUCCESS）∧ 全程零红 FAIL 行/FAIL 迹象
+             * （log_fail_lines==0——数据 SDC 红行与通道C FAIL 都计入）∧
+             * 非 selftest（阳性自检必 FAIL，取证文件保留）——任何检出迹象
+             * 都保留文件；log_fd>=0 保证只删本轮自有文件（pid 复用 EEXIST
+             * 降级时不动上一轮遗留）。unlink 失败 best-effort log_warning
+             * 不升格为检测失败（诊断附属哲学同 init 打开降级路径） */
+            if (ret == EXIT_SUCCESS && d->selftest == 0 &&
+                    __atomic_load_n(&d->log_fail_lines, __ATOMIC_RELAXED) == 0 &&
+                    unlink(d->log_path) != 0)
+                log_warning("spinlock_add_neon: cannot unlink green-run log %s "
+                            "(errno %d: %s) — best effort, test result unaffected",
+                            d->log_path, errno, strerror(errno));
+        }
         free(d->inputs);
         free(d->golden);
         free(d->line);

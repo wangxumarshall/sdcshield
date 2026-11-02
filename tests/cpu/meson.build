@@ -902,6 +902,8 @@ if host_machine.cpu_family() == 'aarch64'
             'arm_add/barrier_after_lock_store.cpp',
             'arm_add/low_load_cache_pressure.cpp',
             'arm_add/str_instruction_stress.cpp',
+            'arm_add/cache_stress_clflush.cpp',
+            'arm_add/cache_stress_memcpy.cpp',
         )
     )
 endif

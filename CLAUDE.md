@@ -66,7 +66,8 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent:
                                                #   SVE1 host:  486 PROD / 496 q0 / 500 q-1  (2026-11-01 merge-tree,
                                                #               post issue #374 sched_storm×4 PROD→BETA re-measure)
-                                               #   no-SVE 920: ~295 PROD (predicted; 299 pre-#374 − 4; host re-measure pending)
+                                               #   no-SVE 920:  388 PROD / 396 q0 / 400 q-1  (2026-11-02 measured on 0xd01 "firestorm";
+                                               #                 old 299/~295 predictions falsified — missed the d61b7de1 91-test batch)
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

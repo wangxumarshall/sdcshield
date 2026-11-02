@@ -102,6 +102,11 @@ sed -n '/^## 0\./,/^## 1\./p' "$TRI512" | sed '1d;$d' | sed '/^$/d' > "$TMP/sec0
 # ---- fmmla@128 源码逐字引文（tests/cpu/arm64/sve512_fmmla_arm.cpp:209-212）。
 # 内容断言（PR #307 #11）：行号是活源码上的脆弱锚——上游漂移一行即静默
 # 错引；断言引文恰 4 行且含门调用与实测 SIGILL 句，漂移即 FATAL。
+# 树前提（检视 #4439756853，如实声明）：锚点 209-212 按当前 HEAD——main 侧
+# #376（f1560439）向源文件插入 16 行使引文自 193-196 下移；矩阵 §0 钉死的
+# 冻结基线（12ccda540fd4 / e4720831）上引文仍在 193-196、209-212 为 HWCAP2
+# 日志文本——在冻结基线树上跑本脚本必然 quote-drift FATAL（exit 2），
+# 「机械生成、重跑即复现」的前提 = #376 合入后的树（PR #404 检视轮重锚）。
 sed -n '209,212p' "$FMMLA_SRC" > "$TMP/fmmla.quote"
 quote_ok=1
 grep -q 'arm64_require_sve_vl(test, 256, 1024)' "$TMP/fmmla.quote" || quote_ok=0
@@ -335,7 +340,10 @@ cat <<'HDR'
   **矩阵证据描述的测试代码与基线完全一致**（Task 7 runbook：三腿 570 格分诊 =
   零测试代码缺陷）。注：2026-10-31 起本分支合入了 main（#302/#316/#317 等，
   §0.1 delta 表为权威差异清单），当前 HEAD 的 tests/ framework/ 已不再等于
-  冻结基线——复核上述 diff 请用 `e4720831`，勿用移动的 HEAD。
+  冻结基线——复核上述 diff 请用 `e4720831`，勿用移动的 HEAD。fmmla 引文锚（§3
+  逐字引文，`sve512_fmmla_arm.cpp:209-212`）按 #376（f1560439）合入后的当前树
+  重锚——冻结基线上该引文仍在 :193-196，在冻结基线树上跑 `matrix-gen.sh` 会因
+  quote drift FATAL（exit 2）；重跑复现的前提 = #376 之后的树（PR #404 检视轮）。
 - 二进制：native 两腿 `sdcshield-12ccda540fd4`（四份 summary 头 `version:` 行一致，实测）；
   512 腿 gem5 `/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt`
   md5 `3f9011f40dbe80ec1df478c62ddb0b06`（Task 5 终版 9-stub 链）+ 同源 sdcshield。

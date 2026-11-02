@@ -22,9 +22,15 @@
 #   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :209-212）；
 #   (d) §4 表体的 † 弱证据行标记集合 = 5 个 PR #316 已修复越界缺陷测试
 #       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）；
-#   (e) §5 对账行叙述数字的期望值（128 列 163/26、256 列 164/25/1，及唯一非超时
-#       baked 的身份 acl_gemm_sve=dim=512）——数量与身份均与叙述锁死，工件漂移
-#       即 FATAL（见 END 段断言块）。
+#   (e) §5 对账行叙述数字的期望值（128 列 163/26、256 列 164/25/1、512 列
+#       181/39/9（5 crash + 4 timeout）/25/15/1/16，及唯一非超时 baked 的身份
+#       acl_gemm_sve=dim=512）——数量与身份均与叙述锁死，工件漂移即 FATAL
+#       （见 END 段断言块）。守护边界（如实声明）：断言锁工件派生计数与 acl
+#       身份，不锁「有界值 = 各 knob 的 clamp 下限」取值语义——clamp 范围定义
+#       在测试源码/框架（如 cdouble mdim [300,6000]、有界值 300=下限的对应
+#       仅由 triage-256 §5 表承载），脚本输入不含该信息；重跑协议若漂移
+#       （如下限起步改中间档起步），断言全过而「clamp 下限 = 最小激发强度」
+#       叙述失实——该语义准确性由 §5 表的人工核数承担。
 #
 # 一致性断言（任一失败 → 非零退出、不产出 matrix.md）：
 #   清单 190 行；4 份 native summary + 1 份 verdicts 各覆盖全部 190 名；
@@ -215,6 +221,7 @@ END {
             c512 = (t in knob512) ? "pass(bounded: " knob512[t] ")" : "pass"
         else if (v == "crash" || v == "timeout") {
             if (!(t in breason)) { printf "FATAL: 512 %s without boundary reason tag\n", t > "/dev/stderr"; fatal = 1 }
+            if (v == "crash") cr512++; else to512++
             c512 = "BOUNDARY(gem5: " breason[t] ")"
         } else { printf "FATAL: 512 bad verdict [%s] %s\n", v, t > "/dev/stderr"; fatal = 1; c512 = "FAIL" }
 
@@ -268,6 +275,25 @@ END {
     # 静默失实，恰是本断言块要防住的模式）。
     if (!("acl_gemm_sve" in knob) || knob["acl_gemm_sve"] != "dim=512") \
         { printf "FATAL: narrative expects the sole non-timeout baked to be acl_gemm_sve dim=512 (got %s)\n", ("acl_gemm_sve" in knob ? knob["acl_gemm_sve"] : "<absent>") > "/dev/stderr"; fatal = 1 }
+    # 非超时 baked 集合断言（检视 #4439756844 的重要增强）：26 项 baked 中 256 seed1
+    # 非超时的恰为 acl_gemm_sve（其余 25 项全部腿内超时、走 §5 腿外重跑）。单一
+    # 工件对倒（acl 超时 + 它 baked 格转绿）时上方计数/值断言可全过而「baked 标定」
+    # 叙述静默失实——本断言封死该组合（沙箱实证的绕过路径）。
+    non_to = 0
+    for (t2 in knob)
+        if (res[4 "," t2] != "timed out") { non_to++; non_to_last = t2 }
+    if (non_to != 1 || non_to_last != "acl_gemm_sve") \
+        { printf "FATAL: sole non-timeout baked must be acl_gemm_sve (got %d non-timeout baked, last = %s)\n", non_to, (non_to ? non_to_last : "<none>") > "/dev/stderr"; fatal = 1 }
+    # 512 列对账行叙述数字断言（检视 #4439756862）：181 pass / 39 有界 / 9 边界
+    # （5 crash + 4 timeout 分量）/ baked 26 项中绿 25 / overrides 16 条中绿 15 /
+    # 重叠 1——512 列手写口径数字与 %d 计算值锁死（同 128/256 列）。
+    if (p512 + q512 != 181) { printf "FATAL: 512 narrative expects 181 pass (got %d)\n", p512 + q512 > "/dev/stderr"; fatal = 1 }
+    if (q512 != 39)         { printf "FATAL: 512 narrative expects 39 bounded (got %d)\n", q512 > "/dev/stderr"; fatal = 1 }
+    if (y512 != 9)          { printf "FATAL: 512 narrative expects 9 boundary (got %d)\n", y512 > "/dev/stderr"; fatal = 1 }
+    if (cr512 != 5 || to512 != 4) { printf "FATAL: 512 narrative expects 5 crash + 4 timeout boundary (got %d + %d)\n", cr512, to512 > "/dev/stderr"; fatal = 1 }
+    if (bg != 25 || eg != 15 || bo != 1) { printf "FATAL: 512 narrative expects baked-25 green / extras-15 green / overlap-1 (got %d/%d/%d)\n", bg, eg, bo > "/dev/stderr"; fatal = 1 }
+    for (e in extra) n_ovr++
+    if (n_ovr != 16)        { printf "FATAL: 512 narrative expects 16 gem5-overrides lines (got %d)\n", n_ovr > "/dev/stderr"; fatal = 1 }
     # 叙述数字/身份断言后立即 exit（与上方统计断言块的 fatal 判定同一结构）——
     # fatal 时 §5 汇总 math.md 零写出，拼装阶段不执行，matrix.md 不会产出半成品对账行。
     if (fatal) exit 1

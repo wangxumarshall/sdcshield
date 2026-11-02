@@ -11,6 +11,26 @@
 
 **Spec:** issue #394（gh issue view 394，task-loop:audit:cc0f8836c8a9944d）——「25/190（13%）矩阵格以『clamp 下限起步、首次通过即止』的有界重跑计绿……把最小激发强度的证据当成满强度证据……标题未携带该限定」。
 
+> **⚠ 执行勘误（2026-11-01 PR #404 检视轮次后补，先于下方原文）**：本计划入库后，
+> 其交付文本经 PR #404 检视处置修正（commit `aef95657`/`ebb6edb4`）——**下方 Task 2/3/4
+> 原文中的下列口径已被证伪，重执行者不得按原文逐字回退**，以入库交付文本
+> （triage-256.md / matrix-gen.sh / matrix.md / README.md）为准：
+> 1. **「165 格默认自适应」实为 164 默认自适应 + 1 格 `acl_gemm_sve.dim=512` 标定
+>    baked（Ruling B）**——Task 2 Step 4 的 §7 标题/seed1/seed2 bullet 与 Task 3
+>    Step 1 的对账行均须按 164+1 拆分写；acl 的 dim clamp 实为 [64,4096]（源码
+>    `sdc_knob_int_clamped(test,"dim",0,64,4096)`），512 是标定中间档、非下限。
+> 2. **Task 3 Step 2 @128 legend 子句「26 项 = 同一组 clamp 下限值」为假**——26 项
+>    baked = 25 项 clamp 下限 + 1 项 acl 标定（128 腿命令行第一项即
+>    `-O acl_gemm_sve.dim=512`，逐字拷贝自 256 腿 seed2）。
+> 3. **Task 4 Step 1 README 从句**同口径：主语收窄为 25 格，26 项 baked 须拆明
+>    「25 clamp 下限 + 1 acl 标定」。
+> 4. **Task 3 Step 3 的自验关卡自相矛盾**：`git diff matrix.md | grep -c '^[+-]|'`
+>    期望 0——但 legend 行与表体数据行同为 `|` 起始，Step 2 自己改写的 legend 行
+>    在 diff 中必呈 `+|`/`-|` 命中该模式，计数恒 ≥1，该关卡按写定方式永不为 0。
+>    实际执行的等价验证（已过）：`bash -n matrix-gen.sh` + `./matrix-gen.sh` exit 0
+>    （内置 FATAL 断言全过）+ 再生成 diff 逐 hunk 判读恰为预期文本改动、190 行表体
+>    零变化。
+
 ## Global Constraints
 
 - 一个补丁一个单元：本计划全部改动 = 一个 commit（计划文档随补丁入库，先例 6902536c）。

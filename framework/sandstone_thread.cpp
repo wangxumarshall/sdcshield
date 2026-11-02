@@ -27,7 +27,7 @@ struct SandstoneTestThreadAttributes
      * stuck PROT_NONE (mprotect path) or without guards between them
      * (madvise path), crashing the next pthread_create() inside its
      * explicit_bzero.  A swallowed EINVAL used to hide this until issue
-     * #396; the setup calls below now abort() loudly on failure.
+     * #396; the setup calls below now exit loudly on failure.
      */
     static size_t GuardSize()
     {
@@ -55,12 +55,22 @@ struct SandstoneTestThreadAttributes
 };
 
 #ifndef _WIN32
+#include <sysexits.h>
 /*
  * Thread-stack guard setup must not fail silently: Linux rejects a
  * non-page-aligned mprotect()/madvise() address with EINVAL (it does not
  * round it down), so a swallowed failure leaves the stacks PROT_NONE or
  * guard-less and the next pthread_create() crashes with no prior message
- * (issue #396).  Report and abort instead.
+ * (issue #396).  Report and exit instead.
+ *
+ * _exit(EX_SOFTWARE), not abort(): this runs inside the forked test child
+ * (the static thread_attributes below first constructs there), and the
+ * parent's test_result_from_exit_code() classifies a SIGABRT as "crash"
+ * (Killed/CoreDumped) -- indistinguishable from a genuine test segfault in
+ * the machine-readable result -- while a plain exit status other than
+ * -1/0/1 becomes OperatingSystemError, i.e. a framework problem, which is
+ * what this is.  And _exit rather than exit, because the child is midway
+ * through a static constructor and must not run destructors of globals.
  */
 [[noreturn]] static void thread_stack_setup_failed(const char *what, const void *addr)
 {
@@ -68,7 +78,7 @@ struct SandstoneTestThreadAttributes
     fprintf(stderr, "%s: %s(%p) failed: %s (page size %u, guard %zu)\n",
             program_invocation_name, what, addr, err,
             sandstone_page_size(), SandstoneTestThreadAttributes::GuardSize());
-    abort();
+    _exit(EX_SOFTWARE);
 }
 #endif
 } // unnamed namespace

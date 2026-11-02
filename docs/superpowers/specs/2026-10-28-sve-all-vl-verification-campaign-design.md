@@ -5,9 +5,11 @@
 
 ## 1. 目标与非目标
 
-**目标**：188 个 SVE1 用例在 VL = 128 / 256 / 512 三档全部获得**真实通过
-证据**（564 格矩阵），验证过程中发现的缺陷即修（每个修复独立 commit
-并在三档重验）。
+**目标**：190 个 SVE 用例在 VL = 128 / 256 / 512 三档全部获得**真实通过
+证据**（570 格矩阵），验证过程中发现的缺陷即修（每个修复独立 commit
+并在三档重验）。（勘误 2026-11-02，issue #449：清单按 Task 1 实测枚举
+裁决为 190 行，见 enumeration.md §3；本节原 188×3=564 为 name-grep
+估算，已被取代。）
 
 **非目标（范围外，如实声明）**：
 - 1024 档——用户矩阵限定 128/256/512；既有 gem5 kernel 证据覆盖 1024
@@ -39,7 +41,7 @@
 - **清单工件**：`--list-tests` 输出过滤生成 `sve-test-list.txt`
   （`--test-list-file` 消费），入库到
   `docs/superpowers/inventory/sve-all-vl-campaign/`，与证据矩阵同目录，
-  作为 564 格矩阵的行定义。
+  作为 570 格矩阵的行定义。
 - **对账**：`scripts/check-arm64-requires.py` 跑通零差异后才算枚举完成。
 
 ## 4. native 腿执行规格（128 + 256，本机）
@@ -91,14 +93,14 @@ gem5-fi 仓库自己的规则与 commit 流；sdcshield 仓只入清单工件与
 
 ## 7. 验收判据
 
-564 格矩阵（188 × 3）全绿；每格有可引用的真实命令与输出（native：
+570 格矩阵（190 × 3）全绿；每格有可引用的真实命令与输出（native：
 `exit: pass`；gem5：`exit: pass` @ `--vl 4`）。允许带**显式理由**的
 边界格（如某用例经论证在本档不可达），理由必须是机制性的，不接受
 "没跑完"。
 
 ## 8. 文档同步（大颗粒度修改触发）
 
-- README：验证矩阵结论（188 × 3 全绿 + 证据索引）。
+- README：验证矩阵结论（190 × 3 全绿 + 证据索引）。
 - CLAUDE.md 勘误两处：gem5-fi 本机实为 `/home/sdc/wangxu/gem5-fi`
   （文档写 operator/，以实测为准）；"`tests_sve` compiles at fixed
   128-bit; sleef_sve stays there by design" 已过时（sleef_sve 现在
@@ -120,6 +122,6 @@ gem5-fi 仓库自己的规则与 commit 流；sdcshield 仓只入清单工件与
 1. `sve-test-list.txt` 清单 + 调和结论（sdcshield 仓，campaign 分支，
    `docs/superpowers/inventory/sve-all-vl-campaign/`）。
 2. gem5-fi prctl/syscall stub commit 序列（gem5-fi 仓）。
-3. 564 格证据矩阵（MD 表 + 原始输出归档路径，同目录）。
+3. 570 格证据矩阵（MD 表 + 原始输出归档路径，同目录）。
 4. 修复 commit 序列（发现即修，三档重验）。
 5. 文档同步三件（README / CLAUDE.md 勘误 / progress-log）。

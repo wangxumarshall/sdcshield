@@ -19,21 +19,11 @@
 #include <fcntl.h>
 #include <limits.h>
 
-#ifdef _WIN32
-/* 宏守卫:尊重 TU 既有的选择(如某 TU 明确想要非 lean 的 windows.h,
- * 应在包含本头之前自行 #define 或提前 include <windows.h>)。
- * NOMINMAX:不依赖 mingw-w64 minwindef.h 私有的 #ifndef __cplusplus
- * 守卫——向 MSVC/clang-cl 迁移时 min/max 宏会破坏 std::min/std::max。 */
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>     /* GetSystemInfo() for sandstone_page_size() */
-#else
-#  include <unistd.h>      /* sysconf(_SC_PAGESIZE) for sandstone_page_size() */
-#endif
+/* unistd.h: Windows 下经 framework_incdir 解析到仓库自带 sysdeps/windows
+ * shim(getpagesize 声明,#include_next 链到 mingw 的 unistd.h——两者均无
+ * sysconf);其余平台为系统 unistd.h(sysconf)。sandstone_page_size() 的
+ * 两个实现都由它供给,不再引入 windows.h(零宏面注入)。 */
+#include <unistd.h>
 
 #ifdef __cplusplus
 #include <span>
@@ -92,7 +82,8 @@ extern "C" {
  * page size, otherwise mprotect() will round to the kernel's page boundary and
  * may make adjacent data read-only (causing SIGSEGV on kernels with >4 KB
  * pages, e.g. ARM64 16 KB / 64 KB configurations).  Resolve once via
- * sysconf(_SC_PAGESIZE) (GetSystemInfo() on Windows) and cache it.
+ * sysconf(_SC_PAGESIZE) (getpagesize() through the sysdeps/windows shim on
+ * Windows) and cache it.
  */
 #ifdef __cplusplus
 extern "C++"
@@ -101,12 +92,9 @@ extern "C++"
 static inline unsigned sandstone_page_size(void)
 {
 #ifdef _WIN32
-    static unsigned long cached = 0;
-    if (!cached) {
-        SYSTEM_INFO info;
-        GetSystemInfo(&info);
-        cached = info.dwPageSize;
-    }
+    static int cached = 0;
+    if (!cached)
+        cached = getpagesize();     /* sysdeps/windows/unistd.h shim */
     return (unsigned)cached;
 #else
     static long cached = 0;

@@ -573,6 +573,7 @@ tests_set_sve.add(
         'eigen_gemm/gemm_double_max_arm.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
         'eigen_svd/svd_double_sve.cpp',
+        'eigen_svd/svd_double2_sve.cpp',
         'eigen_svd/svd_float_sve.cpp',
         'eigen_svd/svd_fvectors_sve.cpp',
     )

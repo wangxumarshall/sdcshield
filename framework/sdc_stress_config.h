@@ -616,9 +616,9 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  * 存量链, 含 x86-64 #else 分支)签名与行为不变(rule 5, issue #351——
  * probe_floor_ms 缺省值即 f84966bc 之前的历史噪声底语义, 不得随 ARM
  * 侧 M3 口径联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)
- * 显式传 sdc_m3_probe_floor_ms(100.0)。fit 保持 f84966bc 之前的第 8 参历史位次、
- * probe_floor_ms 殿后: 字面量 0/NULL 作第 8 实参(『显式不要 fit』的
- * 旧写法)仍绑 fit 而非经 int→double 隐式转换静默重绑
+ * 显式传 sdc_m3_probe_floor_ms(100.0)。fit 保持自 f84966bc 引入起(至本
+ * PR 参数化前)的第 8 参位次、probe_floor_ms 殿后: 字面量 0/NULL 作第 8
+ * 实参(『显式不要 fit』的旧写法)仍绑 fit 而非经 int→double 隐式转换静默重绑
  * probe_floor_ms=0.0——后者使 probe 抬档循环永假、外推基数退回微档
  * 噪声且无告警; double 字面量误入第 8 位则编译报错(响亮)。
  * 调用契约:

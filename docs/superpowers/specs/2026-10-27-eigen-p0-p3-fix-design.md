@@ -146,7 +146,8 @@ node0-only 机器：全部线程计入 node0、node_budget ≈ 全局 MemAvailab
 > 「probe 档抬升阈值 <1ms→<100ms」经参数化后**不再是 `sdc_calibrated_dim`
 > 的模板缺省行为**，而是带 fit 出参消费方的**显式实参**——现签名为
 > `sdc_calibrated_dim(..., struct sdc_fit *fit = nullptr, double probe_floor_ms = 1.0)`
-> （framework/sdc_stress_config.h；fit 保持 `f84966bc` 前第 8 参历史位次，
+> （framework/sdc_stress_config.h；fit 保持自 `f84966bc` 引入起（至本 PR
+> 参数化前）的第 8 参位次，
 > probe_floor_ms 殿后——字面量 `0`/`NULL` 作第 8 实参仍绑 fit，double
 > 字面量误入则编译报错）：模板缺省 `1.0` 恢复 `f84966bc` 之前
 > 存量 7 参链（跨 arch，含 x86-64 `#else` 分支）的 1ms 历史噪声底语义

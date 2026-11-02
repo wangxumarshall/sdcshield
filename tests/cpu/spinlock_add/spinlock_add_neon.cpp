@@ -35,16 +35,24 @@
  *                        墙钟（重启确认窗），反复停摆以区分性签名 FAIL、
  *                        不以 hard-lockup CONFIRMED 定罪
  *
- * 检出时延边界（PR#341 轮1 检视 :13/:233 披露义务，框架 deadline 语义、
- * 测试内不可消除）：通道C 的 FROZEN 判定自身需 ~11s（10s 看门狗 + 1s 确认
- * 窗 + dump 落盘）、NO_PROGRESS 判定需 ~40s（3 次预算重置 + 第 4 窗口）——
- * 冻结/停滞事件若在 -t 窗口尾部不足上述时延处开始，父进程在 deadline 先
- * 置 TimedOut 并对子进程走 SIGTERM→20s→SIGKILL 处决阶梯
- * （terminate_children），FAIL 消息与 64B dump 不及产出，以墙收收场——
- * 恰是本测试声称消灭的形态在窗口尾部的残留（-t 60s 默认下尾部 ~11s/60s
- * ≈18% 对 FROZEN 口径不闭合）。acquire 循环只认自身预算、不查
- * test_time_condition 是有意取舍：等待者查时间条件并提前放弃 = 把检出
- * 机会让渡给墙收，判定完整性优先。此边界在此声明而非静默存在。
+ * 检出时延边界（PR#341 轮1 检视 :13/:233 提出；轮2 检视 :41 依框架代码
+ * 修正——轮1 版本误采「-t 到期即处决」的时序断言，实为虚构盲区）：通道C
+ * 的 FROZEN 判定自身需 ~11s（10s 看门狗 + 1s 确认窗 + dump 落盘）、
+ * NO_PROGRESS 判定需 ~40s（3 次预算重置 + 第 4 窗口），而 acquire 循环
+ * 只认自身预算、不查 test_time_condition（有意取舍：等待者查时间条件并
+ * 提前放弃 = 把检出机会让渡给超时，判定完整性优先）——判定完成时刻可溢
+ * 出 -t 名义窗口（onset + 11s/40s > -t）。溢出部分由框架父进程的收集墙
+ * 容忍：test_timeout = max(5×-t + 30s, 300s)（framework/sandstone.cpp），
+ * worker 全部 join 后子进程正常退出，FAIL 消息与 64B dump 照常产出、结果
+ * 收集为 Failed 而非 TimedOut——onset+11s/40s ≤ -t+11s/40s <
+ * max(5×-t+30s, 300s) 对一切 -t 恒成立，尾部检出不会丢失。真实边界只有
+ * 两条，在此如实披露：① 显式 --max-test-time 设低于 onset+判定时延时，
+ * 父进程墙先到，子进程被处决（SIGQUIT→20s→SIGKILL 阶梯，
+ * terminate_children），FAIL 与 dump 丢失、以 TimedOut 收场；② 真实
+ * TimedOut（子进程挂满 max(5×-t+30s, 300s) 收集墙）是比通道C 所能报告
+ * 的更强异常形态——单次冻结即产出 FROZEN FAIL、不可能跑到墙，能挂满墙
+ * 的只剩框架/系统级停摆或不可中断 I/O 睡眠等，应按更强信号处置、不应
+ * 按良性超时轻放。
  *
  * 三通道自检（部署到新机器后必跑，coherence_probe SELFTEST_W 同款纪律——
  * 阳性通过后阴性结果才有意义；错值 fail loudly 而非静默 off，防 typo 无声

@@ -424,10 +424,16 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
 
         /* 自检 stall：首个进临界区的线程持锁 15s（> 看门狗 10s + 确认窗 1s
          * + 裕量——模拟冻结须长于两段式全检出时延，否则确认窗内其他线程
-         * CAS 成功会被判为饥饿、阳性击穿），其他线程看门狗应触发 */
+         * CAS 成功会被判为饥饿、阳性击穿），其他线程看门狗应触发。
+         * sleep 返回值不可弃（PR#341 轮1 检视 :329）：POSIX sleep 被任意
+         * 已捕获信号打断即返回未睡秒数——持锁提前释放会让确认窗内 CAS
+         * 成功、通道 C 阳性丢失，部署自检静默假绿（与 init 的 fail-loudly
+         * 门槛不对等）。循环睡满标称秒数 */
         if (d->selftest == 1 && d->stall_armed == 0) {
             d->stall_armed = 1;
-            sleep(SPINLOCK_ADD_NEON_STALL_SLEEP_SECONDS);
+            unsigned remain = SPINLOCK_ADD_NEON_STALL_SLEEP_SECONDS;
+            while (remain > 0)
+                remain = sleep(remain);
         }
 
         spinlock_add_neon_release(d);

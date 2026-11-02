@@ -12,7 +12,9 @@
 **Spec:** issue #394（gh issue view 394，task-loop:audit:cc0f8836c8a9944d）——「25/190（13%）矩阵格以『clamp 下限起步、首次通过即止』的有界重跑计绿……把最小激发强度的证据当成满强度证据……标题未携带该限定」。
 
 > **⚠ 执行勘误（2026-11-01 PR #404 检视轮次后补，先于下方原文）**：本计划入库后，
-> 其交付文本经 PR #404 检视处置修正（commit `aef95657`/`ebb6edb4`）——**下方 Task 2/3/4
+> 其交付文本经 PR #404 检视处置修正（commit `aef95657`/`ebb6edb4`，2026-11-02 分支
+> rebase 线性化后对应 `354013e3`/`44599bae`——旧 SHA 系 rebase 前形态，本分支历史
+> 已不可达，核验以新 SHA 为准）——**下方 Task 2/3/4
 > 原文中的下列口径已被证伪，重执行者不得按原文逐字回退**，以入库交付文本
 > （triage-256.md / matrix-gen.sh / matrix.md / README.md）为准：
 > 1. **「165 格默认自适应」实为 164 默认自适应 + 1 格 `acl_gemm_sve.dim=512` 标定
@@ -51,7 +53,7 @@
 **Interfaces:**
 - Produces: 「当前 HEAD 上 matrix-gen.sh 再生成 == 入库 matrix.md」的实证，作为 Task 3 改后 diff 判读的基线。
 
-- [ ] **Step 1: 从当前生成器再生成并 diff**
+- [x] **Step 1: 从当前生成器再生成并 diff**
 
 ```bash
 cd docs/superpowers/inventory/sve-all-vl-campaign
@@ -70,7 +72,7 @@ Expected: `BASELINE-REPRODUCIBLE`（零 diff；生成器全部 FATAL 断言通�
 **Interfaces:**
 - Produces: 「§5 证据强度限定」锚点（matrix-gen.sh 与 README 的限定语引用该节名）。
 
-- [ ] **Step 1: §1 pass 计数 bullet 后追加指针行**
+- [x] **Step 1: §1 pass 计数 bullet 后追加指针行**
 
 在「- 两 seed 的 pass 计数均含 mce_check（……= 191 执行 191 绿）。」之后新增一行：
 
@@ -80,12 +82,12 @@ Expected: `BASELINE-REPRODUCIBLE`（零 diff；生成器全部 FATAL 断言通�
   量化与限定见 §5「证据强度限定」。
 ```
 
-- [ ] **Step 2: §5 协议行加前向指针**
+- [x] **Step 2: §5 协议行加前向指针**
 
 :132 「取值从 knob 的 **clamp 下限**起步，若 FAIL 则 ×2 逐级上调直至 pass（记录每级原因）。」
 句尾追加：「**该协议只确立「存在可通过的有界几何」**——证据强度含义见本节末尾「证据强度限定」。」
 
-- [ ] **Step 3: §5 结论段后插入「证据强度限定」块（含量化缩比表）**
+- [x] **Step 3: §5 结论段后插入「证据强度限定」块（含量化缩比表）**
 
 在 「**结论**：25/25 在 clamp 下限全绿、零上调。……无任何 fail/crash。」段之后插入：
 
@@ -114,7 +116,7 @@ seed 各一次）的 VL=256 绿 = **最小激发强度**证据：功能正确性
 **不等价**。
 ```
 
-- [ ] **Step 4: §7 标题与 bullets 限定**
+- [x] **Step 4: §7 标题与 bullets 限定**
 
 标题 :197 改为：
 
@@ -150,7 +152,7 @@ seed2 bullet 改为：
 观察项 ③ 句尾「直接按本表 clamp 下限协议有界化即可。」改为「直接按本表 clamp 下限
 协议有界化即可（所得为最小强度证据，报告口径须携带 §5 同款限定）。」
 
-- [ ] **Step 5: 数字机械核对（缩比表 vs §4/§5 原表）**
+- [x] **Step 5: 数字机械核对（缩比表 vs §4/§5 原表）**
 
 核对表（执行时逐项 grep §4/§5 原值复核）：
 
@@ -176,7 +178,7 @@ seed2 bullet 改为：
 - Consumes: Task 2 的「§5 证据强度限定」节名（限定语引用它）。
 - Produces: 与 triage-256.md 同口径的矩阵侧限定。
 
-- [ ] **Step 1: :265 256 列对账行 printf 文本改为**
+- [x] **Step 1: :265 256 列对账行 printf 文本改为**
 
 ```
 - **256 列 = %d pass** —— 对账 triage-256 §7（seed1 165 腿内直绿 + 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（165 直绿 + 25 格腿内 clamp 下限有界））；%d 个有界格 = %d 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——**clamp 下限 = 最小激发强度**，工作集较默认自适应几何缩小数个数量级，证据强度弱于直绿格、不构成满强度激发证据，triage-256 §5「证据强度限定」）+ %d 格 baked 直绿（acl dim=512，Ruling B / triage-256 §1）。
@@ -184,12 +186,12 @@ seed2 bullet 改为：
 
 （printf 格式符与参数 `p256 + q256, q256, n_to, q256 - n_to` 不变。）
 
-- [ ] **Step 2: :320 legend 两处子句改为**
+- [x] **Step 2: :320 legend 两处子句改为**
 
 @128 子句：「26 项腿内 baked（triage-128 §1：逐字拷贝自 256 腿 seed2——即同一组 clamp 下限值，最小激发强度语义同 @256；两 seed 腿内有界实测）」；
 @256 子句：「25 格 seed1 有界重跑（triage-256 §5：clamp 下限一次通过、零上调——**clamp 下限 = 最小激发强度**，证据强度限定见彼处）」。
 
-- [ ] **Step 3: 再生成并验证 diff 恰为预期**
+- [x] **Step 3: 再生成并验证 diff 恰为预期**
 
 ```bash
 cd docs/superpowers/inventory/sve-all-vl-campaign
@@ -204,13 +206,13 @@ Expected: diff 只落在 §5 的 256 列对账行与 §2 legend 行（两处文�
 **Files:**
 - Modify: `README.md:374`（运动总结段「三档采集」句）
 
-- [ ] **Step 1: 在「……见矩阵 §2 种子语义）；」与「512 = gem5 SE」之间插入从句**
+- [x] **Step 1: 在「……见矩阵 §2 种子语义）；」与「512 = gem5 SE」之间插入从句**
 
 ```markdown
 这 25 格（及 128 腿逐字拷贝同值的 26 项 baked）以 **clamp 下限最小激发几何**取证——工作集较默认自适应几何缩小数个数量级，功能正确性成立、**不构成满强度激发证据**（triage-256 §5「证据强度限定」）；
 ```
 
-- [ ] **Step 2: grep 验证限定语落位**
+- [x] **Step 2: grep 验证限定语落位**
 
 ```bash
 grep -c "最小激发" README.md docs/superpowers/inventory/sve-all-vl-campaign/triage-256.md \
@@ -221,8 +223,8 @@ Expected: 三文件均 ≥1。
 
 ### Task 5: 终验 + 提交 + 推送 + PR + issue 报告
 
-- [ ] **Step 1: 终验**：`git diff --stat` 只含 5 个文件（计划、triage-256、matrix-gen.sh、matrix.md、README）；Task 1-4 全部 Expected 达成；x86-64 非回归 = 纯文档/脚本文本改动、不触碰 tests/ framework/（如实声明，非「检查通过」）。
-- [ ] **Step 2: 提交**（一个 commit，含计划文档）：
+- [x] **Step 1: 终验**：`git diff --stat` 只含 5 个文件（计划、triage-256、matrix-gen.sh、matrix.md、README）；Task 1-4 全部 Expected 达成；x86-64 非回归 = 纯文档/脚本文本改动、不触碰 tests/ framework/（如实声明，非「检查通过」）。
+- [x] **Step 2: 提交**（一个 commit，含计划文档）：
 
 ```bash
 git checkout -B fix/issue-394 origin/main   # 已在则跳过
@@ -232,6 +234,6 @@ git add docs/superpowers/plans/2026-11-01-issue394-bounded-evidence-strength.md 
 git commit -s -m "docs(campaign): 256 腿 25 个有界格证据强度限定——clamp 下限=最小激发强度 (issue #394)"
 ```
 
-- [ ] **Step 3: 推送 + 开 PR**（兜底：分支已有 open PR 则 `gh pr edit` 改写标题正文）：
+- [x] **Step 3: 推送 + 开 PR**（兜底：分支已有 open PR 则 `gh pr edit` 改写标题正文）：
   标题 `fix: 256 腿 25 个有界格以 clamp 下限计绿的证据强度限定 (#394)`，正文含 Closes #394 + 根因 + 改动点 + 验证证据。
-- [ ] **Step 4: 报告贴 issue #394**；工作区回干净 main。
+- [x] **Step 4: 报告贴 issue #394**；工作区回干净 main。

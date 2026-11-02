@@ -576,6 +576,7 @@ tests_set_sve.add(
         'eigen_svd/svd_double2_sve.cpp',
         'eigen_svd/svd_float_sve.cpp',
         'eigen_svd/svd_fvectors_sve.cpp',
+        'eigen_svd_jacobi/svd_double_sve.cpp',
         'eigen_svd_jacobi/svd_float_sve.cpp',
         'eigen_svd_jacobi/svd_fvectors_sve.cpp',
     )
@@ -1183,6 +1184,7 @@ if host_machine.cpu_family() == 'aarch64'
         ['eigen_gemm/gemm_double_max_arm_body.cpp', 'gemm'],
         ['eigen_svd/svd_double_sve_body.cpp',      'svd_f64'],
         ['eigen_svd/svd_float_sve_body.cpp',       'svd_f32'],
+        ['eigen_svd_jacobi/svd_double_sve_body.cpp', 'svd_j_f64'],
         ['eigen_svd_jacobi/svd_float_sve_body.cpp', 'svd_j_f32'],
     ]
     foreach spec : eigen_sve_body_specs

@@ -638,6 +638,13 @@ struct sdc_fit {
  * 显式实参 / 告警文案), 由本常量绑定, M3 重标定只改一处。 */
 static constexpr double sdc_m3_probe_floor_ms = 100.0;
 
+/* M3 前提告警公共段: 分流文案(传参达标/未达标)共用的病理与后果表述。
+ * 宏参与字面量拼接(format 检查仍生效), 单点维护防双口径漂移——
+ * 分支各自维护曾致 byte-identical 双口径并存(见 8d0dc47e 裁定)。 */
+#define SDC_M3_FIT_WARN_BODY                                          \
+    "fit 差分扣 b 的固定开销占比<10%%前提未达成(spec §4.3 M3), "       \
+    "a_ms 将被固定开销与计时噪声污染(a_ms 虚高→n_run 偏小→激发欠压); "
+
 template <typename F>
 static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                                      const char *test_id, const char *knob,
@@ -746,20 +753,15 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
         if (t1 < sdc_m3_probe_floor_ms) {
             if (probe_floor_ms >= sdc_m3_probe_floor_ms)
                 log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
-                            "knob hi 截断致档位抬不上去, fit 差分扣 b 的"
-                            "固定开销占比<10%%前提未达成(spec §4.3 M3), "
-                            "a_ms 将被固定开销与计时噪声污染(a_ms 虚高→"
-                            "n_run 偏小→激发欠压); 检查 knob hi 是否足以"
-                            "抬升 probe 档", test_id, knob, t1,
-                            sdc_m3_probe_floor_ms);
+                            "knob hi 截断致档位抬不上去, " SDC_M3_FIT_WARN_BODY
+                            "检查 knob hi 是否足以抬升 probe 档", test_id,
+                            knob, t1, sdc_m3_probe_floor_ms);
             else
                 log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
-                            "fit 差分扣 b 的固定开销占比<10%%前提未达成"
-                            "(spec §4.3 M3), a_ms 将被固定开销与计时噪声污染"
-                            "(a_ms 虚高→n_run 偏小→激发欠压); 检查 probe_floor_ms"
-                            " 传参(M3 消费方应显式传 %.0f)与 knob hi 是否足以"
-                            "抬升 probe 档", test_id, knob, t1,
-                            sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
+                            SDC_M3_FIT_WARN_BODY
+                            "检查 probe_floor_ms 传参(M3 消费方应显式传 %.0f)"
+                            "与 knob hi 是否足以抬升 probe 档", test_id, knob,
+                            t1, sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
         }
         /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
          *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p

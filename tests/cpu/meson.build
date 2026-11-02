@@ -141,6 +141,9 @@ if host_machine.cpu_family() == 'aarch64'
         when : memcpy_rewr_dep,
         if_true : files(
             'memory/memcpy_rewr.cpp',
+            # NEON variant shares the original .conf via the same
+            # MEMCPY_REWR_SRC_DIR define (arm_add/memcpy_rewr_neon.cpp)
+            'arm_add/memcpy_rewr_neon.cpp',
         )
     )
 endif
@@ -327,6 +330,15 @@ if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
             'arm-0102/arm0102_kreg_mask.cpp',
+            'arm-0102/arm0102_fma_f32.cpp',
+            'arm-0102/arm0102_fma_f64.cpp',
+            'arm-0102/arm0102_ins_ext.cpp',
+            'arm-0102/arm0102_kreg_logic.cpp',
+            'arm-0102/arm0102_kreg_mask_dump.cpp',
+            'arm-0102/arm0102_kreg_mask_vceq.cpp',
+            'arm-0102/arm0102_kreg_not.cpp',
+            'arm-0102/arm0102_kreg_select.cpp',
+            'arm-0102/arm0102_swizzle.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
@@ -339,6 +351,15 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/agu_stress_unaligned.cpp',
             'cache/cachebounce_sdc.cpp',
             'cache/cache_stress_civac.cpp',
+            'cache/cache_stress_clflush_2.cpp',
+            'cache/cache_stress_memcpy_2.cpp',
+            'cache/llcstress.cpp',
+            'cache/llc_randomized_load.cpp',
+            'cache/llc_uniform_load.cpp',
+            'cache/l3_execute.cpp',
+            'cache/flushed_memcpy.cpp',
+            'cache/flushed_memcpy_bis.cpp',
+            'cache/sfence.cpp',
             'misc/core179_kernel_sdc_repro.cpp',
             'memory/mem_disambig_alu.cpp',
             'misc/movbe_dump_golden.cpp',
@@ -515,6 +536,7 @@ tests_set_base.add(
         'eigen_gemm/double14.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square_dump.cpp',
+        'eigen_gemm/gemm_double_ab_split.cpp',
         'eigen_gemm/gemm_double_dynamic_square.cpp',
         'eigen_gemm/gemm_double_dynamic_square_dump.cpp',
         'eigen_gemm/gemm_float_dynamic_square.cpp',
@@ -863,14 +885,69 @@ endif
 # 停滞看门狗 + 锁行 64B dump（硬锁死签名）。NEON 内核 aarch64 专属，
 # 仅 aarch64 构建（spinlock_unaligned 同款门）——非 aarch64 构建不含
 # 本用例（无占位注册，文件内亦无永不编译的死分支）。
+# spinlock_stale_read(_xchg)：CORE179 读路径缺陷类探针（CAS/xchg 两差分
+# 臂，纯 std::atomic，无内在函数；因面向 ARM64 病机现象、避免改变 x86
+# 参考集，同样仅 aarch64 构建）。2026-11-02 自 arm64-sdc-fuzzing/opendcdiag
+# 研究仓逐字节迁移。
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
             'spinlock_add/spinlock_add_neon.cpp',
+            'spinlock_add/spinlock_stale_read.cpp',
+            'spinlock_add/spinlock_stale_read_xchg.cpp',
         )
     )
 endif
 
+# arm_add/ —— 2026-11-02 用户规格 10 测试中查重后落地的 7 个（3 个已存在
+# 不重复实现：atomic_simd_128/256_unaligned、spinlock_unaligned）。
+# A 组 5 个 = str 失效故障报告五维探针（跨域写可见性 / 三层回读丢写 /
+# 锁+屏障路径丢写 / 低占空比跨 die / 高密度多宽度 str 批）；B 组 2 个 =
+# 633 #210/#211 ARM64 等价（DC CIVAC 冲刷干扰复制 + 纯复制对照）。
+# 全部 ARM64 指令语义（dmb/dsb ish、ldaxr/stxr、dc civac、cntvct），
+# 仅 aarch64 构建——x86-64 不含。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'arm_add/store_visibility_cross_class.cpp',
+            'arm_add/store_lost_write_detect.cpp',
+            'arm_add/barrier_after_lock_store.cpp',
+            'arm_add/low_load_cache_pressure.cpp',
+            'arm_add/str_instruction_stress.cpp',
+            'arm_add/cache_stress_clflush.cpp',
+            'arm_add/cache_stress_memcpy.cpp',
+            'arm_add/cache_stress_clflush_2_neon.cpp',
+            'arm_add/cache_stress_memcpy_2_neon.cpp',
+            'arm_add/flushed_memcpy_neon.cpp',
+            'arm_add/flushed_memcpy_bis_neon.cpp',
+            'arm_add/llcstress_neon.cpp',
+            'arm_add/llc_randomized_load_neon.cpp',
+            'arm_add/llc_uniform_load_neon.cpp',
+            'arm_add/l3_execute_neon.cpp',
+            'arm_add/sfence_neon.cpp',
+            'arm_add/store_visibility_cross_class_neon.cpp',
+            'arm_add/store_lost_write_detect_neon.cpp',
+            'arm_add/barrier_after_lock_store_neon.cpp',
+            'arm_add/low_load_cache_pressure_neon.cpp',
+            'arm_add/str_instruction_stress_neon.cpp',
+            'arm_add/cache_stress_clflush_neon.cpp',
+            'arm_add/cache_stress_memcpy_neon.cpp',
+            'arm_add/cachebounce_neon.cpp',
+            'arm_add/mem_disambiguation_neon.cpp',
+            'arm_add/mem_disambig_alu_neon.cpp',
+            'arm_add/mfence_neon.cpp',
+            'arm_add/mfence_pure_neon.cpp',
+            'arm_add/memcpy0_neon.cpp',
+            'arm_add/memcpy1_neon.cpp',
+            'arm_add/memcpy_l1d_size_neon.cpp',
+            'arm_add/memcpy_l2_cache_size_neon.cpp',
+            'arm_add/memcpy_l3_cache_size_neon.cpp',
+            'arm_add/memcpy_sem_neon.cpp',
+            'arm_add/memcpy_shuffle_neon.cpp',
+            'arm_add/memcpy_shuffle_v2_neon.cpp',
+        )
+    )
+endif
 
 # JIT code-generation test suite. Each test mmaps executable memory and
 # emits a chain of machine-code instructions (at runtime, not compile-time)
@@ -1303,6 +1380,13 @@ endif
 # ARM64-native NEON + crypto (AES) tests. The subdir guards the actual build
 # behind `if host_machine.cpu_family() == 'aarch64'` so x86-64 is untouched.
 subdir('arm64')
+
+# sdc_fuzzing: the 100 core-179 SDC reproducer cases (BETA). The subdir's
+# meson.build + cases_index.csv are AUTO-GENERATED by
+# scripts/generate_sdc_fuzz_cases.py (do not edit by hand — regenerate).
+# Self-gated on aarch64 and on eigen3_dep, so x86-64 is untouched and a
+# missing Eigen simply drops the fleet.
+subdir('arm64/sdc_fuzzing')
 
 # SVE ports of the 53 avx-named tests (fma/mesh/eigen/ipsec). Same
 # self-gating pattern as arm64/ above: the subdir's own meson.build wraps

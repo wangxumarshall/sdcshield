@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793557081534,
+  "lastUpdate": 1793623389679,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -3067,6 +3067,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.154,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "0a6963840acdca40852609d5c86292a159388d91",
+          "message": "fix: triage-256 §4 seed2 尸体比对降格为未留档一次性观察 (#401) (#415)\n\n* docs(campaign): triage-256 §4 seed2 尸体比对降格为未留档一次性观察\n\nissue #401（audit Minor/可维护性）：§4 把「与 seed2 首跑尸体的逐格比对」当作\n「25 格超时集合跨 seed 结构性」的已执行交叉核验论据（「该比对结论以此记录为准」），\n而该比对依赖的原始日志已按裁定 D 被重跑覆盖、/tmp stdout 随重启丢失——既毁证据，\n无法复审计实。\n\n修复（纯文档，单处段）：\n- 结构性结论显式改由机制论证独撑（几何输入是物理内存比例与全机线程数，不含\n  seed 依赖项；seed1 全量实测见本表）——审计确认机制论证本身成立；\n- 尸体比对降格为「未留档的一次性观察（不列入论据链）」，写明不可复审计实的\n  原因（日志被重跑覆盖 + /tmp stdout 随重启丢失），如实保留「该观察曾发生」的\n  历史记录；「以此记录为准」的核验地位表述删除。\n\n实测：grep 全文「以此记录为准」清零；库内无其他文件引用该论断（matrix.md /\nREADME 不含「尸体/比对一致/seed2 首跑」）；diff 恰为 §4 一处段 +6/-3 行，\n头部环境事件 2、§4 另注、§7 结论与降格表述无矛盾。规则 2 全链：build.sh\n6 步零警告；-e zstd19 -t 2000 -n 1 → exit: pass。纯文档改动，x86-64 非回归 =\n无代码语义变化（如实声明）。\n\n对应 issue：#401。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(campaign): triage-256 §4 论据句证据地位分层与比对指代修正\n\nPR #415 检视 round 1（local-claude 一 Important + 一 Minor，同一处段，一次重写）：\n\n1. Important——「该结论仅由机制论证独撑（…；seed1 全量实测见本表）」自相矛盾：\n   括号内「仅由独撑」与并列「seed1 实测」论据地位互斥；且「几何与 seed 无关」⇏\n   「25 格集合跨 seed 相同」，缺「超时完全由几何决定」未论证前提——文档自录反例\n   线索（#15 杀灭迟滞：随机数据依赖地址的 asm 循环，runtime 1,279,904 ms 对其余格\n   316-414 s 的离散 = 数据影响执行时间的已记录通道）；seed2 尸体比对降格后无界侧\n   实测论据归零，强度却仍「确定是」。重写为证据地位分层：seed1 全量实测确立\n   「seed1 侧 25 格名单」基础事实；「名单跨 seed 不变」的外推仅由机制论证支撑，\n   并显式写出未闭合环节（「工作量超出 300 s 预算是数量级级而非边缘」未单独量化）\n   → 结论强度「确定是」降为「预期是」。\n2. Minor——同段观察句「与前一会话比对一致」指代歧义：头部事件 2 同词指 seed2\n   首跑会话，此处实指 seed1 全量跑（时间线：seed1 03:55-07:06 先行、seed2 首跑\n   08:40:15 死亡）。改为「与 seed1 全量跑的超时名单（本表）比对一致」。\n\n实测：grep 复核——「以此记录为准」全文 0；「确定」仅剩「『预期』而非『确定』」\n强度对比；「前一会话」仅剩头部 line 17 历史行（其语境自洽）；「结构性/跨 seed」\n全文仅此一处，降强度无文档联动。构建（worktree 全新 setup，meson+ninja 533/533，\nexit 0）4 条 warning 全为既有——2 条 meson no-sources 目标声明 + 2 条 main 侧\nx86 mesh_upi_{avx,sse}_sym.cpp -Wformat（本 PR 未触碰任何 .cpp），零新警告；\n-e zstd19 -t 2000 -n 1 → exit: pass。纯文档改动，x86-64 非回归 = 无代码语义\n变化（如实声明）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(plan): issue401 计划的 grep 验证声称修正为与实测一致\n\nPR #415 检视 round 1（local-claude Minor）：plan 的 Global Constraints 把\n「grep '尸体|比对一致|seed2 首跑' 仅命中 triage-256.md」写成绝对化验证记录，\n实测为假且合入状态下不可复现——全库 grep 另命中无关文件\n（core179 论文译文 mspc_paper_zh.md:121 的「尸体」一词），plan 文件自身也含\n全部三个词（主题使然）。实质结论（matrix.md/README 无该论断扩散）成立，但\n证据纪律主题 PR 的验证声称自身不精确。\n\n修正为可复现表述：零命中 matrix.md/README；库内其余命中为主题文件\ntriage-256.md、本 plan 自身、无关语境一处（mspc_paper_zh.md:121「尸体」），\n均非该论断的扩散。\n\n实测：全库 grep 三词命中清单与本句一字不差；纯文档改动，构建零新警告、\nzstd19 回归 pass 由同轮 C1 提交前统一验证覆盖（两 commit 同批 push 前）。\nx86-64 非回归 = 无代码语义变化（如实声明）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(campaign): triage-256 §7 结论③ 强度随 §4 降级传播——「天然产生」改「预期」限定\n\nPR #415 检视 round 2（local-claude Minor，正确性）：§4 已把「25 格集合\n跨 seed 结构性」从「确定」降为「预期」（证据地位分层：seed1 实测为基础\n事实层、跨 seed 外推为机制论证层），但 §7 结论 ③ 仍以无限定确定性措辞\n复述同一论断（「自适应几何与 300 s 超时预算的组合在 62 GiB node0-only\n主机上天然产生 25 格超时」）——降级未传播到位，文档内结论强度自相矛盾。\n\n根因（如实承认）：round 1 修复的联动核验 grep 只查了「结构性|跨 seed」\n两词、声称「全文仅此一处，降强度无文档联动」，措辞不同的 §7 ③「天然\n产生」逃过该 grep——d5fac31c 提交信息所录核验声称与实际不符。\n\n修正：③ 句改「产生 25 格超时（seed1 实测事实；名单跨 seed/后续腿不变\n的外推强度为『预期』而非『确定』，论据分层见 §4）」，逐字对齐 §4 分层\n口径；后续腿处置指引（clamp 下限协议）原样保留。\n\n实测：diff 恰为 §7 ③ 一处句；「天然产生」全库 grep 归零（修复前唯一\n命中即本句）；本轮联动核验改宽口径——全文通读 + 「一定/必然/无疑/\n天然/必超」grep 零残留，「确定」仅剩 §4:90 与 §7 ③ 两处「『预期』\n而非『确定』」对比句，「预期」在 §4:84/90 与 §7 ③:218 三处口径一致；\n§1（时长侧证）/§3（负载边界归因）/§5（「坐实」限「同 seed」）/§7 ①②\n（各带「因果未证」限定）均与分层相容，无其他漏网点（enumeration.md\n「必然超时」为 acl_gemm 耐心下界另一主题）。构建 ninja no work to do\n（纯 .md，exit 0）零新警告；-e zstd19 -t 2000 -n 1 → exit: pass。\n纯文档改动，x86-64 非回归 = 无代码语义变化；无受影响芯片能力，\ngem5-fi 不适用（如实声明验证边界）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(campaign): triage-256 §4 机制论证句「数量级级」叠字笔误修正\n\nPR #415 检视 round 3（local-claude Minor，可维护性）：§4:88-89 降格后\n唯一支撑外推的机制论证前提句中「工作量超出 300 s 预算是数量级级而非\n边缘」的「数量级级」为叠字笔误（非通行表述，全库 grep 唯一一处），\n应为「是数量级」。\n\n修正：删一「级」字，语义不变（超出达数量级、非边缘超出）。\n\n实测：grep -c '数量级级' 修复前=1、修复后=0；diff 恰为一字。纯文档\n改动，构建零新警告与 zstd19 回归由本轮同批 push 前统一验证覆盖；\nx86-64 非回归 = 无代码语义变化（如实声明）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(campaign): triage-256 §4 一次性观察句补指代解读的事后性与依据披露\n\nPR #415 检视 round 3（local-claude Minor，正确性）：观察句的比对对象\n「seed1 全量跑的超时名单」系 d5fac31c 对原文「与前一会话比对一致」的\n事后改写——该句自认「无法复审计实」，改写却把事后解读当作观察内容\n直接陈述，且未注明指代澄清并非原始记录（正是 issue #401 所修「以\n不可复核声称充当已执行核验」的同类风险在修正句上复发）。\n\n修正：比对一致后插入括注——原始记录仅称「与前一会话比对一致」、\n比对对象认定为 seed1 全量跑系事后按时间线解读（seed1 03:55-07:06\n先行、seed2 首跑 08:40:15 死亡，「前一会话」唯一可指前者）、该解读\n本身同样无法复核。\n\n实测：diff 恰为该一处句；「前一会话」现出现两处——头部 line 17 历史\n行（语境自洽）与本句括注（引原始措辞），语境各自闭合。纯文档改动，\n构建零新警告与 zstd19 回归由本轮同批 push 前统一验证覆盖；x86-64\n非回归 = 无代码语义变化（如实声明）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(campaign): triage-256 §7 结论③ 跨 seed 与跨腿维度拆分——§4 引用只覆盖前者\n\nPR #415 检视 round 3（local-claude Minor，正确性）：3b88dc70 把「名单\n跨 seed/后续腿不变的外推强度…论据分层见 §4」两维合并统引 §4，但 §4\n的机制论证仅覆盖跨 seed 维度（几何输入不含 seed 依赖项）；后续腿\n（128/512）几何按档自适应（本表即 256 档自适应产物），全库不存在任何\n「后续腿名单不变」的论证——合并引用使读者误以为腿维度同样有机制\n论证背书。该缺陷系 3b88dc70（round 2 传播降级）自身引入，如实承认。\n\n修正：③ 括注拆维——「名单跨 seed 不变的外推强度为『预期』而非\n『确定』，论据分层见 §4；跨腿维度无此论证——几何按档自适应，名单\n复现未证，故指引保持『如遇』条件式」；后续腿处置指引（clamp 下限\n协议）原样保留。\n\n实测：diff 恰为 §7 ③ 一处句；grep「后续腿」全文命中——§7 ③ 两处\n（跨腿限定 + 条件式指引）与 plan 历史文件，无其他联动点。纯文档改动，\n构建零新警告与 zstd19 回归由本轮同批 push 前统一验证覆盖；x86-64\n非回归 = 无代码语义变化（如实声明）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(plan): issue401 计划执行状态同步——checkbox 勾选 + 偏差执行记录\n\nPR #415 检视 round 3（local-claude Minor，可维护性）：同 PR 入库的\nplan 被同 PR 的 commit 序列证伪——「单 commit」约束 vs 实际多 commit、\nStep 1 描述的目标文本 vs 交付的分层版本、7 个执行 checkbox 全部留空\n（库内先例 2026-10-24-sve-sme-all-vl2-p4.md:53 执行后打 [x]）。\n\n修正：7 个 Step checkbox 全部按实际执行勾选；文末追加「执行记录」一节\n如实记录偏差——commit 数超出（检视轮次追加，各仍一补丁一单元）、\n文本演进（Step 1 草拟确定级 → round 1 分层「预期」级）、Step 2 初版\ngrep 词面过窄的教训、Step 7 的 worktree 环境口径差异。不改写 Step 1\n等原文（计划文本是当时意图的历史记录，改写会伪造计划史），偏差由\n执行记录承载。\n\n实测：grep 勾选 7/7、未勾选 0；diff = checkbox 7 行 + 追加执行记录\n一节，无原文改动。纯文档改动，构建零新警告与 zstd19 回归由本轮同批\npush 前统一验证覆盖；x86-64 非回归 = 无代码语义变化（如实声明）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(campaign): triage-256 §4 指代解读「唯一可指」降为「最可能指」——排他断言强度匹配论证\n\nPR #415 检视 round 4（local-claude Minor，正确性）：e61199b2 在披露\n指代解读时写入「『前一会话』唯一可指前者」——排他性断言，但时间线\n论证不构成排他证明，违反本 PR 自身在 §4 主结论刚确立的「断言强度须\n匹配论证」纪律（主结论降「预期」，指代解读却保留「唯一」）。两处\n未闭合：① 指称粒度——头部环境事件 2 的「前一会话」系会话级用法，\nseed1 跑（07:06 止）与 seed2 首跑（~08:40 死）间隔仅约 1.5 h，可能\n同会话先后执行，会话边界未留档；② 替代候选——环境事件 1 的废弃\n首跑（00:26-01:41，同清单同 seed）时间线同样在前、未排除。\n\n修正：「唯一可指前者」→「最可能指前者——紧邻在前、持完整超时名单\n且环境干净；但会话边界未留档（头部环境事件 2 的同词为会话级用法，\nseed1 跑与 seed2 首跑可能同会话先后），更早的废弃首跑（环境事件 1：\n00:26-01:41、污染、41/190）亦未排除，故为非排他解读」。\n\n实测：diff 恰为该一处括注；grep「唯一可指」修复前 1、修复后 0，\n「最可能指」新增 1 处（本句）。构建 ninja no work to do（纯 .md，\nexit 0）零新警告；-e zstd19 -t 2000 -n 1 → exit: pass。纯文档改动，\nx86-64 非回归 = 无代码语义变化；无受影响芯片能力，gem5-fi 不适用\n（如实声明验证边界）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n---------\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\nCo-authored-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-02T05:15:39Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/0a6963840acdca40852609d5c86292a159388d91"
+        },
+        "date": 1793623387804,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 83090.772,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44934.35,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.777,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 31.006,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.838,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.995,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.668,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.382,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 28211.914,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.905,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 10.734,
             "unit": "s"
           }
         ]

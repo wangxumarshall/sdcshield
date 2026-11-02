@@ -176,8 +176,14 @@ Q4 madvise(m+pg+pg/2, MADV_DONTNEED) = -1 errno=Invalid argument
 - >8K 页内核故障本机不可复现 → 以「故意破坏几何」在同一路径实证
   （等效的通用几何失配故障，非页对齐 → EINVAL 由 Q1 直接证明）。
 - x86-64：检视论证——中立 framework 代码，4K 页 x86-64 上
-  `GuardSize() = 8192` 与原值逐位相同、几何不变；唯一行为差异是「失败
-  时」从无声 SIGSEGV 变为响亮 abort（strictly better）。
+  `GuardSize() = 8192` 与原值逐位相同、几何不变；失败时的行为差异
+  分路径，不得统一压扁为「无声 SIGSEGV」：mprotect 失败（mprotect
+  路径逐线程置 RW、MADV 路径全区置 RW）旧为吞错 → 栈滞留
+  PROT_NONE → 后续 pthread_create 无声 SIGSEGV（Q3 实测）；MADV
+  循环内 madvise(MADV_GUARD_INSTALL) 失败旧为吞错 → 无声降级
+  继续跑（线程间缺 guard、无 SIGSEGV——issue #396 谴责的盲区形态，
+  6.13+ MADV 内核上 x86-64 同样存在该子路径）——两者现均为响亮
+  abort（strictly better）。
 - Windows：helper 与三处调用点全在 `#ifndef _WIN32`，构建不受影响。
 
 ## 交付

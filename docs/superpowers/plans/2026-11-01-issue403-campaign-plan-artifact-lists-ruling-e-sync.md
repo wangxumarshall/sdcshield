@@ -40,11 +40,18 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
 - 纯 .md 改动：不碰任何代码、脚本、数据文件、`.gitignore` 本身（裁定 E 方向
   正确，错的是计划文本——反向「放开 .log 入库」会塞进 152-383 MB 级 yaml，
   违背裁定 E，不做）。
-- 影响面已核：`grep -rn 'native-256-<seed>|native-128-<seed>|<test>\.log|全部日志'`
-  全库仅命中该计划文档（docs/cases、docs/paper 的命中为无关内容）——matrix.md/
-  README/triage/spec 均无 `.log` 入库主张，无需同步。
-- 单 commit（一个逻辑单元：计划文档工件清单同步裁定 E，本计划随同入库，
-  先例 7dfa9505 / e61c0fd6）。
+- 影响面已核：`grep -rEn 'native-256-<seed>|native-128-<seed>|<test>\.log|全部日志'`
+  （-E 必需——BRE 下 `|` 为字面量，无 -E 原样执行零命中，无法复现下述结论）——命中
+  三类：目标计划文档（campaign.md 各 Files/矩阵输入行）+ 本实施计划自身（根因描述
+  与本行）+ 无关字面量（scripts/run/run-sdc-hunt-30min.sh:8 与 run_cluster_anchored.sh:185
+  的「保留全部日志」为删日志规则文案、gem5-512-extract.sh 的 `<test>.log` 为输入
+  格式说明、triage-256.md 同类记录——均非 `.log` 入库主张）；matrix.md/README/spec
+  均无 `.log` 入库主张，无需同步。
+- commit 形态：原设计单 commit（一个逻辑单元，先例 7dfa9505 / e61c0fd6）；PR 实际
+  3 commits = e63b0345 本体 + d7ca9374/9fa0787b 两轮检视处置（每轮处置一个逻辑
+  单元——一补丁一单元原则下的追加，处置修改了本体产物，属同一交付物的迭代追记
+  而非拆分逻辑单元；本计划文档自身被后两轮修改）。本计划为事前指令形态文档，
+  随处置轮次追记修正案（各 Step 的「改前」类指令为历史时点原文）。
 - x86-64 非回归 = 纯文档，无架构语义，如实声明。
 
 ---
@@ -52,7 +59,7 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
 ### Task 1: 同步计划文档工件清单 + 验证 + commit
 
 **Files:**
-- Modify: `docs/superpowers/plans/2026-10-28-sve-all-vl-verification-campaign.md`（6 处：Global Constraints 总纲、Task 2 Files、Task 2 Step 1、Task 3 Files、Task 6 Files、Task 8 Interfaces+Step 1——此 6 处枚举 = e63b0345 单 commit 的编辑位置，其单 commit diff 为 6 hunk；PR 净 diff（`git diff 6fdf040d..HEAD -- <该文件> | grep -c '^@@'`）实测 8 hunk，多出的 @@ -317/-331 是 round-1 处置 commit 对 Task 6 内嵌骨架的关键语义对齐——计数主张按单 commit / 净 diff 双口径分列，勿混用）
+- Modify: `docs/superpowers/plans/2026-10-28-sve-all-vl-verification-campaign.md`（6 处：Global Constraints 总纲、Task 2 Files、Task 2 Step 1、Task 3 Files、Task 6 Files、Task 8 Interfaces+Step 1——此 6 处枚举 = e63b0345 单 commit 的编辑位置，其单 commit diff 为 6 hunk；PR 净 diff（`git diff 6fdf040d..HEAD -- <该文件> | grep -c '^@@'`）实测 8 hunk，多出的 @@ -317/-331 是 d7ca9374（round-1，骨架语义化重写：write_identity/batch.tsv 追加/断点续跑）与 9fa0787b（round-2，关键语义对齐：P=20、`-f no --ignore-timeout`、read -a 防 glob、`exit: pass` 口径）两轮处置的叠加——计数主张按单 commit / 净 diff 双口径分列，勿混用）
 
 **Interfaces:**
 - Consumes: 裁定 E 协议事实（triage-256.md §1 / triage-128.md §0/§6 / .gitignore / 实际入库工件集）。

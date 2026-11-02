@@ -73,8 +73,11 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #      locks those groups out and yields ~488, see README)
                                                #   no-SVE 920 (MIDR part 0xd01): 439 PROD / 547 q0 / 551 q-1
                                                #     (2026-11-02 实测, = 迁移 121 + arm_add 7 + _neon 14 +
-                                               #      cache 新 9 PROD 后; do NOT cross-tree-subtract
-                                               #      the two host figures
+                                               #      cache 新 9 PROD 后; older 390/394/398 records are
+                                               #      attribution-unverifiable — the d6e39b96 claim conflicts
+                                               #      with registry arithmetic, no-SVE q-1 ceiling 586−207 =
+                                               #      379 < 398, only ">>299" stands; do NOT cross-tree-
+                                               #      subtract the two host figures
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

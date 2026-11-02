@@ -1708,3 +1708,29 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
     目标数，warning 归属 538 降级树构建。
 - **验证**: 文档-only commit；570/580/584 计数与 zstd19 回归 pass 已实测
   （b9df4cb3 树，二进制不变）。
+
+## 2026-11-02（PR #413 R4 检视处置：390 树归因证伪定案 + 82 全量对账 + pocketfft 守卫补全）
+
+- **当前 head 意见 4 条（local-claude 行级，14:26 检视）**:
+  - **#25 采纳（Critical，README:344/388 + CLAUDE.md:72-73）**: 390/394/398 与
+    588 注册锚点算术不相容——三前提逐一实证（d6e39b96..HEAD 测试删除 0、
+    门控 203 SVE + 1 SVE2 + 3 SME = 207、净增仅 2 探针）→ d6e39b96 全依赖
+    注册 = 586、no-SVE 机 q-1 天花板 = 586 − 207 = 379 < 记录 398（+19
+    超界，依赖降级只能减不能增、祖先树不可能注册更多）。390 的「main
+    d6e39b96」树归因不可信（或出自含主线外用例的另一棵树，如 122 战役
+    变体树）；三处改写为「历史记录 390/394/398，树归因经复核与注册总数
+    算术不相容（天花板 379），出处与宿主身份均不可考，唯『远超旧 299
+    推算』定性成立，待 0xd01 机复测定值」。
+  - **#26 采纳（README:388）**: 齐备清单漏 pocketfft——meson 静默禁用守卫
+    5 处实证（OpenSSL/OpenBLAS/SLEEF/pocketfft/isa-l，tests/cpu/meson.build
+    :421/:686/:726/:761/:945），570 列表含 pocketfft_fft×1（本构建已放行）；
+    清单改为「meson 静默禁用守卫全部放行 + acl/GMP 链接」。
+  - **#27 采纳（progress-log 1619）**: 降级→齐备 +82 对账闭合——残差 4
+    具名 = openssl×3（openssl_sha/sha3/sm3sm4）+ acl_gemm×1，全量对账
+    82 = ipsec×70 + openblas×5 + openssl×3 + sleef×2 + acl_gemm×1 +
+    fisttp_arm×1，已写入 README footnote。
+  - **#28 采纳（PR 元数据）**: PR 描述自述「2 文件 3 行」与 R1–R4 实际
+    处置范围不符——PR body 更新为如实范围（原 3 行文档修正 + R1–R4 检视
+    处置链，progress-log 台账可溯源）。
+- **验证**: 文档-only commit（README/CLAUDE/progress-log + PR body）；
+  570/580/584 计数与 zstd19 回归 pass 已实测（7d7331cd 树二进制不变）。

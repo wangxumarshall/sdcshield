@@ -215,8 +215,7 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
      * 相同(PR#384 检视, 意见 4432271425: 此前 preinit+child 四份逐字
      * 拷贝纯靠手工同步, 任一侧单独改动即静默重开误杀窗口)。 */
     int n_model = n_hi;
-    int64_t knob = sdc_knob_or_env_clamped(test, "eigen_gemm_double_max_arm",
-                                           "mdim", MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0)
         n_model = (int)knob;
 
@@ -279,8 +278,7 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
      * class). Flagged as T7/T9 input (footprint-aware AR entry or
      * per-test compensation); no code change in this round. */
     int dim;
-    int64_t knob = sdc_knob_or_env_clamped(test, "eigen_gemm_double_max_arm",
-                                           "mdim", MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0) {
         dim = (int)knob;
     } else {
@@ -369,6 +367,9 @@ DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, 
    * estimate from the memory ceiling + measured GEMM iteration model —
    * or from the explicit knob, which the child applies verbatim
    * (issue #352) — (T6: the child sizes the dimension itself via the
+   * joint solver; this only keeps the parent's timing expectation at or
+   * above the child's choice, so the derived timeout (5*duration+30s,
+   * 300s floor) scales along). (T6: the child sizes the dimension itself via the
    * joint solver; this only keeps the parent's timing expectation at or
    * above the child's choice, so the derived timeout (5*duration+30s,
    * 300s floor) scales along). */

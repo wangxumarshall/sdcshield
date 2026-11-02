@@ -252,8 +252,7 @@ static int size_matrix_preinit(struct test *test)
      *     最坏 ~213 s, 距 300 s floor 留 ~25% 裕量), 且 n_run 在本
      *     host class 恒把 child n 压在时间侧——显式档恰恰绕过这层
      *     保护, 才必须把 AR 显式放进模型。 */
-    int64_t knob = sdc_knob_or_env_clamped(test, "eigen_svd_cdouble_sve",
-                                           "mdim", MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
 
     double iter_s;
     if (knob > 0) {
@@ -356,8 +355,7 @@ static int sve_probe_and_init(struct test *test)
      * (注: n=1100 是定点实验档; auto 档在同一 run_budget_ms 下实测最坏
      * ~213 s, 见上方 size_matrix_preinit 注释, 两个口径不矛盾.) */
     int dim;
-    int64_t knob = sdc_knob_or_env_clamped(test, "eigen_svd_cdouble_sve",
-                                           "mdim", MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0) {
         dim = (int)knob;
     } else {

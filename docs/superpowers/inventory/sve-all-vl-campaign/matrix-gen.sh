@@ -16,12 +16,15 @@
 #                                        T3 minor fix：triage-128 曾意译丢句，此处补逐字）
 #
 # 纪律（brief Step 1）：每一格的值都由本脚本从上述工件机械推导，**不许手填**。
-# 脚本内嵌的字面量只有四类，均为对已入库文档的引用而非数据编造：
+# 脚本内嵌的字面量只有五类，均为对已入库文档/工件的引用或守护而非数据编造：
 #   (a) triage 分节号引用（triage-256 §1+§5 / triage-128 §1+§2 / triage-512 §0+§5.1+§5.2）；
 #   (b) 9 个 512 边界格的机制性理由短标签（内容归类引自 triage-512 §5.1/§5.2）；
 #   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :209-212）；
 #   (d) §4 表体的 † 弱证据行标记集合 = 5 个 PR #316 已修复越界缺陷测试
-#       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）。
+#       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）；
+#   (e) §5 对账行叙述数字的期望值（128 列 163/26、256 列 164/25/1，及唯一非超时
+#       baked 的身份 acl_gemm_sve=dim=512）——数量与身份均与叙述锁死，工件漂移
+#       即 FATAL（见 END 段断言块）。
 #
 # 一致性断言（任一失败 → 非零退出、不产出 matrix.md）：
 #   清单 190 行；4 份 native summary + 1 份 verdicts 各覆盖全部 190 名；
@@ -260,6 +263,11 @@ END {
     if (p256 != 164)        { printf "FATAL: 256 narrative expects 164 default-adaptive (got %d)\n", p256 > "/dev/stderr"; fatal = 1 }
     if (n_to != 25)         { printf "FATAL: 256 narrative expects 25 bounded reruns (got %d)\n", n_to > "/dev/stderr"; fatal = 1 }
     if (q256 - n_to != 1)   { printf "FATAL: 256 narrative expects 1 baked calibration (got %d)\n", q256 - n_to > "/dev/stderr"; fatal = 1 }
+    # 身份断言：唯一非超时 baked 必须是 acl_gemm_sve dim=512（计数断言只锁数量，
+    # 身份漂移——baked 清单里那 1 项换成别的测试——时计数全过而「acl 标定」叙述
+    # 静默失实，恰是本断言块要防住的模式）。
+    if (!("acl_gemm_sve" in knob) || knob["acl_gemm_sve"] != "dim=512") \
+        { printf "FATAL: narrative expects the sole non-timeout baked to be acl_gemm_sve dim=512 (got %s)\n", ("acl_gemm_sve" in knob ? knob["acl_gemm_sve"] : "<absent>") > "/dev/stderr"; fatal = 1 }
     M = OUT "/math.md"
     printf "| 列 | pass（直绿） | pass(bounded) | SKIP(legal) | BOUNDARY(gem5) | 合计 |\n" > M
     printf "|---|---|---|---|---|---|\n" > M
@@ -270,7 +278,7 @@ END {
     printf "| **合计** | **%d** | **%d** | **%d** | **%d** | **%d** |\n", P, Q, S, Y, P + Q + S + Y > M
     printf "\n" > M
     printf "**%d = %d pass（%d 直绿 + %d 有界）+ %d SKIP(legal) + %d BOUNDARY(gem5)**，零 FAIL、零非法 SKIP。\n\n", P + Q + S + Y, P + Q, P, Q, S, Y > M
-    printf "- **128 列 = %d pass + %d SKIP(legal)** —— 对账 triage-128 §5（189 腿内直绿 × 2 seed = 163 默认自适应直绿 + 26 格腿内 baked 有界（= 25 项 clamp 下限 + 1 项 acl 标定，构成同 §2 legend @128，clamp 下限 = 最小激发强度、语义限定统一见 triage-256 §5「证据强度限定」）+ 1 合法 SKIP：fmmla@128，两 seed 同格同理）。\n", p128 + q128, s128 > M
+    printf "- **128 列 = %d pass + %d SKIP(legal)** —— 对账 triage-128 §5（189 腿内直绿 × 2 seed = 163 默认自适应直绿 + 26 格腿内 baked 有界（= 25 项 clamp 下限 + 1 项 acl 标定，构成同 §2 legend @128，clamp 下限 = 最小激发强度、语义限定统一见 triage-256 §5「证据强度限定」），另有 1 合法 SKIP：fmmla@128，两 seed 同格同理）。\n", p128 + q128, s128 > M
     printf "- **256 列 = %d pass** —— 对账 triage-256 §7（seed1 165 腿内直绿（164 默认自适应 + 1 格 acl 标定 baked）+ 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内 clamp 下限有界））；%d 个有界格 = %d 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ %d 格 baked 直绿（acl dim=512 标定，Ruling B / triage-256 §1；此格按下行有界格计法计入、腿内直绿口径亦含它，两口径两属）。\n", p256 + q256, q256, n_to, q256 - n_to > M
     printf "- **512 列 = %d pass + %d BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；%d 个有界格 = baked 26 项中绿 %d（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 %d（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 %d（acl：baked 512 被 extras 覆盖为 128）。\n", p512 + q512, y512, q512, bg, eg, bo > M
     printf "- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。\n" > M

@@ -658,8 +658,9 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
      * 直到可测量或触及 hi——否则外推基数失真。两级语义(issue #351):
      *   - 缺省 1.0(历史噪声底): 求解快到 1ms 以下即被计时噪声淹没
      *     (实测稀疏 Cholesky 规则带状 probe 在 64 档仅 0.1ms, 外推
-     *     失控)——跨 arch 存量 7 参调用(x86-64 #else 链)byte-identical
-     *     沿用此口径, 不得随 ARM 侧 M3 口径联动改动(rule 5)。
+     *     失控)——跨 arch 存量 7 参调用(x86-64 #else 链)语义不变沿用
+     *     此口径(同 1ms 停点与代码路径, 操作点在计时抖动内一致),
+     *     不得随 ARM 侧 M3 口径联动改动(rule 5)。
      *   - sdc_m3_probe_floor_ms(100.0, spec §4.3 M3): 固定开销(构造/
      *     预处理)在计时中占比 <10%, 幂律系数不被抬高(实测 sve 模型
      *     t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高

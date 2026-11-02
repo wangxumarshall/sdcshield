@@ -389,10 +389,18 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         const enum SpinlockAddNeonAcquire acq = spinlock_add_neon_acquire(d, cpu, &stall_ns);
         if (acq != SPINLOCK_ACQUIRE_OK) {
             const char *verdict;
+            /* verdict/report 只断言证据支持的结论（PR#341 轮1 检视 :302）：
+             * 确认窗能证明的是签名（epoch 静止 + CAS 持续失败），不能证明
+             * 根因——「释放写丢失」与「持锁者整窗未运行（被抢占/限流，如
+             * selftest=stall 的合法 sleep 持锁者）」在等待者视角不可区分
+             * （PR#328 六轮检视 :234 裁定该形态仍按冻结判决），报文按
+             * 签名 + 候选因陈述，不断言硬件级根因 */
             if (acq == SPINLOCK_ACQUIRE_FROZEN)
                 verdict = "hard-lockup signature CONFIRMED (epoch static across the "
-                          "confirm window, CAS failing — lock word frozen at 1 / "
-                          "release write lost)";
+                          "confirm window, CAS failing — lock word stuck at 1; "
+                          "root cause not asserted: lost release write vs holder "
+                          "descheduled/preempted across the window are "
+                          "indistinguishable from a waiter's view)";
             else if (acq == SPINLOCK_ACQUIRE_OBSERVER_STALLED)
                 verdict = "freeze verdict withheld (this thread could not observe "
                           "continuously — confirm window repeatedly invalidated by "
@@ -404,7 +412,10 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
             if (acq == SPINLOCK_ACQUIRE_FROZEN)
                 report_fail_msg("spinlock_add_neon: lock acquisition stalled %.1fs (>%.0fs) "
                                 "on cpu %d, frozen CONFIRMED (lock line static for >=%.0fs, "
-                                "CAS failing) — hard-lockup signature",
+                                "CAS failing) — hard-lockup signature; root cause not "
+                                "asserted (lost release write vs holder descheduled/"
+                                "preempted across the window are indistinguishable from "
+                                "a waiter's view)",
                                 (double)stall_ns / 1e9, SPINLOCK_ADD_NEON_STALL_SECONDS, cpu,
                                 SPINLOCK_ADD_NEON_CONFIRM_SECONDS);
             else if (acq == SPINLOCK_ACQUIRE_OBSERVER_STALLED)

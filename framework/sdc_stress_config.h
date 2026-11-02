@@ -612,11 +612,15 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  * 拟合出参 fit(spec §4.3 M3): 成功路径填充 {a_ms, p} —— 单解模型
  * t(n)=a_ms·n^p, a_ms 已按两点差分扣除固定开销 b(见函数尾); 早退
  * 路径保持 {0,0}(无效, 消费方跳过 n_run)。
- * probe_floor_ms/fit 缺省 {1.0, nullptr}: 既有 7 实参调用(跨 arch
+ * fit/probe_floor_ms 缺省 {nullptr, 1.0}: 既有 7 实参调用(跨 arch
  * 存量链, 含 x86-64 #else 分支)签名与行为不变(rule 5, issue #351——
- * 该缺省值即 f84966bc 之前的历史噪声底语义, 不得随 ARM 侧 M3 口径
- * 联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)显式传
- * 100.0。
+ * probe_floor_ms 缺省值即 f84966bc 之前的历史噪声底语义, 不得随 ARM
+ * 侧 M3 口径联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)
+ * 显式传 100.0。fit 保持 f84966bc 之前的第 8 参历史位次、
+ * probe_floor_ms 殿后: 字面量 0/NULL 作第 8 实参(『显式不要 fit』的
+ * 旧写法)仍绑 fit 而非经 int→double 隐式转换静默重绑
+ * probe_floor_ms=0.0——后者使 probe 抬档循环永假、外推基数退回微档
+ * 噪声且无告警; double 字面量误入第 8 位则编译报错(响亮)。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
  *   if (dim > lo)
@@ -632,8 +636,8 @@ template <typename F>
 static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                                      const char *test_id, const char *knob,
                                      double k_floor, F solve_once,
-                                     double probe_floor_ms = 1.0,
-                                     struct sdc_fit *fit = nullptr)
+                                     struct sdc_fit *fit = nullptr,
+                                     double probe_floor_ms = 1.0)
 {
     if (fit) { fit->a_ms = 0.0; fit->p = 0.0; }  /* 早退路径保持无效 */
     if (hi <= lo)
@@ -1086,7 +1090,7 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         struct sdc_fit fit;
         sdc_calibrated_dim(a->lo, a->hi, per_solve,
                            test ? test->id : "(global)", knob, 3.0,
-                           solve_once, 100.0, &fit);
+                           solve_once, &fit, 100.0);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
             double nr = std::pow((double)a->run_budget_ms
                                  / (ar * 2.0 * fit.a_ms), 1.0 / fit.p);

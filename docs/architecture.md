@@ -283,7 +283,9 @@ is wall-clock-dependent and thus not byte-reproducible; the PR-measured
 `mdim` 473 vs the 476 pre-#302 baseline is such jitter). The 100 ms M3
 floor (fixed-overhead share < 10%, needed
 by the difference-based `sdc_fit` `a_ms` extraction; bound to the named
-constant `sdc_m3_probe_floor_ms`, with a runtime `log_warning` whenever
+constant `sdc_m3_probe_floor_ms`, with a runtime `log_warning` — emitted
+only for fit-consuming callers, since the legacy 7-argument chains pass no
+`fit` and never warn — whenever
 the probe tier's measured duration falls short of it) is carried explicitly
 by the joint solver on its ARM64-only path; no non-migrated consumer sees
 it.

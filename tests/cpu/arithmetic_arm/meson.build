@@ -18,11 +18,14 @@
 #   * compiler-rt builtins .. /usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/
 #                             libclang_rt.builtins.a (soft-float __addsf3 et al.)
 #
-# The Arm Optimized Routines (libmathlib.a / libstringlib.a) static archives are
-# NOT available on this host (only the .so versions ship, and the reference port
-# links them statically to avoid a runtime GLIBC_2.38 dependency). The 3 AOR
-# tests (aor_math.cpp, aor_string.cpp, cbw_arm.cpp) are therefore excluded
-# below — they are listed as comments and not built, so there is no link error.
+# The Arm Optimized Routines (libmathlib.a / libstringlib.a) static archives
+# ship VENDORED under third-party/arm-opt (include/ = the two self-contained
+# headers mathlib.h + stringlib.h, lib/ = the static archives; copied from the
+# reference port's third_party/arm-opt-install, .so variants deliberately NOT
+# vendored — the reference port links statically to avoid a runtime GLIBC_2.38
+# dependency on 22.03 SP4, which has no libmathlib.so/libstringlib.so either).
+# The 3 AOR tests (aor_math.cpp, aor_string.cpp, cbw_arm.cpp) build against
+# aor_dep below with the same graceful-degrade probe as ACL/compiler-rt.
 #
 # Test IDs use an `_arm` suffix (adcx_arm, adox_arm, adcxlong_arm,
 # adcx_adox_interleaved_arm) and are DISTINCT from the already-ported
@@ -98,6 +101,37 @@ if acl_enable != 'disabled'
 endif
 
 # ---------------------------------------------------------------------------
+# Arm Optimized Routines: VENDORED prebuilt static libraries (third-party/
+# arm-opt). find_library(static:true) hands meson the .a PATH directly (not
+# -lmathlib), so the linker cannot silently pick a .so from the same dir —
+# and no host .so exists to drag in GLIBC_2.38 on 22.03 SP4. Graceful-degrade
+# probe identical to ACL/compiler-rt: no vendored archives → aor_sources
+# empty, no link error.
+# ---------------------------------------------------------------------------
+arm_opt_prefix = meson.current_source_dir() / '../../../third-party/arm-opt'
+if run_command('test', '-f', arm_opt_prefix / 'lib' / 'libmathlib.a', check : false).returncode() == 0
+    aor_mathlib = cpp.find_library('mathlib', required : false,
+        static : true, dirs : [arm_opt_prefix / 'lib'])
+    aor_stringlib = cpp.find_library('stringlib', required : false,
+        static : true, dirs : [arm_opt_prefix / 'lib'])
+    aor_dep = declare_dependency(
+        compile_args : ['-isystem', arm_opt_prefix / 'include'],
+        dependencies : [aor_mathlib, aor_stringlib],
+    )
+    aor_sources = files(
+        'aor_math.cpp',
+        'aor_string.cpp',
+        'cbw_arm.cpp',
+    )
+    message('Using vendored Arm Optimized Routines (third-party/arm-opt)')
+else
+    aor_dep = declare_dependency()
+    aor_sources = []
+    message('third-party/arm-opt/lib/libmathlib.a not found — the 3 AOR '
+            + 'tests (aor_math/aor_string/cbw_arm) are not built.')
+endif
+
+# ---------------------------------------------------------------------------
 # compiler-rt builtins: static soft-float integer implementation (__addsf3,
 # __subsf3, __mulsf3, __divsf3 ...). -Wl,--whole-archive prevents the linker
 # from dropping the soft-float symbols as "unused".
@@ -166,11 +200,11 @@ endif
 # (crt_sources is set in the probe-gated block above — empty when the
 # clang-rt archive is absent on this build host.)
 
-# Excluded — AOR libmathlib.a / libstringlib.a static archives are not present
-# on this host, so these 3 tests would fail to link:
-#   'aor_math.cpp',
-#   'aor_string.cpp',
-#   'cbw_arm.cpp',
+# 3 AOR tests: aor_math (sincospi transcendental stress vs golden),
+# aor_string (memcpy/memcmp 256KiB round-trip vs golden), cbw_arm
+# (sign-extension CBW/CWDE class via stringlib). (aor_sources is set in
+# the probe-gated block above — empty when the vendored archives are
+# absent.)
 
 # ---------------------------------------------------------------------------
 # Per-library static libraries. Each is added to sandstone_tests so the test
@@ -241,8 +275,30 @@ crt_tests_lib = static_library(
     ],
 )
 
+aor_tests_lib = static_library(
+    'tests_arithmetic_arm_aor',
+    aor_sources,
+    build_by_default: false,
+    include_directories: [
+        framework_incdir,
+        tests_common_incdirs,
+    ],
+    dependencies: [
+        boost_dep,
+        aor_dep,
+    ],
+    cpp_args: [
+        debug_c_flags,
+        default_cpp_flags,
+        default_cpp_warn,
+        march_generic_flags,
+        arm_cpp_flags,
+    ],
+)
+
 sandstone_tests += [
     gmp_tests_lib,
     acl_tests_lib,
     crt_tests_lib,
+    aor_tests_lib,
 ]

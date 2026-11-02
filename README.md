@@ -157,6 +157,10 @@ sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzs
 ./third-party/sleef/build.sh             # → install/lib/libsleef.a（sleef_neon / sleef_sve）
 ./third-party/isa-l/build.sh             # → install/lib/libisal.a（isal_igzip + isal_crc*；缺省回退系统 libisal）
 ./third-party/acl/build.sh               # → install/lib/libarm_compute-core.a（acl_gemm NEGEMM + fisttp_arm；NEON runtime core 目标，v23.02）
+# third-party/arm-opt/（Arm Optimized Routines）无需构建：随仓库直接携带
+#   include/mathlib.h + stringlib.h 与 lib/libmathlib.a + libstringlib.a
+#   （静态链入，aor_math / aor_string / cbw_arm 三测试；不 vendored .so——
+#   22.03 SP4 无 libmathlib.so 且动态链入会带进 GLIBC_2.38 版本需求）
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ./scripts/build.sh
 ./builddir/sdcshield --list-tests        # 列出默认 PROD 用例——数量随芯片能力过滤（见「测试用例与检测能力」）

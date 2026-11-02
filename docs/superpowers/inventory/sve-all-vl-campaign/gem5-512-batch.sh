@@ -31,8 +31,10 @@
 # 产物：gem5-512/<t>.log（原始输出，含 run_sve.sh 的 G5+md5 身份行）与
 #   gem5-512/<t>.d/（m5out 工作目录）不入库（.gitignore /gem5-512/* 覆盖）；
 #   另两个小体积溯源记录**入库**（.gitignore `!` 反选豁免——目录级
-#   `git add` 会真实暂存它们，裁定 E）：gem5-512/batch.tsv（每测试一行
-#   <test>\trc=<n>\twall=<n>s\t<exit-line>\t<sim-exit-line>\tsrc=batch
+#   `git add` 会真实暂存它们，裁定 E）：gem5-512/batch.tsv（追加式
+#   溯源账本——每执行一格追加一行，幂等重跑为同一测试追加新行，
+#   判定一律取清单内末行；实测 206 行/190 唯一测试/16 个多行测试）
+#   行格式 <test>\trc=<n>\twall=<n>s\t<exit-line>\t<sim-exit-line>\tsrc=batch
 #   ——末列为逐行溯源戳，PR #307 #25：无该列 = 手工并入或早于戳记的
 #   历史行；gem5-512-extract.sh 的机械提取 + 溯源审计输入）、
 #   gem5-512/identity.txt（批量时二进制身份：gem5 md5 + sdcshield 版本，
@@ -237,9 +239,11 @@ echo "batch end:   $(date '+%F %T')"
 # Task 6 Step 2 points HERE as the single authoritative source (PR #418
 # review findings): the plan embeds no code mirror — run this script, do
 # not rebuild one from the plan text. The DENOMINATOR counts the
-# list-contract-filtered list.effective (PR #307 #21): raw-list
-# comment/blank/"|time" suffix lines are excluded from execution and
-# totals alike.
+# list-contract-filtered list.effective (PR #307 #21): raw-list comment
+# lines and the blank lines a "|"-prefixed row leaves behind are excluded
+# from execution and totals alike — a "|…"-SUFFIXED row is different: the
+# suffix is stripped (sub(/\|.*/, "")) and the bare name is executed and
+# counted like any other.
 n=$(awk -F'\t' 'FILENAME == ARGV[1] { if ($1 != "") list[$1] = 1; next }
                $1 in list { last[$1] = $4 }
                END { c = 0; for (t in last) if (last[t] == "exit: pass") c++; print c }' \

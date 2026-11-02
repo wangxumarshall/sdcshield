@@ -201,6 +201,9 @@ static int movbe_dump_probe_g1_sve_run(struct test *test, int cpu)
 }
 #endif
 
+/* gcc-10 (20.03/22.03) 在 -O2/-O3 下对本 cleanup 形态 RTL expand ICE（每日 15 镜像
+   CI 10 job 红根因）；O1 规避与 run 函数先例（626f6554）同款，冷路径校验语义不变。 */
+__attribute__((optimize("O1")))
 static int movbe_dump_probe_g1_sve_cleanup(struct test *test)
 {
     auto *data = (movbe_dump_probe_g1_sve_data *)test->data;

@@ -224,12 +224,13 @@ echo "batch end:   $(date '+%F %T')"
 # semantics gem5-512-extract.sh applies (one verdict row per listed test) —
 # so re-runs never inflate it and the figure never exceeds the denominator.
 # It prints a single 0 on zero rows; ${n:-0} covers missing files (awk then
-# prints nothing; the old `|| echo 0` double-printed "0"). Kept in sync with
-# the campaign.md Task 6 Step 2 skeleton (PR #418 review findings). The
-# DENOMINATOR intentionally differs: this full version counts the
-# list-contract-filtered list.effective (PR #307 #21) while the skeleton
-# defers that filtering and counts the raw $LIST — the totals diverge once
-# the raw list carries comment/blank/"|time" suffix lines.
+# prints nothing; the old `|| echo 0` double-printed "0"). The campaign.md
+# Task 6 Step 2 points HERE as the single authoritative source (PR #418
+# review findings): the plan embeds no code mirror — run this script, do
+# not rebuild one from the plan text. The DENOMINATOR counts the
+# list-contract-filtered list.effective (PR #307 #21): raw-list
+# comment/blank/"|time" suffix lines are excluded from execution and
+# totals alike.
 n=$(awk -F'\t' 'FILENAME == ARGV[1] { list[$1] = 1; next }
                $1 in list { last[$1] = $4 }
                END { c = 0; for (t in last) if (last[t] == "exit: pass") c++; print c }' \

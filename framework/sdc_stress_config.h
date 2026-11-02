@@ -718,6 +718,18 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                     ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
                     : "");
     if (fit) {
+        /* M3 有效性告警: 差分扣 b 要求 probe 档 ≥100ms(固定开销占比
+         * <10%, spec §4.3 M3); probe_floor_ms 缺省 1.0 是存量 7 参链的
+         * 历史噪声底语义(issue #351), 与 fit 差分组合即是致噪源——
+         * a_ms 虚高 → n_run 偏小 → 激发维度静默欠压。该误用组合可
+         * 编译、无报错, 在此从静默变有声; 现役调用方无一触发(联合
+         * 求解显式传 100.0, 存量链不传 fit)。 */
+        if (probe_floor_ms < 100.0)
+            log_warning("[时间校准] %s.%s: fit 差分扣 b 口径要求 "
+                        "probe_floor_ms≥100(固定开销占比<10%%, spec §4.3 "
+                        "M3), 实传 %.1f——a_ms 将被固定开销与计时噪声污染"
+                        "(a_ms 虚高→n_run 偏小→激发欠压), M3 消费方应显式"
+                        "传 100.0", test_id, knob, probe_floor_ms);
         /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
          *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p
          * b≈0 时严格退化为 a = t1/p1^p。差分在 b 为常数的模型下精确,

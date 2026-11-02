@@ -768,15 +768,28 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
          * 配套)与 b 主导的对抗档都成立; 代价是对差分 (t2−t1) 的测量
          * 噪声敏感(p1/mid 档位拉得越开越稳)。退化保护(档位重合/计时
          * 持平/非有限/非正)回退
-         * b=0 口径 a = t1/p1^p —— 系数只高不低, 消费方 n_run 只小
-         * 不大(保守方向)。 */
+         * b=0 口径 a = t1/p1^p —— t1 含全部固定开销, 系数只高不低、
+         * 消费方 n_run 只小不大: 时间预算侧保守, SDC 激发强度侧欠压
+         * (与上方 t1<floor 告警同型污染), 故回退从静默变有声。 */
         double pn = std::pow((double)p1, k);
         double mn = std::pow((double)mid, k);
         double a = 0.0;
         if (mid > p1 && t2 > t1 && mn > pn && std::isfinite(mn - pn))
             a = (t2 - t1) / (mn - pn);
-        if (!(a > 0.0) && pn > 0.0)
-            a = t1 / pn;                 /* t1>0 由上方早退保证 */
+        if (!(a > 0.0) && pn > 0.0) {
+            /* 差分退化告警(PR #377 检视): 此前唯一漏网的静默污染路径
+             * ——t1 ≥ floor 时 M3 前提告警不触发, 而档位重合(hi 截断
+             * 使 mid==p1)或计时持平/倒挂(系统抖动、非单调求解器)令
+             * 差分退化为 0/负, b=0 口径把固定开销全数计入 a_ms(a_ms
+             * 虚高→n_run 偏小→激发欠压)。两档实测随告警留档供定位;
+             * 处方按两类致因: 拉大 knob hi 档距(重合)或复跑(持平)。 */
+            log_warning("[时间校准] %s.%s: fit 两点差分退化(档 %d→%d 实测 "
+                        "%.1fms→%.1fms, 档位重合或计时持平/倒挂)——回退 "
+                        "b=0 口径 a=t1/p1^k, 固定开销未扣除, a_ms 虚高→"
+                        "n_run 偏小→激发欠压; 检查 knob hi 拉大档距或复跑"
+                        "消除计时抖动", test_id, knob, p1, mid, t1, t2);
+            a = t1 / pn;             /* t1>0 由上方早退保证 */
+        }
         if (a > 0.0 && std::isfinite(a)) {
             fit->a_ms = a;
             fit->p = k;

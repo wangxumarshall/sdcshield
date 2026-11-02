@@ -30,7 +30,11 @@
  * longer sizes the matrix at all: it only writes a desired_duration
  * UPPER bound from the same memory ceiling — or from the explicit
  * knob/env, which the child applies VERBATIM and therefore must scale
- * the duration too (issue #352) — and sizing in the child also
+ * the duration too (issue #352), and on that explicit tier a
+ * minimum_duration single-iteration floor, because the framework-level
+ * -t override replaces desired_duration unconditionally and would
+ * otherwise land the explicit big tier on the 300 s hard grace
+ * (PR#384 review, id 4432271419) — and sizing in the child also
  * fixes exec_each_test children, whose freshly-exec'd image never ran the
  * preinit and previously sized every run at the un-initialised 300.
  * An explicit override is available via
@@ -169,6 +173,17 @@ static int solve_once_cdouble_sve(int n)
  *           own AR-aware n_run (run_budget=140 s tier, measured worst
  *           ~213 s — ~25% inside the 300 s hard grace), and n_run pins
  *           child n on the time side on this host class.
+ *   min:   the knob tier ALSO writes test->minimum_duration = ar×2×t(knob)
+ *           (no 0.95 margin — the floor of "at least one full iteration";
+ *           PR#384 review, id 4432271419): the framework-level -t override
+ *           replaces desired_duration unconditionally, so without the
+ *           min clamp `-t 2000 -O …mdim=<big>` sits on the 300 s floor
+ *           and is SIGQUIT-killed mid-iteration. The AUTO branch writes
+ *           NO min: the standard `-t 2000 -n 1` smoke lane must stay
+ *           seconds-fast (the auto single iteration is designed inside
+ *           the 300 s grace by run_budget=140 s), and at -n 1 n_hi hits
+ *           MDIM_MAX, so an auto min would stretch the smoke to the
+ *           t(6000) minutes scale.
  *
  * Child n <= n_hi holds for the AUTO branch only: the child returns
  * min(n_mem, n_run, hi), n_mem uses
@@ -247,6 +262,20 @@ static int size_matrix_preinit(struct test *test)
                 ? sdc_ar_factor(SDC_FAM_MEM_BOUND, sdc_numa_probe()) : 1.0;
         iter_s = ar * 2.0
                * (243.4 * std::pow((double)knob / 4400.0, 3.0) + 1.0);
+        /* 【PR#384 检视, 意见 4432271419】-t 在框架层无条件覆盖
+         * desired_duration(sandstone_run.cpp test_duration 的
+         * sApp->test_time 分支), 而本测试此前未设 minimum_duration →
+         * 该夹钳空置——`-t 2000 -O …mdim=<大>` 的 target 被钉在 2 s,
+         * timeout 落到 max(5×2+30, 300) = 300 s floor, 单次全迭代
+         * (2×t(knob) ≫ 300 s)被 SIGQUIT 误杀(修复前实测: -t 2000 -n 1
+         * -O mdim=4000 → 320.6 s 处 SIGQUIT)。把单次全迭代模型(无
+         * 0.95 裕量: min 是"至少跑完一次迭代"的物理下限)写进
+         * minimum_duration, -t 小值档的 target 被夹钳到单迭代,
+         * timeout(5×min+30)随之随 knob 缩放。auto 分支不写:
+         * `-t 2000 -n 1` 标准冒烟必须保持秒级(auto 单迭代由
+         * run_budget=140 s 设计收在 300 s floor 内), 且 -n 1 下 n_hi
+         * 撞 MDIM_MAX, 写 min 会把冒烟拉到 t(6000) 分钟级。 */
+        test->minimum_duration = (int)(iter_s * 1000.0);   /* ms */
     } else {
         iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
     }
@@ -364,10 +393,10 @@ static int sve_probe_and_init(struct test *test)
     }
 
     log_info("M_DIM %d (sized in child init: knob/env, else 联合求解 "
-             "min(n_mem, n_run); preinit desired_duration %d ms is the "
-             "upper-bound model; override with -O "
-             "eigen_svd_cdouble_sve.mdim=N)",
-             dim, test->desired_duration);
+             "min(n_mem, n_run); preinit desired_duration %d ms, "
+             "minimum_duration %d ms (显式档: 单迭代下限, -t 夹钳); "
+             "override with -O eigen_svd_cdouble_sve.mdim=N)",
+             dim, test->desired_duration, test->minimum_duration);
 
     /* Allocate the test data (the runtime-dimension template's run()
      * primes its own per-thread matrices; the init-time golden BDCSVD
@@ -469,7 +498,13 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
    * sizes the dimension itself via the joint solver; this only keeps the
    * parent's timing expectation at or above the child's choice, so
    * exactly one run iteration executes and the derived timeout
-   * (5*duration+30s, 300s floor) scales along). */
+   * (5*duration+30s, 300s floor) scales along). On the explicit tier the
+   * preinit also writes minimum_duration = the single full-iteration
+   * model (PR#384 review, id 4432271419): the framework-level -t override
+   * replaces desired_duration unconditionally, so without the min clamp
+   * `-t 2000 -O …mdim=<big>` lands on the 300 s floor and is
+   * SIGQUIT-killed mid-iteration — the min keeps -t small values from
+   * shrinking the target below one full knob iteration. */
   .desired_duration = 0,
   .fracture_loop_count = 5,
   .quality_level = TEST_QUALITY_PROD,

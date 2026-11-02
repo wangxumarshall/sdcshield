@@ -260,7 +260,17 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   分支维持 t(n_hi)×0.95 不变：其 AR 保护来自联合求解 AR-aware 的
   n_run（run_budget=140s 档，实测最坏 ~213s，距 300s floor 留 ~25%
   裕量），且 n_run 在本 host class 恒把 child n 压在时间侧——显式档
-  恰恰绕过这层保护，才必须把 AR 显式放进模型。天然修复 exec_each_test 模式
+  恰恰绕过这层保护，才必须把 AR 显式放进模型。
+  【2026-11-02 勘误，PR#384 检视（意见 4432271419）】显式档 preinit 兼写
+  test->minimum_duration = ar×2×t(knob)（无 0.95 裕量，"至少跑完一次
+  迭代"的物理下限）：-t 在框架层无条件覆盖 desired_duration
+  （sandstone_run.cpp test_duration 的 sApp->test_time 分支），不设 min
+  夹钳时 `-t 2000 -O …mdim=<大>` 的 target 被钉在 2 s、timeout 落到
+  300 s floor，单次全迭代被 SIGQUIT 误杀（修复前实测 -t 2000 -n 1
+  -O mdim=4000 → 320.6 s SIGQUIT）——与 #352 头条失败模式同型的确定性
+  kill 路径。auto 分支**不写**：`-t 2000 -n 1` 标准冒烟必须保持秒级
+  （auto 单迭代由 run_budget=140 s 设计收在 300 s floor 内），且
+  -n 1 下 n_hi 撞 MDIM_MAX，写 min 会把冒烟拉到 t(6000) 分钟级。天然修复 exec_each_test 模式
   preinit 不跑导致 g_dim 恒 300 的分歧（LSP 核实修正 #3）；
   **exec 模式下 desired_duration 的说明【v2 修正】：`test_duration()`
   在父进程用 preinit 写入的值（fork 模式有效）；exec 模式子进程无

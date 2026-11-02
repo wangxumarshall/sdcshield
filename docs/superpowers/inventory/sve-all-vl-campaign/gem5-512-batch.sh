@@ -214,4 +214,10 @@ if [ -f "$OUT/batch.tsv" ]; then
 fi
 xargs -a "$OUT/list.effective" -P "$P" -I{} "$0" --one {}
 echo "batch end:   $(date '+%F %T')"
-echo "cells with 'exit: pass': $(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null || echo 0) / $(wc -l < "$OUT/list.effective")"
+# Zero-match "0\n0" fix: grep -c already prints 0 (and exits 1) on zero matches,
+# so `|| echo 0` appends a SECOND 0 — the command substitution captures two
+# lines. ${n:-0} prints a single 0 both on zero matches and on a missing
+# batch.tsv (grep then prints nothing). Same shape as the campaign.md Task 6
+# Step 2 skeleton (kept in sync — PR #418 round-4 review finding).
+n=$(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null)
+echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$OUT/list.effective")"

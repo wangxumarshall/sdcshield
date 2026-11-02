@@ -33,6 +33,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <atomic>
+#include "arm_add_excite.h"
 
 #define SLD_MAX_THREADS 1024
 
@@ -127,6 +128,13 @@ static int store_lost_write_detect_run(struct test *test, int cpu) {
         /* if the partner HAS started but not published yet, skip this
          * round's cross-read — no waiting, no deadlock, next round will
          * see the publication */
+        /* excitation filler: NEON switching power (see arm_add_excite.h) */
+        if (!arm_add_excite::fill(cpu, epoch)) {
+            report_fail_msg("excitation filler store->reload mismatch "
+                            "(cpu %d round %lu)", cpu,
+                            (unsigned long)epoch);
+        }
+
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
@@ -136,5 +144,6 @@ DECLARE_TEST(store_lost_write_detect, "Lost-write sentinel ladder: str epoch, sa
     .test_init = store_lost_write_detect_init,
     .test_run = store_lost_write_detect_run,
     .test_cleanup = store_lost_write_detect_cleanup,
+    .fracture_loop_count = -1,   /* never fracture: our semantic rounds are microseconds; auto mode (40) ends the run in ~10 ms */
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

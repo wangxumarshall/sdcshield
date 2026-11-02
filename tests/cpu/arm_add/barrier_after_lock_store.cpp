@@ -27,6 +27,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <atomic>
+#include "arm_add_excite.h"
 
 namespace { /* ODR: per-TU BALSData */
 struct BALSData {
@@ -91,7 +92,9 @@ static int barrier_after_lock_store_run(struct test *test, int cpu) {
     auto *d = static_cast<BALSData *>(test->data);
     (void)cpu;
 
+    uint64_t round = 0;
     do {
+        ++round;
         /* bounded spin for the lock — a permanently-held lock is a FAIL,
          * not a hang (spinlock_add_neon watchdog precedent). */
         uint64_t spin = 0;
@@ -108,6 +111,13 @@ static int barrier_after_lock_store_run(struct test *test, int cpu) {
         uint64_t cur = bals_load(&d->protected_val);
         if (cur != exp) {
             bals_unlock(&d->lock);
+        /* excitation filler: NEON switching power (see arm_add_excite.h) */
+        if (!arm_add_excite::fill(cpu, round)) {
+            report_fail_msg("excitation filler store->reload mismatch "
+                            "(cpu %d round %lu)", cpu,
+                            (unsigned long)round);
+        }
+
             report_fail_msg("barrier_after_lock_store: protected value %lu, "
                             "expected %lu — previous holder's store was "
                             "lost inside the lock+barrier path",
@@ -129,5 +139,6 @@ DECLARE_TEST(barrier_after_lock_store, "Write-loss inside the lock+barrier path:
     .test_init = barrier_after_lock_store_init,
     .test_run = barrier_after_lock_store_run,
     .test_cleanup = barrier_after_lock_store_cleanup,
+    .fracture_loop_count = -1,   /* never fracture: our semantic rounds are microseconds; auto mode (40) ends the run in ~10 ms */
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

@@ -26,6 +26,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <atomic>
+#include "arm_add_excite.h"
 
 #define SVC_MAX_THREADS 1024
 
@@ -71,7 +72,9 @@ static int store_visibility_cross_class_run(struct test *test, int cpu) {
 
     if (cpu == 0) {
         /* writer: bump every slot, barrier, same-core sanity read-back */
+        uint64_t round = 0;
         do {
+            ++round;
             for (int r = 0; r < SVC_MAX_THREADS; ++r) {
                 uint64_t v = d->seq[r].load(std::memory_order_relaxed) + 1;
                 uint64_t *slot = reinterpret_cast<uint64_t *>(&d->seq[r]);
@@ -87,10 +90,18 @@ static int store_visibility_cross_class_run(struct test *test, int cpu) {
                 }
             }
         } while (test_time_condition(test));
+        /* excitation filler: NEON switching power (see arm_add_excite.h) */
+        if (!arm_add_excite::fill(cpu, round)) {
+            report_fail_msg("excitation filler store->reload mismatch (cpu %d round %lu)", cpu,
+                            (unsigned long)round);
+        }
+
     } else {
         /* reader: nop delay, unbarriered read, dmb ish, barriered read */
         uint64_t last_seen = 0;
+        uint64_t round = 0;
         do {
+            ++round;
             /* delay: pure nop spin, no clock / no syscall (C++20 forbids
              * volatile compound ops, so use a compiler barrier instead) */
             for (int i = 0; i < 200; ++i) { __asm__ volatile("" ::: "memory"); }
@@ -115,6 +126,12 @@ static int store_visibility_cross_class_run(struct test *test, int cpu) {
             }
             if (r2 > last_seen) last_seen = r2;
         } while (test_time_condition(test));
+        /* excitation filler: NEON switching power (see arm_add_excite.h) */
+        if (!arm_add_excite::fill(cpu, round)) {
+            report_fail_msg("excitation filler store->reload mismatch (cpu %d round %lu)", cpu,
+                            (unsigned long)round);
+        }
+
     }
     return EXIT_SUCCESS;
 }
@@ -123,5 +140,6 @@ DECLARE_TEST(store_visibility_cross_class, "Cross-coherency-domain store visibil
     .test_init = store_visibility_cross_class_init,
     .test_run = store_visibility_cross_class_run,
     .test_cleanup = store_visibility_cross_class_cleanup,
+    .fracture_loop_count = -1,   /* never fracture: our semantic rounds are microseconds; auto mode (40) ends the run in ~10 ms */
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

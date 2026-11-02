@@ -42,6 +42,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <atomic>
+#include "arm_add_excite.h"
 
 #define SIS_MAX_THREADS 1024
 #define SIS_NSLOTS      1024
@@ -132,6 +133,14 @@ static int str_instruction_stress_run(struct test *test, int cpu) {
          * reproduced framework-free with a pthread mini-repro: 25757
          * judged / 0 fails after this fix, 6/6 fails before). */
         d->ver[cpu].store(2 * epoch - 1, std::memory_order_relaxed);
+        /* store-store fence: the odd "writing" marker must become visible
+         * BEFORE any slot of the new batch.  Without it ARM64 may reorder
+         * the batch stores ahead of the marker, and a sweeper can then
+         * observe v1 == v2 == old-completed while slots already hold
+         * epoch+1 — a guaranteed false FAIL (all samples read slot =
+         * pe+1, exposed once the filler widened the completed-state
+         * window from ~ns to ~19 us). */
+        __asm__ volatile("dmb ishst" ::: "memory");
         for (int s = 0; s < SIS_NSLOTS; ++s)
             sis_write_slot(&mine[s][0], epoch);
         __asm__ volatile("dsb ish" ::: "memory");
@@ -173,6 +182,13 @@ static int str_instruction_stress_run(struct test *test, int cpu) {
             }
             /* v1 != v2: torn snapshot round, discarded, retried next
              * round — not a failure, the partner simply kept writing */
+        /* excitation filler: NEON switching power (see arm_add_excite.h) */
+        if (!arm_add_excite::fill(cpu, epoch)) {
+            report_fail_msg("excitation filler store->reload mismatch "
+                            "(cpu %d round %lu)", cpu,
+                            (unsigned long)epoch);
+        }
+
         }
     } while (test_time_condition(test));
 
@@ -183,5 +199,6 @@ DECLARE_TEST(str_instruction_stress, "High-density str batch (byte/halfword/word
     .test_init = str_instruction_stress_init,
     .test_run = str_instruction_stress_run,
     .test_cleanup = str_instruction_stress_cleanup,
+    .fracture_loop_count = -1,   /* never fracture: our semantic rounds are microseconds; auto mode (40) ends the run in ~10 ms */
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

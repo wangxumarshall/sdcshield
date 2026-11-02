@@ -20,6 +20,7 @@
 #include "sandstone.h"
 #include <cstdint>
 #include <cstring>
+#include "arm_add_excite.h"
 
 #define CSM_SIZE (64 * 1024)
 
@@ -85,6 +86,13 @@ static int cache_stress_memcpy_run(struct test *test, int cpu) {
                 }
             }
         }
+
+        /* excitation filler: NEON switching power (see arm_add_excite.h) */
+        if (!arm_add_excite::fill(cpu, epoch)) {
+            report_fail_msg("excitation filler store->reload mismatch "
+                            "(cpu %d round %lu)", cpu,
+                            (unsigned long)epoch);
+        }
     } while (test_time_condition(test));
 
     return EXIT_SUCCESS;
@@ -94,5 +102,6 @@ DECLARE_TEST(cache_stress_memcpy, "Pure memory copy control, no flush (633 #211 
     .test_init = cache_stress_memcpy_init,
     .test_run = cache_stress_memcpy_run,
     .test_cleanup = cache_stress_memcpy_cleanup,
+    .fracture_loop_count = -1,   /* never fracture: our semantic rounds are microseconds; auto mode (40) ends the run in ~10 ms */
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

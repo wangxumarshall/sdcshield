@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <ctime>
 #include <atomic>
+#include "arm_add_excite.h"
 
 #define LLP_MAX_THREADS 1024
 #define LLP_PERIOD_NS   10000000LL   /* 10 ms */
@@ -132,6 +133,13 @@ static int low_load_cache_pressure_run(struct test *test, int cpu) {
                 if (v > last_seen[r]) last_seen[r] = v;
             }
         } while (llp_cntvct() < window_end);
+            /* excitation filler: NEON switching power (see arm_add_excite.h) */
+            if (!arm_add_excite::fill(cpu, epoch)) {
+                report_fail_msg("excitation filler store->reload mismatch "
+                                "(cpu %d round %lu)", cpu,
+                                (unsigned long)epoch);
+            }
+
 
         /* ---- idle window: the 5%-30% duty cycle ---- */
         struct timespec ts = { .tv_sec = 0, .tv_nsec = idle_ns };
@@ -145,5 +153,6 @@ DECLARE_TEST(low_load_cache_pressure, "Low-duty-cycle (5%-30%, knob duty_us) cro
     .test_init = low_load_cache_pressure_init,
     .test_run = low_load_cache_pressure_run,
     .test_cleanup = low_load_cache_pressure_cleanup,
+    .fracture_loop_count = -1,   /* never fracture: our semantic rounds are microseconds; auto mode (40) ends the run in ~10 ms */
     .quality_level = TEST_QUALITY_PROD,
 END_DECLARE_TEST

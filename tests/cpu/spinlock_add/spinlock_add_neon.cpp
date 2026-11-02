@@ -604,36 +604,46 @@ static int spinlock_add_neon_init(struct test *test)
     /* knob 读取（init/main 线程，random_access_sweep 纪律：缓存进 test->data，
      * run 线程禁止直接读）；必须用 testspecific 变体——-O testid.key=value
      * 的键按测试 id 定域，NULL-test 裸键查不到 */
-    /* logverif / logverif_retain 是 0/1 布尔旋钮：错值（=2、=-1…）fail
-     * loudly 而非静默钳 1（PR#341 轮5 检视 :608，selftest 旋钮同段纪律
-     * :610-613）——retain 静默钳 1 会「以为没开实际开了」（无界堆积照
-     * 发），反向错值静默钳 0 则审计文件照删；键名 typo（logverif_
-     * rettain）框架侧静默忽略未知键（test_knobs 无 set-vs-used 交叉核
-     * 对，framework/test_knobs.cpp:145-152——框架级已知缺口）测试侧
-     * 不可见、无法在此防御，值域校验是测试侧可闭合的部分 */
-    int logverif_raw = get_testspecific_knob_value_int(test, "logverif", 0);
+    /* logverif / logverif_retain 是 0/1 布尔旋钮：全值域白名单 fail
+     * loudly 而非静默钳 0/1（PR#341 轮5 检视 :608/:623，selftest 旋钮
+     * 同段纪律 :638-641）——retain 静默钳 1 会「以为没开实际开了」（无
+     * 界堆积照发），反向错值静默钳 0 则审计文件照删。必须走 string
+     * 变体 + strcmp 白名单而非 int 变体 + 整数域守卫：非数值串
+     * （=on/=true…）经 knob_value_integer 的 strtoull 解析失败后无
+     * 告警返回 value_if_not_present=0（framework/test_knobs.cpp:113-129
+     * Defaulted 路径），整数域守卫（(unsigned)raw > 1）拦不住——恰是
+     * 「反向错值静默钳 0 → 审计文件照删」路径（轮5 检视 :623 揭示
+     * int 版守卫只闭合整数子域）。键名 typo（logverif_rettain）框架
+     * 侧静默忽略未知键（test_knobs 无 set-vs-used 交叉核对——框架级
+     * 已知缺口）测试侧不可见，不在此防御范围 */
+    const char *logverif_s = get_testspecific_knob_value_string(test, "logverif", "0");
     /* logverif_retain（0/1，默认 0）：绿跑是否保留逐次验证日志。默认删
      * （修 #9/#14 的长战役绿跑堆积写满 /var/tmp）；=1 时绿跑也保留——
      * golden 为 init 同源内核预计算，init/run 一致同错的系统性错误三通
      * 道全绿，logverif 行是绿跑期唯一可人工审计的计算值迹（PR#341 轮4
      * 检视 :834），需要审计时显式打开；代价是回到无界堆积（见 header
      * 生命周期披露），长战役慎用 */
-    int logverif_retain_raw = get_testspecific_knob_value_int(test, "logverif_retain", 0);
-    /* (unsigned)cast 使负值（若框架解析出）一并落入 >1 分支 */
-    if ((unsigned)logverif_raw > 1u || (unsigned)logverif_retain_raw > 1u) {
-        log_error("spinlock_add_neon: invalid logverif=%d / "
-                  "logverif_retain=%d knob value(s) (valid: 0 or 1, default "
-                  "0) — failing loudly so a wrong value cannot silently "
-                  "flip the verification-log / audit-retention setting "
-                  "(selftest knob discipline)",
-                  logverif_raw, logverif_retain_raw);
+    const char *logverif_retain_s = get_testspecific_knob_value_string(test, "logverif_retain", "0");
+    if (strcmp(logverif_s, "0") != 0 && strcmp(logverif_s, "1") != 0) {
+        log_error("spinlock_add_neon: invalid logverif knob value \"%s\" "
+                  "(valid: 0 or 1, default 0) — failing loudly so a wrong "
+                  "value cannot silently flip the verification-log setting "
+                  "(selftest knob discipline)", logverif_s);
         /* 与 selftest 错值路径同约束：仅 d 本身已分配，就地释放返回，
          * 不能 goto fail——会跨越下方 floats_total 的初始化（C++ 禁止） */
         free(d);
         return EXIT_FAILURE;
     }
-    d->logverif = logverif_raw != 0;
-    d->logverif_retain = logverif_retain_raw != 0;
+    if (strcmp(logverif_retain_s, "0") != 0 && strcmp(logverif_retain_s, "1") != 0) {
+        log_error("spinlock_add_neon: invalid logverif_retain knob value "
+                  "\"%s\" (valid: 0 or 1, default 0) — failing loudly so a "
+                  "wrong value cannot silently flip the audit-retention "
+                  "setting (selftest knob discipline)", logverif_retain_s);
+        free(d);
+        return EXIT_FAILURE;
+    }
+    d->logverif = strcmp(logverif_s, "1") == 0;
+    d->logverif_retain = strcmp(logverif_retain_s, "1") == 0;
     const char *st = get_testspecific_knob_value_string(test, "selftest", "off");
     /* 未知取值 fail loudly 而非静默映射 0（igzip level knob 先例：静默钳
      * 0 会让部署自检纪律被一个 typo 无声击穿——selftest=Stall 之类错值

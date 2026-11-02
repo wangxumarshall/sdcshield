@@ -13,7 +13,7 @@ docs/superpowers/inventory/sve-all-vl-campaign/` 会**零警告静默丢掉全�
 （目录级 add 对被忽略文件不告警，实测复现），矩阵将引用从未入库的文件。本计划把
 计划文档的工件清单与消费描述同步到裁定 E（运动实际执行的协议）。
 
-**Architecture:** 纯文档改动（原设计 0 代码语义变化，单文件 6 处编辑 + 本计划文档；检视处置轮次对入库脚本 `gem5-512-batch.sh` 收尾统计行及注释的触碰例外见 Global Constraints round-4 豁免追记——PR 净 diff 3 文件、hunk 数以 `git diff` 实测为准，此处不写死计数）。
+**Architecture:** 纯文档改动（原设计 0 代码语义变化，单文件 6 处编辑 + 本计划文档；检视处置轮次对入库脚本 `gem5-512-batch.sh` 收尾统计行及注释的触碰例外见 Global Constraints round-4 豁免追记——PR 净 diff 的文件数与 hunk 数均以 `git diff` 实测为准，此处不写死计数）。
 在计划文档中：(1) Global Constraints 增补一条「证据工件协议（裁定 E）」总纲，
 声明不入库/入库工件全集与 `git add` 的静默跳过语义（把「静默丢证据」从陷阱变成
 已声明的预期行为，并禁止 `git add -f` 强塞）；(2) Task 2/3/6 的 `.log` Create 行

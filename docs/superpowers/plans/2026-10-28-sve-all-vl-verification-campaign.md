@@ -171,6 +171,8 @@ Expected: `ARM64 spec: SVE yes (max VL 128 bits) | SVE2 no | SME no | SME2 no`�
 - [ ] **Step 2/3/4:** 与 Task 2 Step 1-3 相同（**完整继承**其命令块全部行——cd/`LIST` 等与 Task 2 逐字相同的原样行原封继承，stdout 捕获、`echo` 退出码、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 提取各行均在下方命令块内按继承形态示出；下方命令块按被继承的完整形态改写，非仅主命令示意），外加 env 前缀；全部 `native-256` 文件名前缀相应改为 `native-128`（替换范围同 Task 2 Step 2 注记）：
 ```bash
 # seed1（seed2 同理：LCG1001→LCG1002 文件名全量替换，替换范围见 Task 2 Step 2 注记）
+cd /home/sdc/wangxu/sdcshield-main
+LIST=docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
 LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log
 SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-128-LCG1001.stdout 2>&1
 echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
@@ -354,7 +356,7 @@ rm -rf m5out   # spike 标定会在 cwd 产生 gem5 输出目录，清掉防入�
 
 `gem5-512-batch.sh`（并行度 20——控制器修正案 2：标定实测单实例 RSS ≤ ~1.2 GB，20 路典型 ~24 GB，远低于 57 GB 可用；本机 128 核，gem5 单线程；**与任何构建错峰**）。完整实现以本 Task Create 的 `gem5-512-batch.sh` 为**唯一权威源**（已入库）——**执行一律直接用入库脚本，勿据本文档重建代码**；本 Step 不内嵌代码块。
 
-结构语义速览（**非权威、不可执行**——权威定义见入库脚本头注释）：批时二进制身份记录 `write_identity()`（写 `gem5-512/identity.txt`，extract 以批时记录盖戳 verdicts 头）；断点续跑（`rc=0` 收口格 touch `.done` 跳过、陈旧标记先 stderr 告警再重跑）；`batch.tsv` 逐格六列 O_APPEND 追加（裁定 E 溯源记录）；执行形状 `-f no --ignore-timeout`（Task 5 裁定）；26 项 baked `-O` 降容数组（native-256 腿裁定 D 同集——缺之则 `eigen_svd_bidiag_sve`/`eigen_svd_cdouble_sve` 等全核 TIMEOUT 前科用例收不了口）；重复名/重复键守卫（PR #307 #19/#32）与批间二进制变更告警；绿格收尾统计 = 清单约束内、末行 `exit: pass` 的唯一测试数（幂等、分子≤分母构造保证；权威判定 = `gem5-512-extract.sh`：`rc=0 && exit: pass && tick≥地板`，收尾 echo 仅速览）。
+结构语义速览（**非权威、不可执行**——权威定义见入库脚本头注释）：批时二进制身份记录 `write_identity()`（写 `gem5-512/identity.txt`，extract 以批时记录盖戳 verdicts 头）；断点续跑（`rc=0` 收口格 touch `.done` 跳过、陈旧标记先 stderr 告警再重跑）；`batch.tsv` 逐格六列 O_APPEND 追加（裁定 E 溯源记录）；执行形状 `-f no --ignore-timeout`（Task 5 裁定）；26 项 baked `-O` 降容数组（native-256 腿裁定 D 同集——缺之则 `eigen_svd_bidiag_sve`/`eigen_svd_cdouble_sve` 等全核 TIMEOUT 前科用例收不了口）；重复名/重复键守卫（PR #307 #19/#32）与批间二进制变更告警；绿格收尾统计 = 清单约束内、末行 `exit: pass` 的唯一测试数（幂等、分子≤分母构造保证；权威判定 = `gem5-512-extract.sh`：`rc=0 && exit: pass && tick≥地板`，收尾 echo 仅速览——速览不校验 rc/tick，可高于 verdicts 绿格数）。
 
 （本 Step 曾内嵌约 70 行骨架近拷贝、仅靠注释纪律维系与入库版同步——该纪律已实测失效过一次，分叉面在 PR #418 检视中持续产生意见，处置裁定移除代码镜像、单源指向入库脚本；历史演进与逐轮处置见 git log。）
 
@@ -408,16 +410,19 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield -e <test> -t 2000 -n 1   # 
 
 **Files:**
 - Create: `docs/superpowers/inventory/sve-all-vl-campaign/matrix.md`（570 格总表，190×3——matrix.md 已实收入库，标题自述 190×3）
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh`（矩阵生成脚本——已实收入库，379 行、`git ls-files` 可复核；Step 1 的生成器，每一格从入库工件机械推导并内嵌一致性断言）
+- Create: `docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh`（矩阵生成脚本——已实收入库，`git ls-files` 可复核；Step 1 的生成器，每一格从入库工件机械推导并内嵌一致性断言）
 
 **Interfaces:**
 - Consumes: Task 2/3/6 的**入库**证据（`<leg>-LCG<seed>.summary.txt`、`gem5-512-verdicts.txt`、`gem5-overrides.txt`；裁定 E——原始 `.log` 不入库，不得作为矩阵输入）+ Task 7 修复记录。
 
-- [ ] **Step 1: 汇总矩阵**——`matrix.md` 表头 `| test | 128 | 256 | 512 | 证据 |`；每格 pass/边界（理由）/FAIL（不允许残留）。生成方式 = 已入库的 `matrix-gen.sh`（Task 8 实际执行的生成器，**不许手填**、勿另写生成器——其内嵌一致性断言：清单 190 行、各列恰 190 格/总 570 格、无 FAIL/MISSING 格、26 项 baked `-O` 三处命令行头逐字一致，任一失败即非零退出、不产出 matrix.md）：
+- [ ] **Step 1: 汇总矩阵**——`matrix.md` 表头 `| test | 128 | 256 | 512 | 证据 |`；每格 pass/边界（理由）/FAIL（不允许残留）。生成方式 = 已入库的 `matrix-gen.sh`（Task 8 实际执行的生成器，**不许手填**、勿另写生成器——其内嵌一致性断言：清单 190 行、各列恰 190 格/总 570 格、无 FAIL/MISSING 格、26 项 baked `-O` 三处命令行头逐字一致，任一失败即非零退出、`&&` 不执行 mv、既有 matrix.md 不受触碰）：
 ```bash
-docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh > docs/superpowers/inventory/sve-all-vl-campaign/matrix.md
+# 原子形态：全部断言失败点均在首个 stdout 输出之前，直接 `> matrix.md` 会在
+# 脚本启动瞬间（shell O_TRUNC）把既有矩阵清空为 0 字节（实测复现）——
+# .new + mv 隔离失败路径。
+docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh > docs/superpowers/inventory/sve-all-vl-campaign/matrix.md.new && mv docs/superpowers/inventory/sve-all-vl-campaign/matrix.md.new docs/superpowers/inventory/sve-all-vl-campaign/matrix.md
 ```
-（计划撰写时点的草案指令「执行者写 10 行以内的 awk/grep 管道」系事前形态，实际执行产出即 matrix-gen.sh，以入库脚本为准；本轮同步实测该调用重定向输出与入库 matrix.md diff 为空、exit=0。）
+（计划撰写时点的草案指令「执行者写 10 行以内的 awk/grep 管道」系事前形态，实际执行产出即 matrix-gen.sh，以入库脚本为准；本轮同步实测：成功路径重定向输出与入库 matrix.md diff 为空、exit=0；失败路径（断输入副本复现 exit=2）直接重定向把既有 matrix.md 清空为 0 字节、.new+mv 形态下既有文件原样保留仅 .new 残留 0 字节。）
 - [ ] **Step 2: 验收自查**——570 格全绿或有显式机制性理由（190×3，定稿口径见 Goal 注记）；抽查 10 格回放**入库工件**（`.summary.txt` / `gem5-512-verdicts.txt`）确认引用真实（裁定 E：原始 `.log` 留工作区不入库——Step 1 刚声明其不得作为矩阵输入，新 clone 的验收者拿不到，同样不得作为验收输入）。
 - [ ] **Step 3: Commit**——`docs(campaign): 570 格证据矩阵汇总（190×3：128/256/512）`（实际执行 commit e4720831 同款）。
 

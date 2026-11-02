@@ -515,6 +515,7 @@ tests_set_base.add(
         'eigen_gemm/double14.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square_dump.cpp',
+        'eigen_gemm/gemm_double_ab_split.cpp',
         'eigen_gemm/gemm_double_dynamic_square.cpp',
         'eigen_gemm/gemm_double_dynamic_square_dump.cpp',
         'eigen_gemm/gemm_float_dynamic_square.cpp',

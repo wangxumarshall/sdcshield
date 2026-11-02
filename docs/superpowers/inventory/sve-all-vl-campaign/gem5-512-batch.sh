@@ -214,15 +214,19 @@ if [ -f "$OUT/batch.tsv" ]; then
 fi
 xargs -a "$OUT/list.effective" -P "$P" -I{} "$0" --one {}
 echo "batch end:   $(date '+%F %T')"
-# Zero-match "0\n0" fix: grep -c already prints 0 (and exits 1) on zero matches,
-# so `|| echo 0` appends a SECOND 0 — the command substitution captures two
-# lines. ${n:-0} prints a single 0 both on zero matches and on a missing
-# batch.tsv (grep then prints nothing). NUMERATOR kept in sync with the
-# campaign.md Task 6 Step 2 skeleton (PR #418 round-4 review finding; round-5
-# finding #40 scoped the sync claim to the numerator — the denominator
-# intentionally differs: this full version counts the list-contract-filtered
-# list.effective (PR #307 #21) while the skeleton defers that filtering and
-# counts the raw $LIST, so the two totals diverge once the raw list carries
-# comment/blank/"|time" suffix lines).
-n=$(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null)
+# Closing cell count, IDEMPOTENT: batch.tsv is append-only and an idempotent
+# re-run appends a fresh row per re-executed cell, so a plain `grep -c` counts
+# appended ROWS, not cells — re-running already-green cells would double-count
+# them (the "cells" figure could even exceed the denominator). This awk counts
+# UNIQUE tests whose LAST row is `exit: pass` — the same last-row-wins
+# semantics gem5-512-extract.sh applies — so re-runs never inflate it. It
+# prints a single 0 on zero rows; ${n:-0} covers a missing batch.tsv (awk
+# then prints nothing; the old `|| echo 0` double-printed "0"). Kept in sync
+# with the campaign.md Task 6 Step 2 skeleton (PR #418 review findings). The
+# DENOMINATOR intentionally differs: this full version counts the
+# list-contract-filtered list.effective (PR #307 #21) while the skeleton
+# defers that filtering and counts the raw $LIST — the totals diverge once
+# the raw list carries comment/blank/"|time" suffix lines.
+n=$(awk -F'\t' '{ last[$1] = $4 } END { c = 0; for (t in last) if (last[t] == "exit: pass") c++; print c }' \
+    "$OUT/batch.tsv" 2>/dev/null)
 echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$OUT/list.effective")"

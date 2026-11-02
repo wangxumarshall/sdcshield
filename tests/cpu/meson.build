@@ -887,6 +887,24 @@ if host_machine.cpu_family() == 'aarch64'
     )
 endif
 
+# arm_add/ —— 2026-11-02 用户规格 10 测试中查重后落地的 7 个（3 个已存在
+# 不重复实现：atomic_simd_128/256_unaligned、spinlock_unaligned）。
+# A 组 5 个 = str 失效故障报告五维探针（跨域写可见性 / 三层回读丢写 /
+# 锁+屏障路径丢写 / 低占空比跨 die / 高密度多宽度 str 批）；B 组 2 个 =
+# 633 #210/#211 ARM64 等价（DC CIVAC 冲刷干扰复制 + 纯复制对照）。
+# 全部 ARM64 指令语义（dmb/dsb ish、ldaxr/stxr、dc civac、cntvct），
+# 仅 aarch64 构建——x86-64 不含。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'arm_add/store_visibility_cross_class.cpp',
+            'arm_add/store_lost_write_detect.cpp',
+            'arm_add/barrier_after_lock_store.cpp',
+            'arm_add/low_load_cache_pressure.cpp',
+            'arm_add/str_instruction_stress.cpp',
+        )
+    )
+endif
 
 # JIT code-generation test suite. Each test mmaps executable memory and
 # emits a chain of machine-code instructions (at runtime, not compile-time)

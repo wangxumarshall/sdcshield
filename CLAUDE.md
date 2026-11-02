@@ -67,9 +67,8 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #   SVE1 host:  486 PROD / 496 q0 / 500 q-1  (2026-11-01 merge-tree,
                                                #               post issue #374 sched_storm×4 PROD→BETA re-measure;
                                                #               +121 迁移后推算 507/517/521, 待该主机重测)
-                                               #   no-SVE 920 (本机): 409 PROD / 517 q0 / 521 q-1  (2026-11-02 实测,
-                                               #               含 opendcdiag 迁移 121 = 21 PROD + 100 sdc_fuzz BETA;
-                                               #               旧预测 ~295 过时: 2026-10-31 bulk +71 未计入)
+                                               #   no-SVE 920 (本机): 416 PROD / 524 q0 / 528 q-1  (2026-11-02 实测,
+                                               #               = 迁移 121 + arm_add 7 PROD 后; 旧预测 ~295 过时)
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

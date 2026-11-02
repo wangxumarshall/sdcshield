@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 190 个 SVE1 用例在 VL=128/256/512 三档采集真实通过证据（570 格矩阵），发现即修。（计数口径：计划撰写时点预期 188 用例/564 格，清单定稿 190——`wc -l sve-test-list.txt` = 190、matrix.md 实收 190×3=570 格；正文 Task 6/8 与 Goal 按定稿值，Task 1 命令块内「预期 188/≈189」为历史时点预期原文。计数对齐与 Task 6 骨架执行语义对齐系 PR #418 检视处置轮次追加、超出 issue #403「.log 入库主张消歧」原始边界——因与本同步产出的工件协议注记交织于同一 hunk 邻域不再拆分 PR，处置按轮次独立 commit（git log 逐轮可追溯）+ PR 描述逐轮记录。）
+**Goal:** 为 190 个 SVE1 用例在 VL=128/256/512 三档采集真实通过证据（570 格矩阵），发现即修。（计数口径：计划撰写时点预期 188 用例/564 格，清单定稿 190——`wc -l sve-test-list.txt` = 190、matrix.md 实收 190×3=570 格；正文 Task 6/8 与 Goal 按定稿值，Task 1 命令块内「预期 188/≈189」为历史时点预期原文。）
+
+**范围追记（过程叙事，非目标定义）:** 计数对齐与 Task 6 骨架执行语义对齐系 PR #418 检视处置轮次追加、超出 issue #403「.log 入库主张消歧」原始边界——因与本同步产出的工件协议注记交织于同一 hunk 邻域不再拆分 PR，处置按轮次独立 commit（git log 逐轮可追溯）+ PR 描述逐轮记录。
 
 **Architecture:** native 两腿（128=env 降 spec / 256=原生）在本机全量跑 `--test-list-file`；512 腿走 gem5-fi SE 真二进制，先补 `prctl(PR_SVE_GET_VL/SET_VL)` stub 打通框架 VL 探测（A′），时间盒失败则回退 FS（A）。修复走独立 commit 三档重验。
 
@@ -349,7 +351,7 @@ rm -rf m5out   # spike 标定会在 cwd 产生 gem5 输出目录，清掉防入�
 
 - [ ] **Step 2: 批处理脚本**
 
-`gem5-512-batch.sh`（并行度 20——控制器修正案 2：标定实测单实例 RSS ≤ ~1.2 GB，20 路典型 ~24 GB，远低于 57 GB 可用；本机 128 核，gem5 单线程；**与任何构建错峰**）。骨架如下——与仓库实际入库版一致的关键语义（批时身份记录、断点续跑、`batch.tsv` 逐格追加、执行形状 `-f no --ignore-timeout`、绿格统计取 `exit: pass` 内容行——Files 行声明的入库证据全部由脚本产出，不再自相矛盾。骨架的执行语义重写系 PR #418 round-1/round-2 检视处置产物，超出本计划原始目标（工件清单同步），为消除「入库证据声明与同页内嵌脚本矛盾」而做，处置记录见 commit d7ca9374/9fa0787b）；完整版（`--one` 单测模式、baked `-O` 数组、`list.effective` 清单契约过滤（PR #307 #21）、批间二进制变更告警（full batch 对照 identity 记录、变更即大声警告）、逐行 stdout 回显、PR #307 检视加固注释）以本 Task Create 的 `gem5-512-batch.sh` 为准：
+`gem5-512-batch.sh`（并行度 20——控制器修正案 2：标定实测单实例 RSS ≤ ~1.2 GB，20 路典型 ~24 GB，远低于 57 GB 可用；本机 128 核，gem5 单线程；**与任何构建错峰**）。骨架如下——与仓库实际入库版一致的关键语义（批时身份记录、断点续跑、`batch.tsv` 逐格追加、执行形状 `-f no --ignore-timeout`、绿格统计取 `exit: pass` 内容行——Files 行声明的入库证据全部由脚本产出，不再自相矛盾。骨架的执行语义重写系 PR #418 round-1/round-2 检视处置产物，超出本计划原始目标（工件清单同步），为消除「入库证据声明与同页内嵌脚本矛盾」而做，处置记录见 commit d7ca9374/9fa0787b；骨架与入库版双份同源逻辑仅以注释文字维系同步、无机械校验——同步纪律已实测失效过一次（round-3 只修骨架统计行、round-4 检视才补修入库脚本），分歧一律以本 Task Create 的入库版为准）；完整版（`--one` 单测模式、baked `-O` 数组、`list.effective` 清单契约过滤（PR #307 #21——骨架 `xargs` 直喂原始 `$LIST` 不止统计分母分叉，是**执行输入缺陷**：清单含注释行时会作 bogus `-e` 参数被真实执行、`|time` 后缀名格的 batch.tsv 行全部落空）、重复名守卫（list.effective 同名校验——同名并发 `--one` 实例会互覆 `.d`/`.log`，开跑前即失败，PR #307 #19）、重复键守卫（gem5-overrides.txt 单键单行契约校验——双键会使矩阵标注未用过的 knob，PR #307 #32）、批间二进制变更告警（full batch 对照 identity 记录、变更即大声警告）、逐行 stdout 回显、PR #307 检视加固注释）以本 Task Create 的 `gem5-512-batch.sh` 为准：
 
 ```bash
 #!/bin/bash
@@ -365,9 +367,11 @@ rm -rf m5out   # spike 标定会在 cwd 产生 gem5 输出目录，清掉防入�
 # 从未产出，已入库 verdicts 身份头为 extract 时重算，见其头注 RECOMPUTED AT
 # EXTRACT TIME；照本骨架重跑将产出 identity.txt）；断点续跑：rc=0 已收口的格 touch .done 跳过，超时/崩溃格不标记、
 # 幂等重跑重新执行（batch.tsv 追加写、提取取末行，新行覆盖旧行）。
-# 绿格统计取内容行 exit: pass（分子口径与入库版末行一致；分母分叉——骨架取原始
-# $LIST，入库版取 list.effective（PR #307 #21 清单契约过滤，骨架免列），清单含
-# 注释/空行/`|time` 后缀行时两者分叉）——速览近似而非判定：rc=0
+# 绿格统计 = 末行为 exit: pass 的唯一测试数（与入库版末行同款幂等口径：batch.tsv
+# 为追加写，重跑已绿格会追加新 pass 行——行计数双计，取每测试末行即幂等）；分母
+# 与执行输入分叉——骨架 xargs 直喂原始 $LIST（清单含注释行时会作 bogus -e 参数被
+# 真实执行、`|time` 后缀名格 batch.tsv 行全部落空），入库版先过滤 list.effective
+# （PR #307 #21，骨架免列）——速览近似而非判定：rc=0
 # 不蕴含 pass，exit: pass 行亦不区分 pass 与诚实 init-skip（overlay 抑制 per-test
 # yaml，无日志行可判——tick 地板是唯一机械句柄）；权威判定 = gem5-512-extract.sh
 # （rc=0 && exit: pass && tick≥地板），本 echo 仅收尾速览（口径详见其头注释）。
@@ -393,7 +397,7 @@ run_one() {
         if [ "$lastrc" = "rc=0" ] || [ -z "$lastrc" ]; then return 0; fi
         echo "NOTE: $t carries .done but its last batch.tsv row is $lastrc" >&2
         echo "      (stale marker, pre-2026-10-30 attempted-semantics) — re-running" >&2
-        rm -f "$OUT/$t.done"         # 陈旧标记（末行为非 rc=0 收口的矛盾行）→ 告警后重跑（入库版 :109-110 同款审计告警——陈旧 .done 被强制重跑须可观测）
+        rm -f "$OUT/$t.done"         # 陈旧标记（末行为非 rc=0 收口的矛盾行）→ 告警后重跑（入库版 --one 分支同款审计告警——陈旧 .done 被强制重跑须可观测）
     fi
     [ -f "$OUT/identity.txt" ] || write_identity
     extra=$(awk -v t="$t" 'index($0, t "|")==1 {print substr($0, length(t)+2); exit}' \
@@ -416,8 +420,9 @@ export -f run_one write_identity   # write_identity 亦须导出：run_one 内�
 export LIST OVR OUT G5 RUN BIN
 [ -f "$OUT/identity.txt" ] || write_identity
 xargs -a "$LIST" -P 20 -I{} bash -c 'run_one "$@"' _ {}
-n=$(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null)   # 零匹配 grep 已印 0（|| echo 0 会双 0）；文件缺失捕获空
-echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$LIST")"   # 分母 = 原始清单；入库版分母 = list.effective（PR #307 #21，骨架免列）
+n=$(awk -F'\t' '{ last[$1] = $4 } END { c = 0; for (t in last) if (last[t] == "exit: pass") c++; print c }' \
+    "$OUT/batch.tsv" 2>/dev/null)   # 末行=exit: pass 的唯一测试数（幂等：重跑追加行不再双计）；零行单 0；文件缺失捕获空
+echo "cells with 'exit: pass': ${n:-0} / $(wc -l < "$LIST")"   # 分母 = 原始清单（xargs 同喂它，执行输入同款免列——见上注）；入库版分母 = list.effective（PR #307 #21）
 ```
 
 - [ ] **Step 3: 执行、机械提取与分诊**

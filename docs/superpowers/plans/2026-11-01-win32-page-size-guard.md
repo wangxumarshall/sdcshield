@@ -9,12 +9,35 @@
 `sysdeps/windows/aligned_alloc.cpp` 一处受影响,且未在代码中留下任何警示
 或守卫。
 
-实测受影响面(比计划文档承认的更大):包含 sandstone_p.h 的 **全部
-Windows 编译单元**——13 个 `framework/*.cpp`(Floats/logging/random/
-sandstone/sandstone_chrono/sandstone_opts/sandstone_run/sandstone_test_groups/
-sandstone_tests/sandstone_thread/sandstone_ulog/selftest/test_knobs,
-meson 无平台排除)+ 3 个 `framework/sysdeps/windows/{tmpfile.c:7,
-child_debug.cpp:8, aligned_alloc.cpp:12}` = **16 个 TU**。
+实测受影响面(比计划文档承认的更大;R1 检视勘误 + 处置 worker 独立复核后的
+准确口径):包含 sandstone_p.h 的 **全部 Windows 编译单元**(默认构建口径:
+target=windows、device_type=cpu 缺省、selftests 缺省 true)——13 个
+`framework/*.cpp`(Floats/logging/random/sandstone/sandstone_chrono/
+sandstone_opts/sandstone_run/sandstone_test_groups/sandstone_tests/
+sandstone_thread/sandstone_ulog/selftest/test_knobs;selftest 经
+`-Dselftests` 缺省 true 编入,其余在 framework/meson.build:192 起的无条件
+framework_files 列表)+ 3 个 `framework/device/cpu/{cpu_device.cpp,
+topology.cpp,logging_cpu.cpp}`(framework/meson.build:95
+`subdir(devicedeps_dir)` 无平台条件,device/cpu/meson.build:30-34 无条件
+加入 framework_files;初版计划文档漏计)+ 3 个
+`framework/sysdeps/windows/{tmpfile.c:7,child_debug.cpp:8,
+aligned_alloc.cpp:12}` + 2 个经 sysdeps/windows/meson.build 的
+`'../generic/memfpt.c'`、`'../generic/physicaladdress.c'` 条目编入
+Windows 构建的 `framework/sysdeps/generic/` C TU(两文件均在 :6 直接
+include;generic/kvm.c 同列表编入但不 include 本头;初版与 R1 勘误初稿
+均漏计)+ 1 个 `tests/common/mce_check/mce_check.cpp:29`
+(tests/common/meson.build:8 无条件编译;紧邻的 smi_count 反而有
+`if target_machine.system() == 'linux'` 守卫,证明该写法可得而 mce_check
+未加;初版漏计)+ 3 个 `tests/cpu/memory/memcpy_{l1d_size,l2_cache_size,
+l3_cache_size}.cpp`(各 :2 直接 include,tests/cpu/meson.build:79-81 位于
+无 when: 条件的 `tests_set_base.add(files(...))` 列表;初版与 R1 勘误初稿
+均漏计)= **直接 25 个 TU**;另加 1 个间接 TU
+`framework/device/cpu/premain.cpp`(经 cpuid_internal.h:18 拉入
+sandstone_p.h,cpuid_internal.h 的唯一非直接包含消费者,premain_files
+无平台条件)= **合计 26 个 TU**。排除项口径:smi_count(linux target 守卫)、
+event_monitor 与 device/gpu/idxd(device_type 守卫)、sysdeps/{darwin,
+freebsd,linux,unix}(system 守卫);host aarch64 门控的测试族
+(cache_stress_civac 等)仅在注释提及本头、无 include,不在枚举内。
 
 失败机制(上游 Windows 构建口径 = MinGW,由 meson.build:141-160 的
 `__USE_MINGW_ANSI_STDIO`/`-mconsole`/`-include` 等 GCC-only 参数证明):
@@ -51,11 +74,17 @@ sysconf 缺失这一核心变量与真实头文件一致,已引用真实文件�
 `framework/sandstone_p.h`:
 
 1. 顶部 include 区(`#include <limits.h>` 之后)加平台分支,
-   把 `#include <unistd.h>` 从 :73(extern "C" 区内)移出到此:
+   把 `#include <unistd.h>` 从 :73(extern "C" 区内)移出到此
+   (R1 检视后最终形态,含宏守卫与 NOMINMAX):
 
    ```c
    #ifdef _WIN32
-   #  define WIN32_LEAN_AND_MEAN
+   #  ifndef WIN32_LEAN_AND_MEAN
+   #    define WIN32_LEAN_AND_MEAN
+   #  endif
+   #  ifndef NOMINMAX
+   #    define NOMINMAX
+   #  endif
    #  include <windows.h>     /* GetSystemInfo() for sandstone_page_size() */
    #else
    #  include <unistd.h>      /* sysconf(_SC_PAGESIZE) for sandstone_page_size() */
@@ -95,17 +124,37 @@ sysconf 缺失这一核心变量与真实头文件一致,已引用真实文件�
 - **`WIN32_LEAN_AND_MEAN`**:仓库既有防御先例(random.cpp:33);全仓库
   (framework/ + tests/,third-party 除外)对 LEAN 排除头(rpc/shellapi/
   winsock/mmsystem/wincrypt…)零依赖(grep 实测);避免把 winsock.h 拉进
-  全部 16 个 TU(mingw windows.h 无 LEAN 时会包含 winsock.h,
-  windows.h:91-93 实测)。
-- **min/max 宏污染**:mingw-w64 `minwindef.h:170` 的 `#ifndef __cplusplus`
-  守卫使 C++ TU 从不获得 min/max 宏(实证),sandstone_opts.cpp:701 等
-  `std::min` 用法安全;唯一 C TU(tmpfile.c)现状本就 include windows.h,
-  宏环境不变。MSVC 口径不受支持(meson GCC-only 参数),不构成约束。
+  全部 26 个 TU(mingw windows.h 无 LEAN 时会包含 winsock.h,
+  windows.h:91-93 实测)。R1 检视修正:define 加 `#ifndef` 守卫(尊重 TU
+  既有选择,不强制定义),并补 `NOMINMAX`(同样带守卫)——min/max 安全
+  不再单独押在 mingw-w64 minwindef.h 私有的 `#ifndef __cplusplus` 守卫上
+  (Windows SDK 官方 minwindef.h 无该守卫,向 MSVC/clang-cl 迁移时
+  min/max 宏会立刻破坏 `std::min`/`std::max` 用法)。
+- **min/max 宏污染**(R1 修正后的准确论证):mingw-w64 `minwindef.h:170`
+  的 `#ifndef __cplusplus` 守卫使 C++ TU 从不获得 min/max 宏(实证),
+  sandstone_opts.cpp:701 等 `std::min` 用法安全;含本头的 C TU 共 3 个
+  (tmpfile.c、经 sysdeps/windows 编入的 generic/memfpt.c 与
+  generic/physicaladdress.c),全量 grep 实测均无裸 min()/max() 调用与
+  DELETE/ERROR/NEAR/FAR 等宏 token 实撞(见验证节),故追加 NOMINMAX 对
+  mingw 现状零行为差异、纯防御。初版文档「tmpfile.c
+  现状本就 include windows.h,宏环境不变」的说法**不准确**:tmpfile.c:7
+  含 sandstone_p.h 先于其 :19 的 windows.h,include guard 使后者成为
+  no-op,实际生效的由修复前的非 lean 变为 lean(tmpfile.c 在用的
+  GetTempPathW/CreateFileW 等符号均在 lean 保留的 winbase/winnt 中,
+  属核对过的潜伏变化而非破坏)。
 - **`extern "C++"` 逃逸**:保留(现状已验证形态,static 函数链接说明本就
   无效,保留零风险)。
-- **不移 windows.h 相关内容到 sysdeps**:Windows 上 `ROUND_UP_TO_PAGE`
-  唯一使用点 aligned_alloc.cpp:59 `pvalloc()` 与 16 个 TU 的头内联需求
-  要求函数自足于头文件;拆分会引入 Linux/Windows 结构不对称,超出最小改动。
+- **不移 windows.h 相关内容到 sysdeps**(R1 勘误后重述):初版文档
+  「Windows 上 `ROUND_UP_TO_PAGE` 唯一使用点 aligned_alloc.cpp:59
+  `pvalloc()`」是错误前提——grep 实测 Windows 编译 TU 中共 **9 个使用点**:
+  sandstone.cpp:315/333/337/376/378/410(init_shmem/commit_shmem/
+  attach_shmem 的共享内存布局,经 sysdeps/windows/mman.c 的
+  VirtualAlloc/VirtualProtect shim 真实运行)、logging.cpp:368/379
+  (LogMessagesFile 的 mmap/munmap)、sandstone_run.cpp:865(protect_shmem
+  断言)。真实依据是:多个 Windows TU 直接消费 `sandstone_page_size()`/
+  `ROUND_UP_TO_PAGE`,头内联是硬需求;shmem 布局消费 dwPageSize 恰是修复
+  的正确性收益(4K 页系统数值不变;16K 页 WoA 上布局取整到真实页而非
+  硬编码 4096);拆分会引入 Linux/Windows 结构不对称,超出最小改动。
 - **不动 `framework/sandstone_test_utils.h`**:单测专用副本,上游本来就
   `#include <sys/mman.h>`(:20,Windows 从来不可编译),非本 commit 引入,
   不在本 issue 范围(如实声明,不顺手扩界)。
@@ -119,6 +168,13 @@ sysconf 缺失这一核心变量与真实头文件一致,已引用真实文件�
 - **Windows 语义**:`dwPageSize` 是该系统页大小(x86/x64 = 4 KB,
   ARM64 WoA 24H2 可为 16 KB),与 pvalloc 的「round up to the actual
   page size」语义一致;GetSystemInfo 是 core API,MinGW/MSVC 均有。
+  R1 检视补修:初版只把 pvalloc 的 **size** 取整接到 dwPageSize,同文件
+  valloc(:51-54)的对齐仍硬编码 4096——16K 页系统上 pvalloc 会返回
+  4096 对齐而非页对齐的内存,「语义一致」只对 size 成立、对 alignment
+  不成立;且 linux/darwin 侧 valloc 分别经 `__libc_valloc`/
+  `malloc_zone_valloc` 保证真页对齐,Windows 侧是三平台中唯一 >4K 页
+  语义错误的实现。已改为 `aligned_alloc(sandstone_page_size(), size)`
+  (两函数均无 in-repo 调用者,属潜伏缺陷修复)。
 - **竞态**:与现状同构(函数级 static + 写同值,良性)。
 
 ## 验证(rule 2)
@@ -127,6 +183,11 @@ sysconf 缺失这一核心变量与真实头文件一致,已引用真实文件�
 2. **修复后 mock 重跑**(同一 mingw mock 环境 + `-D_WIN32` + 忠实
    `windows.h` mock,按 sysinfoapi.h 真实签名):预修复错误消失,
    编译通过并正确返回 `dwPageSize`——引用真实输出。
+   **mock 的局限(R1 如实化)**:mock 只编译了从修复后文件逐字提取的
+   page-size 函数体与 include 区,`-D_WIN32` 下 C++/C 两种编译模式,
+   **不是** 26 个受影响 TU 的本体编译;mock windows.h 也只含
+   SYSTEM_INFO/GetSystemInfo 签名,不含真实 windows.h(即使 LEAN)仍
+   注入的宏面(DELETE/ERROR/OPTIONAL/空宏 far/near 等)。
 3. 回归:`-e zstd19 -t 2000 -n 1` → `exit: pass`;`-e mce_check` →
    pass(标准口径);线程栈 guard 实跑(多线程全核)→ pass。
 4. x86-64 非回归:改动为架构中立 framework 代码,Linux 路径逐字不变
@@ -134,6 +195,15 @@ sysconf 缺失这一核心变量与真实头文件一致,已引用真实文件�
 5. **Windows 真实工具链验证不可得**(本机无 MinGW/MSVC,CI 无 Windows
    job):以上述 mock 编译 + mingw-w64 真实头文件拉取检视为验证边界,
    如实声明,不以「应该能过」替代。
+6. **R1 宏冲突 token 全量扫描**(对 mock 无法覆盖的「真实 windows.h
+   宏面 vs 全部 TU 标识符」风险的静态验证):对 framework/(含
+   unit-tests)+ tests/ 全部 C/C++ 源(注:仓内无 selftests/ 顶层目录)
+   grep `\b(DELETE|OPTIONAL|IGNORE|ERROR|NEAR|FAR|near|far)\b` 与裸
+   `min(|max(` 调用——命中**全部**为字符串字面量与注释(C 预处理器
+   不替换其内容);random.cpp:279-280 及 sandstone_data.h/Floats.h 的
+   `min()/max()` 均为成员函数定义且受 mingw `__cplusplus` 守卫保护
+   (NOMINMAX 追加后 C 模式亦无宏)。结论:当前树零实撞,宏注入为
+   潜在风险而非现行破坏;引用真实 grep 输出。
 
 ## 交付
 
@@ -143,3 +213,46 @@ sysconf 缺失这一核心变量与真实头文件一致,已引用真实文件�
     无 Co-Authored-By)。
 - push origin feature 分支(绝不 main);PR `--base main`,正文含
   `Closes #397` + 修复报告;报告贴回 issue #397。
+
+## 检视修正(PR #407 review R1,2026-11-01)
+
+第 5 bot(local-claude)对 head d4f711a0 的 6 条意见 + pr-agent 1 条,
+逐条批判性处置后采纳 5 条(代码 2:valloc 对齐、宏卫生;文档 3:受影响面
+勘误、9 使用点勘误、mock 局限如实化)、变通 2 条(pr-agent「需人工进一步
+验证真实 Windows 构建」与 local-claude 工具链验证意见的真实边界——本机
+无 mingw/MSVC、gem5-fi 无法仿真 Windows 用户态,如实声明;CI Windows
+防线遗留人工决策):
+
+1. **valloc/pvalloc 对齐**(采纳,代码):valloc 硬编码 4096 对齐改为
+   `sandstone_page_size()`——16K 页 WoA 上 pvalloc 此前会返回非页对齐
+   内存;posix 侧(linux `__libc_valloc` / darwin `malloc_zone_valloc`)
+   均真页对齐,Windows 侧原是三平台唯一 >4K 页语义错误实现。无 in-repo
+   调用者,潜伏缺陷修复。
+2. **宏卫生**(采纳,代码):`WIN32_LEAN_AND_MEAN` 加 `#ifndef` 守卫 +
+   追加 `NOMINMAX`(同守卫)——不再强制定义、min/max 安全不押在
+   mingw-w64 私有守卫上(MSVC minwindef.h 无 `__cplusplus` 守卫)。
+3. **文档勘误**(采纳,文档):受影响面 16 → **26 个 TU**(补
+   device/cpu 3 个 + mce_check + 间接 premain.cpp;R1 勘误初稿曾误为
+   21,处置 worker 独立复核 meson 全链后再勘误:sysdeps/windows 的
+   `../generic/{memfpt,physicaladdress}.c` 条目 +2、tests_set_base
+   无条件列表的 memcpy_{l1d,l2,l3} 缓存测试 +3——勘误本身也会漏,
+   唯一兜底是把 meson 引用链逐条核读);
+   「ROUND_UP_TO_PAGE 唯一使用点 aligned_alloc.cpp:59」勘误为 **9 个
+   Windows-TU 使用点**(sandstone.cpp 6 / logging.cpp 2 /
+   sandstone_run.cpp 1,shmem 布局/日志 mmap/protect_shmem 断言);
+   「tmpfile.c 宏环境不变」勘误为「实际由非 lean 变 lean(符号经核对
+   仍覆盖)」;「唯一含本头的 C TU tmpfile.c」勘误为 3 个 C TU;
+   mock 验证声称如实化(仅提取体编译,非 TU 本体)。
+4. **宏 token 全量扫描**(新增验证,见验证节第 6 条):全仓零实撞。
+5. **真实 Windows 工具链编译验证**(变通):本机实测无 mingw/MSVC
+   (which x86_64/aarch64/i686-w64-mingw32-gcc、clang-cl 全部未命中),
+   gem5-fi 为 ARM64 Linux 全系统仿真、无法仿真 Windows 用户态 API
+   (GetSystemInfo/VirtualAlloc),验证边界如实声明:mock 编译 +
+   mingw-w64 真实头签名检视 + 宏 token 全量静态扫描。「26 个 TU 全部
+   恢复可编译」是高度可信但未经真实工具链证实的推断,不是已验证事实。
+6. **CI Windows 编译防线**(变通,遗留):初版文档自认根因含「CI 无
+   Windows job 故破坏未被发现」,本 PR 未补防线(如 mingw 交叉编译
+   smoke 目标)。不在本 issue 范围内的原因:全仓 Windows 构建的可行性
+   (依赖链 openssl 等)未经验证,CI workflow 改动无法本地实证,靠
+   push-看红绿试错违反「无实证不 push」;作为遗留项记录,建议人工
+   决策是否单开 issue 建 mingw smoke CI。

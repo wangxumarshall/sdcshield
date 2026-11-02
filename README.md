@@ -341,7 +341,7 @@ bash scripts/run/sdc_machine_scan.sh                         # 无 root 降级�
 
 ### ARM64 spec 策略与默认用例集（2026-10-27 起）
 
-sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `arm64_requires` 与 `arm64_min_vl_bits`（`framework/sandstone.h`）过滤，只保留芯片能执行的用例——默认用例数 **host-dependent**：SVE1 主机实测 486 PROD（`--quality=0` 496、`--quality=-1` 500），无 SVE 鲲鹏 920 为 299（完整时序链见「用例质量分级」footnote）。
+sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/SME2 扩展位 + **架构最大** VL/SVL 档位——向内核请求天花板并读回实际授予值；"当前 VL" ≠ "最大 VL"，sysctl 可能压低默认值）。默认测试集在**选择期**按每个用例声明的 `arm64_requires` 与 `arm64_min_vl_bits`（`framework/sandstone.h`）过滤，只保留芯片能执行的用例——默认用例数 **host-dependent**：SVE1 主机实测 488 PROD（2026-11-02 复核；`--quality=0` 498、`--quality=-1` 502），无 SVE 鲲鹏 920 为 299（完整时序链见「用例质量分级」footnote）。
 
 - `-e` / `--test-list-file` **旁路过滤**：显式请求的用例仍会注册，能力不足时诚实 SKIP（附理由）。
 - **控制线程**在 `test_init` 前 pin 到芯片最大档（aux 线程与 worker 继承，init golden 与 run lane 档位一致）；每个 SVE/SVE2 worker 重新 pin 并校验读回——pin 被拒 = SKIP，读回不符 = FAIL。
@@ -385,7 +385,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | 2 | PROD（默认）| `quality >= 2` | 487 |
 | | **合计** | | **501** |
 
-> 上表为 ARM64 gcc 构建的源码全量口径（2026-11-01 merge 树复核 = main 2026-10-31 口径 + `spinlock_add_neon`；`smi_count` 自 SKIP 转为真实 PROD 探针即 issue #7，总数不变）。运行时实际数量随芯片 spec 过滤：SVE1 主机 2026-11-01 实测 490 PROD（q0/q-1 = 496/500），同日 issue #374 将 `sched_storm×4`（内核调度刺激/负对照，无 SDC 检出语义）自 PROD 降级 BETA 后复核 **486 PROD**（q0/q-1 集合不变）；无 SVE 鲲鹏 920 **299**（推算 = 2026-10-27 实测 297 + `spinlock_add_neon` + `smi_count`，待无 SVE 主机实测复核）。cn23154 复现分支（clang/libc++，含 SME 用例）2026-09-28 实测：默认 322，`--quality=-1` 全量 333。
+> 上表为 ARM64 gcc 构建的源码全量口径（2026-11-01 merge 树复核 = main 2026-10-31 口径 + `spinlock_add_neon`；`smi_count` 自 SKIP 转为真实 PROD 探针即 issue #7，总数不变）。运行时实际数量随芯片 spec 过滤：SVE1 主机 2026-11-01 实测 490 PROD（q0/q-1 = 496/500），同日 issue #374 将 `sched_storm×4`（内核调度刺激/负对照，无 SDC 检出语义）自 PROD 降级 BETA 后复核 **486 PROD**（q0/q-1 集合不变），2026-11-02 `feat/eigen-sve-unification` 分支实测 **488 PROD**（q0/q-1 = 498/502：其后基线随 PR #343 并入 `neon_rot_ldr_rand{,_thread}` +2，本分支新增 `eigen_svd_double_sve` +1、退役 `eigen_svd_bidiag_sve` −1，dense SVE FMA 场景由前者承接）；无 SVE 鲲鹏 920 **299**（推算 = 2026-10-27 实测 297 + `spinlock_add_neon` + `smi_count`，待无 SVE 主机实测复核）。cn23154 复现分支（clang/libc++，含 SME 用例）2026-09-28 实测：默认 322，`--quality=-1` 全量 333。
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm64_sdc_sve`、`arm_crypto`、`ist_sbaf`、`neon_add`、`neon_add_sve`
 - **SKIP（`--quality=-1`）**：`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`

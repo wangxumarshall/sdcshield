@@ -98,7 +98,10 @@
  * spinlock_add_neon.logverif_retain=1（默认 0）保留绿跑文件供人工审计
  * （PR#341 轮4 检视 :834：golden 为 init 同源预计算，init/run 一致同错
  * 时三通道全绿，logverif 行是绿跑期唯一可人工核对的计算值迹）——代价
- * 是回到无界堆积，长战役慎用。红跑文件为取证设计、无上限无轮转（轮4
+ * 是回到无界堆积，长战役慎用；堆积使 pid 复用/回绕后新切片撞同名遗留
+ * 文件，init 以 <pid>-<n>.log 后缀退格重试（上限 64，约 13 天连续战役
+ * 耗尽后才降级，PR#341 轮5 检视 :740），审计文件名因而不是恒定 <pid>.log。
+ * 红跑文件为取证设计、无上限无轮转（轮4
  * 检视 :825 边界）：嘈杂共享机上的饥饿假阳性 FAIL 亦逐切片留档（实测
  * 速率 ~840MB/天量级），长战役操作员须自行巡检清理 /var/tmp——上限/
  * 轮转与取证完整性冲突，按取证优先保留此边界并在此声明。
@@ -156,6 +159,7 @@
                                                   * 与持锁排空(~15s) 须落在标称窗口内 */
 #define SPINLOCK_ADD_NEON_STARVATION_RESETS_MAX 3 /* 饥饿重置上限：跨 3+1 窗口无获锁 → 进展异常 FAIL */
 #define SPINLOCK_ADD_NEON_LOG_MAX 10000      /* 每线程逐次日志行上限 */
+#define SPINLOCK_ADD_NEON_LOG_OPEN_TRIES 64 /* <pid>.log 撞 EEXIST 时 <pid>-<n>.log 后缀重试上限（见 init） */
 #define SPINLOCK_ADD_NEON_MAGIC 0x5A5AC0DE5A5AC0DEull
 
 /* 恰一条 cacheline：lock_word 是 8 字节窗口的靶心，epoch/holder/magic 是
@@ -725,25 +729,37 @@ static int spinlock_add_neon_init(struct test *test)
     d->shared_counter[0] = 0;
 
     if (d->logverif) {
-        snprintf(d->log_path, sizeof d->log_path,
-                 "/var/tmp/spinlock_add_neon_%d.log", (int)getpid());
-        /* O_CREAT|O_EXCL：/var/tmp 为 1777 粘滞目录、pid 可预测，O_NOFOLLOW
-         * 只拦预植符号链接（ELOOP）、拦不住预植普通文件（chmod 666 绕过，
-         * 受害进程 O_TRUNC 后 O_APPEND 写入 = 攻击者可实时读/注入伪 PASS
-         * 行稀释真 FAIL）——O_EXCL 存在即拒绝（EEXIST）闭合两者：预植
-         * symlink 同样 EEXIST（open(2)：O_CREAT|O_EXCL 遇 symlink 失败），
-         * O_NOFOLLOW 保留作纵深防御。代价：pid 复用遇上一轮遗留同名日志
-         * 也 EEXIST——诊断附属按下方降级路径禁用日志继续跑（log_warning
-         * 告知操作员可清理），取证文件不被清空、跨轮追加混淆亦不复存在
-         * （原 O_TRUNC 截断方案由此移除：O_EXCL 保证文件必为本轮新建，
-         * 截断无对象）。O_APPEND 保留：同轮多线程共享 fd 的原子追加。 */
-        d->log_fd = open(d->log_path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW, 0644);
+        /* 首选 /var/tmp/spinlock_add_neon_<pid>.log；EEXIST 时以
+         * <pid>-<n>.log 递增后缀重试（PR#341 轮5 检视 :740）——retain=1
+         * （及红跑取证文件无上限留档）长战役下 pid 空间回绕（本机
+         * pid_max=4194304，实测节奏 ~240 切片/s ≈ 4.8h/圈）后，每圈同
+         * pid 切片都命中上一圈保留文件，若直接降级则该 pid 的 logverif
+         * 在整个战役期持续死亡；后缀重试使每圈退一格，上限
+         * SPINLOCK_ADD_NEON_LOG_OPEN_TRIES（~4.8h/圈 × 64 ≈ 13 天连续
+         * 战役）耗尽才降级——重试仍全 O_EXCL，「绝不写已存在文件」的
+         * 防预植语义不变（注入伪 PASS/稀释 FAIL 行需向已存在文件追加，
+         * O_EXCL 恒拒绝；后缀名可预测不构成新攻击面：防御目标是拒绝写
+         * 已存在文件而非隐藏文件名，预植 <pid>-1.log 与预植 <pid>.log
+         * 同等难度且同等被拒）。cleanup 对应：unlink 的是本轮实际打开
+         * 的 log_path（含后缀），不动上一圈遗留。 */
+        for (int attempt = 0; attempt <= SPINLOCK_ADD_NEON_LOG_OPEN_TRIES; ++attempt) {
+            if (attempt == 0)
+                snprintf(d->log_path, sizeof d->log_path,
+                         "/var/tmp/spinlock_add_neon_%d.log", (int)getpid());
+            else
+                snprintf(d->log_path, sizeof d->log_path,
+                         "/var/tmp/spinlock_add_neon_%d-%d.log", (int)getpid(), attempt);
+            d->log_fd = open(d->log_path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW, 0644);
+            if (d->log_fd >= 0 || errno != EEXIST)
+                break; /* 成功；或非「文件已存在」形态（只读 fs、SELinux、
+                        * 预植 symlink 的 ELOOP…）——后缀重试无意义 */
+        }
         if (d->log_fd < 0) {
             /* logverif 是 opt-in 诊断附属、不是检测契约：环境不可用（只读
-             * /var/tmp、SELinux 拒绝、O_NOFOLLOW/O_EXCL 命中预植 symlink/
-             * 普通文件的 ELOOP/EEXIST，pid 复用或 -f no 调试模式同进程多
-             * fracture 遇上一轮遗留同名日志的 EEXIST——后者 rm 旧文件即可
-             * 恢复）时降级为禁用日志继续跑——检测通道 A/B/C 不受影响，环境问题
+             * /var/tmp、SELinux 拒绝、O_NOFOLLOW 命中预植 symlink 的
+             * ELOOP，或后缀重试耗尽——同 pid 遗留文件数已超
+             * SPINLOCK_ADD_NEON_LOG_OPEN_TRIES，rm 旧文件即可恢复）时
+             * 降级为禁用日志继续跑——检测通道 A/B/C 不受影响，环境问题
              * 不与 SDC 检出共享退出码、不污染战役自动分诊（cpufreq/thermal
              * 缺失优雅降级同哲学，PR#328 二轮检视 :326）。用 log_warning
              * 而非 log_error：后者会把本用例标 Failed（message_common_check

@@ -736,15 +736,31 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
          * 两个方向都判错——floor=100.0 但 hi 截断致档位抬不上去同样是
          * 致噪源; 反之慢求解器在缺省 1.0 下 lo 档实测已 ≥100ms, 差分
          * 本干净, 不应告警)。实测 t1 不足时 a_ms 虚高 → n_run 偏小 →
-         * 激发维度静默欠压, 在此从静默变有声。 */
-        if (t1 < sdc_m3_probe_floor_ms)
-            log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
-                        "fit 差分扣 b 的固定开销占比<10%%前提未达成"
-                        "(spec §4.3 M3), a_ms 将被固定开销与计时噪声污染"
-                        "(a_ms 虚高→n_run 偏小→激发欠压); 检查 probe_floor_ms"
-                        " 传参(M3 消费方应显式传 %.0f)与 knob hi 是否足以"
-                        "抬升 probe 档", test_id, knob, t1,
-                        sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
+         * 激发维度静默欠压, 在此从静默变有声。
+         * 阈值锚定 spec §4.3 M3 方法口径而非调用方实参(R4 检视答疑):
+         * 100ms 是差分扣 b 方法本身的档位判据, 非逐求解器可调——显式
+         * 传 sub-100 实参仍告警是有意设计(偏离 spec 的差分口径应被看
+         * 见; 固定开销 b 显著更小的求解器应先修订 spec M3 标定, 常量
+         * 已单点绑定)。文案按传参是否已达 M3 口径分流: 已达标者唯一
+         * 残余致因是 knob hi 截断, 不再误指传参。 */
+        if (t1 < sdc_m3_probe_floor_ms) {
+            if (probe_floor_ms >= sdc_m3_probe_floor_ms)
+                log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
+                            "knob hi 截断致档位抬不上去, fit 差分扣 b 的"
+                            "固定开销占比<10%%前提未达成(spec §4.3 M3), "
+                            "a_ms 将被固定开销与计时噪声污染(a_ms 虚高→"
+                            "n_run 偏小→激发欠压); 检查 knob hi 是否足以"
+                            "抬升 probe 档", test_id, knob, t1,
+                            sdc_m3_probe_floor_ms);
+            else
+                log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
+                            "fit 差分扣 b 的固定开销占比<10%%前提未达成"
+                            "(spec §4.3 M3), a_ms 将被固定开销与计时噪声污染"
+                            "(a_ms 虚高→n_run 偏小→激发欠压); 检查 probe_floor_ms"
+                            " 传参(M3 消费方应显式传 %.0f)与 knob hi 是否足以"
+                            "抬升 probe 档", test_id, knob, t1,
+                            sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
+        }
         /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
          *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p
          * b≈0 时严格退化为 a = t1/p1^p。差分在 b 为常数的模型下精确,

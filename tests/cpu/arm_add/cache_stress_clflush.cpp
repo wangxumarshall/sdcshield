@@ -10,6 +10,15 @@
  *  eviction pressure.  cache_stress_memcpy (633 #211) is the exact same
  *  copy+verify with ZERO flushing — the controlled pair.
  *
+ *  THREAD-SAFETY FIX (2026-11-03, full-core campaign finding): the
+ *  buffers used to live in test->data — SHARED across all workers,
+ *  whose poison/copy/verify rounds stomped each other (poison bytes
+ *  leaking into golden comparisons) and failed within 3.7 ms on
+ *  nearly every core.  -n 4's small race window had masked it; -n 64
+ *  is the verification floor from now on.  Buffers are PER-THREAD
+ *  (run-local) — the flush-interference semantics are per-thread
+ *  anyway.
+ *
  *  Anti-golden-fold: dst is pre-corrupted with ~epoch (fresh every
  *  round) before the copy, so a store lost to the flush pressure cannot
  *  hide behind last round's correct bytes (issue #374 lineage).  The
@@ -29,14 +38,6 @@
 #define CSF_LINES       (CSF_SIZE / CSF_LINE)
 #define CSF_FLUSH_EVERY 8                        /* flush 1 line per 8 copied */
 
-namespace { /* ODR: per-TU CSFData */
-struct CSFData {
-    uint64_t *src;
-    uint64_t *dst;
-    uint64_t *golden;
-};
-}
-
 static inline void csf_flush_line(const void *addr) {
     __asm__ volatile(
         "dc civac, %0\n\t"
@@ -45,63 +46,57 @@ static inline void csf_flush_line(const void *addr) {
 }
 
 static int cache_stress_clflush_init(struct test *test) {
-    auto *d = new CSFData;
-    if (!d) return EXIT_FAILURE;
-    d->src    = new uint64_t[CSF_SIZE / 8];
-    d->dst    = new uint64_t[CSF_SIZE / 8];
-    d->golden = new uint64_t[CSF_SIZE / 8];
-    if (!d->src || !d->dst || !d->golden) return EXIT_FAILURE;
-
-    memset_random(d->src, CSF_SIZE);
-    memcpy(d->golden, d->src, CSF_SIZE);   /* independent golden snapshot */
-    memset(d->dst, 0, CSF_SIZE);
-    test->data = d;
+    (void)test;   /* buffers are per-thread now (thread-safety fix) */
     return EXIT_SUCCESS;
 }
 
 static int cache_stress_clflush_cleanup(struct test *test) {
-    auto *d = static_cast<CSFData *>(test->data);
-    delete[] d->src;
-    delete[] d->dst;
-    delete[] d->golden;
-    delete d;
-    test->data = nullptr;
+    (void)test;
     return EXIT_SUCCESS;
 }
 
 static int cache_stress_clflush_run(struct test *test, int cpu) {
-    auto *d = static_cast<CSFData *>(test->data);
-    (void)cpu;
+    (void)test;
     uint64_t epoch = 0;
+
+    /* PER-THREAD buffers (thread-safety fix — see header note) */
+    uint64_t *src    = new uint64_t[CSF_SIZE / 8];
+    uint64_t *dst    = new uint64_t[CSF_SIZE / 8];
+    uint64_t *golden = new uint64_t[CSF_SIZE / 8];
+    if (!src || !dst || !golden) return EXIT_FAILURE;
+
+    memset_random(src, CSF_SIZE);
+    memcpy(golden, src, CSF_SIZE);   /* independent golden snapshot */
+    memset(dst, 0, CSF_SIZE);
 
     do {
         ++epoch;
         const uint64_t poison = ~epoch;
 
-        /* pre-corrupt dst: a store lost this round cannot masquerade as
-         * last round's correct bytes */
+        /* pre-corrupt dst: a store lost this round cannot masquerade
+         * as last round's correct bytes */
         for (size_t i = 0; i < CSF_SIZE / 8; ++i)
-            d->dst[i] = poison;
+            dst[i] = poison;
 
-        /* batch copy src -> dst with ongoing flush interference on the
-         * destination's already-written lines */
+        /* batch copy src -> dst with ongoing flush interference on
+         * the destination's already-written lines */
         for (int line = 0; line < CSF_LINES; ++line) {
-            memcpy(d->dst + (size_t)line * CSF_LINE / 8,
-                   d->src + (size_t)line * CSF_LINE / 8,
+            memcpy(dst + (size_t)line * CSF_LINE / 8,
+                   src + (size_t)line * CSF_LINE / 8,
                    CSF_LINE);
             if (line % CSF_FLUSH_EVERY == 0 && line >= CSF_FLUSH_EVERY) {
-                /* evict an already-written dst line (a few lines back, so
-                 * it is genuinely completed work under pressure) */
+                /* evict an already-written dst line (a few lines back,
+                 * so it is genuinely completed work under pressure) */
                 int victim = line - CSF_FLUSH_EVERY;
-                csf_flush_line(&d->dst[(size_t)victim * CSF_LINE / 8]);
+                csf_flush_line(&dst[(size_t)victim * CSF_LINE / 8]);
             }
         }
 
         /* verify against the independent golden */
-        if (memcmp(d->dst, d->golden, CSF_SIZE) != 0) {
+        if (memcmp(dst, golden, CSF_SIZE) != 0) {
             for (int line = 0; line < CSF_LINES; ++line) {
-                const uint64_t *g = d->golden  + (size_t)line * CSF_LINE / 8;
-                const uint64_t *a = d->dst     + (size_t)line * CSF_LINE / 8;
+                const uint64_t *g = golden + (size_t)line * CSF_LINE / 8;
+                const uint64_t *a = dst    + (size_t)line * CSF_LINE / 8;
                 if (memcmp(g, a, CSF_LINE) != 0) {
                     report_fail_msg("cache_stress_clflush: dst line %d "
                                     "differs from golden under flush "
@@ -111,15 +106,18 @@ static int cache_stress_clflush_run(struct test *test, int cpu) {
                 }
             }
         }
+
         /* excitation filler: NEON switching power (see arm_add_excite.h) */
         if (!arm_add_excite::fill(cpu, epoch)) {
             report_fail_msg("excitation filler store->reload mismatch "
                             "(cpu %d round %lu)", cpu,
                             (unsigned long)epoch);
         }
-
     } while (test_time_condition(test));
 
+    delete[] src;
+    delete[] dst;
+    delete[] golden;
     return EXIT_SUCCESS;
 }
 

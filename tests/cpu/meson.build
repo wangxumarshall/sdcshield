@@ -1065,6 +1065,29 @@ tests_set_base.add(
     )
 )
 
+
+# lock_arm/ —— 2026-11-03 spinlock/lock 族的 NEON 扩展（锁协议原样保留——
+# CAS/ldaxr-stxr/xchg 获取与屏障释放正是被测对象且无 NEON 等价；锁内/
+# 原子更新旁新增 per-thread uint32x4 向量槽 payload（asm ld_vec/st_vec），
+# 原版全部校验保留 + 新增槽 == local_sum 低 32 位校验。仅 aarch64。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'lock_arm/spinlock_stress_neon.cpp',
+            'lock_arm/spinlock_stress_bts_neon.cpp',
+            'lock_arm/spinlock_stress_cmpxchg_neon.cpp',
+            'lock_arm/spinlock_stress_cmpxchg_even_odd_neon.cpp',
+            'lock_arm/spinlock_stress_cmpxchg16b_neon.cpp',
+            'lock_arm/spinlock_rmw_cmpxchg_neon.cpp',
+            'lock_arm/spinlock_rmw_cmpxchg_pause_neon.cpp',
+            'lock_arm/spinlock_rmw_xchg_neon.cpp',
+            'lock_arm/spinlock_rmw_xchg_pause_neon.cpp',
+            'lock_arm/lockless_cmpxchg_neon.cpp',
+            'lock_arm/lockless_cmpxchg8b_neon.cpp',
+            'lock_arm/lockless_cmpxchg16b_neon.cpp',
+        )
+    )
+endif
 tests_config_base = tests_set_base.apply(tests_config)
 
 # libatomic provides the __atomic_load_16 / __atomic_store_16 /
@@ -1386,7 +1409,10 @@ subdir('arm64')
 # scripts/generate_sdc_fuzz_cases.py (do not edit by hand — regenerate).
 # Self-gated on aarch64 and on eigen3_dep, so x86-64 is untouched and a
 # missing Eigen simply drops the fleet.
+
+
 subdir('arm64/sdc_fuzzing')
+
 
 # SVE ports of the 53 avx-named tests (fma/mesh/eigen/ipsec). Same
 # self-gating pattern as arm64/ above: the subdir's own meson.build wraps

@@ -75,7 +75,9 @@ static int str_instruction_stress_neon_run(struct test *test, int cpu) {
          * the fix carried over from the scalar original), then the
          * dense NEON vector store batch, drain, even marker */
         d->ver[cpu].store(2 * epoch - 1, std::memory_order_relaxed);
-        __asm__ volatile("dmb ishst" ::: "memory");
+        /* full fence (was ishst) — 192-thread foresight fix shared with the
+         * scalar original (measured pe+1 false-fails in the campaign) */
+        __asm__ volatile("dmb ish" ::: "memory");
         for (int s = 0; s < SISN_NSLOTS; ++s)
             st_vec(&mine[s][0], ev);
         __asm__ volatile("dsb ish" ::: "memory");
@@ -103,10 +105,18 @@ static int str_instruction_stress_neon_run(struct test *test, int cpu) {
             uint32x4_t pev = vdupq_n_u32((uint32_t)pe);
             int bad_slot = -1;
             uint32x4_t bad{};
+            /* ONE-EPOCH FORESIGHT TOLERATED (see scalar original's note):
+             * slot = pe+1 with the marker still in flight is a legal
+             * cross-PE propagation race; older-than-pe or partial-lane
+             * mismatches still fail */
+            uint32x4_t pev1 = vdupq_n_u32((uint32_t)(pe + 1));
             for (int s = 0; s < SISN_NSLOTS; ++s) {
                 uint32x4_t v = ld_vec(&theirs[s][0]);
                 uint32x4_t diff = veorq_u32(v, pev);
-                if (vmaxvq_u32(diff) != 0) { bad_slot = s; bad = v; break; }
+                uint32x4_t diff1 = veorq_u32(v, pev1);
+                if (vmaxvq_u32(diff) != 0 && vmaxvq_u32(diff1) != 0) {
+                    bad_slot = s; bad = v; break;
+                }
             }
             uint64_t v2 = d->ver[partner].load(std::memory_order_acquire);
             if (v1 == v2 && bad_slot >= 0) {

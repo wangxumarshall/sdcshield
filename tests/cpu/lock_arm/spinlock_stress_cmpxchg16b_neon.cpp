@@ -1,0 +1,174 @@
+/*  spinlock_stress_cmpxchg16b_neon — NEON variant of tests/cpu/spinlock/spinlock_stress_cmpxchg16b_neon.cpp (lock_arm pass,
+ *  2026-11-03; original untouched).
+ *
+ *  The lock-free / wide-CAS protocol is EXACTLY the original's (it is
+ *  the test's subject).  ADDED alongside the atomic update: a
+ *  per-thread uint32x4 vector slot RMW'd through asm ld_vec/st_vec
+ *  (intrinsics get GCC-forwarded) — the NEON datapath payload raises
+ *  switching power while every original check stays verbatim.  New
+ *  check: the slot must equal the low 32 bits of the thread's own
+ *  local_sum (mod-2^32 arithmetic is closed on both sides).
+ */
+#include <sandstone.h>
+#include <arm_neon.h>
+/* asm vector IO — intrinsics get GCC store-transformed / load-forwarded */
+static inline uint32x4_t la_ld_vec(const uint32_t *a) {
+    uint32x4_t v;
+    __asm__ volatile("ldr %q0, [%1]" : "=w"(v) : "r"(a) : "memory");
+    return v;
+}
+static inline void la_st_vec(uint32_t *a, uint32x4_t v) {
+    __asm__ volatile("str %q0, [%1]" :: "w"(v), "r"(a) : "memory");
+}
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <atomic>
+#include <random>
+#include <unistd.h>
+
+#define MAX_THREADS 128
+
+// 16 字节对齐的结构体，使用 std::atomic<__int128> 管理
+namespace { /* ODR: per-TU SharedData (29-file same-name hazard) */
+struct alignas(16) SharedData {
+    std::atomic<__int128> value;               // 原子128位整数
+    std::atomic<uint64_t> thread_idx;          // 线程 ID 分配器
+    uint64_t local_sums[MAX_THREADS];
+    uint32_t (*vec_slot)[4];   /* per-thread NEON payload slot */          // 每个线程的本地增量总和
+};
+}
+
+static int spinlock_stress_cmpxchg16b_init(struct test *test) {
+    auto *sd = new SharedData;
+    if (!sd) return EXIT_FAILURE;
+    sd->value = 0;
+    sd->thread_idx.store(0, std::memory_order_relaxed);
+    memset(sd->local_sums, 0, sizeof(sd->local_sums));
+    sd->vec_slot = new uint32_t[MAX_THREADS][4];
+    memset(sd->vec_slot, 0, MAX_THREADS * 16);
+    test->data = sd;
+    return EXIT_SUCCESS;
+}
+
+static int spinlock_stress_cmpxchg16b_run(struct test *test, int cpu) {
+    (void)cpu;
+    auto *sd = static_cast<SharedData*>(test->data);
+
+    int id = sd->thread_idx.fetch_add(1, std::memory_order_relaxed);
+    if (id >= MAX_THREADS) {
+        report_fail_msg("Too many threads");
+        return EXIT_FAILURE;
+    }
+
+    /* randomization hardening H14' (P16): framework RNG (per-thread
+     * stream, -s reproducible) replaces std::mt19937; range [1, 1000). */
+    auto dist = []() { return (1) + random64() % (uint64_t)((1000) - (1) + 1); };
+    uint64_t local_sum = 0;
+
+    do {
+        uint64_t inc = dist();
+
+        bool success = false;
+        while (!success) {
+            __int128 old_val = sd->value.load(std::memory_order_acquire);
+            uint64_t old_counter = (uint64_t)old_val;
+            uint64_t old_pad = (uint64_t)(old_val >> 64);
+            uint64_t new_counter = old_counter + inc;
+            __int128 new_val = ((__int128)old_pad << 64) | new_counter;
+            // 使用 compare_exchange_weak（等价于 cmpxchg16b）
+            success = sd->value.compare_exchange_weak(old_val, new_val,
+                                                      std::memory_order_acq_rel,
+                                                      std::memory_order_acquire);
+            if (!success) {
+                // 自旋等待，加入 yield 提示
+                #if defined(__aarch64__)
+                    __asm__ volatile("yield");
+                #elif defined(__x86_64__)
+                    __asm__ volatile("pause");
+                #else
+                    /* no arch-specific pause hint; fall through */
+                #endif
+            }
+        }
+
+        local_sum += inc;
+        /* NEON payload alongside the atomic update: per-thread vector RMW */
+        {
+            uint32_t *slot = sd->vec_slot[id];
+            uint32x4_t v = la_ld_vec(slot);
+            v = vaddq_u32(v, vdupq_n_u32((uint32_t)inc));
+            la_st_vec(slot, v);
+        }
+
+    } while (test_time_condition(test));
+
+    sd->local_sums[id] = local_sum;
+    return EXIT_SUCCESS;
+}
+
+static int spinlock_stress_cmpxchg16b_finish(struct test *test) {
+    auto *sd = static_cast<SharedData*>(test->data);
+
+    uint64_t total_local = 0;
+    uint64_t thread_count = 0;
+    for (int i = 0; i < MAX_THREADS; ++i) {
+        if (sd->local_sums[i] != 0) {
+            total_local += sd->local_sums[i];
+            thread_count++;
+        }
+    }
+
+    __int128 final_val = sd->value.load(std::memory_order_acquire);
+    uint64_t final_counter = (uint64_t)final_val;
+
+    // 一致性测试：存储到内存再加载比较
+    __int128 store_buf = final_val;
+    __int128 reload_buf;
+    memcpy(&reload_buf, &store_buf, sizeof(store_buf));
+    bool consistent = (reload_buf == final_val);
+
+    bool data_ok = (final_counter == total_local);
+    bool passed = data_ok && consistent;
+
+    const char *color = passed ? "\033[32m" : "\033[31m";
+    const char *result_str = passed ? "PASS" : "FAIL";
+
+    fprintf(stderr, "spinlock_stress_cmpxchg16b_neon: Final counter=%lu, Total local sums=%lu, Threads=%lu, data_ok=%d, consistent=%d, result=%s%s\033[0m\n",
+            final_counter, total_local, thread_count, data_ok, consistent, color, result_str);
+    fflush(stderr);
+
+    if (!passed) {
+        report_fail_msg("spinlock_stress_cmpxchg16b_neon: Counter mismatch or consistency failure");
+        return EXIT_FAILURE;
+    }
+
+    /* NEON slot check: slot == low 32 bits of local_sum */
+    for (uint64_t i = 0; i < thread_count; ++i) {
+        uint32_t want = (uint32_t)sd->local_sums[i];
+        uint32x4_t got = la_ld_vec(sd->vec_slot[i]);
+        uint32x4_t diff = veorq_u32(got, vdupq_n_u32(want));
+        if (vmaxvq_u32(diff) != 0) {
+            report_fail_msg("spinlock_stress_cmpxchg16b_neon: vector slot %lu mismatch: got "
+                            "{%u,%u,%u,%u} want %u (NEON store lost)", i,
+                            vgetq_lane_u32(got, 0), vgetq_lane_u32(got, 1),
+                            vgetq_lane_u32(got, 2), vgetq_lane_u32(got, 3), want);
+            delete[] sd->vec_slot;
+            delete sd;
+            return EXIT_FAILURE;
+        }
+    }
+    delete[] sd->vec_slot;
+    delete sd;
+    return EXIT_SUCCESS;
+}
+
+DECLARE_TEST(spinlock_stress_cmpxchg16b_neon, "Stress test LOCK CMPXCHG16B (ARM64 atomic 128-bit)")
+    .groups = DECLARE_TEST_GROUPS(&group_math),
+    .test_init = spinlock_stress_cmpxchg16b_init,
+    .test_run = spinlock_stress_cmpxchg16b_run,
+    .test_cleanup = spinlock_stress_cmpxchg16b_finish,
+    .fracture_loop_count = -1,   /* never fracture (lock_arm convention) */
+    .quality_level = TEST_QUALITY_PROD,
+END_DECLARE_TEST

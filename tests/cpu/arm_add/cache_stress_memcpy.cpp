@@ -24,43 +24,33 @@
 
 #define CSM_SIZE (64 * 1024)
 
-namespace { /* ODR: per-TU CSMData */
-struct CSMData {
-    uint64_t *src;
-    uint64_t *dst;
-    uint64_t *golden;
-};
-}
-
 static int cache_stress_memcpy_init(struct test *test) {
-    auto *d = new CSMData;
-    if (!d) return EXIT_FAILURE;
-    d->src    = new uint64_t[CSM_SIZE / 8];
-    d->dst    = new uint64_t[CSM_SIZE / 8];
-    d->golden = new uint64_t[CSM_SIZE / 8];
-    if (!d->src || !d->dst || !d->golden) return EXIT_FAILURE;
-
-    memset_random(d->src, CSM_SIZE);
-    memcpy(d->golden, d->src, CSM_SIZE);   /* independent golden snapshot */
-    memset(d->dst, 0, CSM_SIZE);
-    test->data = d;
+    (void)test;   /* buffers are per-thread now (thread-safety fix) */
     return EXIT_SUCCESS;
 }
 
 static int cache_stress_memcpy_cleanup(struct test *test) {
-    auto *d = static_cast<CSMData *>(test->data);
-    delete[] d->src;
-    delete[] d->dst;
-    delete[] d->golden;
-    delete d;
-    test->data = nullptr;
+    (void)test;
     return EXIT_SUCCESS;
 }
 
 static int cache_stress_memcpy_run(struct test *test, int cpu) {
-    auto *d = static_cast<CSMData *>(test->data);
-    (void)cpu;
+    (void)test;
     uint64_t epoch = 0;
+
+    /* PER-THREAD buffers — THREAD-SAFETY FIX (2026-11-03, full-core
+     * campaign finding): these used to be shared via test->data and
+     * the workers' poison/copy/verify rounds stomped each other
+     * (same root cause as cache_stress_clflush; -n 4 masked it,
+     * -n 64 is the verification floor now). */
+    uint64_t *src    = new uint64_t[CSM_SIZE / 8];
+    uint64_t *dst    = new uint64_t[CSM_SIZE / 8];
+    uint64_t *golden = new uint64_t[CSM_SIZE / 8];
+    if (!src || !dst || !golden) return EXIT_FAILURE;
+
+    memset_random(src, CSM_SIZE);
+    memcpy(golden, src, CSM_SIZE);   /* independent golden snapshot */
+    memset(dst, 0, CSM_SIZE);
 
     do {
         ++epoch;
@@ -68,21 +58,21 @@ static int cache_stress_memcpy_run(struct test *test, int cpu) {
 
         /* pre-corrupt dst (anti-golden-fold, identical to clflush arm) */
         for (size_t i = 0; i < CSM_SIZE / 8; ++i)
-            d->dst[i] = poison;
+            dst[i] = poison;
 
         /* pure copy — no flush interference anywhere */
-        memcpy(d->dst, d->src, CSM_SIZE);
+        memcpy(dst, src, CSM_SIZE);
 
         /* verify against the independent golden */
-        if (memcmp(d->dst, d->golden, CSM_SIZE) != 0) {
+        if (memcmp(dst, golden, CSM_SIZE) != 0) {
             for (size_t i = 0; i < CSM_SIZE / 8; ++i) { /* full scan (was sampled i += 8) */
-                if (d->golden[i] != d->dst[i]) {
+                if (golden[i] != dst[i]) {
                     report_fail_msg("cache_stress_memcpy: dst qword %zu "
                                     "differs from golden with NO flush "
                                     "present (g=%016lx a=%016lx) — pure "
                                     "copy-path failure, the control arm",
-                                    i, (unsigned long)d->golden[i],
-                                    (unsigned long)d->dst[i]);
+                                    i, (unsigned long)golden[i],
+                                    (unsigned long)dst[i]);
                 }
             }
         }
@@ -95,6 +85,9 @@ static int cache_stress_memcpy_run(struct test *test, int cpu) {
         }
     } while (test_time_condition(test));
 
+    delete[] src;
+    delete[] dst;
+    delete[] golden;
     return EXIT_SUCCESS;
 }
 

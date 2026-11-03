@@ -64,6 +64,63 @@
  * byte-tolerant reference that a deterministic single-core fault cannot
  * poison.
  *
+ * Issue #484 (deterministic low-amplitude blind spot, 2026-11-04): the
+ * three channels above leave one fault class invisible — a DETERMINISTIC
+ * deviation below kTolRel * ||B||_F (e.g. a persistent stuck SVE lane
+ * flipping one mantissa bit: ~1 ULP ~ 4e-16, eight orders below tol)
+ * reproduces byte-identically on both double passes AND stays inside the
+ * tolerance vs the scalar reference, so no channel fires. The fourth
+ * channel closes this: init's control thread computes golden_sve by
+ * running the VERY SAME SVE kernel on the frozen input before the workers
+ * start, and every frozen-replay round byte-compares the worker output
+ * against it (plain scalar memcmp — the #373 rule that compare gates stay
+ * scalar still holds). A persistent per-core SVE datapath fault corrupts
+ * the worker's output but not the init-thread golden (different physical
+ * core, same chip), so any-amplitude deterministic deviation now fails
+ * the replay memcmp. Why this is a DISCLOSED exception to the issue #373
+ * scalar-golden paradigm (writing_tests.md: golden must be independent of
+ * the datapath under test)? Because svaddv's intra-vector reduction order
+ * is architecturally IMPLEMENTATION-DEFINED: no scalar bit-exact
+ * equivalent of the kernel's tree reductions exists, and removing svaddv
+ * from the DUT to make it scalar-emulable would excise the SVE reduction
+ * tree — the very unit under stress. The SVE-kernel golden is therefore
+ * cross-core instead of cross-implementation, and the independent scalar
+ * tolerance channel is RETAINED as the algorithmic gate: kernel code
+ * defects reproduce identically on every core and pass the byte channel,
+ * but diverge from the scalar reference far above kTolRel (the B1-015
+ * evidence: the three original kernel bugs diverged at ~1e-1). Residual
+ * blind spots, stated honestly: (a) a worker that shares the control
+ * thread's core compares against a same-unit golden — in the default
+ * all-core run every OTHER worker still fails, but a single-worker run
+ * scheduled on the init core would pass all four channels for a
+ * persistent fault; (b) a chip-wide fault that corrupts every core's SVE
+ * unit identically poisons golden_sve and the DUT identically. Both are
+ * strictly narrower than the pre-fix blind spot (all deterministic
+ * low-amplitude faults, all modes, all cores).
+ *
+ * gem5-fi evidence for the #484 channel (SE O3, same-source dual kernel
+ * docs/superpowers/inventory/issue484-bidiag-byte-golden/
+ * eigen_svd_bidiag_dual.c, n=64, 8 iterations, seed 1): the injected
+ * fault class is a deterministic post-kernel 1-ULP mantissa flip at
+ * (32,32) — the escaped class itself. PRE-fix channel set (mode=old):
+ * SDCSHIELD_FAILS=0 at VL 128 AND 512 (blind spot reproduced: max_diff
+ * 1.1e-13 <= tol 3.7e-8, both double passes flipped identically — the
+ * flip provably present, the clean replay FNV differs). POST-fix
+ * (mode=new): SDCSHIELD_FAILS=4 at VL 128 AND 512 — every replay round
+ * catches the byte deviation (worker 3.2009611278502348 vs init
+ * 3.2009611278502352) while the same round's tolerance compare still
+ * passes — the two channels' coverage difference on one screen. Healthy
+ * hardware (fault=none): SDCSHIELD_FAILS=0 at VL 128/256/512/1024
+ * (FNV_GOLDEN_SVE e765545533fe0b3a / 4a7cd16eaa8f13e1 / 635273fe796ee882
+ * / 0ef0f373581f31d1) and at n=68 (non-VL-multiple shape, VL 512,
+ * d07bc55cf03e81d2) — no false positives, and golden_sve is
+ * byte-identical to the clean replay output at every tier (kernel
+ * determinism, the channel's precondition). Boundary: gem5 SE runs one
+ * context, so the PHYSICAL cross-core property is not exercised there —
+ * it rests on the validated per-VL kernel determinism plus the
+ * homogeneous-core deployment target (Kunpeng 920); the same-unit
+ * residuals (a)/(b) above are exactly where that argument gives out.
+ *
  * Honest scope note: this is bidiagonalization only, not a full SVD
  * (no singular values, no U/V accumulation) — the payload targets the
  * FMA/store-reload datapath, not SVD semantics.
@@ -108,10 +165,12 @@
  *      校准) 全核时撞 2048 上限, 单次迭代分钟级且 TERM 打不断,
  *      -t 5000 实测 343s SIGQUIT timed out —— 即本次修复的 P0-2。 */
 struct bidiag_data {
-    double *orig;     /* init 时的输入矩阵 (回放轮读, 重掷轮不读) */
-    double *golden;   /* init 首算的标量参考结果 (回放轮比对) */
-    double *work;     /* 保留字段(未用, run 用 per-thread TLS); 兼容旧结构 */
-    int n;            /* 运行时矩阵维度 */
+    double *orig;       /* init 时的输入矩阵 (回放轮读, 重掷轮不读) */
+    double *golden;     /* init 首算的标量参考结果 (回放轮容差比对) */
+    double *golden_sve; /* init 控制线程以 SVE 内核对冻结输入算的字节级
+                           期望 (回放轮 memcmp, issue #484 第四通道;
+                           复用原保留字段 work —— 该字段自 B6 起未用) */
+    int n;              /* 运行时矩阵维度 */
 };
 
 #ifdef __aarch64__
@@ -451,39 +510,43 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
             .lo = 64, .hi = 2048,
             .fam = SDC_RSS_BIDIAG,              /* RSS 表优先, 下方三元组仅兼容保留 */
             .bytes_per_elem = 8, .matrices_per_thread = 3, .rss_ratio = 2.0,
-            .shared_bytes_per_slice = 0,   /* orig+golden = 16n² 随所选 n 动态,
-                                            * 联合求解无闭式——忽略其一阶项:
-                                            * n∈[64,2048] 时 ≤67MB, 占 650‰
-                                            * 节点预算 <0.2% */
+            .shared_bytes_per_slice = 0,   /* orig+golden+golden_sve = 24n² 随
+                                            * 所选 n 动态, 联合求解无闭式——
+                                            * 忽略其一阶项: n∈[64,2048] 时
+                                            * ≤100MB, 占 650‰ 节点预算 <0.3%
+                                            * (issue #484 增 golden_sve 后) */
             .mem_fraction_permille = 650, .ar_fam = SDC_FAM_MEM_BOUND,
             .run_budget_ms = 200000,      /* 全核单迭代(2解×AR)预算: 300s 硬宽限×0.67 */
         };
         d->n = sdc_joint_dim_slice(test, "mdim", &ja, run_bidiag_once);
     }
-    d->work = nullptr;   /* 保留字段, run 用 per-thread TLS 缓冲 */
-
     /* bytes 经 round_up_64 对齐(C11 契约, 见其定义处注释); run() 的
      * bytes 用同公式同 n 取整, memcpy 回放轮两侧尺寸恒一致。 */
     size_t bytes = round_up_64((size_t)d->n * d->n * sizeof(double));
-    d->orig   = (double *)aligned_alloc(64, bytes);
-    d->golden = (double *)aligned_alloc(64, bytes);
-    if (!d->orig || !d->golden) {
+    d->orig       = (double *)aligned_alloc(64, bytes);
+    d->golden     = (double *)aligned_alloc(64, bytes);
+    d->golden_sve = (double *)aligned_alloc(64, bytes);
+    if (!d->orig || !d->golden || !d->golden_sve) {
         /* T10 init 降级(m2, 对齐 eigen_sparse 先例): init 期分配失败是
          * 资源性而非 SDC——降 n 到 lo(=64, 与上方联合求解 lo/clamp 下限
          * 同值)重分配一次, 仍失败才资源性 SKIP; 原 EXIT_FAILURE 打红
-         * 撤销。降档后冻结回放对(orig/golden)与 run 的 d->n 同档一致。 */
+         * 撤销。降档后冻结回放对(orig/golden/golden_sve)与 run 的 d->n
+         * 同档一致。 */
         constexpr int kInitRetryLo = 64;
-        log_warning("[init 降级] %s: 共享 orig/golden 分配失败 n=%d → 降档 n=%d 重试一次",
+        log_warning("[init 降级] %s: 共享 orig/golden/golden_sve 分配失败 n=%d → 降档 n=%d 重试一次",
                     test->id, d->n, kInitRetryLo);
         free(d->orig);
         free(d->golden);
+        free(d->golden_sve);
         d->n = kInitRetryLo;
         bytes = round_up_64((size_t)d->n * d->n * sizeof(double));
-        d->orig   = (double *)aligned_alloc(64, bytes);
-        d->golden = (double *)aligned_alloc(64, bytes);
-        if (!d->orig || !d->golden) {
+        d->orig       = (double *)aligned_alloc(64, bytes);
+        d->golden     = (double *)aligned_alloc(64, bytes);
+        d->golden_sve = (double *)aligned_alloc(64, bytes);
+        if (!d->orig || !d->golden || !d->golden_sve) {
             free(d->orig);
             free(d->golden);
+            free(d->golden_sve);
             delete d;
             log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
                      test->id, kInitRetryLo);
@@ -511,6 +574,35 @@ static int eigen_svd_bidiag_sve_init(struct test *test)
                             "element %d (random operands need tighter "
                             "scaling)", i);
         }
+    }
+
+    /* 跨核字节级 golden (issue #484 第四通道): 控制线程在 worker 启动前
+     * 以与 worker 完全相同的 SVE 内核对同一冻结输入再算一份字节级期望,
+     * 回放轮 memcmp 用。设计论证(#373 标量 golden 范式为何在此不可行、
+     * 残留盲区边界)见文件头 issue #484 段。worker 非有限输出由容差通道
+     * 的 isfinite 门捕获, 此处不再重复金丝雀。scratch 就地分配释放
+     * (探针 run_bidiag_once 同款; gofs 表按本线程 svcntd() 构建, 框架已
+     * 把控制线程钉到芯片最大 VL, worker 重钉后读回一致, 两侧表恒同)。 */
+    memcpy(d->golden_sve, d->orig, bytes);
+    {
+        double *hv = (double *)aligned_alloc(64, round_up_64((size_t)d->n * sizeof(double)));
+        double *hw = (double *)aligned_alloc(64, round_up_64((size_t)d->n * sizeof(double)));
+        uint64_t *gofs = (uint64_t *)aligned_alloc(64,
+                round_up_64(svcntd() * sizeof(uint64_t)));
+        if (!hv || !hw || !gofs) {
+            free(hv); free(hw); free(gofs);
+            free(d->orig);
+            free(d->golden);
+            free(d->golden_sve);
+            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d (SVE golden scratch)",
+                     test->id, d->n);
+            delete d;
+            return EXIT_SKIP;
+        }
+        for (uint64_t l = 0; l < svcntd(); ++l)
+            gofs[l] = l * (uint64_t)d->n * sizeof(double);
+        bidiagonalize_sve(d->golden_sve, d->n, hv, hw, gofs);
+        free(hv); free(hw); free(gofs);
     }
 
     test->data = d;
@@ -587,6 +679,25 @@ static int eigen_svd_bidiag_sve_run(struct test *test, int cpu)
             bidiagonalize_sve(work, n, l_hv, l_hw, l_gofs);
             ++iter;
             bidiag_compare_or_fail(work, d->golden, n, iter);
+
+            /* 字节级跨核通道 (issue #484): 确定性低幅度位错(< kTolRel×‖B‖_F,
+             * 双跑逐字节一致)同时逃过上面容差通道与双跑自一致 memcmp;init
+             * 控制线程(异物理核)以同一 SVE 内核算的 golden_sve 是其字节级
+             * 期望——任意幅度的确定性偏差在此必失配。闸门保持 plain memcmp
+             * (#373 范式: 向量比对闸门会为持久比对单元故障重开盲区)。 */
+            if (memcmp(work, d->golden_sve, bytes) != 0) {
+                for (int i = 0; i < n * n; ++i) {
+                    if (memcmp(&work[i], &d->golden_sve[i], sizeof(double)) != 0) {
+                        report_fail_msg("bidiagonalization deviates byte-exactly "
+                                "from the init-thread SVE golden at (%d, %d): "
+                                "worker %.17g vs init %.17g (iteration %ld) - "
+                                "deterministic low-amplitude deviation "
+                                "(issue #484 channel)",
+                                i / n, i % n, work[i], d->golden_sve[i], iter);
+                        break;
+                    }
+                }
+            }
         } else {
             if (++since_reroll >= kRerollEvery) {
                 since_reroll = 0;
@@ -631,6 +742,7 @@ static int eigen_svd_bidiag_sve_cleanup(struct test *test)
     if (d) {
         free(d->orig);
         free(d->golden);
+        free(d->golden_sve);
         delete d;
     }
     return EXIT_SUCCESS;
@@ -666,7 +778,8 @@ DECLARE_TEST(eigen_svd_bidiag_sve,
              "SVD-style Householder bidiagonalization SDC stress — dense SVE FMA chains "
              "(dot-product reductions + rank-1 svmla/svmls updates) without the Eigen library; "
              "independent scalar golden + framework-RNG re-rolled inputs + frozen cross-core "
-             "replay alternation + same-input double-pass byte-exact self-check (B6, PR #244 review)")
+             "replay alternation + same-input double-pass byte-exact self-check (B6, PR #244 review) "
+             "+ init-thread SVE-kernel byte-exact replay golden (issue #484)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = eigen_svd_bidiag_sve_init,
     .test_run = eigen_svd_bidiag_sve_run,

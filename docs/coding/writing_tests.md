@@ -695,6 +695,24 @@ instead of assuming one tier:
   `tests/cpu/misc/neon_rot_*.cpp` (except `rowmajor_scalar64` — already
   fully scalar, a separate scalar-vs-scalar same-code gap) +
   `tests/cpu/arm64/neon_rot_2src.cpp`.
+- **FP tree-reduction kernels are the documented exception** (issue #484,
+  precedent `tests/cpu/sve/eigen/eigen_svd_bidiag_sve.cpp`): when the hot
+  loop's result depends on `svaddv`-class horizontal reductions, the
+  intra-vector summation order is architecturally IMPLEMENTATION-DEFINED, so
+  no scalar bit-exact equivalent of the kernel exists, and stripping the
+  reduction from the DUT to make it scalar-emulable excises the SVE
+  reduction tree — the very unit under stress. There the byte-exact golden
+  is computed in `test_init` by the SAME vector kernel (control thread,
+  before the workers start; framework pins control thread and workers to
+  the same chip-maximum VL) and compared on frozen-replay rounds with a
+  plain scalar memcmp — cross-core instead of cross-implementation — while
+  an independent scalar reference with a tolerance stays as the
+  algorithmic gate (kernel code defects reproduce identically on every
+  core and pass the byte channel, but diverge from the scalar reference).
+  Disclose the residual blind spots in the test's docblock: a worker
+  sharing the control thread's core compares against a same-unit golden
+  (single-worker runs scheduled on the init core lose the channel), and a
+  chip-wide fault corrupting every core identically poisons both sides.
 - **A self-inverse transform's intermediate must be verified against an
   independent golden** (issue #374 paradigm, template:
   `docs/superpowers/plans/2026-11-01-issue374-movbe-roundtrip-golden.md`):

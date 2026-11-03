@@ -188,10 +188,9 @@ knob/env 可申请更大足迹（其超时语义见 #357）。quick 模式 16 Mi
 注：symm_f64 由 #323 补齐（#414 当时只改了 sym 对）；f64 块粒度
 32 KiB（4096×double），sym 对为 32 KiB（8192×float）。
 
-### SVE eigen / acl_gemm
+### acl_gemm_sve
 | knob | 含义 | 范围 | 缺省 |
 |---|---|---|---|
-| `eigen_svd_bidiag_sve.mdim` | 双对角化方阵维度 | 64~2048 | 自适应 65% |
 | `acl_gemm_sve.dim` | F32 GEMM 方阵维度 | 64~4096 | 自适应 60% |
 
 ### SVE ipsec（24 个文件，统一）

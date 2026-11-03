@@ -15,7 +15,8 @@
  * @ref eigen_gemm_double_max_arm;样板收敛于
  * eigen_svd/sandstone_eigen_sve_dispatch.h)。run 语义逐字镜像原用例
  * (per-thread operands + golden 同源首算 + kRerollEvery 重掷 +
- * memcmp_or_fail,元素数口径 dim*dim、T=complex<double> 推导),body 在
+ * memcmp_or_fail,比对口径镜像原用例 reinterpret_cast<double*> +
+ * 2*dim*dim double(字节覆盖 = dim*dim 个 16B complex 元素)),body 在
  * gemm_c128_sve_body.cpp。
  *
  * 维度:knob/env > 联合求解,镜像 eigen_gemm_cdouble_dynamic_square 的

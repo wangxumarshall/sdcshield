@@ -550,22 +550,25 @@ tests_set_skx.add(
     )
 )
 
-# ARM64 SVE-backed Eigen pair (gemm + the SVD counterpart of
-# eigen_svd_cdouble); only built on aarch64 (see the SVE build block
-# below). These two files are the DISPATCH TUs — the only members of
-# tests_sve — and are deliberately vector-length agnostic: they hold no
+# ARM64 SVE-backed Eigen cases (the SVE counterparts of the NEON
+# eigen_svd/eigen_svd_jacobi/eigen_gemm families; 2 pre-existing + 12
+# added 2026-11-03 by the eigen SVE unification); only built on aarch64
+# (see the SVE build block below). These 14 files are the DISPATCH TUs —
+# the only members of tests_sve from this block — and are deliberately
+# vector-length agnostic: they hold no
 # Eigen SVE types, so tests_sve compiles them with march_sve_dispatch
 # (-march=armv8.2-a+sve, NO -msve-vector-bits). Eigen's SVE packet
 # backend is compile-time fixed-width (arm_sve_vector_bits(
 # EIGEN_ARM64_SVE_VL)) and VLA is un-compilable at the C++ language level
 # (sizeless struct members / NumTraits sizeof, twice-confirmed spike), so
-# the PAYLOAD is not built here: the `foreach spec : [['gemm','128'], ...]`
-# loop in the ARM64 SVE build block below instantiates it once per tier as
-# tests_eigen_{gemm,svd}_vl<N> static libraries (Eigen namespace and test
-# symbol namespace renamed per tier). The dispatcher reads the worker's
-# pinned VL and calls into the matching tier variant at run time; the
-# complex SVD payload has no 1024-bit variant (upstream Eigen ptranspose
-# out-of-bounds read — see the loop's comment). VL plumbing:
+# the PAYLOAD is not built here: the eigen_sve_body_specs table +
+# `foreach tier` loop in the ARM64 SVE build block below instantiate it
+# once per tier as tests_eigen_<pfx>_vl<N> static libraries (Eigen
+# namespace and test symbol namespace renamed per tier). The dispatcher
+# reads the worker's pinned VL and calls into the matching tier variant
+# at run time; every payload — complex ones included — is built at all
+# four tiers (128/256/512/1024) since the issue #410 ptranspose scatter
+# rewrite (see the loop's comment). VL plumbing:
 # framework/device/cpu/arm64/arm64_vl.h.
 tests_set_sve.add(
     when : eigen3_dep,

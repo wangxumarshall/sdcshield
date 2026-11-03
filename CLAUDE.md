@@ -64,9 +64,10 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
 ./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent:
-                                               #   SVE1 host:  486 PROD / 496 q0 / 500 q-1  (2026-11-01 merge-tree,
-                                               #               post issue #374 sched_storm×4 PROD→BETA re-measure)
-                                               #   no-SVE 920: ~295 PROD (predicted; 299 pre-#374 − 4; host re-measure pending)
+                                               #   SVE1 host:  495 PROD / 505 q0 / 513 q-1  (2026-11-03 feat/eigen-sve-unification:
+                                               #               +12 SVE eigen cases, − eigen_svd_bidiag_sve; full chain in README)
+                                               #   no-SVE 920: ~295 PROD (predicted; 299 pre-#374 − 4; the 12 new SVE
+                                               #               cases are all ARM64_REQUIRES_SVE-gated, no-SVE count unchanged)
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
@@ -126,7 +127,9 @@ END_DECLARE_TEST
   2-core `eigen_svd_double -n 2` pass. Run full-core; `-n 1` is no longer
   required. Adaptive dims are jointly sized (2026-10-27,
   feat/eigen-p0-p3-fix — also cured the full-core auto timeouts
-  `eigen_svd_cdouble_sve` 321s / `eigen_svd_bidiag_sve` 343s):
+  `eigen_svd_cdouble_sve` 321s / `eigen_svd_bidiag_sve` 343s; the
+  latter case — and its `SDC_RSS_BIDIAG` table entry — was retired
+  2026-11-02, historical note only):
   `sdc_joint_dim_slice` = min(n_mem, n_run, clamp) — n_mem from a
   per-NUMA-node four-source budget (phys×‰ / MemAvailable×0.9 / cgroup
   v1+v2 / CommitLimit−Committed_AS×0.9 when vm.overcommit_memory=2 —
@@ -142,9 +145,10 @@ END_DECLARE_TEST
   `sdc_auto_square_dim`/`sdc_auto_linear_count` adaptive paths)
   fires only for the ten SVD template-family users (knob routed
   through the joint layer via `calibrated_auto_dim`) —
-  gemm/sparse/sve/bidiag callers still short-circuit the knob in
+  gemm/sparse/sve callers still short-circuit the knob in
   their own init (before the arch guard), no warning yet (T11b
-  follow-up; 10/21 eigen cases covered). The pre-fix "ULP-level
+  follow-up; 10/21 eigen cases covered; the fourth bidiag caller was
+  retired with its case 2026-11-02). The pre-fix "ULP-level
   sporadic failure under full-core multithreading" advice is
   obsolete.
 - **Vector capability (SVE/SVE2/SME, VL/SVL tiers) is per-host — probe it,
@@ -167,9 +171,15 @@ END_DECLARE_TEST
   register and skip honestly). Override the assumed maximum with
   `SDCSHIELD_ARM64_SPEC_MAX_VL=<bits>` (only lowers; re-probed so an
   unimplemented tier such as 384 falls back to what the kernel grants).
-  The Eigen SVE pair is tier-locked by the language (fixed-width packets) and
-  is built once per tier with a runtime function-pointer dispatch; the
-  complex SVD payload runs all four tiers since the vendored-Eigen ptranspose
+  The 14 Eigen SVE cases (2026-11-03, feat/eigen-sve-unification) are all
+  tier-locked by the language (fixed-width packets) and built once per tier
+  with a runtime function-pointer dispatch, unified on the per-tier body +
+  dispatcher framework in
+  `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h` (2 pre-existing:
+  `eigen_svd_cdouble_sve`/`eigen_gemm_double_max_arm`; 12 new: BDCSVD×4,
+  JacobiSVD×4 — SKIP-level, GEMM×4; `eigen_svd_bidiag_sve` retired
+  2026-11-02, its raison d'être eliminated by #410). Every payload runs all
+  four tiers since the vendored-Eigen ptranspose
   scatter rewrite (issue #410, 2026-11-01: the memory-bridge form read past
   `buf[N][NC]` when NC > N — 1024-bit NC=8; the scatter form is in bounds
   for any N/NC and bit-identical in square shapes, gem5-verified at

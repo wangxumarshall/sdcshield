@@ -751,6 +751,27 @@ instead of assuming one tier:
   propagate to the end). gem5-fi CHAOS acceptance pattern (single-bit
   injection, final-only vs segmented A/B): see
   `docs/superpowers/inventory/issue376-chain-checkpoints/verdicts.md`.)
+- **Fixed-width SVE packet backends (Eigen): compile per tier, dispatch at
+  run time** (2026-11-03 pattern, template:
+  `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h`): Eigen's SVE
+  packet backend is compile-time fixed-width
+  (`arm_sve_vector_bits(EIGEN_ARM64_SVE_VL)`), and sizeless VLA packets
+  cannot be struct members at the C++ language level (twice-confirmed
+  spike) — a single VLA payload TU is impossible. Split the case into a
+  BODY TU compiled once per tier (`-DEIGEN_ARM64_SVE_VL=<t>
+  -msve-vector-bits=<t>`, namespace per tier via
+  `-DEIGEN_SVE_BODY_NS=<pfx>_vl<t>`, exporting four functions:
+  `make_data(int)` / `solve_once(int)` / `run_body(test, cpu)` /
+  `cleanup(test)`; library `tests_eigen_<pfx>_vl<t>`) and a VL-agnostic
+  DISPATCHER TU in `tests_sve` (no `-msve-vector-bits`) that declares the
+  four namespaces (`EIGEN_SVE_DECLARE_BODY_NS(pfx)`), defines the
+  dispatchers (`EIGEN_SVE_DEFINE_DISPATCHERS(pfx)`), gates with
+  `arm64_require_sve_vl`, solves the dim (knob/env > joint sizing), and
+  forwards `run`/`cleanup` to the tier the framework pinned — the
+  dispatcher re-pins and verifies the readback at run time (refused pin =
+  SKIP, mismatched readback = FAIL, worker tier ≠ init-recorded tier =
+  FAIL). Precedents: the 14 Eigen SVE cases (`eigen_svd*_sve`,
+  `eigen_gemm_*_sve`, `eigen_gemm_double_max_arm`).
 
 ### 声明用例的 ARM64 规格要求（选填，向量用例必填）
 

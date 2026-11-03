@@ -808,7 +808,7 @@ enum sdc_rss_family {
     SDC_RSS_BDCSVD_F32, SDC_RSS_BDCSVD_F64, SDC_RSS_BDCSVD_C128,
     SDC_RSS_JACOBI_F32, SDC_RSS_JACOBI_F64, SDC_RSS_JACOBI_C128,
     SDC_RSS_GEMM_F32, SDC_RSS_GEMM_F64, SDC_RSS_GEMM_C128,
-    SDC_RSS_SPARSE, SDC_RSS_BIDIAG, SDC_RSS_INVALID
+    SDC_RSS_SPARSE, SDC_RSS_INVALID
 };
 
 /* 族 → 实测 c(KB/n²/线程)。Phase A 2026-10-27, (child@T4−child@T1)/3
@@ -834,7 +834,6 @@ static const double s_rss_ratio_table[SDC_RSS_INVALID] = {
     0.0315,   /* SDC_RSS_GEMM_F64    */
     0.0631,   /* SDC_RSS_GEMM_C128   */
     0.0091,   /* SDC_RSS_SPARSE      */
-    0.0313,   /* SDC_RSS_BIDIAG      */
 };
 
 static inline double sdc_rss_table_c(enum sdc_rss_family f)
@@ -1115,8 +1114,9 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     double ar = sdc_ar_factor(a->ar_fam, sdc_numa_probe());
     int n_run = 0;
     if (solve_once && a->run_budget_ms > 0 && n_mem > a->lo) {
-        /* k_floor=3.0: 现役/规划消费方(稠密 SVD/GEMM/稀疏 Cholesky/
-         * bidiag)的复杂度下限同为 ~3.0(各自旧调用方同值);
+        /* k_floor=3.0: 现役/规划消费方(稠密 SVD/GEMM/稀疏
+         * Cholesky)的复杂度下限同为 ~3.0(各自旧调用方同值;第四个
+         * bidiag 消费方已随用例 2026-11-02 退役);
          * sdc_joint_args 不带此参(签名契约)。 */
         double per_solve_ms = (double)a->run_budget_ms / (ar * 2.0);
         long per_solve = (long)per_solve_ms;

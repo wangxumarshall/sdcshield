@@ -263,15 +263,20 @@ VmHWM feedback     per-slice MemFeedback slots in shmem (written at
 
 `eigen_svd_cdouble_sve` / `eigen_gemm_double_max_arm` moved sizing from
 preinit into the child `test_init` (also fixing an exec-mode divergence
-where the exec'd image never saw the preinit-computed dim);
-`eigen_svd_bidiag_sve` already sized in child init. Explicit
+where the exec'd image never saw the preinit-computed dim). The other 12
+Eigen SVE cases (2026-11-03 unification — per-tier body + dispatcher
+framework, `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h`)
+likewise size in the child `test_init` via the dispatcher
+(`eigen_svd_bidiag_sve` did too — retired 2026-11-02, historical note).
+Explicit
 `-O <test>.mdim` bypasses sizing; an `[内存越界]`/`[欠压力]`
 expected-memory warning fires only for callers whose knob query routes
 through the joint layer's early-exit (the ten SVD template-family users
-via `calibrated_auto_dim`). The GEMM/sparse/SVE/bidiag callers still
+via `calibrated_auto_dim`). The GEMM/sparse/SVE callers still
 short-circuit the knob in their own init (`if (v > 0) return v;` before
 the arch guard) — their explicit paths carry no warning yet (T11b
-follow-up; 10/21 eigen cases covered).
+follow-up; 10/32 eigen cases covered; the fourth bidiag caller was
+retired with its case).
 
 x86-64 keeps the old sizing behavior via the **callers'** `#else` chains
 (e.g. `calibrated_auto_dim`'s legacy two-step memory+2 s-calibration

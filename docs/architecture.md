@@ -276,11 +276,16 @@ follow-up; 10/21 eigen cases covered).
 x86-64 keeps the old sizing behavior via the **callers'** `#else` chains
 (e.g. `calibrated_auto_dim`'s legacy two-step memory+2 s-calibration
 chain, `gemm_mdim`'s `sdc_auto_square_dim` path) — rule 5. The `#else`
-branch inside `sdc_joint_dim_slice` itself is the defensive definition
-of the same legacy semantics; no live x86 caller reaches it today (all
-call sites are `#if defined(__aarch64__) && defined(__linux__)`-gated),
-it exists so a future cross-arch caller gets defined, loudly-logged
-behavior instead of a compile error.
+branch inside `sdc_joint_dim_slice` itself is the global-arch fallback
+(#482): four-source global budget + power-law time cap via
+`sdc_calibrated_dim` (AR=1, no per-node/AR/VmHWM feedback — x86 has no
+`sdc_numa.h`). No live x86 caller reaches it today (all call sites are
+`#if defined(__aarch64__) && defined(__linux__)`-gated); it exists so a
+future cross-arch caller that drops its guard gets the same memory×time
+dual cap as ARM instead of silently losing the single-solve time bound.
+Migrating an x86 caller still changes its sizing numbers (RSS table /
+four-source budget / run_budget_ms semantics), which rule 5 keeps to the
+callers' own `#else` chains.
 
 One rule-5 exception is disclosed here (approved): the `sdc_calibrated_dim`
 probe threshold was raised 1 ms → 100 ms (M3 — a 1 ms probe is dominated by

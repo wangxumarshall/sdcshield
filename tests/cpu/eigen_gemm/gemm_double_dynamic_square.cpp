@@ -94,8 +94,9 @@ static int gemm_mdim(struct test *test)
      *     ~4.0s, 有效 AR≈15(3× 表值); 本宿主类内存侧先绑定
      *     (n_mem < n_run)故该边界不暴露, 时间侧绑定的主机会把 200s
      *     迭代实际跑成 ~600s——AR 表足迹感知重标定的已知输入。
-     * x86-64(rule 5): #else 保留旧链原样——joint 的 x86 分支按契约
-     * 忽略 solve_once/run_budget_ms(时间校准是调用方链的职责)。 */
+     * x86-64(rule 5): #else 保留旧链原样——joint 的 x86 分支已补齐
+     * 时间校准与四源预算(#482), 但迁移仍会把内存三元组换成 ARM 实测
+     * 的 RSS 表/四源全局预算, sizing 数值变化, rule 5 保持旧链。 */
     struct sdc_joint_args ja = {
         .lo = 16, .hi = 4096,
         .fam = SDC_RSS_GEMM_F64,    /* 0.0315 KB/n²/线程, T9 重标定后 */

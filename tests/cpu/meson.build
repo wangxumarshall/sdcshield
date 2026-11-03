@@ -574,6 +574,7 @@ tests_set_sve.add(
         'eigen_gemm/gemm_double_dynamic_square_sve.cpp',
         'eigen_gemm/gemm_float_dynamic_square_sve.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_double14_sve.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
         'eigen_svd/svd_double_sve.cpp',
         'eigen_svd/svd_double2_sve.cpp',

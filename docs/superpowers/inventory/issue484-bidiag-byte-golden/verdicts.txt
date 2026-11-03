@@ -1,0 +1,91 @@
+# issue #484 证据台账——eigen_svd_bidiag_sve 字节级跨核 golden 通道(回放轮 memcmp)
+
+日期: 2026-11-04。分支 fix/issue-484。
+gem5: /home/sdc/wangxu/gem5-fi-fuzz/build/ARM/gem5.opt(本机设施;CLAUDE.md
+      的 /home/sdc/wangxu/gem5-fi 为他机路径,多机记录条款:换机先探测。
+      只读使用——执行其二进制与板级构造,未在该仓写入任何文件)。
+SE config: 本目录 se_sve_min.py —— 自 gem5-fi-fuzz configs/se/arm_chaos.py
+      最小化(板/缓存/内存/处理器/VL 钨扎逐字同源;CHAOS 段省略:该仓
+      check-in 的 gem5.opt 早于 config 的 CHAOSRAS 导入,且本验证的故障
+      模型在 harness 内注入,不需要 CHAOS 寄存器级注入)。
+双 kernel: 本目录 eigen_svd_bidiag_dual.c —— 同源提取
+      tests/cpu/sve/eigen/eigen_svd_bidiag_sve.cpp @ main 418e4e09
+      (bidiagonalize_ref / bidiagonalize_sve / random_pm_one 值域形状 /
+      bidiag_compare_or_fail 判定 / run 回放-重掷交替结构,逐字;检测中立
+      适配清单见其头注释,先例 fpu_special_sve_dual.c)。
+构建: clang 17 -static -O2 -march=armv9-a+sve -Wall -Wextra -lm,零警告。
+命令形: gem5.opt --quiet --outdir=<dir> se_sve_min.py --cmd <dual> \
+          --sve_vl <qw> --workload_args "<mode> <fault> <n> 8 1"
+        qw: 128=1 256=2 512=4 1024=8;mode: old=修复前三通道, new=+第四
+        通道;fault: none=健康, tiny=确定性 1-ULP 尾数翻转(对角元
+        (n/2,n/2),仅注入 DUT 角色内核输出——issue #484 逃逸故障类的
+        忠实模型:确定性、双跑同错、~4e-16 ≪ tol~3.7e-8)。
+
+## 1. 2×2 复现矩阵(n=64, seed=1)
+
+| mode  | fault | VL=512          | VL=128          | 结论 |
+|-------|-------|-----------------|-----------------|------|
+| old   | none  | FAILS=0         | —               | 修复前基线绿 |
+| old   | tiny  | **FAILS=0**     | **FAILS=0**     | **盲区复现(红)** |
+| new   | none  | FAILS=0         | FAILS=0         | 修复后无假阳 |
+| new   | tiny  | **FAILS=4**     | **FAILS=4**     | **修复捕获(green)** |
+
+- old×tiny(盲区复现,gem5-logs/old-tiny-vl512.log / old-tiny-vl1.log):
+  全部容差比对 PASS —— reroll max_diff=2.043e-13 ≤ tol=3.734e-08、
+  replay max_diff=1.146e-13 ≤ tol=3.656e-08(注入的 1-ULP ~4.4e-16 被
+  合法树归约/串行求和舍入差 ~1e-13 掩没);双跑 memcmp 无 FAIL(两跑
+  同错);SDCSHIELD_FAILS=0。注入真实性由 FNV 交叉证明:
+  FNV_WORK_LAST(old×tiny)=50f7590874bdfe93 ≠
+  FNV_WORK_LAST(old×none)=635273fe796ee882(翻转确在输出字节里)。
+- new×tiny(修复捕获,gem5-logs/new-tiny-vl512.log / new-tiny-vl1.log):
+  每个回放轮(iter 1/3/5/7)字节通道失配 ×4:
+  "byte-exact deviation from init-thread SVE golden at (32, 32): worker
+  3.2009611278502348 vs init 3.2009611278502352"(差 4.4e-16 = 1 ULP),
+  且同轮容差比对仍 PASS(max_diff=1.146e-13)——容差漏、字节抓,同屏。
+- new×none(无假阳 + 通道前置条件,gem5-logs/new-none-vl*.log):
+  FNV_GOLDEN_SVE == FNV_WORK_LAST(old×none) = 635273fe796ee882(VL=512)
+  —— init 角色与 worker 角色两次独立内核调用逐字节一致(内核确定性,
+  字节通道无假阳的前置条件)。
+
+## 2. 四档 sweep(new×none,修复后功能验证)
+
+| VL(bits) | n  | SDCSHIELD_FAILS | FNV_GOLDEN_SVE    |
+|----------|----|------------------|-------------------|
+| 128      | 64 | 0                | e765545533fe0b3a  |
+| 256      | 64 | 0                | 4a7cd16eaa8f13e1  |
+| 512      | 64 | 0                | 635273fe796ee882  |
+| 1024     | 64 | 0                | 0ef0f373581f31d1  |
+| 512      | 68 | 0                | d07bc55cf03e81d2  |
+
+FNV_GOLDEN 各档不同(128=b64acdf9beea9431 / 256=b5d063a594ddba6c /
+512=4b6678bd666d56f0 / 1024=d39b32dc3324bca3)—— 实证排查:「标量参考」
+bidiagonalize_ref 在 +sve 编译单元被编译器自动向量化上了 SVE(harness
+clang 构建 objdump --disassemble=bidiagonalize_ref 含 41 处 z/p 寄存器
+引用;仓库真实构建 libtests_sve_avx53.a 的同名符号含 43 处,同为 GCC
++sve -O 自动向量化),其归约树随运行时 VL 变化 → golden 字节随档位漂
+移。这是**先于本修复的构建层事实**(标定基线 ~4e-14 亦由此而来),对
+本证据链结论零影响: 字节通道只用显式 ACLE 内核(golden_sve 与 work 由
+同一二进制内同一函数计算,编译器一致性免疫);容差通道的判定在该漂移
+下依然全 PASS(2×2 矩阵的 old×tiny=0 不依赖 golden 的具体档位字节)。
+n=68 为非整 VL 倍形状(谓词尾路径)。顺带观察(供后续单元参考,非本补
+丁范围): 容差通道的 golden 独立性是源码级而非数据通路级——cf. neon_rot
+族的 check-scalar-golden.sh 机械门,本测试的 ref 未做防自动向量化钉扎。
+
+## 3. 诚实边界
+
+- gem5 SE 单上下文,**不物理跨核**:跨核性依赖 (i) 每 VL 档内核确定性
+  (上面双调用字节一致已验) + (ii) 同芯片同核设计(Kunpeng 920 部署
+  目标)——文件头 docblock 的残留盲区 (a)/(b)(-n 1 恰与控制线程同核、
+  芯片级同错)正是该论证失效处。
+- 注入模型为「输出级确定性微扰」,非 RTL/微架构级位翻转(CHAOS 寄存器
+  注入);它精确对标本 issue 的指控对象——校验通道对确定性低幅度位错
+  的漏检,而非内核对硬件故障的敏感度(后者由 svaddv/svmla 压测面承担)。
+
+## 4. 本机(无 SVE 鲲鹏)边界
+
+- 构建: SDC_BUILD_JOBS=20 ./scripts/build.sh 零新警告(受影响 TU
+  tests/cpu/sve/eigen/eigen_svd_bidiag_sve.cpp 重编通过;过程中修掉
+  一处自引入的 -Wuse-after-free(delete d 后读 d->n)后复验干净)。
+- 本机运行: -e eigen_svd_bidiag_sve -t 2000 -n 1 → result: skip,
+  skip-category: CpuNotSupported(诚实 SKIP;init 门控真实执行)。
+- 回归: -e zstd19 -t 2000 -n 1 → exit: pass。

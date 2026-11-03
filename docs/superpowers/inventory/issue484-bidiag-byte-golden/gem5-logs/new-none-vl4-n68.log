@@ -1,0 +1,28 @@
+Global frequency set at 1000000000000 ticks per second
+warn: No dot file generated. Please install pydot to generate the dot file and pdf.
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (8192 Mbytes) does not match the address range assigned (1024 Mbytes)
+src/base/statistics.hh:279: warn: One of the stats is a legacy stat. Legacy stat is a stat that does not belong to any statistics::Group. Legacy stat is deprecated.
+src/base/stats/storage.hh:278: warn: Bucket size (4) does not divide range [1:32] into equal-sized buckets. Rounding up.
+src/base/stats/storage.hh:278: warn: Bucket size (4) does not divide range [1:8] into equal-sized buckets. Rounding up.
+src/base/remote_gdb.cc:418: warn: Sockets disabled, not accepting gdb connections
+info: Standard input is not a terminal, disabling listeners.
+src/sim/syscall_emul.cc:86: warn: ignoring syscall set_robust_list(...)
+src/sim/syscall_emul.cc:97: warn: ignoring syscall rseq(...)
+      (further warnings will be suppressed)
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/syscall_emul.hh:1127: warn: readlink() called on '/proc/self/exe' may yield unexpected results in various settings.
+      Returning '/tmp/issue484/eigen_svd_bidiag_dual'
+src/sim/syscall_emul.cc:86: warn: ignoring syscall mprotect(...)
+  [reroll iter 0] max_diff=8.817e-13 tol=3.929e-08 (PASS)
+  [replay iter 1] max_diff=1.882e-12 tol=3.904e-08 (PASS)
+  [reroll iter 2] max_diff=8.817e-13 tol=3.929e-08 (PASS)
+  [replay iter 3] max_diff=1.882e-12 tol=3.904e-08 (PASS)
+  [reroll iter 4] max_diff=8.817e-13 tol=3.929e-08 (PASS)
+  [replay iter 5] max_diff=1.882e-12 tol=3.904e-08 (PASS)
+  [reroll iter 6] max_diff=8.817e-13 tol=3.929e-08 (PASS)
+  [replay iter 7] max_diff=1.882e-12 tol=3.904e-08 (PASS)
+MODE=new FAULT=none VL=512 n=68 iters=8 fault_elem=(34,34) fault_val=3.5690745118061749
+FNV_GOLDEN=fe1c9424b967eb6d
+FNV_GOLDEN_SVE=d07bc55cf03e81d2
+FNV_WORK_LAST=18c9515662149a09
+SDCSHIELD_FAILS=0

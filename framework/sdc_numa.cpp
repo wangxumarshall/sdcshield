@@ -5,6 +5,7 @@
 #include "sdc_stress_config.h"   /* sdc_budget_bytes(四源 min, spec §4.2 + #310) */
 
 #include <dirent.h>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,18 +29,30 @@ static int parse_node_dir(const char *name, int *out)
 static int s_cpu_node[SDC_NUMA_MAX_CPUS];    /* -1 = 未归属; 0 是合法节点号 */
 
 /* 遍历 CPU 区间串 "0-31,64,96-121,123-127" 的每个 CPU, 逐个回调 visit。
- * 内核 cpulist 语义; 非数字处停止; 倒挂段 "5-3" 按单 CPU 计。 */
+ * 内核 cpulist 语义; 非数字处停止; 倒挂段 "5-3" 按单 CPU 计。
+ * 防御(issue #480): strtol 溢出段(errno==ERANGE)与负号段是损坏
+ * 输入, 停止解析 —— 宁可低估, 绝不失控; 区间上端钳到
+ * SDC_NUMA_MAX_CPUS-1, 与归属表 "c 越界忽略" 的既有语义一致(arm64
+ * 内核 NR_CPUS 上限 4096, 真实编号不会越界), 使每段循环次数有界,
+ * count_cpu_list 的 int 计数与 (int)c 截断均不可能。 */
 template <typename Visit>
 static void for_each_cpu_in_list(const char *list, Visit visit)
 {
     const char *p = list;
     while (*p) {
         char *end;
+        errno = 0;
         long a = strtol(p, &end, 10);
-        if (end == p) break;
+        if (end == p || errno == ERANGE || a < 0) break;
         long b = a;
-        if (*end == '-') b = strtol(end + 1, &end, 10);
+        if (*end == '-') {
+            errno = 0;
+            b = strtol(end + 1, &end, 10);
+            if (errno == ERANGE) break;
+        }
         if (b < a) b = a;
+        if (b >= SDC_NUMA_MAX_CPUS)
+            b = SDC_NUMA_MAX_CPUS - 1;
         for (long c = a; c <= b; ++c)
             visit((int)c);
         if (*end != ',') break;

@@ -93,6 +93,24 @@ static void node_mem_read(int node, uint64_t *total_bytes, uint64_t *free_bytes)
     fclose(f);
 }
 
+/* 全量读取单行 sysfs 文件(issue #480: 固定缓冲对稀疏编号超长列表会截断
+ * 低估 —— cpu/online 的 256 字节实测把 1945 字节/500-CPU 列表数成 78)。
+ * getline 动态扩容, 不受缓冲上限约束; 返回 malloc 行(含换行, 解析在
+ * 非数字处自然停止), 调用方 free; 不可读/空文件返回 nullptr。 */
+static char *read_sysfs_line(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return nullptr;
+    char *line = nullptr;
+    size_t cap = 0;
+    if (getline(&line, &cap, f) < 0) {
+        free(line);                 /* POSIX: 失败时 line 可 free */
+        line = nullptr;
+    }
+    fclose(f);
+    return line;
+}
+
 /* 一次性探测; 由 sdc_numa_probe 的静态初始化保证只跑一遍 */
 static struct sdc_numa_topology probe_uncached(void)
 {
@@ -112,30 +130,26 @@ static struct sdc_numa_topology probe_uncached(void)
             if (pn->memtotal_bytes > 0)
                 ++topo.nodes_with_mem;
             /* cpulist: 计数 + 登记 cpu→node 归属表(一次解析, 之后查表) */
-            char path[128], buf[1024];
+            char path[128];
             snprintf(path, sizeof path, "/sys/devices/system/node/node%d/cpulist", node);
-            FILE *f = fopen(path, "r");
-            if (f) {
-                if (fgets(buf, sizeof buf, f)) {
-                    int n = 0;
-                    for_each_cpu_in_list(buf, [&](int c) {
-                        ++n;
-                        if (c >= 0 && c < SDC_NUMA_MAX_CPUS)
-                            s_cpu_node[c] = node;
-                    });
-                    pn->ncpus = n;
-                }
-                fclose(f);
+            char *cpulist = read_sysfs_line(path);
+            if (cpulist) {
+                int n = 0;
+                for_each_cpu_in_list(cpulist, [&](int c) {
+                    ++n;
+                    if (c >= 0 && c < SDC_NUMA_MAX_CPUS)
+                        s_cpu_node[c] = node;
+                });
+                pn->ncpus = n;
+                free(cpulist);
             }
         }
         closedir(d);
     }
-    FILE *online = fopen("/sys/devices/system/cpu/online", "r");
+    char *online = read_sysfs_line("/sys/devices/system/cpu/online");
     if (online) {
-        char buf[256] = "";
-        if (fgets(buf, sizeof buf, online))
-            topo.total_cpus = count_cpu_list(buf);
-        fclose(online);
+        topo.total_cpus = count_cpu_list(online);
+        free(online);
     }
     return topo;
 }

@@ -1154,16 +1154,19 @@ if host_machine.cpu_family() == 'x86_64'
 endif
 
 # ARM64 SVE build block: mirror of the x86 SKX/HSW blocks above. Compiles the
-# Eigen SVE pair (gemm_double_max_arm + svd_cdouble_sve) against Eigen's SVE
-# packet backend (-DEIGEN_ARM64_USE_SVE) with a fixed vector length, and
-# renames the Eigen namespace so it links beside the NEON baseline without
-# symbol clashes. All-VL Phase 2 P5: these two are the library's ONLY
-# members — the fixed 128-bit lock stays because Eigen's SVE packets are
-# compile-time fixed-width (VLA is un-compilable at the C++ language level,
+# per-tier payloads of the 14 Eigen SVE cases (2 pre-existing + 12 added
+# 2026-11-03 by the eigen SVE unification; their dispatch TUs are loaded
+# into tests_sve above) against Eigen's SVE packet backend
+# (-DEIGEN_ARM64_USE_SVE) with a fixed vector length, renaming the Eigen
+# namespace per tier so the variants link beside each other and the NEON
+# baseline without symbol clashes. Eigen's SVE packets are compile-time
+# fixed-width (VLA is un-compilable at the C++ language level,
 # twice-confirmed spike). All-VL Phase 2 (design 2026-10-27 §4.7) turned that
-# limitation into a per-tier instantiation: the payload is built once per
-# width (128/256/512/1024) and a vector-length-agnostic dispatcher picks the
-# variant that matches the worker's pinned tier at run time.
+# limitation into a per-tier instantiation: the eigen_sve_body_specs table
+# below (10 body families) is built once per width (128/256/512/1024) as
+# tests_eigen_<pfx>_vl<N> static libraries, and the vector-length-agnostic
+# dispatchers pick the variant that matches the worker's pinned tier at run
+# time.
 if host_machine.cpu_family() == 'aarch64'
     # --- Eigen payload: one instantiation per VL tier, table-driven --------
     # Eigen's SVE packet types are compile-time fixed-width and appear as

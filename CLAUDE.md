@@ -147,7 +147,7 @@ END_DECLARE_TEST
   through the joint layer via `calibrated_auto_dim`) —
   gemm/sparse/sve callers still short-circuit the knob in
   their own init (before the arch guard), no warning yet (T11b
-  follow-up; 10/21 eigen cases covered; the fourth bidiag caller was
+  follow-up; 10/32 eigen cases covered; the fourth bidiag caller was
   retired with its case 2026-11-02). The pre-fix "ULP-level
   sporadic failure under full-core multithreading" advice is
   obsolete.

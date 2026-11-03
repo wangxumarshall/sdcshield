@@ -494,13 +494,19 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
    * framework computes test_duration for the first run) as an UPPER-BOUND
    * estimate from the memory ceiling (auto mode) or the explicit knob
    * (which the child applies verbatim — issue #352) (P0-1: the child
-   * sizes the dimension itself via the joint solver; this only keeps the
-   * parent's timing expectation at or above the child's choice, so
-   * exactly one run iteration executes and the derived timeout
-   * (5*duration+30s, 300s floor) scales along). On the explicit tier the
-   * preinit also writes minimum_duration = the single full-iteration
-   * model (PR#384 review, id 4432271419): the framework-level -t override
-   * replaces desired_duration unconditionally, so without the min clamp
+   * sizes the dimension itself via the joint solver, always <= that
+   * ceiling. The run-side do-while — which continues while the deadline
+   * has NOT expired — exits after exactly one iteration when dur sits
+   * at or below the child's real single-iteration time; at the
+   * memory-bound ceiling the real iteration carries the AR factor on
+   * top of the same quiet fit, so it sits above the −5%-discounted dur
+   * (issue #479: the previous "at or above" wording had this
+   * backwards); a dur above the real time would instead start a second,
+   * un-budgeted iteration. The derived timeout (5*duration+30s, 300s
+   * floor) scales along). On the explicit tier the preinit also writes
+   * minimum_duration = the single full-iteration model (PR#384 review,
+   * id 4432271419): the framework-level -t override replaces
+   * desired_duration unconditionally, so without the min clamp
    * `-t 2000 -O …mdim=<big>` lands on the 300 s floor and is
    * SIGQUIT-killed mid-iteration — the min keeps -t small values from
    * shrinking the target below one full knob iteration. */

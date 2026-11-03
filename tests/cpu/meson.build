@@ -299,8 +299,6 @@ tests_set_base.add(
 # neon_rot_ldr_rand_thread: issue #339 fix — the board-local wangxu draft
 # carved ALL buffers from one pool with independent random offsets (false-SDC
 # overlap); this variant partitions the pool into disjoint init/thread zones.
-# The arm-0102/ subdir holds trigger-format variants of existing test files
-# (kreg7/8, etc.) applying the verified core-179 trigger recipe.
 # The 2026-10-31 bulk registration (71 files) imports the remaining
 # core-179-family research probes that arrived with the d61b7de1 source drop:
 #   - misc/neon_rot_* (1src/fwd_probe/nop_gap/stale_reload/store_only/
@@ -329,16 +327,6 @@ tests_set_base.add(
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
-            'arm-0102/arm0102_kreg_mask.cpp',
-            'arm-0102/arm0102_fma_f32.cpp',
-            'arm-0102/arm0102_fma_f64.cpp',
-            'arm-0102/arm0102_ins_ext.cpp',
-            'arm-0102/arm0102_kreg_logic.cpp',
-            'arm-0102/arm0102_kreg_mask_dump.cpp',
-            'arm-0102/arm0102_kreg_mask_vceq.cpp',
-            'arm-0102/arm0102_kreg_not.cpp',
-            'arm-0102/arm0102_kreg_select.cpp',
-            'arm-0102/arm0102_swizzle.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',

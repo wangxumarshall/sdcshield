@@ -142,8 +142,8 @@ if host_machine.cpu_family() == 'aarch64'
         if_true : files(
             'memory/memcpy_rewr.cpp',
             # NEON variant shares the original .conf via the same
-            # MEMCPY_REWR_SRC_DIR define (arm_add/memcpy_rewr_neon.cpp)
-            'arm_add/memcpy_rewr_neon.cpp',
+            # MEMCPY_REWR_SRC_DIR define (neon_memcpy_cache/memcpy_rewr_neon.cpp)
+            'neon_memcpy_cache/memcpy_rewr_neon.cpp',
         )
     )
 endif
@@ -299,8 +299,9 @@ tests_set_base.add(
 # neon_rot_ldr_rand_thread: issue #339 fix — the board-local wangxu draft
 # carved ALL buffers from one pool with independent random offsets (false-SDC
 # overlap); this variant partitions the pool into disjoint init/thread zones.
-# The arm-0102/ subdir holds trigger-format variants of existing test files
-# (kreg7/8, etc.) applying the verified core-179 trigger recipe.
+# The arm-0102/ subdir (trigger-format variants, kreg7/8 etc.) was retired
+# 2026-11-03 ("delete old") — its 10 base files are gone; the _sve variants
+# under sve/kreg/ stay registered in their own block.
 # The 2026-10-31 bulk registration (71 files) imports the remaining
 # core-179-family research probes that arrived with the d61b7de1 source drop:
 #   - misc/neon_rot_* (1src/fwd_probe/nop_gap/stale_reload/store_only/
@@ -329,16 +330,6 @@ tests_set_base.add(
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
-            'arm-0102/arm0102_kreg_mask.cpp',
-            'arm-0102/arm0102_fma_f32.cpp',
-            'arm-0102/arm0102_fma_f64.cpp',
-            'arm-0102/arm0102_ins_ext.cpp',
-            'arm-0102/arm0102_kreg_logic.cpp',
-            'arm-0102/arm0102_kreg_mask_dump.cpp',
-            'arm-0102/arm0102_kreg_mask_vceq.cpp',
-            'arm-0102/arm0102_kreg_not.cpp',
-            'arm-0102/arm0102_kreg_select.cpp',
-            'arm-0102/arm0102_swizzle.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
@@ -899,7 +890,8 @@ if host_machine.cpu_family() == 'aarch64'
     )
 endif
 
-# arm_add/ —— 2026-11-02 用户规格 10 测试中查重后落地的 7 个（3 个已存在
+# neon_memcpy_cache/（原 arm_add/，2026-11-03 lock/memcpy-cache 拆分迁移）
+# —— 2026-11-02 用户规格 10 测试中查重后落地的 7 个（3 个已存在
 # 不重复实现：atomic_simd_128/256_unaligned、spinlock_unaligned）。
 # A 组 5 个 = str 失效故障报告五维探针（跨域写可见性 / 三层回读丢写 /
 # 锁+屏障路径丢写 / 低占空比跨 die / 高密度多宽度 str 批）；B 组 2 个 =
@@ -909,42 +901,69 @@ endif
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
-            'arm_add/store_visibility_cross_class.cpp',
-            'arm_add/store_lost_write_detect.cpp',
-            'arm_add/barrier_after_lock_store.cpp',
-            'arm_add/low_load_cache_pressure.cpp',
-            'arm_add/str_instruction_stress.cpp',
-            'arm_add/cache_stress_clflush.cpp',
-            'arm_add/cache_stress_memcpy.cpp',
-            'arm_add/cache_stress_clflush_2_neon.cpp',
-            'arm_add/cache_stress_memcpy_2_neon.cpp',
-            'arm_add/flushed_memcpy_neon.cpp',
-            'arm_add/flushed_memcpy_bis_neon.cpp',
-            'arm_add/llcstress_neon.cpp',
-            'arm_add/llc_randomized_load_neon.cpp',
-            'arm_add/llc_uniform_load_neon.cpp',
-            'arm_add/l3_execute_neon.cpp',
-            'arm_add/sfence_neon.cpp',
-            'arm_add/store_visibility_cross_class_neon.cpp',
-            'arm_add/store_lost_write_detect_neon.cpp',
-            'arm_add/barrier_after_lock_store_neon.cpp',
-            'arm_add/low_load_cache_pressure_neon.cpp',
-            'arm_add/str_instruction_stress_neon.cpp',
-            'arm_add/cache_stress_clflush_neon.cpp',
-            'arm_add/cache_stress_memcpy_neon.cpp',
-            'arm_add/cachebounce_neon.cpp',
-            'arm_add/mem_disambiguation_neon.cpp',
-            'arm_add/mem_disambig_alu_neon.cpp',
-            'arm_add/mfence_neon.cpp',
-            'arm_add/mfence_pure_neon.cpp',
-            'arm_add/memcpy0_neon.cpp',
-            'arm_add/memcpy1_neon.cpp',
-            'arm_add/memcpy_l1d_size_neon.cpp',
-            'arm_add/memcpy_l2_cache_size_neon.cpp',
-            'arm_add/memcpy_l3_cache_size_neon.cpp',
-            'arm_add/memcpy_sem_neon.cpp',
-            'arm_add/memcpy_shuffle_neon.cpp',
-            'arm_add/memcpy_shuffle_v2_neon.cpp',
+            'neon_memcpy_cache/store_visibility_cross_class.cpp',
+            'neon_memcpy_cache/store_lost_write_detect.cpp',
+            'neon_memcpy_cache/barrier_after_lock_store.cpp',
+            'neon_memcpy_cache/low_load_cache_pressure.cpp',
+            'neon_memcpy_cache/str_instruction_stress.cpp',
+            'neon_memcpy_cache/cache_stress_clflush.cpp',
+            'neon_memcpy_cache/cache_stress_memcpy.cpp',
+            'neon_memcpy_cache/cache_stress_clflush_2_neon.cpp',
+            'neon_memcpy_cache/cache_stress_memcpy_2_neon.cpp',
+            'neon_memcpy_cache/flushed_memcpy_neon.cpp',
+            'neon_memcpy_cache/flushed_memcpy_bis_neon.cpp',
+            'neon_memcpy_cache/llcstress_neon.cpp',
+            'neon_memcpy_cache/llc_randomized_load_neon.cpp',
+            'neon_memcpy_cache/llc_uniform_load_neon.cpp',
+            'neon_memcpy_cache/l3_execute_neon.cpp',
+            'neon_memcpy_cache/sfence_neon.cpp',
+            'neon_memcpy_cache/store_visibility_cross_class_neon.cpp',
+            'neon_memcpy_cache/store_lost_write_detect_neon.cpp',
+            'neon_memcpy_cache/barrier_after_lock_store_neon.cpp',
+            'neon_memcpy_cache/low_load_cache_pressure_neon.cpp',
+            'neon_memcpy_cache/str_instruction_stress_neon.cpp',
+            'neon_memcpy_cache/cache_stress_clflush_neon.cpp',
+            'neon_memcpy_cache/cache_stress_memcpy_neon.cpp',
+            'neon_memcpy_cache/cachebounce_neon.cpp',
+            'neon_memcpy_cache/mem_disambiguation_neon.cpp',
+            'neon_memcpy_cache/mem_disambig_alu_neon.cpp',
+            'neon_memcpy_cache/mfence_neon.cpp',
+            'neon_memcpy_cache/mfence_pure_neon.cpp',
+            'neon_memcpy_cache/memcpy0_neon.cpp',
+            'neon_memcpy_cache/memcpy1_neon.cpp',
+            'neon_memcpy_cache/memcpy_l1d_size_neon.cpp',
+            'neon_memcpy_cache/memcpy_l2_cache_size_neon.cpp',
+            'neon_memcpy_cache/memcpy_l3_cache_size_neon.cpp',
+            'neon_memcpy_cache/memcpy_sem_neon.cpp',
+            'neon_memcpy_cache/memcpy_shuffle_neon.cpp',
+            'neon_memcpy_cache/memcpy_shuffle_v2_neon.cpp',
+        )
+    )
+endif
+
+# neon_lock/ —— lock 家族（spinlock_stress / spinlock_rmw / lockless_cmpxchg）
+# 的 NEON 变体（lock_arm pass，2026-11-03）：锁协议（CAS/ldaxr-stxr/xchg 获锁
+# 与带屏障释放）与原版逐字一致——它是测试对象，无 NEON 等价物；锁内新增
+# per-thread NEON 向量槽 RMW（asm ldr/str %q，NEON 数据通路抬升临界区切换
+# 功耗，arm_add 激励谱系），原版全部校验（共享计数器 vs 本地总和）逐字保留
+# 并新增向量槽 = local_sum 低 32 位校验。even_odd 文件含 even/odd 两测试，
+# 共 12 文件 13 测试。顶层 #include <arm_neon.h>，仅 aarch64 构建
+# （spinlock_add/ 同款门）——x86-64 不含。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'neon_lock/lockless_cmpxchg16b_neon.cpp',
+            'neon_lock/lockless_cmpxchg8b_neon.cpp',
+            'neon_lock/lockless_cmpxchg_neon.cpp',
+            'neon_lock/spinlock_rmw_cmpxchg_neon.cpp',
+            'neon_lock/spinlock_rmw_cmpxchg_pause_neon.cpp',
+            'neon_lock/spinlock_rmw_xchg_neon.cpp',
+            'neon_lock/spinlock_rmw_xchg_pause_neon.cpp',
+            'neon_lock/spinlock_stress_bts_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg16b_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg_even_odd_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg_neon.cpp',
+            'neon_lock/spinlock_stress_neon.cpp',
         )
     )
 endif

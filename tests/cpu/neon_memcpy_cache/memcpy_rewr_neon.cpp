@@ -315,7 +315,6 @@ static void func_struct_test1(memcpy_rewr_state *st, int size)
     if (!m_tester_p)
         return;
     neon_copy(m_tester_p->b1, st->gl_tester.b1, size);
-    m_tester_p->b1[0] ^= 0xFF; /* INJECT */
 }
 
 static void func_struct_test2(memcpy_rewr_state *st, int size,

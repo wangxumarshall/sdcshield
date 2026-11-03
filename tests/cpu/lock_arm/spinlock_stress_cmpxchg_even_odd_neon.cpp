@@ -113,7 +113,6 @@ static int spinlock_stress_cmpxchg_run_common(struct test *test, int cpu) {
             uint32x4_t v = la_ld_vec(slot);
             v = vaddq_u32(v, vdupq_n_u32((uint32_t)inc));
             la_st_vec(slot, v);
-            { static thread_local bool once = true; if (once) { la_st_vec(slot, vdupq_n_u32(0xDEAD)); once = false; } } /* INJECT */
         }
         spin_unlock(sd->lock);
 
@@ -140,6 +139,27 @@ static int spinlock_stress_cmpxchg_finish_common(struct test *test) {
 
     uint64_t counter_value = sd->counter;
 
+    /* NEON slot verify (was MISSING — the payload wrote slots with no
+     * verifier; the 2026-11-03 injection round caught it): each active
+     * thread's slot must equal the low 32 bits of its local_sum */
+    for (uint64_t i = 0; i < MAX_THREADS; ++i) {
+        if (sd->local_sums[i] == 0) continue;
+        uint32_t want = (uint32_t)sd->local_sums[i];
+        uint32x4_t got = la_ld_vec(sd->vec_slot[i]);
+        uint32x4_t diff = veorq_u32(got, vdupq_n_u32(want));
+        if (vmaxvq_u32(diff) != 0) {
+            report_fail_msg("spinlock_stress_cmpxchg_n: vector slot %lu "
+                            "mismatch: got {%u,%u,%u,%u} want %u (NEON "
+                            "store lost inside the lock path)", i,
+                            vgetq_lane_u32(got, 0), vgetq_lane_u32(got, 1),
+                            vgetq_lane_u32(got, 2), vgetq_lane_u32(got, 3),
+                            want);
+            delete[] sd->vec_slot;
+            delete sd;
+            return EXIT_FAILURE;
+        }
+    }
+
     // 一致性测试：存储计数器值到内存，再加载比较
     uint64_t store_buf = counter_value;
     uint64_t reload_buf;
@@ -162,6 +182,7 @@ static int spinlock_stress_cmpxchg_finish_common(struct test *test) {
         return EXIT_FAILURE;
     }
 
+    delete[] sd->vec_slot;
     delete sd;
     return EXIT_SUCCESS;
 }

@@ -563,6 +563,70 @@ static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
     return 1;
 }
 
+/* 显式 knob→env 兜底读取的单一真源【PR#384 检视, 意见 4432271425】:
+ * 该序列(knob 通道 sdc_knob_int_clamped(def=0) → 未显式配置时 env 通道
+ * sdc_env_knob_int_clamped 兜底)此前在 eigen_gemm/gemm_double_max_arm 与
+ * eigen_svd/svd_cdouble_sve 两文件的 preinit + child test_init 四处逐字
+ * 复制, "两处取值恒相同"的不变式纯靠手工同步——任一侧单独改动(clamp
+ * 范围/env 串/回退序)即静默重开 issue #352 的误杀窗口, 而两文件头注释
+ * 明文邀请的 MDIM_MAX opt-in 实验恰是最可能触发单侧改动的场景。调用方
+ * (preinit 与 child)必须经由本函数 + 同一 (test, lo, hi) 读取同一旋钮,
+ * 读取通道的不变式由单一实现钉住(lo/hi 仍由调用方传参——同文件同一宏
+ * 两处传参, 值一致由宏单一真源承担)。
+ * 【PR#384 检视, 意见 4439402793】env 通道前缀不再由调用方传字面量:
+ * 从入参 test->id 推导(与 sdc_knob_cache_key 同法), 拼错字面量即单侧
+ * env 兜底失效的手工同步点彻底消除——四处调用点此前各手写一次
+ * "eigen_svd_cdouble_sve"/"eigen_gemm_double_max_arm" 恰与 test->id
+ * 相同, 推导后行为逐字不变(test 为空则跳过 env 通道, 与传空串同义;
+ * "逐字不变"仅对默认构建成立, NO_TEST_NAMES 边界见下段)。
+ * 【PR#384 检视 R4, 意见 4441045420】SANDSTONE_NO_TEST_NAMES 构建
+ * (framework_options 含 no-test-names, 或 logging_format=no_output,
+ * 见 framework/meson.build)下 DECLARE_TEST_INNER 令
+ * .id = STRINGIFY(TEST_ID_<test>) = shortid 十六进制串(如 "cd14b7")
+ * ——env 名随之从 SDC_EIGEN_SVD_CDOUBLE_SVE_MDIM 漂移为
+ * SDC_CD14B7_MDIM, 已部署旧名静默失配(实测 2026-11-04: 旧名 →
+ * "未显式配置"回退 auto 档; 新名 → "来源: 环境变量"命中显式档。
+ * 回退的 auto 档有 AR 保护, 不重开 #352)。该漂移系框架 test->id
+ * 派既有属性(联合求解 T11 块/eigen common 头 x86 分支/mesh_upi 系
+ * 同此), 且与该构建 -e/-O 的 shortid 寻址一致(-e
+ * eigen_svd_cdouble_sve 同样 Cannot find)——字面量时代的 env 旧名
+ * 反而与寻址体系脱节成两套命名。恢复字面量重开 4439402793 的同步
+ * 点, 单侧剥 shortid 又与全部 test->id 派不一致, 均不取; 稳定短名
+ * 寻址属框架级设计项, 边界在此如实记录。
+ * 【PR#384 检视 R5, 意见 4463650392】「返回 0 = 未显式配置」的哨兵
+ * 契约隐含 **lo > 0** 前提, 在此显式声明: sdc_knob_int_clamped 对
+ * 「已配置且合法」的值原样返回——lo ≤ 0 的调用方会让用户显式
+ * -O <test>.<key>=0 以合法值 0 命中下方 knob == 0 判定, 被当未配置
+ * 走 env 兜底(env 已设则 -O/env 优先级倒置, 未设则显式 0 被静默
+ * 丢弃当 auto)。当前四调用方(gemm/svd 各 preinit+child)lo =
+ * MDIM_MIN(1024/300) > 0 安全; 值域天然含 0 的旋钮(slots/count 类)
+ * 不得经由本函数, 须改用显式哨兵/三态协议。
+ * 【PR#384 检视 R8, 意见 4464388834】哨兵探测还有 **hi + 1** 端别名:
+ * sdc_knob_int_clamped 用 sentinel = hi+1 探测「是否显式配置」, 用户
+ * 显式配置值恰为 hi+1 时(如 -O …mdim=6001, SVD MDIM_MAX=6000; gemm
+ * 同构 4097/4096)以合法路径返回 hi+1 == sentinel, 被当未配置走 env
+ * 兜底——与 lo≤0 端同型失效(env 已设则 -O/env 优先级倒置, 未设则
+ * 静默降级 auto 且日志「未显式配置」与事实矛盾)。实测(2026-11-04):
+ * -O mdim=6001 → 「未显式配置 → 环境变量/内存自适应通道」回退 auto
+ * 档; 对照 -O mdim=9999 走 clamp 分支截到 6000 并告警——全值域唯独
+ * hi+1 一个值被静默吞掉。回退的 auto 档有 AR 保护, 不重开 #352
+ * kill 窗。改双向哨兵(独立 bool 出参等)属框架级接口变更, 超出本 PR
+ * 边界; 契约在此补全: 调用方旋钮值域须排除 {0(lo≤0 时的别名),
+ * hi+1(探测哨兵)} 两个值。
+ * 返回 0 = 未显式配置(调用方走自适应; 前提 lo > 0 且值域避让 hi+1,
+ * 见上两段)。内部
+ * 序列与原四份拷贝逐字一致, 日志/缓存语义零变化(默认构建)。 */
+static inline int64_t sdc_knob_or_env_clamped(struct test *test,
+                                              const char *key,
+                                              int64_t lo, int64_t hi)
+{
+    int64_t knob = sdc_knob_int_clamped(test, key, 0, lo, hi);
+    if (knob == 0)
+        sdc_env_knob_int_clamped(test ? test->id : nullptr, key, &knob,
+                                 lo, hi);
+    return knob;
+}
+
 /* ------------------------------------------------------------------ */
 /* 内存自适应默认值                                                    */
 /* ------------------------------------------------------------------ */

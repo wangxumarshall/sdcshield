@@ -28,7 +28,13 @@
  * run_budget_ms note in sve_probe_and_init) — clamped to [300, 6000]. The
  * preinit no
  * longer sizes the matrix at all: it only writes a desired_duration
- * UPPER bound from the same memory ceiling, and sizing in the child also
+ * UPPER bound from the same memory ceiling — or from the explicit
+ * knob/env, which the child applies VERBATIM and therefore must scale
+ * the duration too (issue #352), and on that explicit tier a
+ * minimum_duration single-iteration floor, because the framework-level
+ * -t override replaces desired_duration unconditionally and would
+ * otherwise land the explicit big tier on the 300 s hard grace
+ * (PR#384 review, id 4432271419) — and sizing in the child also
  * fixes exec_each_test children, whose freshly-exec'd image never ran the
  * preinit and previously sized every run at the un-initialised 300.
  * An explicit override is available via
@@ -147,12 +153,53 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  *           node_cpus), so n_hi tracks it on every host class — not
  *           just the 127-worker reference the value was historically
  *           hard-coded to.
- *   dur   = t(n_hi) × 0.95,  t(N) = 243.4s·(N/4400)³ + 1s  (x3b fit,
+ *   auto:  dur = t(n_hi) × 0.95,  t(N) = 243.4s·(N/4400)³ + 1s  (x3b fit,
  *           within ±2% of the measured points at N>=2400).
+ *   knob:  dur = ar × 2 × t(knob) × 0.95 (PR#384 review, id 4432271415):
+ *           the explicit tier bypasses the joint solver's AR-aware n_run
+ *           protection VERBATIM, so the all-core contention must go into
+ *           the model explicitly — the FULL iteration is golden-prime +
+ *           one DUT solve per round (two BDCSVDs in total; the golden
+ *           re-roll every kRerollEvery=16 rounds amortizes 1/16 per round
+ *           and is not modelled), each eating the AR slowdown. This is
+ *           isomorphic to the gemm fix (f6783077) and to the joint
+ *           solver's own iteration model (per_solve =
+ *           run_budget/(ar×2)). ar = the memory-bound family table
+ *           value (the family the auto branch's ar_fam uses; measured
+ *           worst-child AR≈39 on the single-memory-node host class vs
+ *           kill tolerance AR>~2.4 under the old 0.95×t-only model);
+ *           workers == 1 takes ar = 1 — the table value is a FULL-CORE
+ *           figure and a lone worker contends only with itself, so the
+ *           ungated table value would stretch a -n 1 explicit run to
+ *           ~ar×t(knob) (breaking the one-iteration semantics of the
+ *           standard `-t … -n 1` regression lane). The AUTO branch keeps
+ *           the t(n_hi)×0.95 model: its AR protection is the solver's
+ *           own AR-aware n_run (run_budget=140 s tier, measured worst
+ *           ~213 s — ~25% inside the 300 s hard grace), and n_run pins
+ *           child n on the time side on this host class.
+ *   min:   the knob tier ALSO writes test->minimum_duration = ar×2×t(knob)
+ *           (no 0.95 margin — the floor of "at least one full iteration";
+ *           PR#384 review, id 4432271419): the framework-level -t override
+ *           replaces desired_duration unconditionally, so without the
+ *           min clamp `-t 2000 -O …mdim=<big>` sits on the 300 s floor
+ *           and is SIGQUIT-killed mid-iteration. The AUTO branch writes
+ *           NO min: the standard `-t 2000 -n 1` smoke lane must stay
+ *           seconds-fast (the auto single iteration is designed inside
+ *           the 300 s grace by run_budget=140 s), and at -n 1 n_hi hits
+ *           MDIM_MAX, so an auto min would stretch the smoke to the
+ *           t(6000) minutes scale.
  *
- * Child n <= n_hi: the child returns min(n_mem, n_run, hi), n_mem uses
+ * Child n <= n_hi holds for the AUTO branch only: the child returns
+ * min(n_mem, n_run, hi), n_mem uses
  * the same budget/c/worker-scaled threads, and its most-conservative
  * AR(25) keeps n_run below the memory ceiling on this host class.
+ * An explicit knob/env is applied VERBATIM (dim = knob, no min against
+ * n_hi — issue #352), so the duration model must follow the knob too:
+ * with n_hi alone, every knob above n_hi times out at the 300 s hard
+ * grace (5×t(n_hi)×0.95+30 s < one full 2×t(knob) iteration; e.g.
+ * knob=4400 single-threaded: 300 s vs ~487 s measured model) and the
+ * child is SIGQUIT-killed mid-iteration — the exact functional
+ * regression the pre-reinit code's knob-scaled timeout prevented.
  * (Correction of an earlier comment that claimed a host with fewer
  * threads "only shrinks n_hi — the safe direction": that was backwards.
  * A hard-coded 127 makes the child's n_mem denominator SMALLER than
@@ -182,8 +229,99 @@ static int size_matrix_preinit(struct test *test)
     int n_hi = (int)std::sqrt(budget_kb / ((double)workers * c_kb));
     if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
     if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;
-    double iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
-    test->desired_duration = (int)(iter_s * 950.0);   /* ms, -5% margin */
+
+    /* 显式 knob/env 档(issue #352): child 对显式 mdim 逐字采用
+     * (dim = knob, 不与 n_hi 取 min), duration 模型必须跟着 knob 缩放,
+     * 否则任何 knob > n_hi 的显式大维度档都落在 300 s 硬宽限
+     * (5×t(n_hi)×0.95+30 s 远小于一次 2×t(knob) 完整迭代) 被
+     * SIGQUIT 误杀——迁移前 preinit 的 timeout 恰是随 knob 缩放的,
+     * 此处恢复该契约。读取通道经 sdc_knob_or_env_clamped 单一实现,
+     * 与 child 恒相同(PR#384 检视, 意见 4432271425: 此前 preinit+child
+     * 四份逐字拷贝纯靠手工同步, 任一侧单独改动即静默重开误杀窗口)。
+     *
+     * 【PR#384 检视, 意见 4432271415】显式档的 duration 必须按全核
+     * 全迭代 ar×2×t(knob) 建模: 一次 run 侧迭代 = golden 首算 1 次 +
+     * DUT 每轮求解 1 次, 共 2 次 BDCSVD(golden 重算每 kRerollEvery=16
+     * 轮才摊 1 次, 未计入), 全核下每次都吃 AR 争抢——与 gemm 修复
+     * (f6783077)及联合求解自身的迭代模型(per_solve = run_budget/
+     * (ar×2))同构。【R6 勘误, 意见 4463986208】原文「golden 首算 +
+     * DUT 两次 BDCSVD」把构成写成 3 次分解, 与 sandstone_eigen_common.h
+     * run() 的实际(入口 prime 1 次 + 每 do-while 轮 DUT 1 次)不符
+     * ——模型系数 ×2 = 总数 2 次, 数值自始正确, 错的只是构成描述
+     * (本块与文件头模型注释、spec §4.5 三处同步修正)。
+     * 只乘 0.95×t(knob) 时 timeout = 4.75×t(knob)+30 s, kill 条件
+     * AR_real > ~2.4, 而 sve_probe_and_init 的 run_budget_ms 注释实测
+     * 单内存节点最坏 child 有效 AR≈39——多 worker 显式档必被误杀,
+     * #352 的失败模式只对 -n 1 真正闭合。三个口径:
+     *   - ar 取内存密集族表值(与本测试 auto 分支的 ar_fam 同族);
+     *   - workers == 1 时取 1: AR 表值是全核口径, 单 worker 自争抢
+     *     为 1(物理定义); 不折算则 -n 1 显式档裸跑 target 被拉到
+     *     ~ar 倍 t(knob), 标准回归路径(-t … -n 1)的单迭代语义破坏;
+     *   - auto 分支维持 t(n_hi)×0.95(P0-1 §4.5 原模型): 其 AR 保护
+     *     来自联合求解 AR-aware 的 n_run(run_budget=140 s 档, 实测
+     *     最坏 ~213 s, 距 300 s floor 留 ~25% 裕量), 且 n_run 在本
+     *     host class 恒把 child n 压在时间侧——显式档恰恰绕过这层
+     *     保护, 才必须把 AR 显式放进模型。 */
+    int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
+
+    double iter_s;
+    if (knob > 0) {
+        double ar = workers > 1
+                ? sdc_ar_factor(SDC_FAM_MEM_BOUND, sdc_numa_probe()) : 1.0;
+        iter_s = ar * 2.0
+               * (243.4 * std::pow((double)knob / 4400.0, 3.0) + 1.0);
+        /* 【PR#384 检视 R7, 意见 4464199547】+1.0 系大 N 定标的拟合
+         * 常数, 在此随整个 t(N) 一并乘进 ar×2, 与 auto 分支(desired
+         * 上界模型, 常数不放大)口径不同——后果方向保守(地板更高),
+         * 如实记录为已知口径差: 小 knob 档 min 偏离紧致物理下限
+         * ~3×(mdim=600 -n 1: min 3234ms vs 实测内层单迭代 0.92-1.1s;
+         * -n 2 的 80859ms 中 50s 系 +1×ar×2=50 的常数通胀), 大 knob
+         * 档可忽略(4400 档 +1 占 0.4%)。与二值闸门裁定(4439402800/
+         * 4440012653, 保守方向)一致, 不改模型。 */
+        /* 【PR#384 检视, 意见 4432271419】-t 在框架层无条件覆盖
+         * desired_duration(sandstone_run.cpp test_duration 的
+         * sApp->test_time 分支), 而本测试此前未设 minimum_duration →
+         * 该夹钳空置——`-t 2000 -O …mdim=<大>` 的 target 被钉在 2 s,
+         * timeout 落到 max(5×2+30, 300) = 300 s floor, 单次全迭代
+         * (2×t(knob) ≫ 300 s)被 SIGQUIT 误杀(修复前实测: -t 2000 -n 1
+         * -O mdim=4000 → 320.6 s 处 SIGQUIT)。把单次全迭代模型(无
+         * 0.95 裕量: min 是"至少跑完一次迭代"的物理下限)写进
+         * minimum_duration, -t 小值档的 target 被夹钳到单迭代,
+         * timeout(5×min+30)随之随 knob 缩放。auto 分支不写:
+         * `-t 2000 -n 1` 标准冒烟必须保持秒级(auto 单迭代由
+         * run_budget=140 s 设计收在 300 s floor 内), 且 -n 1 下 n_hi
+         * 撞 MDIM_MAX, 写 min 会把冒烟拉到 t(6000) 分钟级。 */
+        /* 【PR#384 检视 R6, 意见 4463986219】SVD 侧不加 GEMM 的
+         * GEMM_AR_CAVEAT_X(3×)加权——量化账在本文件镜像(完整裁定
+         * 记录: gemm_double_max_arm.cpp 的 minimum_duration 注释块 +
+         * spec §4.5 R3/R4 块): 本测试 mem 族表值 25 实测低估仅
+         * 1.56×(单内存节点最坏 child 有效 AR≈39, 远小于 GEMM 的
+         * 3×), SVD VL=128 档因子实测 1.064×(2026-11-04, -n 1 -O
+         * mdim=2048 单迭代 56.06s→59.66s, SDCSHIELD_ARM64_SPEC_MAX_VL
+         * =128 原生降档), 代入裕量 5×25/(39×1.064×1.02)≈2.95×, 打穿
+         * 需档因子 ≥125/(39×1.02)≈3.14×(裕量=阈值/实测档因子, 同
+         * 一量; 【R7 勘误, 意见 4464199557】R4 原记 ≈3.1×/3.15×/
+         * 2.96× 系算术误差: 125/42.33=2.95, 125/39.78=3.14); 加 3×
+         * 会把 4440012653 已裁定的中间档 min 虚抬成本再放大 3 倍
+         * 且无实测支撑, 维持不加。调本测试 ar 表值/幂律系数时须
+         * 对照本账重算。【R8, 意见 4464388852】本账系三处镜像之一
+         * (本块 / gemm CAVEAT 块 SVD 对照句 / spec §4.5 R3/R4/R7
+         * 块), 单一真源以 spec 为准——注释无编译期机制钉住, 改账
+         * 须三处同步(R6 补镜像、R7 勘误两个提交已实证失同步风险);
+         * 把账本常数化为 constexpr/static_assert 的机制化钉住属
+         * 框架级设计项, 超出本 PR 边界。 */
+        test->minimum_duration = (int)(iter_s * 1000.0);   /* ms */
+    } else {
+        iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
+    }
+    /* 【PR#384 检视 R5, 意见 4463650400】显式档生效侧澄清: 同一 iter_s
+     * 下本 desired(0.95×iter_s)恒小于上方 min(1.0×iter_s), 而框架
+     * test_duration 的 min 夹钳最后执行(sandstone_run.cpp:1879-1880)
+     * → 显式档的 target/timeout 恒由 min 决定, 本 desired 在显式档是
+     * 模型记录值(时间预算目标), 单独调它不改显式档时长(须调 min)。
+     * auto 档不写 min, desired 才是生效目标——两档共用本行, "-5%
+     * margin" 仅对 auto 档是真实生效裕量。 */
+    test->desired_duration = (int)(iter_s * 950.0);   /* ms */
     return EXIT_SUCCESS;
 }
 
@@ -243,10 +381,7 @@ static int sve_probe_and_init(struct test *test)
      * (注: n=1100 是定点实验档; auto 档在同一 run_budget_ms 下实测最坏
      * ~213 s, 见上方 size_matrix_preinit 注释, 两个口径不矛盾.) */
     int dim;
-    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
-    if (knob == 0)
-        sdc_env_knob_int_clamped("eigen_svd_cdouble_sve", "mdim", &knob,
-                                 MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0) {
         dim = (int)knob;
     } else {
@@ -277,11 +412,35 @@ static int sve_probe_and_init(struct test *test)
         }
     }
 
-    log_info("M_DIM %d (sized in child init: knob/env, else 联合求解 "
-             "min(n_mem, n_run); preinit desired_duration %d ms is the "
-             "upper-bound model; override with -O "
-             "eigen_svd_cdouble_sve.mdim=N)",
-             dim, test->desired_duration);
+    /* 【PR#384 检视 R5, 意见 4463650411】exec_each_test child 是全新
+     * exec 镜像: preinit 只在 parent 跑(sandstone.cpp 的 -x 分支在
+     * 主流程 preinit_tests 之前 return), 本进程 test 结构两字段恒
+     * 静态初值 0——照常打印会被误读为"无下限保护", 而生效的 -t/min
+     * 夹钳经 parent 的 test_duration → shmem->current_test_endtime
+     * 传入(R3 意见 4440012682 勘误: fork/exec 迭代语义一致)。判据:
+     * preinit 成功后 desired_duration 恒 > 0(两分支 iter_s > 0),
+     * == 0 即 exec child。 */
+    if (test->desired_duration > 0) {
+        /* 【PR#384 检视 R6, 意见 4463986196】min 的文案随值走: auto 档
+         * 设计不写 min(0 = 无下限, -t/默认时长直接生效——4432271419
+         * 的 -t 夹钳仅显式档有), 显式档才有单迭代下限, 恒 0 配显式档
+         * 文案是值/标签双重错配。 */
+        log_info("M_DIM %d (sized in child init: knob/env, else 联合求解 "
+                 "min(n_mem, n_run); preinit desired_duration %d ms, "
+                 "minimum_duration %d ms (%s); "
+                 "override with -O eigen_svd_cdouble_sve.mdim=N)",
+                 dim, test->desired_duration, test->minimum_duration,
+                 test->minimum_duration > 0
+                     ? "显式档: 单迭代下限, -t 夹钳"
+                     : "auto 档: 设计不设下限, -t/默认时长直接生效");
+    } else {
+        log_info("M_DIM %d (sized in child init: knob/env, else 联合求解 "
+                 "min(n_mem, n_run); exec_each_test child: 本进程未跑 "
+                 "preinit, desired/minimum_duration 恒 0——生效的 -t/min "
+                 "夹钳经 parent shmem 传入, 非无下限保护; "
+                 "override with -O eigen_svd_cdouble_sve.mdim=N)",
+                 dim);
+    }
 
     /* Allocate the test data (the runtime-dimension template's run()
      * primes its own per-thread matrices; the init-time golden BDCSVD
@@ -333,11 +492,18 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
   .minimum_cpu = 0,
   /* desired_duration is written by test_preinit (parent, before the
    * framework computes test_duration for the first run) as an UPPER-BOUND
-   * estimate from the memory ceiling (P0-1: the child sizes the dimension
-   * itself via the joint solver; this only keeps the parent's timing
-   * expectation at or above the child's choice, so exactly one run
-   * iteration executes and the derived timeout (5*duration+30s, 300s
-   * floor) scales along). */
+   * estimate from the memory ceiling (auto mode) or the explicit knob
+   * (which the child applies verbatim — issue #352) (P0-1: the child
+   * sizes the dimension itself via the joint solver; this only keeps the
+   * parent's timing expectation at or above the child's choice, so
+   * exactly one run iteration executes and the derived timeout
+   * (5*duration+30s, 300s floor) scales along). On the explicit tier the
+   * preinit also writes minimum_duration = the single full-iteration
+   * model (PR#384 review, id 4432271419): the framework-level -t override
+   * replaces desired_duration unconditionally, so without the min clamp
+   * `-t 2000 -O …mdim=<big>` lands on the 300 s floor and is
+   * SIGQUIT-killed mid-iteration — the min keeps -t small values from
+   * shrinking the target below one full knob iteration. */
   .desired_duration = 0,
   .fracture_loop_count = 5,
   .quality_level = TEST_QUALITY_PROD,

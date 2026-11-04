@@ -238,14 +238,192 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
 - **svd_cdouble_sve**（P0-1）：mdim 计算从 preinit 迁到 child `test_init`
   （`sve_probe_and_init` 内，tier 选择后）；preinit 只留 desired_duration
   ——【v2/q2】用最保守 AR（内存密集族单节点 25）+ 静态表 c 推 **n 的
-  上界**再推 duration，不变式：child 精算 n ≤ preinit n 上界。child 里
-  `sdc_joint_dim_slice` per-node 精算。天然修复 exec_each_test 模式
+  上界**再推 duration，不变式：child 精算 n ≤ preinit n 上界。
+  【2026-10-31 勘误，issue #352】该不变式**仅对 auto 分支成立**：显式
+  knob/env 档 child 逐字采用 dim=knob（不经 min(n_mem, n_run, hi)），
+  修复前 preinit 的 duration 模型只随 n_hi 缩放 → knob>n_hi 的显式
+  大维度档落在 300s 硬宽限被 SIGQUIT 误杀（迁移前 preinit 的 timeout
+  恰随 knob 缩放）。现 preinit 与 child 同通道同 clamp 读 knob/env，
+  n_model=knob（显式）或 n_hi（auto）；`gemm_double_max_arm`（§4.5
+  末项）同步同构修复。child 里
+  `sdc_joint_dim_slice` per-node 精算。
+  【2026-11-02 勘误，PR#384 检视（意见 4432271415）】显式档的
+  duration 模型须按**全迭代** ar×2×t(knob) 建模（一次 run 侧迭代 =
+  golden 首算 1 次 + DUT 每轮求解 1 次 = 共 2 次 BDCSVD【R6 勘误，
+  意见 4463986208：原文「golden 首算 + DUT 两次 BDCSVD」把总数写成
+  3 次，与 sandstone_eigen_common.h run() 实际（入口 prime 1 次 +
+  每 do-while 轮 DUT 1 次，golden 重算每 16 轮摊 1 次未计入）不符；
+  模型系数 ×2 = 总数 2 次，数值自始正确，错的只是构成描述】，
+  全核下每次吃 AR 争抢；与 gemm 修复
+  f6783077 及联合求解自身的迭代模型 per_solve=run_budget/(ar×2) 同构）：
+  只乘 0.95×t(knob) 时 timeout=4.75×t(knob)+30s，kill 条件
+  AR_real>~2.4，而单内存节点最坏 child 实测有效 AR≈39——多 worker
+  显式档必被误杀，#352 失败模式只对 -n 1 真正闭合。ar 取内存密集族
+  表值（与 auto 分支 ar_fam 同族）；workers==1 时取 1（表值是全核
+  口径，单 worker 自争抢为 1；不折算则 -n 1 显式档裸跑 target 被拉到
+  ~ar 倍 t(knob)，`-t … -n 1` 标准回归路径的单迭代语义破坏）。auto
+  分支维持 t(n_hi)×0.95 不变：其 AR 保护来自联合求解 AR-aware 的
+  n_run（run_budget=140s 档，实测最坏 ~213s，距 300s floor 留 ~25%
+  裕量），且 n_run 在本 host class 恒把 child n 压在时间侧——显式档
+  恰恰绕过这层保护，才必须把 AR 显式放进模型。
+  【2026-11-02 勘误，PR#384 检视（意见 4432271419）】显式档 preinit 兼写
+  test->minimum_duration = ar×2×t(knob)（无 0.95 裕量，"至少跑完一次
+  迭代"的物理下限）：-t 在框架层无条件覆盖 desired_duration
+  （sandstone_run.cpp test_duration 的 sApp->test_time 分支），不设 min
+  夹钳时 `-t 2000 -O …mdim=<大>` 的 target 被钉在 2 s、timeout 落到
+  300 s floor，单次全迭代被 SIGQUIT 误杀（修复前实测 -t 2000 -n 1
+  -O mdim=4000 → 320.6 s SIGQUIT）——与 #352 头条失败模式同型的确定性
+  kill 路径。auto 分支**不写**：`-t 2000 -n 1` 标准冒烟必须保持秒级
+  （auto 单迭代由 run_budget=140 s 设计收在 300 s floor 内），且
+  -n 1 下 n_hi 撞 MDIM_MAX，写 min 会把冒烟拉到 t(6000) 分钟级。
+  【2026-11-02 勘误，PR#384 检视（意见 4439402781/4439402765）】
+  gemm_double_max_arm 显式档同步 SVD 的两处同构缺口：(a) workers==1 时
+  ar 取 1（与 svd f23e2fd9 同构——AR 表值是全核口径，单 worker 自争抢为
+  1；不折算则 -n 1 显式档裸跑 target 被拉到 ~ar 倍 t(knob)，compute 表值
+  5.0 → ~4.76 次迭代，标准 `-t … -n 1` 回归路径的单迭代语义破坏）；
+  (b) 显式档兼写 minimum_duration=ar×2×t(knob)（与 svd 9a82f53b 同构
+  ——compute 族表值 5.0 在大足迹下实测低估 3×，`-t 2000 -O mdim=4096`
+  全核单迭代 ≈242-264s 距 300s floor 余量不足 20%，表值档 host class
+  上确定性 SIGQUIT）。GEMM auto 分支维持 f6783077 原模型（ar×2×t(n_hi)
+  不随 worker 数折算——与联合求解 per_solve=run_budget/(ar×2) 同一口
+  径，全框架统一的拓扑表习语）。
+  【2026-11-02 勘误，PR#384 检视 R3（意见 4440012669）】GEMM 显式档 min
+  的全核口径再加 CAVEAT 低估系数 3×（min=3×ar×2×t(knob)，仅
+  workers>1）：仅表值口径的 min 裕量只有 433s/264s≈1.6×（mdim=4096 全核
+  -t 小值档），而 GEMM_T1024_S 系本机 256-bit quiet 定标——VL=128 档实测
+  每迭代慢 1.78×（2026-11-02，-n 1 -O mdim=2048：每内层迭代
+  1.757s→3.133s），与 CAVEAT 有效 AR≈15 叠加后 kill 阈值
+  5×ar_table=25 被 15×1.78=26.7 打穿（计入 T1024 立方 -9% 低估更甚）
+  ——×3 后（min=30×t(knob)）VL=128 叠加最坏仍有 5×15/(15×1.78)≈2.8×
+  裕量。workers==1 不放大（CAVEAT 3× 是全核争抢效应，-n 1 单迭代语义
+  保持）；desired 维持表值标称口径；SVD 侧不加（其 mem 族表值 25 实测
+  低估仅 1.56×=39，按同档因子折算 5×25/(39×1.78)≈1.8× 裕量仍足；SVD
+  自身档因子未单独标定，按同代 GEMM 实测折算）。中间 worker 档
+  （1<w<全核）min 随之更保守——与意见 4439402800/4440012653 的二值闸门
+  裁定一致（保守方向不误杀，插值无标定数据反开 kill 窗）。
+  【2026-11-04 勘误，PR#384 检视 R4（意见 4441045425）——SVD 侧裕量
+  复算与档因子实测】意见按裁定自身公式独立复算：计入 SVD 幂律拟合
+  误差 ±2%（1.02），SVD kill 裕量 = 5×25/(39×1.78×1.02) ≈ 1.77×
+  （R3 记 1.8×），打穿需 SVD 自身档因子 ≥ 125/(39×1.02) ≈ 3.14×
+  （借用 GEMM 实测 1.78×，意见自认 Minor 不阻塞、系复算确认与风险
+  量化）。R4 补实测消除借用不确定性：SVD VL=128 档因子实测
+  **1.064×**（2026-11-04，-n 1 -O mdim=2048 单迭代 56.06s→59.66s，
+  SDCSHIELD_ARM64_SPEC_MAX_VL=128 原生降档且 dump-cpu-info 确认 spec
+  max 128；GEMM 同法对照 4.18s→5.87s 证明降档机制改变执行）——
+  BDCSVD 向量化占比低，对 VL 减半远不如 GEMM（1.78×）敏感。代入
+  实测因子裕量 5×25/(39×1.064×1.02) ≈ 2.95×；R3 借用 GEMM 1.78 的
+  1.8× 本身已是保守上界（AR 与 tier 反相关不叠加，R3 GEMM 实测
+  256-bit AR_eff≈11.2 > VL=128 的 5.7-7.1）。维持 SVD 侧不加
+  CAVEAT：实测档因子距打穿阈值 3.14× 有 2.95× 裕度，且加 3× 会把
+  #4440012653 已裁定的中间档 min 虚抬成本再放大 3 倍（-n 2
+  mdim=4400 → min 12220s→36660s）无实测支撑。验证边界如实声明：
+  档因子系 -n 1 口径实测（全核口径大 mdim 超本机 61GB 物理内存
+  不可运行，与 R3 同构折算限制）。
+  【2026-11-04 勘误，PR#384 检视 R7（意见 4464199557）——上块裕量
+  算术修正】R4 原记「代入实测因子裕量 ≈3.1×/打穿阈值 ≈3.15×/距
+  实测 2.96× 裕度」系算术误差：5×25/(39×1.064×1.02)=125/42.33=
+  **2.95**，125/(39×1.02)=125/39.78=**3.14**（上块已按此改写）；
+  「裕量」与「打穿阈值/实测档因子」是同一量：margin =
+  5×ar_table/(AR_eff×f_tier×1.02)，threshold = 5×ar_table/(AR_eff×
+  1.02)，故 margin = threshold/f_tier = 3.14/1.064 = 2.95——此前
+  两个名字记了两个不一致的数（3.1 vs 2.96）正是误差来源。同块其余数字（1.77×=
+  125/70.8、借用 1.8×=125/69.4）逐项复算正确。2.95× ≫ 1，不翻转
+  「维持不加 CAVEAT」结论；该账系再标定基准（调 ar 表值/幂律系数
+  须对照重算），数字须精确。
+  【2026-11-04 勘误，PR#384 检视 R5（意见 4463650400）——显式档
+  desired 的生效侧澄清】显式档同一 iter_s 下 desired(0.95×iter_s)
+  恒小于 min（GEMM workers>1 时 min=3×iter_s≈3.16×desired），框架
+  test_duration 的 min 夹钳最后执行 → 显式档 target/timeout 恒由
+  min 决定，desired 是模型记录值（auto 档不写 min，desired 才是
+  生效目标），「-5% margin」仅对 auto 档是真实生效裕量。kill 链经
+  min 闭合方向安全（意见自认无功能后果），本条为注释/表述勘误：
+  两测试 desired 行注释已改为生效侧澄清，PR 标题「desired_duration
+  跟随 mdim 旋钮」的机制注记见 PR 描述 R5 节（preinit 的 desired
+  确实跟随旋钮计算，显式档的时长执法经 min 生效）。
+  天然修复 exec_each_test 模式
   preinit 不跑导致 g_dim 恒 300 的分歧（LSP 核实修正 #3）；
   **exec 模式下 desired_duration 的说明【v2 修正】：`test_duration()`
   在父进程用 preinit 写入的值（fork 模式有效）；exec 模式子进程无
   preinit 但父进程有 → desired_duration 经 fork 前的 test 结构不随 exec
   传递，exec child 走 `-t`/默认时长（v1 表述"走 -t 兜底"结论不变，
-  机理更正为：preinit 在 exec 父进程也运行，仅子进程映像不继承写值）**。
+  机理更正为：preinit 在 exec 父进程也运行，仅子进程映像不继承写值）**
+  【2026-11-02 勘误，PR#384 检视（意见 4439402775）处置实录】该 v2 修正
+  的 kill 推论在当前 head 不成立（执法在 parent 侧）：超时执法是
+  wait_for_children 用 **parent** 的 test_timeout(parent 的
+  current_test_duration)，parent 的 preinit 已写 min（9a82f53b）→
+  parent 的 test_duration 把 -t 夹钳到 min → parent 的等待宽限随 knob
+  缩放——exec child 不会被 300s floor 误杀（实测 `-f exec -t
+  2000 -n 1 -O mdim=4000`：一次迭代 556.5s 后 exit: pass，无 SIGQUIT，
+  loop-count 1）。
+  【2026-11-02 再勘误，PR#384 检视 R3（意见 4440012682）——机理更正】
+  上述"exec child 走 DefaultTestDuration=1s = 恰好一次迭代"的机理记载
+  **错误**：exec child 的迭代目标不是本地默认时长，而是 parent 在
+  test_duration()（含 min 夹钳）算出后经 **shmem->current_test_endtime**
+  传入的共享时限（sandstone_run.cpp:1913 计算 → :1961 写入 → :1703 才
+  spawn；exec child 的 worker 循环 sandstone_run.cpp:633
+  `!wallclock_deadline_has_expired(sApp->shmem->current_test_endtime)`
+  读该共享值，从不本地调 test_duration()）——**fork/exec 迭代语义完全
+  一致**，不存在"恒一次迭代 vs 多迭代"的分歧。实测反例（两层循环
+  结构：块=fracture 重 init（内层预算 fracture_loop_count=5），块内
+  worker 循环至共享时限/预算先到者）：`-f exec -t 30000 -n 1 -O
+  mdim=600` → 7 个块（前 6 块每块 loop-count **5** = fracture 预算
+  跑满未被时限截断，末块 loop-count **3** = 30s 共享时限在块内截断，
+  共 33 次内层迭代填满 30s）；旧机理（child 本地 1s）预测每块
+  loop-count ≈2（内层单迭代实测 0.92-1.1s，1s 时限内至多 2 次）——
+  实测 5 证伪。min 夹钳同经共享时限传入：`-f exec -t 2000 -n 1 -O
+  mdim=600` → 单块 3.3s / loop-count 3 = 夹钳后 min 3236ms 的口径
+  （原始 -t 2000ms 预测 loop-count 2、本地 1s 预测 1），与 fork 同
+  语义。因此原提出的"把时长参数并入 exec argv 协议"
+  设计项**建立在假前提上，撤回**。残留语义瑕疵如实收窄为：exec child
+  自身的 test 结构 desired/minimum_duration 字段恒 0（M_DIM 日志行
+  实证）——纯字段语义瑕疵，迭代时长与超时执法均经 shmem/parent 与 fork
+  完全一致，无功能后果。
+  【2026-11-04 勘误，PR#384 检视 R5（意见 4463650411）——M_DIM/N
+  日志的 exec 模式区分】上段"字段恒 0"的日志误导面收口：svd/gemm
+  的 M_DIM/N= 日志按 test->desired_duration == 0 判 exec child
+  （判据：preinit 成功后两分支 iter_s > 0 → desired 恒 > 0；exec
+  child 全新镜像未跑 preinit → 静态初值 0），exec 分支不再打印恒 0
+  的两字段，改打印"本进程未跑 preinit, desired/minimum_duration
+  恒 0——生效的 -t/min 夹钳经 parent shmem 传入, 非无下限保护"。
+  fork 模式日志文本逐字不变。
+  【2026-11-04 勘误，PR#384 检视 R4（意见 4441045420）——9b96ab64
+  声明边界】"env 前缀从 test->id 推导后行为逐字不变"仅对默认构建
+  成立：SANDSTONE_NO_TEST_NAMES 构建（framework_options 含
+  no-test-names 或 logging_format=no_output）下 .id = shortid 十六
+  进制串（如 "cd14b7"——STRINGIFY(TEST_ID_eigen_svd_cdouble_sve) 经
+  sandstone_short_ids.h 展开为 STRINGIFY(cd14b7)），env 名随之从
+  SDC_EIGEN_SVD_CDOUBLE_SVE_MDIM 漂移为 SDC_CD14B7_MDIM，已部署旧名
+  静默失配。实测（2026-11-04，-Dframework_options=no-test-names）：
+  旧名 → "未显式配置"回退 auto 档（11.3s）；新名 → "来源: 环境变量"
+  命中显式档（60.7s 单迭代）；GEMM 同构（旧名 34.4s auto / 新名
+  SDC_7D59EA_MDIM 6.9s 显式）。定性：(a) 回退的 auto 档有 AR 保护
+  （run_budget=140s 收在 300s floor 内），不重开 #352 kill 窗；
+  (b) 漂移是框架 test->id 派既有属性（联合求解 T11 块/eigen common
+  头 x86 分支/mesh_upi 系同此）；(c) 该构建下 -e/-O 寻址本就只认
+  shortid（-e eigen_svd_cdouble_sve 实测 Cannot find，--list-tests
+  输出 shortid），env 新名与寻址体系一致，字面量时代的旧名反而
+  脱节成两套命名。处置：维持推导（恢复字面量重开 4439402793 的
+  同步点；单侧剥 shortid 与全部 test->id 派不一致，均不取），helper
+  注释与 spec 如实记录；稳定短名寻址属框架级设计项，超出本 PR
+  边界。
+  【2026-11-04 勘误，PR#384 检视 R5（意见 4463650392）——哨兵契约
+  lo>0 前提显式声明】sdc_knob_or_env_clamped「返回 0 = 未显式配置」
+  隐含 **lo > 0**：sdc_knob_int_clamped 对「已配置且合法」的值原样
+  返回，lo ≤ 0 时用户显式 -O <test>.<key>=0 会以合法值 0 命中
+  knob==0 判定 → 被当未配置走 env 兜底（env 已设则 -O/env 优先级
+  倒置，未设则显式 0 被静默丢弃当 auto）。当前四调用方（gemm/svd
+  各 preinit+child）lo = MDIM_MIN(1024/300) 安全；helper 契约注释已
+  补声明，值域天然含 0 的旋钮（slots/count 类）不得经由本函数。
+  【2026-11-04 补全，PR#384 检视 R8（意见 4464388834）——hi+1 端
+  别名】哨兵探测的对称缺口：sdc_knob_int_clamped 以 sentinel=hi+1
+  探测「是否显式配置」，用户显式配置值恰为 hi+1 时（-O …mdim=6001，
+  MDIM_MAX=6000；gemm 同构 4097/4096）被当未配置走 env 兜底——与
+  lo≤0 端同型失效（优先级倒置/静默降级 auto）。实测（2026-11-04）：
+  6001 → 「未显式配置」回退 auto 档；对照 9999 → clamp 6000 并告警
+  ——全值域唯独 hi+1 一个值被静默吞掉；回退的 auto 档有 AR 保护，
+  不重开 #352。契约补全：调用方旋钮值域须排除 {0, hi+1} 两个别名
+  值；双向哨兵（独立 bool 出参等）属框架级接口变更，超出本 PR
+  边界。
 - **gemm_double_max_arm**：同样迁移 + 接入时间校准（【v2/M8】它同样
   无校准，v1 漏列）。
 

@@ -17,7 +17,9 @@
  * iteration (same-lineage fill + one multiply, probed per tier in the body
  * TU) at a 200 s table-AR budget via the two-point power-law fit — clamped
  * to [1024, 4096]. The preinit no longer sizes the matrix at all: it only
- * writes a desired_duration UPPER bound from the same memory ceiling, and
+ * writes a desired_duration UPPER bound from the same memory ceiling —
+ * or from the explicit knob/env, which the child applies VERBATIM and
+ * therefore must scale the duration too (issue #352) — and
  * sizing in the child also fixes exec_each_test children, whose
  * freshly-exec'd image never ran the preinit and previously sized every
  * run at the un-initialised 1024. The old parent-side formula
@@ -162,14 +164,28 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
  *          hard-coded to.
  *   dur  = AR(compute) × 2 × t(n_hi) × 0.95,  t(N) = T1024·(N/1024)³ s
  *          (quiet single-probe power law, two-point differential fit —
- *          see the measurement record below).
+ *          see the measurement record below). The explicit knob tier
+ *          models dur = ar × 2 × t(knob) × 0.95 with ar = the same
+ *          compute-family table value, EXCEPT workers == 1 takes ar = 1
+ *          (the table value is a FULL-CORE figure; a lone worker contends
+ *          only with itself — PR#384 review, id 4439402781), and ALSO
+ *          writes minimum_duration = ar × 2 × t(knob) (no 0.95 margin:
+ *          the "at least one full iteration" floor), because the
+ *          framework-level -t override replaces desired_duration
+ *          unconditionally and would otherwise land the explicit tier on
+ *          the 300 s hard grace (PR#384 review, id 4439402765).
  *
  * The AR × 2 mirrors the joint solver's run_budget semantics (fill + one
  * solve per iteration, all-core slowdown factor), so dur models the
  * FULL-CORE single-iteration time at the memory ceiling: child n <= n_hi
  * keeps dur at or above the child's real iteration, which is what the
  * do-while and the derived timeout test_timeout() = 5×duration + 30 s
- * (300 s floor) expect. (Correction of an earlier comment that claimed
+ * (300 s floor) expect — EXCEPT for an explicit knob/env, which the
+ * child applies VERBATIM (dim = knob, no min against n_hi, issue #352
+ * mirror of the SVD fix): the duration model must follow the knob too,
+ * or any knob above n_hi times out at the 300 s hard grace and the
+ * child is SIGQUIT-killed mid-iteration.
+ * (Correction of an earlier comment that claimed
  * a host with fewer threads "only shrinks n_hi — the safe direction":
  * that was backwards. A hard-coded 127 makes the child's n_mem
  * denominator SMALLER than n_hi's on sub-127-worker hosts, so child n
@@ -190,6 +206,11 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
  * count deviate, but only in the safe direction above.
  */
 #define GEMM_T1024_S 0.1260    /* quiet fill+multiply at N=1024, seconds */
+/* PR#384 检视 R3 (意见 4440012669): the compute-family AR table entry
+ * understates ceiling-footprint GEMM 3x (effective AR ~15, measured —
+ * see the init CAVEAT below); the explicit-tier anti-kill floor (min)
+ * scales its full-core AR by this factor. */
+#define GEMM_AR_CAVEAT_X 3.0
 
 static int eigen_gemm_double_max_arm_preinit(struct test *test)
 {
@@ -210,9 +231,80 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
     int n_hi = (int)std::sqrt(budget_kb / ((double)workers * c_kb));
     if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
     if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;
-    double ar = sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe());
-    double iter_s = ar * 2.0 * GEMM_T1024_S * std::pow((double)n_hi / 1024.0, 3.0);
-    test->desired_duration = (int)(iter_s * 1000.0 * 0.95);   /* ms, -5% margin */
+
+    /* 显式 knob/env 档(issue #352, 与 SVD 修复同构): child 对显式 mdim
+     * 逐字采用(dim = knob, 不与 n_hi 取 min), duration 模型必须跟着
+     * knob 缩放, 否则 knob > n_hi 的显式档落在 300 s 硬宽限被 SIGQUIT
+     * 误杀。读取通道经 sdc_knob_or_env_clamped 单一实现, 与 child 恒
+     * 相同(PR#384 检视, 意见 4432271425: 此前 preinit+child 四份逐字
+     * 拷贝纯靠手工同步, 任一侧单独改动即静默重开误杀窗口)。 */
+    int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
+
+    double iter_s;
+    if (knob > 0) {
+        /* 【PR#384 检视, 意见 4439402781】显式档 workers==1 时 ar 取 1——
+         * 与 svd_cdouble_sve(f23e2fd9)同构: AR 表值是全核口径, 单 worker
+         * 自争抢为 1(物理定义); 不折算则 -n 1 显式档裸跑 target 被拉到
+         * ~ar 倍 t(knob)(GEMM_T1024_S 本身是 quiet -n 1 口径, 本机单节点
+         * compute 表值 5.0 → 4.76 次迭代), 标准 -t…-n 1 回归路径的单迭代
+         * 语义破坏。auto 分支维持 f6783077 原模型(ar×2×t(n_hi) 不随
+         * worker 数折算——与联合求解 per_solve=run_budget/(ar×2) 同一口
+         * 径, 全框架统一的拓扑表习语)。 */
+        double ar = workers > 1
+                ? sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe()) : 1.0;
+        iter_s = ar * 2.0 * GEMM_T1024_S * std::pow((double)knob / 1024.0, 3.0);
+        /* 【PR#384 检视, 意见 4439402765】显式档兼写 minimum_duration——
+         * 与 svd_cdouble_sve(9a82f53b)同构: -t 在框架层无条件覆盖
+         * desired_duration(sandstone_run.cpp test_duration), 无 min 夹钳时
+         * `-t 2000 -O …mdim=<大>` 的 timeout 落 300s floor, 而全核单迭代
+         * = 有效AR×2×t(knob)——本文件下方 CAVEAT 自认 compute 族表值 5.0
+         * 在大足迹下实测低估 3×(有效 AR≈15, 甚至 '~600s' host class),
+         * mdim=4096 全核单迭代 ≈242s(计入立方模型 -9% 低估 ≈264s), 余量
+         * 不足 20%, 表值档 host class 上确定性 SIGQUIT。min=单次全迭代
+         * 模型(无 0.95 裕量), -t 小值档 target 被夹钳到单迭代, timeout
+         * (5×min+30)随之随 knob 缩放。auto 分支不写: auto 单迭代由
+         * run_budget=200s×AR 表值设计收在 300s floor 内(本 host class
+         * 内存侧先绑住, n_run 非绑定侧)。
+         * 【PR#384 检视 R3, 意见 4440012669】min 的全核口径再乘 CAVEAT
+         * 低估系数(GEMM_AR_CAVEAT_X=3×): 仅表值口径的 min 裕量只有
+         * 433s/264s≈1.6×(mdim=4096 全核 -t 小值档), 而 GEMM_T1024_S 系
+         * 本机 256-bit quiet 定标——VL=128 档实测每迭代慢 1.78×(2026-11-02,
+         * -n 1 -O mdim=2048: 每内层迭代 1.757s→3.133s), 与 CAVEAT 有效
+         * AR≈15 叠加后 kill 阈值 5×ar_table=25 被 15×1.78=26.7 打穿
+         * (计入 T1024 立方模型 -9% 低估更甚), timeout=5×min+30 在该档
+         * 贴线/击穿。min 是反 kill 地板, 须以最坏真实单迭代为口径:
+         * ×3 后 VL=128 叠加最坏仍有 5×15/(15×1.78)≈2.8× 裕量(计入
+         * -9% ≈2.5×)。workers==1 不放大: CAVEAT 3× 是全核争抢效应,
+         * 单 worker 自争抢为 1, -n 1 显式档单迭代语义保持(意见
+         * 4439402781); desired 维持表值标称口径(时间预算目标, 非反
+         * kill 地板)。SVD 侧不加: 其 mem 族表值 25 实测低估仅 1.56×
+         * (39), 5×25/(39×1.78)≈1.8× 裕量仍足。【R4, 意见 4441045425
+         * 复算】计入 SVD 幂律拟合误差 ±2%(1.02) 精化为 1.77×, 打穿
+         * 需 SVD 档因子 ≥125/(39×1.02)≈3.14×; R4 实测 SVD VL=128
+         * 档因子 1.064×(2026-11-04, -n 1 -O mdim=2048 单迭代
+         * 56.06s→59.66s, SDCSHIELD_ARM64_SPEC_MAX_VL=128 原生降档;
+         * GEMM 同法对照 4.18s→5.87s 证降档改变执行)——代入实测因子
+         * 裕量 5×25/(39×1.064×1.02)≈2.95×【R7 勘误, 意见 4464199557:
+         * R4 原记 ≈3.1× 系算术误差(125/42.33=2.95), 裕量=阈值/实测
+         * 档因子同一量】, R3 借用 GEMM 1.78 系保守
+         * 上界(AR 与 tier 反相关不叠加, R3 GEMM 实测)。中间 worker 档
+         * (1<w<全核) min 随之更保守——二值闸门裁定见意见 4439402800/
+         * 4440012653(保守方向, 插值无标定数据反开 kill 窗)。 */
+        test->minimum_duration = (int)(iter_s * 1000.0
+                * (workers > 1 ? GEMM_AR_CAVEAT_X : 1.0));   /* ms */
+    } else {
+        double ar = sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe());
+        iter_s = ar * 2.0 * GEMM_T1024_S * std::pow((double)n_hi / 1024.0, 3.0);
+    }
+    /* 【PR#384 检视 R5, 意见 4463650400】显式档生效侧澄清: 本 desired
+     * (0.95×iter_s)恒小于上方 min(1.0×iter_s, workers>1 时 3×iter_s
+     * ≈ 3.16×desired), 而框架 test_duration 的 min 夹钳最后执行
+     * (sandstone_run.cpp:1879-1880)→ 显式档的 target/timeout 恒由
+     * min 决定, 本 desired 在显式档是模型记录值(表值标称口径的时间
+     * 预算目标, 见意见 4440012669 裁定), 单独调它不改显式档时长(须调
+     * min)。auto 档不写 min, desired 才是生效目标——两档共用本行,
+     * "-5% margin" 仅对 auto 档是真实生效裕量。 */
+    test->desired_duration = (int)(iter_s * 1000.0 * 0.95);   /* ms */
     return EXIT_SUCCESS;
 }
 
@@ -261,10 +353,7 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
      * class). Flagged as T7/T9 input (footprint-aware AR entry or
      * per-test compensation); no code change in this round. */
     int dim;
-    int64_t knob = sdc_knob_int_clamped(test, "mdim", 0, MDIM_MIN, MDIM_MAX);
-    if (knob == 0)
-        sdc_env_knob_int_clamped("eigen_gemm_double_max_arm", "mdim", &knob,
-                                 MDIM_MIN, MDIM_MAX);
+    int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0) {
         dim = (int)knob;
     } else {
@@ -298,10 +387,33 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
     test->data = gemm_make_data(dim);
 
     double gb = (double)dim * dim * 8.0 * 4.0 / (1 << 30);
-    log_info("N=%d (~%.2f GB per thread; sized in child init: knob/env, else "
-             "联合求解 min(n_mem, n_run); preinit desired_duration %d ms is the "
-             "upper-bound model; override with -O eigen_gemm_double_max_arm.mdim=N)",
-             dim, gb, test->desired_duration);
+    /* 【PR#384 检视 R5, 意见 4463650411】exec_each_test child 是全新
+     * exec 镜像: preinit 只在 parent 跑, 本进程 test 结构两字段恒
+     * 静态初值 0——照常打印会被误读为"无下限保护", 而生效的 -t/min
+     * 夹钳经 parent 的 test_duration → shmem->current_test_endtime
+     * 传入(R3 意见 4440012682 勘误: fork/exec 迭代语义一致)。判据:
+     * preinit 成功后 desired_duration 恒 > 0(两分支 iter_s > 0),
+     * == 0 即 exec child。 */
+    if (test->desired_duration > 0) {
+        /* 【PR#384 检视 R6, 意见 4463986196】min 的文案随值走: auto 档
+         * 设计不写 min(0 = 无下限, -t/默认时长直接生效), 显式档才有
+         * CAVEAT 加权单迭代下限。 */
+        log_info("N=%d (~%.2f GB per thread; sized in child init: knob/env, "
+                 "else 联合求解 min(n_mem, n_run); preinit desired_duration "
+                 "%d ms, minimum_duration %d ms (%s); "
+                 "override with -O eigen_gemm_double_max_arm.mdim=N)",
+                 dim, gb, test->desired_duration, test->minimum_duration,
+                 test->minimum_duration > 0
+                     ? "显式档: CAVEAT 加权单迭代下限, -t 夹钳"
+                     : "auto 档: 设计不设下限, -t/默认时长直接生效");
+    } else {
+        log_info("N=%d (~%.2f GB per thread; sized in child init: knob/env, "
+                 "else 联合求解 min(n_mem, n_run); exec_each_test child: "
+                 "本进程未跑 preinit, desired/minimum_duration 恒 0——生效的 "
+                 "-t/min 夹钳经 parent shmem 传入, 非无下限保护; "
+                 "override with -O eigen_gemm_double_max_arm.mdim=N)",
+                 dim, gb);
+    }
     return EXIT_SUCCESS;
 }
 
@@ -339,11 +451,17 @@ DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, 
   .test_cleanup = eigen_gemm_double_max_arm_cleanup,
   /* desired_duration is written by test_preinit (parent, before the
    * framework computes test_duration for the first run) as an UPPER-BOUND
-   * estimate from the memory ceiling + measured GEMM iteration model
-   * (T6: the child sizes the dimension itself via the joint solver; this
-   * only keeps the parent's timing expectation at or above the child's
-   * choice, so the derived timeout (5*duration+30s, 300s floor) scales
-   * along). */
+   * estimate from the memory ceiling + measured GEMM iteration model —
+   * or from the explicit knob, which the child applies verbatim
+   * (issue #352) — (T6: the child sizes the dimension itself via the
+   * joint solver; this only keeps the parent's timing expectation at or
+   * above the child's choice, so the derived timeout (5*duration+30s,
+   * 300s floor) scales along). On the explicit tier the preinit also
+   * writes minimum_duration = the single full-iteration model (PR#384
+   * review, id 4439402765): the framework-level -t override replaces
+   * desired_duration unconditionally, so without the min clamp
+   * `-t 2000 -O …mdim=<big>` lands on the 300 s floor and is
+   * SIGQUIT-killed mid-iteration. */
   .desired_duration = 0,
   .quality_level = TEST_QUALITY_PROD,
     .arm64_requires = ARM64_REQUIRES_SVE,

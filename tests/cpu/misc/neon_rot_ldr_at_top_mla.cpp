@@ -13,7 +13,8 @@
  * ALU latency/throughput structure of the Kunpeng 920 SIMD MAC pipe, and
  * whether corruption signatures change under accumulation chains:
  *   case 0: mulq then reinterpret         (pure multiply, long latency)
- *   case 1: mla-style: acc = add(mul)   (accumulate via explicit add)
+ *   case 1: mla: acc = vmlaq(a, a, b)   (single mla v.4s — accumulate
+ *                                      chain pinned against refolding)
  *   case 2: mls-style: acc = sub(mul)
  *   case 3: veor (parent control op, unchanged semantics)
  * 32-bit lanes (the mul/mla/mls family is 32-bit-lane-only on this ISA;

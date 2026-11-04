@@ -29,14 +29,14 @@
  *                        本线程被调度饥饿——log 告警并重置等待预算继续争
  *                        用（不 FAIL，防高负载共享机假阳性），跨 3 个窗口
  *                        仍无获锁才以进展异常 FAIL（消息与冻结论区分）；
- *                        确认窗另设观察者停摆防护（六轮检视 :234）——窗内
+ *                        确认窗另设观察者停摆防护（PR#328 检视）——窗内
  *                        相邻采样间隔 >100ms = 本线程自身未被调度（cgroup
  *                        freezer/CRIU/VM 迁移暂停），冻结时长不得计入窗内
  *                        墙钟（重启确认窗），反复停摆以区分性签名 FAIL、
  *                        不以 hard-lockup CONFIRMED 定罪
  *
- * 检出时延边界（PR#341 轮1 检视 :13/:233 提出；轮2 检视 :41 依框架代码
- * 修正——轮1 版本误采「-t 到期即处决」的时序断言，实为虚构盲区）：通道C
+ * 检出时延边界（PR#341 检视提出、后续轮依框架代码修正——初版误采
+ * 「-t 到期即处决」的时序断言，实为虚构盲区）：通道C
  * 的 FROZEN 判定自身需 ~11s（10s 看门狗 + 1s 确认窗 + dump 落盘）、
  * NO_PROGRESS 判定需 ~40s（3 次预算重置 + 第 4 窗口），而 acquire 循环
  * 只认自身预算、不查 test_time_condition（有意取舍：等待者查时间条件并
@@ -93,11 +93,11 @@
  * logverif=1 但打开失败（环境不可用或后缀重试耗尽）时 log_warning 降级
  * 禁用日志、测试照跑（诊断附属不升格为检测失败；'W' 级告警默认
  * verbosity 不显示、须 -v，见 init 降级注释）。文件口径与生命周期
- * （PR#341 轮1 检视 :526/:338）：fracture 架构下每切片各建一个
+ * （PR#341 检视）：fracture 架构下每切片各建一个
  * <pid>.log、行预算随切片重置（fork 起新子进程、-f no 同进程重跑
  * init+run——run 局部变量每切片归零），fork 模式长跑呈每秒数百个碎片
  * 文件而非单一连续日志；-f no 并非「单文件 10000 行/线程」的例外
- * （PR#341 轮6 检视 :95）——retain=0 时同名文件每绿切片 unlink 后
+ * （PR#341 检视）——retain=0 时同名文件每绿切片 unlink 后
  * 重建（内容不跨切片累积，绿跑终态存活 0），retain=1 时同 pid 每切片
  * 撞名走后缀（见 retain 段）；10000 行/线程上限的可达路径是单切片大
  * 循环（--max-test-loop-count 自带禁用 fracture，实测 20000 循环恰
@@ -106,32 +106,32 @@
  * = O(当前并发子进程数)；任何检出迹象（数据 SDC 红行、通道C FAIL、通道B
  * 对账失败）或 selftest 阳性自检保留文件作取证。-O
  * spinlock_add_neon.logverif_retain=1（默认 0）保留绿跑文件供人工审计
- * （PR#341 轮4 检视 :834：golden 为 init 同源预计算，init/run 一致同错
+ * （PR#341 检视：golden 为 init 同源预计算，init/run 一致同错
  * 时三通道全绿，logverif 行是绿跑期唯一可人工核对的计算值迹）——代价
- * 是回到无界堆积，长战役慎用；撞名遗留文件有两形态（PR#341 轮6 检视
- * :766）：fork 模式 pid 复用/回绕（本机 pid_max=4194304、实测 ~240
- * 切片/s ≈ 4.8h/圈，上限 64 ≈ 13 天连续战役才耗尽，轮5 检视 :740）
+ * 是回到无界堆积，长战役慎用；撞名遗留文件有两形态（PR#341 检视）：
+ * fork 模式 pid 复用/回绕（本机 pid_max=4194304、实测 ~240 切片/s ≈
+ * 4.8h/圈，上限 64 ≈ 13 天连续战役才耗尽）
  * 与 -f no 同 pid 每切片必撞（无需回绕，烧穿速率 = fracture 率，实测
  * 本机 36-65 切片/s 随载、65 格 1-3s 烧穿，耗尽后逐切片降级、
  * logverif 死亡直至 rm 旧文件），init 以 <pid>-<n>.log 后缀退格重试，
  * 审计文件名因而不是恒定 <pid>.log。
- * 红跑文件为取证设计、无上限无轮转（轮4
- * 检视 :825 边界）：嘈杂共享机上的饥饿假阳性 FAIL 亦逐切片留档（实测
- * 速率 ~840MB/天量级），长战役操作员须自行巡检清理 /var/tmp——上限/
- * 轮转与取证完整性冲突，按取证优先保留此边界并在此声明。
+ * 红跑文件为取证设计、无上限无轮转（PR#341 检视裁定）：嘈杂共享机上
+ * 的饥饿假阳性 FAIL 亦逐切片留档（实测速率 ~840MB/天量级），长战役
+ * 操作员须自行巡检清理 /var/tmp——上限/轮转与取证完整性冲突，按取证
+ * 优先保留此边界并在此声明。
  *
  * Deviation note (documented): 内核为自包含 NEON intrinsics（本仓 neon_rot
  * 家族同范式）；第三方库（openblas/sleef）计算负载变体为后续独立单元。
  * 循环条件直连 test_time_condition（非 TEST_LOOP，locks/spinlock 家族习语）
  * ——--inject-idle 的占空比注入对本测试不生效（时长仍被同选项折算），依据
- * 与边界见 run 循环尾部注释（PR#328 六轮检视 :394）。
+ * 与边界见 run 循环尾部注释（PR#328 检视）。
  * @endparblock
  */
 
 #include "sandstone.h"
 #include "sandstone_p.h" /* selftest=stall 前置条件校验须读生效测试时长
                           * sApp->current_test_duration（公开 API 无时长访
-                          * 问器）。耦合诚实声明（PR#341 轮1 检视 :76）：本报
+                          * 问器）。耦合诚实声明（PR#341 检视）：本报
                           * 告文件是全仓唯一解引用 sApp 私有单例的测试
                           * （grep 'sApp->' tests/ 仅命中此处；mce_check/
                           * smi_count include sandstone_p.h 仅为传递可见
@@ -139,12 +139,12 @@
                           * 该私有成员（sandstone_p.h）时恰好只破坏本测试；
                           * 日后出现公开时长访问器时应改走之 */
 #include <cerrno>   /* errno：logverif 打开失败降级路径使用；不依赖框架头链
-                     * 传递包含（PR#328 三轮检视 :368——上游 include 整理时
+                     * 传递包含（PR#328 检视——上游 include 整理时
                      * 偶然可见性会静默破碎） */
 #include <chrono>   /* std::chrono::milliseconds（selftest=stall 前置条件校验读
                      * 生效测试时长）：直连纪律同 <cerrno>——此前仅经
                      * sandstone_p.h:30 → sandstone_chrono.h:24 偶然可见
-                     * （PR#328 五轮检视 :443） */
+                     * （PR#328 检视） */
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -213,7 +213,7 @@ static uint64_t spinlock_add_neon_now_ns(void)
 
 /* 任何 FAIL 迹象的统一记账点（绿跑 unlink 的保守条件，见 cleanup）：
  * 新增检测通道 / FAIL 分支时必须调用本函数——漏调用 = 该路径红跑的
- * logverif 取证文件被当绿跑误删且无告警（PR#341 轮3 检视 :827：递增点
+ * logverif 取证文件被当绿跑误删且无告警（PR#341 检视：递增点
  * 分散的演进风险，集中到单一命名函数使契约可见）。RELAXED 原子（多线程
  * 并发递增，#16 同款纪律；cleanup 在 join 后 quiescent 读） */
 static inline void spinlock_add_neon_note_fail(struct SpinlockAddNeonData *d)
@@ -251,7 +251,7 @@ static void spinlock_add_neon_kernel(const float *in, float *out)
 }
 
 /* CAS-acquire 自旋（qspinlock 同谱系）；等待超阈值返回 false（看门狗触发）。
- * 时钟每 1024 次重试采样一次（PR#328 二轮检视 :136）：逐次 clock_gettime
+ * 时钟每 1024 次重试采样一次（PR#328 检视）：逐次 clock_gettime
  * 走 vDSO、触碰 vvar 页另一共享行，深争用下约半数自旋预算为非锁流量，
  * 稀释锁行争用激发形态；1024 次自旋（CAS+yield，量级 ~0.1ms）<< 10s
  * 看门狗阈值，检出延迟增量可忽略 */
@@ -267,7 +267,7 @@ enum SpinlockAddNeonAcquire {
     SPINLOCK_ACQUIRE_OBSERVER_STALLED, /* 确认窗反复被本线程自身的停摆打断，无法给出冻结判定 */
 };
 
-/* 两段式看门狗判定（PR#328 四轮检视 :157）：等待超时 ≠ 锁冻结——等待者被
+/* 两段式看门狗判定（PR#328 检视）：等待超时 ≠ 锁冻结——等待者被
  * 调度饥饿 >10s（高负载共享机/cgroup 限流抢占本线程，此时他线程正常获锁）
  * 时墙钟同样超时，单段墙钟判定会把该形态误报为 hard-lockup。超时后进入
  * 确认窗（SPINLOCK_ADD_NEON_CONFIRM_SECONDS）二次采样：
@@ -282,9 +282,9 @@ enum SpinlockAddNeonAcquire {
  * 连续 3 次重置后仍超时且锁行在流动 = 持续饥饿/进展异常，以区分性消息
  * FAIL——既防假阳性也防线程在无限重置中永不返回。FAIL 报文/dump 的等待
  * 时长取进入 acquire 起的累计（t_entry 基线，跨窗求和），看门狗预算基线
- * t0 则每窗重置——两基线分工见函数内注释（PR#328 五轮检视 :309）。
+ * t0 则每窗重置——两基线分工见函数内注释（PR#328 检视）。
  *
- * 观察者停摆防护（PR#328 六轮检视 :234）：确认窗的墙钟证据只在本线程
+ * 观察者停摆防护（PR#328 检视）：确认窗的墙钟证据只在本线程
  * 实际运行时才成立。cgroup freezer / CRIU checkpoint / VM live-migration
  * 等全局进程冻结若落在确认窗内，冻结时长被原样计入 now-c0——恢复瞬间
  * 持锁者同样刚解冻、尚未完成临界区，epoch 静止 + CAS 失败 + now-c0 超
@@ -298,7 +298,7 @@ enum SpinlockAddNeonAcquire {
  * 界区并释放），真冻结 epoch 永不恢复 → 重启后的窗照常确认。反复停摆
  * （一窗内 > SPINLOCK_ADD_NEON_GAP_RESTARTS_MAX 次）= 观察者自身被深度
  * 限流/反复冻结，无法给出冻结判定，以区分性签名 FAIL（不以 CONFIRMED
- * 定罪）。固有边界（与四轮检视 :157 同类，保持既有处置）：解冻后持锁者
+ * 定罪）。固有边界（与 PR#328 检视同类裁定，保持既有处置）：解冻后持锁者
  * 被持续抢占 >1s 且观察者运行正常时，"持锁者未运行"与"释放写丢失"在
  * 等待者视角不可区分，仍按冻结判决——该形态无冻结时同样存在。 */
 static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddNeonData *d,
@@ -306,7 +306,7 @@ static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddN
 {
     const uint64_t limit = (uint64_t)(SPINLOCK_ADD_NEON_STALL_SECONDS * 1e9);
     const uint64_t confirm_limit = (uint64_t)(SPINLOCK_ADD_NEON_CONFIRM_SECONDS * 1e9);
-    /* 两条时间基线（PR#328 五轮检视 :233/:309）：
+    /* 两条时间基线（PR#328 检视）：
      *   t_entry —— 本次获锁尝试的累计等待基线：自进入 acquire 起永不重置。
      *             报告口径：FROZEN/NO_PROGRESS 的 stall_ns 与 dump_line 的
      *             "LOCK STALL %.3fs" 统一取 now-t_entry（跨饥饿重置窗口求和），
@@ -331,7 +331,7 @@ static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddN
                  * 临界区写——C++20 中 volatile 无跨线程语义，plain 读-写对
                  * 构成 data race（形式 UB）；RELAXED 原子读消除之，ARM64
                  * 对齐 8B 单拷贝原子、与 plain ldr 同码（行为不变、语义有
-                 * 定义，PR#341 轮1 检视 :205） */
+                 * 定义，PR#341 检视） */
                 uint64_t epoch0 = __atomic_load_n(&d->line->epoch, __ATOMIC_RELAXED);
                 uint64_t c0 = spinlock_add_neon_now_ns();
                 uint64_t c_prev = c0;
@@ -351,7 +351,7 @@ static enum SpinlockAddNeonAcquire spinlock_add_neon_acquire(struct SpinlockAddN
                         break;
                     }
                     const uint64_t now = spinlock_add_neon_now_ns();
-                    /* 观察者停摆（PR#328 六轮检视 :234，设计见函数头注释）：
+                    /* 观察者停摆（PR#328 检视，设计见函数头注释）：
                      * 相邻采样间隔远超窗内单次迭代成本 = 本线程自身未被调度
                      * （全局冻结/CPU 限流），停摆期间的墙钟不得计入确认窗 */
                     if (now - c_prev > gap_limit) {
@@ -417,7 +417,7 @@ static void spinlock_add_neon_release(struct SpinlockAddNeonData *d)
 static void spinlock_add_neon_dump_line(struct SpinlockAddNeonData *d, int cpu,
                                         uint64_t stall_ns, const char *verdict)
 {
-    /* 逐元素 RELAXED 原子读（PR#341 轮1 检视 :205）：dump 时其余 worker
+    /* 逐元素 RELAXED 原子读（PR#341 检视）：dump 时其余 worker
      * 仍在自旋/CAS/临界区——lock_word/epoch/holder 与本读并发，plain
      * volatile 读是 data race 的一半（形式 UB）；ARM64 对齐 8B 单拷贝原子，
      * RELAXED 与 plain ldr 同码 */
@@ -458,11 +458,11 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
             /* 通道C FAIL = 保留 logverif 文件的迹象（供回看失败前的逐次
              * 迭代记录）；经 note_fail 统一记账（契约见其注释） */
             spinlock_add_neon_note_fail(d);
-            /* verdict/report 只断言证据支持的结论（PR#341 轮1 检视 :302）：
+            /* verdict/report 只断言证据支持的结论（PR#341 检视）：
              * 确认窗能证明的是签名（epoch 静止 + CAS 持续失败），不能证明
              * 根因——「释放写丢失」与「持锁者整窗未运行（被抢占/限流，如
              * selftest=stall 的合法 sleep 持锁者）」在等待者视角不可区分
-             * （PR#328 六轮检视 :234 裁定该形态仍按冻结判决），报文按
+             * （PR#328 检视裁定该形态仍按冻结判决），报文按
              * 签名 + 候选因陈述，不断言硬件级根因 */
             if (acq == SPINLOCK_ACQUIRE_FROZEN)
                 verdict = "hard-lockup signature CONFIRMED (epoch static across the "
@@ -508,7 +508,7 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         }
 
         /* C: 临界区——锁字同行元数据 + 计数对（通道B 靶，同窗更新）。
-         * epoch/holder 写走 RELAXED 原子（PR#341 轮1 检视 :205）：锁内单
+         * epoch/holder 写走 RELAXED 原子（PR#341 检视）：锁内单
          * 写者，但等待者确认窗/dump 的无锁读并发于本写——C++20 下 plain
          * volatile 写+他线程读是 data race（形式 UB），原子化写侧消除之；
          * RELAXED 保持锁内单写者语义（同步已由 lock_word 的
@@ -526,7 +526,7 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         /* 自检 stall：首个进临界区的线程持锁 15s（> 看门狗 10s + 确认窗 1s
          * + 裕量——模拟冻结须长于两段式全检出时延，否则确认窗内其他线程
          * CAS 成功会被判为饥饿、阳性击穿），其他线程看门狗应触发。
-         * sleep 返回值不可弃（PR#341 轮1 检视 :329）：POSIX sleep 被任意
+         * sleep 返回值不可弃（PR#341 检视）：POSIX sleep 被任意
          * 已捕获信号打断即返回未睡秒数——持锁提前释放会让确认窗内 CAS
          * 成功、通道 C 阳性丢失，部署自检静默假绿（与 init 的 fail-loudly
          * 门槛不对等）。循环睡满标称秒数 */
@@ -553,7 +553,7 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
                     ok ? 32 : 31, ok ? "PASS" : "FAIL");
             /* snprintf 截断时返回完整写入所需长度（可 > sizeof buf）——钳制
              * 到 buf 内实际内容，防 write 越界读栈缓冲（护栏防御未来调大
-             * 字段/格式串）。buf=512 的依据（PR#328 三轮检视 :237）：健康
+             * 字段/格式串）。buf=512 的依据（PR#328 检视）：健康
              * 输出 |out|≤~3e20 → %+.6f 每元素 ≈29 字符、行长 ~230B；但
              * FAIL 行正是 SDC 场景——位型可落 FLT_MAX 级（%+.6f ≈45 字符/
              * 元素），out 4 元素全落该域行长 ~300B、in+out 8 元素全落（共
@@ -590,14 +590,14 @@ static int spinlock_add_neon_run(struct test *test, int cpu)
         /* 循环条件直连 test_time_condition 而非 TEST_LOOP/test_loop_condition
          * ——locks/spinlock 家族统一习语（locks.cpp:68、spinlock_cross_socket.cpp:78
          * 同款 do-while；全仓 248 文件直连 vs 218 文件 TEST_LOOP）。后果须知情
-         * （PR#328 六轮检视 :394）：--inject-idle 的 usleep 注入只存在于
+         * （PR#328 检视）：--inject-idle 的 usleep 注入只存在于
          * test_loop_condition（上游 8d510c9c 有意设计："existing tests that
          * directly use test_time_condition() won't be affected by the idle
          * injection"），但时长折算是框架全局行为——本测试在 inject-idle 实验
          * 中为 (1-idle_rate)×时长 × 100% 占空比，与 TEST_LOOP 用例不一致。
          * 不改为 test_loop_condition 的依据：① 该函数每 N 次迭代才被调用一次
          * （TEST_LOOP 粒度），inner_loop_count/骨折切片随之为 ×N（本测试切片
-         * 行为——含 logverif 每切片文件与行预算——经二~五轮检视校准，重构
+         * 行为——含 logverif 每切片文件与行预算——经多轮检视校准，重构
          * 即重开已收敛议题）；② 独行修复无战役收益：直连条件是 248 文件的
          * 框架级语义，占空比一致性须框架层统一解决。此边界在此声明而非
          * 静默存在 */
@@ -617,14 +617,14 @@ static int spinlock_add_neon_init(struct test *test)
      * run 线程禁止直接读）；必须用 testspecific 变体——-O testid.key=value
      * 的键按测试 id 定域，NULL-test 裸键查不到 */
     /* logverif / logverif_retain 是 0/1 布尔旋钮：全值域白名单 fail
-     * loudly 而非静默钳 0/1（PR#341 轮5 检视 :608/:623，selftest 旋钮
-     * 同段纪律 :638-641）——retain 静默钳 1 会「以为没开实际开了」（无
+     * loudly 而非静默钳 0/1（PR#341 检视，selftest 旋钮同段纪律）——
+     * retain 静默钳 1 会「以为没开实际开了」（无
      * 界堆积照发），反向错值静默钳 0 则审计文件照删。必须走 string
      * 变体 + strcmp 白名单而非 int 变体 + 整数域守卫：非数值串
      * （=on/=true…）经 knob_value_integer 的 strtoull 解析失败后无
      * 告警返回 value_if_not_present=0（framework/test_knobs.cpp:113-129
      * Defaulted 路径），整数域守卫（(unsigned)raw > 1）拦不住——恰是
-     * 「反向错值静默钳 0 → 审计文件照删」路径（轮5 检视 :623 揭示
+     * 「反向错值静默钳 0 → 审计文件照删」路径（PR#341 检视揭示
      * int 版守卫只闭合整数子域）。键名 typo（logverif_rettain）框架
      * 侧静默忽略未知键（test_knobs 无 set-vs-used 交叉核对——框架级
      * 已知缺口）测试侧不可见，不在此防御范围 */
@@ -632,8 +632,8 @@ static int spinlock_add_neon_init(struct test *test)
     /* logverif_retain（0/1，默认 0）：绿跑是否保留逐次验证日志。默认删
      * （修 #9/#14 的长战役绿跑堆积写满 /var/tmp）；=1 时绿跑也保留——
      * golden 为 init 同源内核预计算，init/run 一致同错的系统性错误三通
-     * 道全绿，logverif 行是绿跑期唯一可人工审计的计算值迹（PR#341 轮4
-     * 检视 :834），需要审计时显式打开；代价是回到无界堆积（见 header
+     * 道全绿，logverif 行是绿跑期唯一可人工审计的计算值迹（PR#341
+     * 检视），需要审计时显式打开；代价是回到无界堆积（见 header
      * 生命周期披露），长战役慎用 */
     const char *logverif_retain_s = get_testspecific_knob_value_string(test, "logverif_retain", "0");
     if (strcmp(logverif_s, "0") != 0 && strcmp(logverif_s, "1") != 0) {
@@ -660,7 +660,7 @@ static int spinlock_add_neon_init(struct test *test)
     /* 未知取值 fail loudly 而非静默映射 0（igzip level knob 先例：静默钳
      * 0 会让部署自检纪律被一个 typo 无声击穿——selftest=Stall 之类错值
      * 跑满 -t 时长绿 pass，与阳性自检是否真正执行在时耗上无法区分，
-     * PR#328 二轮检视 :266） */
+     * PR#328 检视） */
     if (strcmp(st, "off") == 0 || strcmp(st, "0") == 0)
         d->selftest = 0;
     else if (strcmp(st, "stall") == 0 || strcmp(st, "1") == 0)
@@ -680,7 +680,7 @@ static int spinlock_add_neon_init(struct test *test)
     d->stall_armed = 0;
     d->log_fd = -1;
 
-    /* selftest=stall 前置条件 fail loudly（PR#328 四轮检视 :219）：通道 C
+    /* selftest=stall 前置条件 fail loudly（PR#328 检视）：通道 C
      * 阳性需要第二个线程在 10s 看门狗 + 1s 确认窗下等待——单线程时唯一
      * 线程自己持锁睡 15s 后自行 release、循环至 -t 耗尽绿 pass，通道 C
      * 永不触发（假绿，与 selftest 错值静默 off 同一纪律缺口：前置条件
@@ -745,7 +745,7 @@ static int spinlock_add_neon_init(struct test *test)
              * ties-to-even）产生 +1.0f，概率 2^-26；-1 仅 x=INT32_MIN 精确
              * 取得。本机全量探针实证（正 int32 域逐值扫描，2026-10-31）。
              * golden 同源预计算（同 kernel 同输入）与输出界分析（按 |x|<=1，
-             * :35/:78）均按闭区间陈述、不受影响（PR#328 四轮检视 :329）。 */
+             * :35/:78）均按闭区间陈述、不受影响（PR#328 检视）。 */
             dst[i] = (float)((int32_t)random32() / 2147483648.0); /* [-1, +1] */
         /* golden：同源内核预计算（同机字节确定） */
         spinlock_add_neon_kernel(dst, d->golden + (size_t)s * SPINLOCK_ADD_NEON_FLOATS);
@@ -776,7 +776,7 @@ static int spinlock_add_neon_init(struct test *test)
 
     if (d->logverif) {
         /* 首选 /var/tmp/spinlock_add_neon_<pid>.log；EEXIST 时以
-         * <pid>-<n>.log 递增后缀重试（PR#341 轮5 检视 :740）——重试仍全
+         * <pid>-<n>.log 递增后缀重试（PR#341 检视）——重试仍全
          * O_EXCL，「绝不写已存在文件」的防预植语义不变（注入伪 PASS/
          * 稀释 FAIL 行需向已存在文件追加，O_EXCL 恒拒绝；后缀名可预测
          * 不构成新攻击面：防御目标是拒绝写已存在文件而非隐藏文件名，
@@ -787,7 +787,7 @@ static int spinlock_add_neon_init(struct test *test)
          * 若直接降级则该 pid 的 logverif 在整个战役期持续死亡，后缀重试
          * 使每圈退一格，上限 SPINLOCK_ADD_NEON_LOG_OPEN_TRIES（~4.8h/圈
          * × 64 ≈ 13 天连续战役）耗尽才降级；-f no（nofork 调试模式，
-         * PR#341 轮6 检视 :766）同 pid 每切片必撞——框架对每切片同进程
+         * PR#341 检视）同 pid 每切片必撞——框架对每切片同进程
          * 重跑本 init、无需 pid 回绕，烧穿速率 = fracture 率（实测本机
          * 36-65 切片/s 随载，65 格 1-3s 烧穿），耗尽后逐切片降级、rm
          * 旧文件即可恢复。cleanup 对应：unlink 的是本轮实际打开的
@@ -812,10 +812,10 @@ static int spinlock_add_neon_init(struct test *test)
              * -f no 同 pid 每切片撞名即此形态，见上）时
              * 降级为禁用日志继续跑——检测通道 A/B/C 不受影响，环境问题
              * 不与 SDC 检出共享退出码、不污染战役自动分诊（cpufreq/thermal
-             * 缺失优雅降级同哲学，PR#328 二轮检视 :326）。用 log_warning
+             * 缺失优雅降级同哲学，PR#328 检视）。用 log_warning
              * 而非 log_error：后者会把本用例标 Failed（message_common_check
              * 对 'E' 前缀调 logging_mark_thread_failed）。可见性边界
-             * （PR#341 轮6 检视 :766）：'W' 级告警在默认 verbosity 不
+             * （PR#341 检视）：'W' 级告警在默认 verbosity 不
              * 显示（logging status_level('W')=VERBOSE(1)），须 -v——
              * nofork+retain 长跑烧穿后逐切片降级在默认输出下静默，操作
              * 员要看到降级须 -v（实测同场景默认 0 条、-v 6s 348 条）。 */
@@ -869,7 +869,7 @@ static int spinlock_add_neon_cleanup(struct test *test)
             ret = EXIT_FAILURE;
         }
 
-        /* 通道B 补充：锁行元数据主动对账（PR#328 二轮检视 :357）。epoch 与
+        /* 通道B 补充：锁行元数据主动对账（PR#328 检视）。epoch 与
          * shared_counter 构造上相等——同一临界区内各增一、持锁单写者、
          * cleanup 前框架已 join 全部 worker（run_threads_in_parallel），
          * quiescent 无撕裂窗口，零假阳性。magic/pad init 后恒定。瞬态一致
@@ -906,15 +906,15 @@ static int spinlock_add_neon_cleanup(struct test *test)
         }
         if (d->log_fd >= 0) {
             close(d->log_fd);
-            /* 绿跑 unlink（PR#341 轮1 检视 #9/:526、#14/:338）：fracture-
+            /* 绿跑 unlink（PR#341 检视）：fracture-
              * per-fork 架构下每子进程各建一个 <pid>.log、行预算随 fork 重
-             * 置，长战役绿跑文件线性堆积直至写满 /var/tmp（检视实测 3s 单
+             * 置，长战役绿跑文件线性堆积直至写满 /var/tmp（实测 3s 单
              * 线程 718 文件/29.2MB）。保守删除条件：通道B 对账全绿
              * （ret==EXIT_SUCCESS）∧ 全程零红 FAIL 行/FAIL 迹象
              * （log_fail_lines==0——数据 miscompare 与通道C FAIL 经
              * note_fail 统一计入，新增 FAIL 路径的记账契约见其注释）∧
              * 非 selftest（阳性自检必 FAIL，取证文件保留）∧ 非
-             * logverif_retain（审计旋钮，PR#341 轮4 检视 :834——绿跑的
+             * logverif_retain（审计旋钮，PR#341 检视——绿跑的
              * 人工审计迹需求与堆积治理由显式旋钮分交操作员）——任何检出
              * 迹象都保留文件；log_fd>=0 保证只删本轮自有文件（pid 复用
              * EEXIST 降级时不动上一轮遗留）。unlink 失败 best-effort

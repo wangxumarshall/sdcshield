@@ -730,19 +730,24 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
     if (td0 > (double)max_single_ms)
         log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
                     test_id, knob, xdim, td0, shrinks);
-    /* t1 显示值按显示精度向下截断(PR #377 检视 id=4441216644, R8 补全):
-     * 四舍五入渲染在 t1∈[99.95,100) 窗口把未达阈值的实测值渲染成
-     * 100.0——printf("%.1f", 99.97)输出"100.0"而下方 M3 前提告警守卫
-     * 99.97<100 为真。汇总行与告警行引用同一 t1, 显示口径必须一致:
-     * 单修告警行(R7)会打出相邻两行『试解 …→100.0ms』与『probe 档
-     * 实测 99.9ms < 100ms』——要消除的操作者误导形态跨行存活(R8
-     * 检视)。向下截断恒有 显示值 ≤ 实测值, 告警行断言(显示值<阈值)
-     * 结构性成立; 代价为显示偏低至多一个显示精度(0.1ms), 对诊断
-     * 处方无损。t2/td 无阈值断言, 保持 %.1f 原口径。 */
-    const double t1_disp = std::floor(t1 * 10.0) / 10.0;
+    /* t1/t2 显示口径(PR #377 检视 id=4441216644/4463472452/4463472461):
+     * fit 消费链(联合求解)用显示精度向下截断——四舍五入在 t1∈[99.95,100)
+     * 窗口把未达阈值的实测值渲染成 100.0(printf("%.1f", 99.97)="100.0")
+     * 而下方 M3 前提告警守卫 99.97<100 为真; 汇总行/M3 告警行/差分退化
+     * 告警行引用同一 t1/t2, 显示口径必须全流一致——单修一处会打出相邻
+     * 两行『…100.0ms』与『…99.9ms < 100ms』, 要消除的操作者误导形态
+     * 跨行存活。向下截断恒有 显示值 ≤ 实测值, 告警行断言(显示值<阈值)
+     * 结构性成立, 且单调保持(t2≤t1 的倒挂不会被渲染成 t2'>t1' 的正挂,
+     * round 无此保证); 代价为显示偏低至多一个显示精度(0.1ms), 对诊断
+     * 处方无损。存量 7 参链(fit=nullptr, x86-64 #else)不经 M3/退化
+     * 告警, 无矛盾可消, 保持 f84966bc~1 的 %.1f 原渲染基线零漂移
+     * (rule 5: 不随 ARM 侧口径联动, 显示亦然)。td/td0 无阈值断言
+     * 且无跨行重复渲染, 保持 %.1f 原口径。 */
+    const double t1_disp = fit ? std::floor(t1 * 10.0) / 10.0 : t1;
+    const double t2_disp = fit ? std::floor(t2 * 10.0) / 10.0 : t2;
     log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
                 "k=%.2f) → %d (验证 %.1fms%s)",
-                test_id, knob, max_single_ms, p1, t1_disp, mid, t2, k, dim, td,
+                test_id, knob, max_single_ms, p1, t1_disp, mid, t2_disp, k, dim, td,
                 td > (double)max_single_ms
                     ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
                     : "");
@@ -761,8 +766,8 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
          * 已单点绑定)。文案按传参是否已达 M3 口径分流: 已达标者唯一
          * 残余致因是 knob hi 截断, 不再误指传参。 */
         if (t1 < sdc_m3_probe_floor_ms) {
-            /* t1 显示用上方汇总行同源的 t1_disp(向下截断口径, 见其
-             * 定义处注释)——告警行断言与汇总行数字恒一致。 */
+            /* t1 显示用上方汇总行同源的 t1_disp(fit 链恒为向下截断
+             * 口径, 见其定义处注释)——告警行断言与汇总行数字恒一致。 */
             if (probe_floor_ms >= sdc_m3_probe_floor_ms)
                 log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
                             "knob hi 截断致档位抬不上去, " SDC_M3_FIT_WARN_BODY
@@ -810,7 +815,8 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                         "%.1fms→%.1fms, 档位重合或计时持平/倒挂)——回退 "
                         "b=0 口径 a=t1/p1^k, 固定开销未扣除, a_ms 虚高→"
                         "n_run 偏小→激发欠压; 检查 knob hi 拉大档距或复跑"
-                        "消除计时抖动", test_id, knob, p1, mid, t1, t2);
+                        "消除计时抖动", test_id, knob, p1, mid, t1_disp,
+                        t2_disp);
             a = t1 / pn;             /* t1>0 由上方早退保证 */
         }
         if (a > 0.0 && std::isfinite(a)) {

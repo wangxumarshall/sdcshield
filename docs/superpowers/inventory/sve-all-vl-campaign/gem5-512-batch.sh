@@ -184,7 +184,10 @@ if [ -n "$ovrdup" ]; then
     exit 2
 fi
 
-echo "batch start: $(date '+%F %T')  P=$P  list=$(wc -l < "$OUT/list.effective") tests"
+# list= counts non-empty rows (same form as the closing denominator) — a
+# "|"-prefixed raw row leaves an empty line in list.effective that wc -l
+# would misreport as a test.
+echo "batch start: $(date '+%F %T')  P=$P  list=$(grep -cv '^$' "$OUT/list.effective") tests"
 new_md5=$(md5sum "$G5" | cut -d' ' -f1)
 echo "gem5: $G5  md5=$new_md5"
 echo "bin:  $BIN  $($BIN --version 2>/dev/null || echo version-unknown)"

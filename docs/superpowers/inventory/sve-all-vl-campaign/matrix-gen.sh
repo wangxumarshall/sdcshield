@@ -2,7 +2,10 @@
 # matrix-gen.sh — SVE 全 VL 验证运动 Task 8：从已入库工件机械生成 190×3 证据矩阵。
 #
 # Usage:   ./matrix-gen.sh > matrix.md.new && mv matrix.md.new matrix.md
-#          （在任意 cwd 执行均可，路径相对本脚本解析。勿直接 `> matrix.md`：
+#          （输入路径相对本脚本自解析；但示例的重定向目标 matrix.md.new 是
+#          **cwd 相对路径**——非仓库根 cwd 下执行会把矩阵产物写错位置（重跑
+#          即复现 matrix.md 的前提随之落空），调用侧先 cd 仓库根（计划 Task 8
+#          Step 1 有同款 cd 行）或改用绝对路径。勿直接 `> matrix.md`：
 #          shell O_TRUNC 在脚本启动瞬间即截断目标，而全部断言失败点均在
 #          首个 stdout 输出之前——直接重定向的失败路径会把既有 matrix.md
 #          清空为 0 字节；.new+mv 使失败不触碰既有矩阵。失败残留的 .new 由

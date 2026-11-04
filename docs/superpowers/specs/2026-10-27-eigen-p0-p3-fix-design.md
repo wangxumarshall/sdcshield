@@ -362,6 +362,14 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   自身的 test 结构 desired/minimum_duration 字段恒 0（M_DIM 日志行
   实证）——纯字段语义瑕疵，迭代时长与超时执法均经 shmem/parent 与 fork
   完全一致，无功能后果。
+  【2026-11-04 勘误，PR#384 检视 R5（意见 4463650411）——M_DIM/N
+  日志的 exec 模式区分】上段"字段恒 0"的日志误导面收口：svd/gemm
+  的 M_DIM/N= 日志按 test->desired_duration == 0 判 exec child
+  （判据：preinit 成功后两分支 iter_s > 0 → desired 恒 > 0；exec
+  child 全新镜像未跑 preinit → 静态初值 0），exec 分支不再打印恒 0
+  的两字段，改打印"本进程未跑 preinit, desired/minimum_duration
+  恒 0——生效的 -t/min 夹钳经 parent shmem 传入, 非无下限保护"。
+  fork 模式日志文本逐字不变。
   【2026-11-04 勘误，PR#384 检视 R4（意见 4441045420）——9b96ab64
   声明边界】"env 前缀从 test->id 推导后行为逐字不变"仅对默认构建
   成立：SANDSTONE_NO_TEST_NAMES 构建（framework_options 含

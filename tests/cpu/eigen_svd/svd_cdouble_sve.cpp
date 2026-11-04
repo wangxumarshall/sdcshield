@@ -394,11 +394,28 @@ static int sve_probe_and_init(struct test *test)
         }
     }
 
-    log_info("M_DIM %d (sized in child init: knob/env, else 联合求解 "
-             "min(n_mem, n_run); preinit desired_duration %d ms, "
-             "minimum_duration %d ms (显式档: 单迭代下限, -t 夹钳); "
-             "override with -O eigen_svd_cdouble_sve.mdim=N)",
-             dim, test->desired_duration, test->minimum_duration);
+    /* 【PR#384 检视 R5, 意见 4463650411】exec_each_test child 是全新
+     * exec 镜像: preinit 只在 parent 跑(sandstone.cpp 的 -x 分支在
+     * 主流程 preinit_tests 之前 return), 本进程 test 结构两字段恒
+     * 静态初值 0——照常打印会被误读为"无下限保护", 而生效的 -t/min
+     * 夹钳经 parent 的 test_duration → shmem->current_test_endtime
+     * 传入(R3 意见 4440012682 勘误: fork/exec 迭代语义一致)。判据:
+     * preinit 成功后 desired_duration 恒 > 0(两分支 iter_s > 0),
+     * == 0 即 exec child。 */
+    if (test->desired_duration > 0) {
+        log_info("M_DIM %d (sized in child init: knob/env, else 联合求解 "
+                 "min(n_mem, n_run); preinit desired_duration %d ms, "
+                 "minimum_duration %d ms (显式档: 单迭代下限, -t 夹钳); "
+                 "override with -O eigen_svd_cdouble_sve.mdim=N)",
+                 dim, test->desired_duration, test->minimum_duration);
+    } else {
+        log_info("M_DIM %d (sized in child init: knob/env, else 联合求解 "
+                 "min(n_mem, n_run); exec_each_test child: 本进程未跑 "
+                 "preinit, desired/minimum_duration 恒 0——生效的 -t/min "
+                 "夹钳经 parent shmem 传入, 非无下限保护; "
+                 "override with -O eigen_svd_cdouble_sve.mdim=N)",
+                 dim);
+    }
 
     /* Allocate the test data (the runtime-dimension template's run()
      * primes its own per-thread matrices; the init-time golden BDCSVD

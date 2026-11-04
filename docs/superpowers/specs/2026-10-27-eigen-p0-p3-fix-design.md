@@ -372,6 +372,14 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   同步点；单侧剥 shortid 与全部 test->id 派不一致，均不取），helper
   注释与 spec 如实记录；稳定短名寻址属框架级设计项，超出本 PR
   边界。
+  【2026-11-04 勘误，PR#384 检视 R5（意见 4463650392）——哨兵契约
+  lo>0 前提显式声明】sdc_knob_or_env_clamped「返回 0 = 未显式配置」
+  隐含 **lo > 0**：sdc_knob_int_clamped 对「已配置且合法」的值原样
+  返回，lo ≤ 0 时用户显式 -O <test>.<key>=0 会以合法值 0 命中
+  knob==0 判定 → 被当未配置走 env 兜底（env 已设则 -O/env 优先级
+  倒置，未设则显式 0 被静默丢弃当 auto）。当前四调用方（gemm/svd
+  各 preinit+child）lo = MDIM_MIN(1024/300) 安全；helper 契约注释已
+  补声明，值域天然含 0 的旋钮（slots/count 类）不得经由本函数。
 - **gemm_double_max_arm**：同样迁移 + 接入时间校准（【v2/M8】它同样
   无校准，v1 漏列）。
 

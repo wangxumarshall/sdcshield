@@ -593,8 +593,16 @@ static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
  * 反而与寻址体系脱节成两套命名。恢复字面量重开 4439402793 的同步
  * 点, 单侧剥 shortid 又与全部 test->id 派不一致, 均不取; 稳定短名
  * 寻址属框架级设计项, 边界在此如实记录。
- * 返回 0 = 未显式配置(调用方走自适应)。内部序列与原四份拷贝逐字
- * 一致, 日志/缓存语义零变化(默认构建)。 */
+ * 【PR#384 检视 R5, 意见 4463650392】「返回 0 = 未显式配置」的哨兵
+ * 契约隐含 **lo > 0** 前提, 在此显式声明: sdc_knob_int_clamped 对
+ * 「已配置且合法」的值原样返回——lo ≤ 0 的调用方会让用户显式
+ * -O <test>.<key>=0 以合法值 0 命中下方 knob == 0 判定, 被当未配置
+ * 走 env 兜底(env 已设则 -O/env 优先级倒置, 未设则显式 0 被静默
+ * 丢弃当 auto)。当前四调用方(gemm/svd 各 preinit+child)lo =
+ * MDIM_MIN(1024/300) > 0 安全; 值域天然含 0 的旋钮(slots/count 类)
+ * 不得经由本函数, 须改用显式哨兵/三态协议。
+ * 返回 0 = 未显式配置(调用方走自适应; 前提 lo > 0, 见上段)。内部
+ * 序列与原四份拷贝逐字一致, 日志/缓存语义零变化(默认构建)。 */
 static inline int64_t sdc_knob_or_env_clamped(struct test *test,
                                               const char *key,
                                               int64_t lo, int64_t hi)

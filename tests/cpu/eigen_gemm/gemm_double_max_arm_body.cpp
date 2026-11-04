@@ -19,6 +19,7 @@
  */
 #include <sandstone.h>
 #include "sdc_stress_config.h"
+#include "gemm_solve_probe.h"
 
 #include <Eigen/Core>
 
@@ -129,14 +130,12 @@ int run_body(struct test *test, int cpu)
     return EXIT_SUCCESS;
 }
 
-/* 联合求解探针 (T6): 与 run 期同构的 tier 内 dgemm —— 构两张 Mat + 同谱系
- * 填充 + 一次乘法, 结果丢弃只为计时 (run() 每迭代 prime/DUT 乘法的同一次;
- * 谱系契约同 svd_cdouble_sve_body.cpp 的 solve_once, 检视 #51): 填充必须与
- * run() 的 fill_rand 同谱系(均匀随机 [-1,1))——splitmix 确定性哈希满足该
- * 契约, 且不依赖 init aux 线程上未定义的 per-thread RNG 状态。GEMM 的
- * 计时对数值不敏感(不同于 BDCSVD 的 deflation 路径), 谱系由分布一致性
- * 满足; 填充本身的 O(n²) 成本相对乘法 O(n³) 在 n>=1024 档可忽略(且已计入
- * 探针计时, 保守方向)。禁止标量参考实现(速度差数倍, 会错标时间模型)。
+/* 联合求解探针 (T6): 计时载荷——构两张 Mat + 同谱系填充 + 一次乘法,
+ * 结果丢弃只为计时(禁止标量参考实现, 速度差数倍会错标时间模型)。
+ * 填充实现已单点收口至 gemm_solve_probe.h(issue #389, 8→1);谱系
+ * 契约(检视 #51)的 probe 侧随之单源化, probe↔run() 侧仍需与
+ * fill_rand 手工同步演化(无编译期绑定, 检视 #392-R3); 本函数保留 extern 符号供 dispatcher 按 tier 链接
+ * (gemm_double_max_arm.cpp 的 GEMM_TEST_NAMESPACE 声明)。
  * 执行线程语义: 本函数在 test_init 的 aux 线程上被 sdc_joint_dim_slice
  * 逐档调用; 框架在 test_init 前已把控制线程 pin 到选定档, init 线程继承
  * 该 VL(arm64_vl.h arm64_require_sve_vl 注释)——本命名空间的编译期固定
@@ -144,22 +143,7 @@ int run_body(struct test *test, int cpu)
  * 观察到的 tier 分派到这里。 */
 int solve_once(int dim)
 {
-    Mat a(dim, dim), b(dim, dim), c;
-    for (int r = 0; r < dim; ++r)
-        for (int col = 0; col < dim; ++col) {
-            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
-            h ^= h >> 32;
-            h *= 0xD6E8FEB86659FD93ull;
-            h ^= h >> 32;
-            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h2 ^= h2 >> 32;
-            a(r, col) = (double)(h % 2000u) / 1000.0 - 1.0;
-            b(r, col) = (double)(h2 % 2000u) / 1000.0 - 1.0;
-        }
-    c = a * b;
-    return 0;
+    return gemm_probe::solve_once<Mat>(dim);
 }
 
 }  // namespace EIGEN_SVE_BODY_NS

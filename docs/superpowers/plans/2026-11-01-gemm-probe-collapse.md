@@ -1,6 +1,4 @@
-# GEMM splitmix sizing 探针收口(issue #389)Implementation Plan
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+# [已执行归档] GEMM splitmix sizing 探针收口(issue #389)Implementation Plan
 
 > **⚠ 勘误(2026-11-04, PR #392 检视 R6)——本 plan 已执行完毕且被检视循环超越, 嵌入代码块是计划时快照、非交付状态。**
 > 本文档开篇即指令 agentic worker「task-by-task 重放」, 但交付物经 PR #392
@@ -21,6 +19,9 @@
 > 冻结、随交付演化按设计静默陈旧、非同步对象; 全仓 grep 谱系魔数找漂移
 > 副本时, `docs/superpowers/plans/` 下的命中应跳过(权威源与审计范围指引
 > 见 `tests/cpu/eigen_splitmix_lineage.h` 头注)。
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **(检视 #392-R9 结构性归档)**: 本 plan 已执行完毕——下方 22 个步骤 checkbox 已全部勾选, 本执行指令对重放不再生效, 勿再依本文件派发执行; 快照与交付态分歧见上方勘误横幅与各 Task 就地勘误。
 
 **Goal:** 把 `tests/cpu/eigen_gemm/` 中 8 份逐字复制的 `gemm_solve_once` splitmix sizing 探针收敛为 1 份共享 header 模板(参数化 Scalar),让『probe 与 run() fill_rand 同谱系』契约(检视 #51)的漂移在编译期不可能。
 
@@ -81,7 +82,7 @@
 **Interfaces:**
 - Produces: `/tmp/gemm_probe_bitcmp`(可执行),供 Task 3 在 header 落地后运行;`/tmp/old_probe_baseline.txt` 供审计取证。
 
-- [ ] **Step 1: 从 origin/main 建分支**
+- [x] **Step 1: 从 origin/main 建分支**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
@@ -89,7 +90,7 @@ git checkout -B fix/issue-389 origin/main
 git branch --show-current   # 期望输出: fix/issue-389
 ```
 
-- [ ] **Step 2: 快照 origin/main 的 8 份探针原文(取证基线)**
+- [x] **Step 2: 快照 origin/main 的 8 份探针原文(取证基线)**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
@@ -103,7 +104,7 @@ cd /home/sdc/wangxu/operator/sdcshield-autoci
 wc -l /tmp/old_probe_baseline.txt   # 非零行数
 ```
 
-- [ ] **Step 3: 写 harness(旧实现 = origin/main 探针函数体逐字,包装仅暴露矩阵;新实现 = Task 2 的 header 模板)**
+- [x] **Step 3: 写 harness(旧实现 = origin/main 探针函数体逐字,包装仅暴露矩阵;新实现 = Task 2 的 header 模板)**
 
 (取证快照标注, PR #392 检视 R6: 下方代码块中 `old_probe_d/f/c` 三变体是
 收口前探针原文的逐字归档, 含谱系魔数副本——取证冻结、不随
@@ -250,7 +251,7 @@ int main()
 ```
 (实现时删掉上文 `cmp_case` 占位骨架——它是说明分发改显式的注记,不是交付代码;harness 最终只含 `old_probe_*` × 3、`new_probe` 模板、`bytes_diff`、`main`。)
 
-- [ ] **Step 4: 编译 harness(在 header 尚未创建时,期望编译失败)**
+- [x] **Step 4: 编译 harness(在 header 尚未创建时,期望编译失败)**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
@@ -267,7 +268,7 @@ Expected: FAIL——`gemm_solve_probe.h: No such file or directory`(确认 harne
 - Produces: `namespace gemm_probe { template <typename Mat> static void fill_pair(Mat &a, Mat &b); template <typename Mat> static int solve_once(int n); }`(整个 namespace 位于 `#if defined(__aarch64__) && defined(__linux__)` 内)。
 - 消费方(8 个文件)以 `#include "gemm_solve_probe.h"` 引用;不依赖任何 Eigen/boost 头(`Mat::Scalar` 由调用方的 Mat 提供)。
 
-- [ ] **Step 1: 写 header(全文如下)**
+- [x] **Step 1: 写 header(全文如下)**
 
 > **勘误(2026-11-04, PR #392 检视 R6)**: 以下「全文」是初版 commit
 > 2895cc0f 的计划时快照, 与交付文件(经 R1-R5 演化)有实质分歧, 原文保留
@@ -385,7 +386,7 @@ static int solve_once(int n)
 #endif  /* GEMM_SOLVE_PROBE_H */
 ```
 
-- [ ] **Step 2: 编译 harness 验证逐位一致**
+- [x] **Step 2: 编译 harness 验证逐位一致**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
@@ -408,13 +409,13 @@ Expected: `PASS double/float/complex n=1/33/64` × 9 行 + `RESULT: ALL BIT-IDEN
 - Consumes: Task 2 的 `gemm_probe::solve_once<Mat>`。
 - Produces: 各文件保留同签名 `static int gemm_solve_once(int n)`(文件级 `#if defined(__aarch64__) && defined(__linux__)` 块内),`gemm_mdim`/`gemm_k_dim` 的调用点零改动。
 
-- [ ] **Step 1: 每个文件——include 区(`#include "sdc_stress_config.h"` 之后)加一行**
+- [x] **Step 1: 每个文件——include 区(`#include "sdc_stress_config.h"` 之后)加一行**
 
 ```cpp
 #include "gemm_solve_probe.h"
 ```
 
-- [ ] **Step 2: 每个文件——将原 `#if defined(__aarch64__) && defined(__linux__)` 块内的 `gemm_solve_once` 全函数体(含原契约注释)替换为**
+- [x] **Step 2: 每个文件——将原 `#if defined(__aarch64__) && defined(__linux__)` 块内的 `gemm_solve_once` 全函数体(含原契约注释)替换为**
 
 ```cpp
 #if defined(__aarch64__) && defined(__linux__)
@@ -428,7 +429,7 @@ static int gemm_solve_once(int n)
 ```
 (float 文件注释补一句「(float 经 (Scalar) 收窄, 与原 (float)((double)…) 逐位同)」;cdouble 文件补「(complex 四流 re/im)」。)
 
-- [ ] **Step 3: 中间验证——全量构建零新警告**
+- [x] **Step 3: 中间验证——全量构建零新警告**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
@@ -445,13 +446,13 @@ Expected: BUILD 成功,无新增 warning(尤其 -Wunused-function——wrapper �
 - Consumes: `gemm_probe::solve_once<Mat>`(body 内 `Mat` 是 `GEMM_TEST_NAMESPACE` 中的 `Matrix<double, Dynamic, Dynamic>`——宏改名 Eigen 下模板只取 `Mat::Scalar`,无 Eigen:: 符号依赖)。
 - Produces: extern 符号 `GEMM_TEST_NAMESPACE::solve_once(int)` 保名保签名(dispatcher `gemm_double_max_arm.cpp:110-124` 零改动)。
 
-- [ ] **Step 1: include 区(`#include "sdc_stress_config.h"` 之后)加**
+- [x] **Step 1: include 区(`#include "sdc_stress_config.h"` 之后)加**
 
 ```cpp
 #include "gemm_solve_probe.h"
 ```
 
-- [ ] **Step 2: 将 `solve_once` 全函数体(120-138 行,含原 T6 契约长注)替换为**
+- [x] **Step 2: 将 `solve_once` 全函数体(120-138 行,含原 T6 契约长注)替换为**
 
 ```cpp
 /* 联合求解探针 (T6): 计时载荷——谱系契约(检视 #51)与填充实现已单点
@@ -465,7 +466,7 @@ int solve_once(int dim)
 }
 ```
 
-- [ ] **Step 3: 构建 4 个 VL tier 的 static_library(body 的编译面)**
+- [x] **Step 3: 构建 4 个 VL tier 的 static_library(body 的编译面)**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci/builddir
@@ -473,7 +474,7 @@ ninja tests_eigen_gemm_vl128 tests_eigen_gemm_vl256 tests_eigen_gemm_vl512 tests
 ```
 Expected: 4 库全部构建成功、零警告(`-msve-vector-bits=TIER` × `-DEigen=EigenSVEn` 下模板具现化 × 4)。若目标名不存在,先 `ninja -t targets | grep eigen_gemm_vl` 查实名。
 
-- [ ] **Step 4: 指令级等价取证——objdump 对比 wrapper 与基线**
+- [x] **Step 4: 指令级等价取证——objdump 对比 wrapper 与基线**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
@@ -497,14 +498,14 @@ Expected: 二者指令序列一致(或仅符号重定位偏移差异、逻辑零
 
 **Files:** 无新改动(纯验证)。
 
-- [ ] **Step 1: 全量构建零新警告**
+- [x] **Step 1: 全量构建零新警告**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci && ./scripts/build.sh 2>&1 | tail -5
 ```
 Expected: clean,zero new warnings。
 
-- [ ] **Step 2: 7 个受影响测试逐个回归(受影响行为跑通)**
+- [x] **Step 2: 7 个受影响测试逐个回归(受影响行为跑通)**
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
@@ -523,7 +524,7 @@ Expected: 每测试 `exit: pass`(引用真实输出进报告)。
 > `eigen_svd_cdouble` + `eigen_svd_jacobi_double`(各 `-t 2000 -n 1` →
 > `exit: pass`, 证据见 PR #392 描述各轮验证记录)。
 
-- [ ] **Step 3: SVE 测试 SKIP 路径诚实验证 + gem5-fi 边界声明**
+- [x] **Step 3: SVE 测试 SKIP 路径诚实验证 + gem5-fi 边界声明**
 
 ```bash
 ./builddir/sdcshield -e eigen_gemm_double_max_arm -t 2000 -n 1 2>&1 | tail -3
@@ -537,7 +538,7 @@ Expected: 本机无 SVE → 诚实 SKIP(reason 不变)。**gem5-fi 规则评估�
 > mirror 的 checksum 逐位一致(见 PR 描述)。本 Step 原文保留以记录计划时
 > 认知, 不作为验证边界依据。
 
-- [ ] **Step 4: x86-64 非回归(按检视)**
+- [x] **Step 4: x86-64 非回归(按检视)**
 
 ```bash
 git diff origin/main --stat
@@ -547,7 +548,7 @@ Expected(按检视声明): 全部改动位于 `#if defined(__aarch64__) && defin
 
 ### Task 6: 提交、推送、PR、报告
 
-- [ ] **Step 1: 单 commit(DCO)**
+- [x] **Step 1: 单 commit(DCO)**
 
 > **勘误(2026-11-04, PR #392 检视 R6)**: 下方 `git add tests/cpu/eigen_gemm/`
 > 与「确认仅 9 个文件」冻结在 R1 扩域前——对初版 commit 2895cc0f(彼时
@@ -586,13 +587,13 @@ arch 守门内)。设计同 sandstone_eigen_common.h::sizing_probe
 ```
 (plan 文档 `docs/superpowers/plans/2026-11-01-gemm-probe-collapse.md` 属过程工件,与功能单元分开评估是否入库;若仓库惯例保留 plan,则单独 docs commit——**不捆绑**进本功能单元。)
 
-- [ ] **Step 2: 推送 fix/issue-389(绝不推 main)**
+- [x] **Step 2: 推送 fix/issue-389(绝不推 main)**
 
 ```bash
 git push -u origin fix/issue-389
 ```
 
-- [ ] **Step 3: 开 PR(若 auto-pr.yml 抢先已建,则 gh pr edit 兜底改写)**
+- [x] **Step 3: 开 PR(若 auto-pr.yml 抢先已建,则 gh pr edit 兜底改写)**
 
 ```bash
 gh pr create --base main --head fix/issue-389 \
@@ -601,14 +602,14 @@ gh pr create --base main --head fix/issue-389 \
 ```
 PR body 必含: `Closes #389`、根因(8 处手工同步义务)、改动清单(9 文件)、验证证据(harness 输出原文、构建输出、7 测试 exit: pass 原文、objdump 结论、x86 声明、gem5-fi 边界声明)。
 
-- [ ] **Step 4: 报告贴 issue #389(不 resolve)**
+- [x] **Step 4: 报告贴 issue #389(不 resolve)**
 
 ```bash
 gh issue comment 389 --body "<同 PR 报告>"
 ```
 内容含: 方案与 issue 建议一致(共享 header 参数化 Scalar)、第 8 份(body)的发现与收口依据、T10 try/catch 模板的处置评估(不承载谱系契约、run 侧三种循环体结构差异真实、本单元不动,理由与依据)、验证证据、PR 链接。
 
-- [ ] **Step 5: 收尾回干净 main**
+- [x] **Step 5: 收尾回干净 main**
 
 ```bash
 git checkout main && git status   # 期望 clean

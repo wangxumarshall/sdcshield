@@ -42,7 +42,8 @@
 #   其余测试双 skip 或单 seed 分歧 skip 均 FATAL，防「合法 SKIP」标签
 #   张冠李戴 / seed 依赖型 skip 被 pass 掩蔽）；512 列 crash/timeout 格
 #   必有机制理由标签；† 标记行恰 5 行（PR #307 #22）；25 项非 acl baked 的
-#   -O 值 = triage-256 §4 clamp 下限（值锁，双向集合相等，#4462912949）。
+#   -O 值 = triage-256 §4 clamp 下限（值锁，双向集合相等，#4462912949）；
+#   256 seed1 命令行头恰 1 项 -O = acl_gemm_sve.dim=512 标定（#4463651353）。
 #
 # locale：全链 LC_ALL=C（enumeration.md §6 的 comm/sort 教训）。
 
@@ -80,6 +81,19 @@ extract_baked "$N256S2" | sort | diff -q - "$TMP/baked26.txt" >/dev/null \
     || { echo "ERROR: baked -O drift between 128 leg and 256 seed2" >&2; exit 2; }
 [ "$(wc -l < "$TMP/baked26.txt")" -eq 26 ] \
     || { echo "ERROR: expected 26 baked -O, got $(wc -l < "$TMP/baked26.txt")" >&2; exit 2; }
+
+# ---- 256 腿 seed1 命令行头值锁（检视 #4463651353 的重要增强）：seed1 侧
+#      「164 默认自适应直绿 + 1 格 acl 标定 baked」叙述的唯一工件依据就是本
+#      命令行头——此前 N256S1 只作结果行输入（awk 输入 4）、命令行头从未解析，
+#      沙箱注入删去 acl -O 实测 rc=0 且产物与入库逐字节一致（叙述静默失实）。
+#      锁 = seed1 baked 集合恰为 {acl_gemm_sve.dim=512}（seed1 腿只烧 acl 标定，
+#      25 项有界重跑在腿外单测——triage-256 §1 命令行实录；多 -O/少 -O/换项均 exit 2）。
+s1_n=$(grep -m1 '^# command-line: ' "$N256S1" | grep -o -- '-O [^ ]*' | wc -l || true)
+s1_v=$(extract_baked "$N256S1" || true)
+if [ "$s1_n" -ne 1 ] || [ "$s1_v" != "acl_gemm_sve.dim=512" ]; then
+    echo "ERROR: 256 seed1 baked -O = '${s1_v}' (count ${s1_n}); expected exactly acl_gemm_sve.dim=512 (Ruling B calibration, triage-256 §1)" >&2
+    exit 2
+fi
 # → <test><TAB><knob>=<value>（在首个 '.' 处切分：测试名不含 '.'）
 awk '{
     dot = index($0, ".")

@@ -44,7 +44,11 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
   #32 推翻该裁定当场修复（骨架已修 `${n:-0}` 而入库版保留双 0 缺陷 = 修复留在
   不会执行的文档镜像里、缺陷留在会执行的脚本里）；此后检视处置对入库脚本的
   触碰（行为级修复/注释级主张收紧）同循此豁免逻辑——逐轮清单以 git log 为准、
-  此处不逐条追写）。
+  此处不逐条追写；**round-11 豁免追记**：处置 commit 07913203 修改 campaign
+  `.gitignore:4` 注释——「one row per executed test」与本 PR round-10 在
+  gem5-512-batch.sh 头注纠正的「每测试一行」系同一虚假主张的英文孪生（实测
+  batch.tsv 206 行/190 唯一测试/16 多行），注释级纠偏、忽略规则零变化（/tmp
+  仓库 check-ignore 五路径判定与改前逐项一致实测），同循 round-4 豁免逻辑）。
 - 影响面已核：`grep -rEn 'native-256-<seed>|native-128-<seed>|<test>\.log|全部日志'`
   （-E 必需——BRE 下 `|` 为字面量，无 -E 原样执行零命中，无法复现下述结论）——命中
   三类：目标计划文档（campaign.md 各 Files/矩阵输入行）+ 本实施计划自身（根因描述

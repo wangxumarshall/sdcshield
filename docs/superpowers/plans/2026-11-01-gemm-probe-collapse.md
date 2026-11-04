@@ -280,7 +280,9 @@ Expected: FAIL——`gemm_solve_probe.h: No such file or directory`(确认 harne
 > (R1 cdfe4176)与 coord_finalize/advance/to_range 公式原语(R4 c968854c);
 > ③ `fill_pair` 开头补同维方阵契约 assert 与 `<cassert>`(R1 932fbccd);
 > ④ include 块整体挪入守门之内(R3 fe652713, 本快照在守门外);
-> ⑤ 谱系契约/值域/防护边界注释块按 R1-R4 检视意见多处改写。
+> ⑤ 谱系契约/值域/防护边界注释块按 R1-R5 检视意见多处改写——含 R5
+> eba09373 随守门放宽一并引入的「守门边界(检视 #392-R5)」注释块(① 的
+> 代码改动携带该注释增量, 归因一致)。
 
 ```cpp
 /* gemm_solve_probe.h — GEMM 联合求解 sizing 探针的共享实现 (issue #389)。

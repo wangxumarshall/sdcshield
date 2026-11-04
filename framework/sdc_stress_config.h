@@ -1293,13 +1293,19 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     if (node_cpus < 1)
         node_cpus = 1;                     /* T2 保证 ≥1, 双保险 */
     /* node_threads 用 worker 口径(spec §4.3 "该节点全部 worker 数"):
-     * -n/--cpuset 下 worker 少于 CPU, 按 全机worker/全机CPU 折算(全核
-     * 时恰等)——不折算则 -n 1 把节点预算按 127 线程分摊, mdim 欠压
-     * ~11×(旧全局模型 total_thread_count 补偿的同型问题)。 */
+     * -n/--cpuset 下 worker 与 CPU 数不等时, 按 全机worker/全机CPU 折算
+     * (全核时恰等)——worker 少于 CPU 时不折算则 -n 1 把节点预算按 127
+     * 线程分摊, mdim 欠压 ~11×(旧全局模型 total_thread_count 补偿的同
+     * 型问题); worker 多于 CPU(超额订阅)时不折算则 node_cpus 停在物理
+     * CPU 数, 节点聚合 RSS = (workers/cpus)×预算, 击穿 OOM 不变量
+     * (issue #423; x86 fallback 与旧全局模型均按真实 worker 数分摊,
+     * 双向正确, 此处与它们对齐)。当前 -n 在解析层 Saturate 到亲和集
+     * CPU 数(sandstone_opts.cpp), 合法 CLI 无法超订——本分支是防御
+     * 性封堵(模型不变量在超订输入域的完整性), 非当前可达的行为。 */
     {
         int workers = sdc_total_threads();
         int cpus_all = sdc_numa_probe()->total_cpus;
-        if (workers > 0 && cpus_all > 0 && workers < cpus_all)
+        if (workers > 0 && cpus_all > 0 && workers != cpus_all)
             node_cpus = node_cpus * workers / cpus_all;   /* 向下取整 */
         if (node_cpus < 1)
             node_cpus = 1;

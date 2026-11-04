@@ -1904,3 +1904,24 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   非回归 = 纯文档。
 - **push 后**: 待第 5 bot（新 head）→ CI → 静默窗 ≥900s → R10 collect
   （预算：本命 R7/R8/R9 = 3/4）。
+
+## PR #413 R10 检视处置（2026-11-04，head 12281fc3，第 5 bot 对 R9 head 的 3 条意见处置——本命末轮 4/4）
+
+- **R10 collect（pr413-r10-collect.md）**: 当前 head（12281fc3）计入 3 条
+  （local-claude 06:45 检视：#58 [Important]/#59 [Minor]/#60 [Minor]），
+  均为可维护性、无新事实错误。CI：14 pass + build-cpu fail（同一对
+  main 侧 low_load_cache_pressure/_neon，定性不变）。
+- **意见处置表**:
+
+| 意见 | 结论 | 依据 |
+|---|---|---|
+| #58 [Important] 计数事实 ≥4 处复制、CLAUDE.md 副本 2→32 行加深债务（id=4464505094） | 变通采纳 | 债务实证成立（R5 #38/R7 #45 判 RESIDUAL 后本 diff 确实再落地第 4 份副本且更长）——末轮做实质收敛：CLAUDE.md 计数块 32 行→15 行（保留操作必需：期望数、降级陷阱一句话、reconfigure 恢复、宿主限定、#43 宿主限定语短式），长推导（486/490 史、ceiling 379、439 指纹链）移交 README 单一事实源，并明写「update numbers there」指针。README:126/:348/:394 的进一步合并（spec 节与 footnote 的结构去重）超出末轮安全边际，维持 RESIDUAL 归去重专项 PR（与本轮收敛不冲突：最坏副本已收敛一半并指针化） |
+| #59 [Minor] spec 节 600 字/footnote 1900 字巨型嵌套句（id=4464505106） | RESIDUAL 维持 | R5 #39 同族判例；其最近一次发作（R9 #54 bot 误读）的根源已由宿主限定语修复（20c07213），句法拆分重构与 #58 的 README 内部结构去重同属一个专项 PR——末轮大改写会重开检视周期而处置预算已尽，如实留档 |
+| #60 [Minor] PR body 落后一轮、标题「待复测定值」已过时（id=4464505114） | 采纳 | 元数据操作无 commit（R5 #37/R7 #44 同例）：body 更新为 R1–R10 十轮如实范围；标题「0xd01 历史记录 390 归因不可考、待复测定值」改为反映现行口径（main 侧 439/547/551 记录、日期/树归属不可考） |
+
+- **验证（R10 亲测）**: 文档-only——ninja no work to do、零新警告；
+  zstd19 -t 2000 -n 1 → exit: pass；x86-64 非回归 = 纯文档。
+- **本命收敛状态**: R7/R8/R9/R10 = 4/4 预算用尽。遗留（结构性、均经
+  多轮判例）：#58 README 内部三处去重、#59 巨句拆分——建议后续文档
+  去重 PR 专项（R5 #38/#39 原判）。build-cpu 红 = main 侧舰队级
+  （low_load_cache_pressure{,_neon} 云 runner SIGABRT），与本 PR 无关。

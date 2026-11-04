@@ -65,32 +65,20 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 
 ./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent:
                                                #   SVE1 host (MIDR part 0xd02): 640 PROD / 750 q0 / 754 q-1
-                                               #     (2026-11-04 measured on this PR's tree after rebase to
-                                               #      main 418e4e09 — includes the 2026-11-02/03 migration
-                                               #      increments; gcc + full vendored deps incl. OpenSSL/
-                                               #      OpenBLAS/SLEEF groups, excl. crt_builtins ×2
-                                               #      (clang-17 libclang_rt.builtins.a probe missed on this
-                                               #      host, +2 PROD where present — README footnote). The
-                                               #      pre-migration tree (2026-11-02) measured 570/580/584
-                                               #      with registry 588; the historical 486/490 series and
-                                               #      its +121 extrapolation 507/517/521 are the degraded
-                                               #      caliber — a fresh-worktree `meson setup` BEFORE
-                                               #      third-party/*/install is populated disables those
-                                               #      groups and yields a degraded count (~488 on the
-                                               #      pre-migration tree); `meson setup --reconfigure
-                                               #      builddir` recovers, see README)
-                                               #   no-SVE 920 (MIDR part 0xd01): 439 PROD / 547 q0 / 551 q-1
-                                               #     (main-side record, post-migration; its self-recorded
-                                               #      date 2026-11-02 is arithmetically impossible —
-                                               #      no-SVE q-1 = registry − 207 gates, 551 ⇒ registry
-                                               #      exactly 758, uniquely matching main 418e4e09
-                                               #      (2026-11-03 22:11); measurement date/tree/host
-                                               #      identity all unverifiable here; older 390/394/398
-                                               #      records are attribution-unverifiable — the d6e39b96
-                                               #      claim conflicts with registry arithmetic, no-SVE
-                                               #      q-1 ceiling 586−207 = 379 < 398, only ">>299" stands;
-                                               #      do NOT cross-tree-subtract the two host figures
-                                               # full dated chain: README「测试用例与检测能力」
+                                               #     (2026-11-04, this tree rebased to main 418e4e09 incl.
+                                               #      the migration; gcc + full vendored deps, excl.
+                                               #      crt_builtins ×2 — clang-17 probe missed here.
+                                               #      Pre-migration tree: 570/580/584, registry 588.)
+                                               #     TRAP: `meson setup` BEFORE third-party/*/install is
+                                               #      populated disables the vendored groups (degraded
+                                               #      count) — `meson setup --reconfigure builddir`
+                                               #      recovers, never rebuild from scratch.
+                                               #   no-SVE 920 (MIDR part 0xd01): 439/547/551 main-side
+                                               #     record — date/tree/host identity unverifiable; older
+                                               #     390/394/398 attribution-unverifiable.
+                                               #   Do NOT cross-host-subtract. Single fact source (all
+                                               #   derivation chains, trap details, registry anchors):
+                                               #   README「测试用例与检测能力」— update numbers there.
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
 ./builddir/sdcshield --quality=-1 -e <test>   # include SKIP-level tests

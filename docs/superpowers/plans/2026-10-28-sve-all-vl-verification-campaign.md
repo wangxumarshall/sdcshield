@@ -141,7 +141,7 @@ docs/superpowers/inventory/sve-all-vl-campaign/extract-summary.sh $LOG $LIST doc
 ```
 Expected: `exit: pass`。注意：eigen_svd_cdouble_sve / eigen_svd_bidiag_sve 有全核 TIMEOUT 前科（node0 带宽，见 memory eigen-mdim-memory-measurement）；若这两格 TIMEOUT → 进 Step 3 分诊，不算本步失败。
 
-- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 字样——共 5 行（`LOG=` 行的日志路径、stdout 捕获重定向、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 目标的 /tmp 源与目标文件名）——一律相应改为 `LCG1002`，**外加 RNG 种子参数 `-s LCG:1001`→`-s LCG:1002`**（带冒号、非文件名——「LCG1001 字样」按字符串匹配不命中它，须单独改；漏改则 seed2 以 seed1 的 RNG 运行而全部产出标 LCG1002，双 seed 独立性零报警丢失）。否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`（漏改 `LOG=` 行则 seed2 的 `-o` 先覆写 seed1 的原始 yaml——**seed1 分诊源丢失**；此时 LCG1002 summary 名实仍符（覆写后 `$LOG` 内容已是 seed2 输出），「summary 提取自 seed1 输出」仅在 `-s` 与 `LOG=` 同时漏改时才发生——两种漏改都是证据污染）。
+- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 字样——共 5 行（`LOG=` 行的日志路径、stdout 捕获重定向、`tail -5` 目检、`cp` 回拷（/tmp 源与入库目标两处字面）、`extract-summary.sh` 目标 summary 文件名——该行源路径是 `$LOG` 变量引用、无 /tmp 字面）——一律相应改为 `LCG1002`，**外加 RNG 种子参数 `-s LCG:1001`→`-s LCG:1002`**（带冒号、非文件名——「LCG1001 字样」按字符串匹配不命中它，须单独改；漏改则 seed2 以 seed1 的 RNG 运行而全部产出标 LCG1002，双 seed 独立性零报警丢失）。否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`（漏改 `LOG=` 行则 seed2 的 `-o` 先覆写 seed1 的原始 yaml——**seed1 分诊源丢失**；此时 LCG1002 summary 名实仍符（覆写后 `$LOG` 内容已是 seed2 输出），「summary 提取自 seed1 输出」仅在 `-s` 与 `LOG=` 同时漏改时才发生——两种漏改都是证据污染）。
 
 - [ ] **Step 3: 分诊**
 

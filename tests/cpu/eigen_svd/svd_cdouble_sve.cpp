@@ -281,6 +281,18 @@ static int size_matrix_preinit(struct test *test)
          * `-t 2000 -n 1` 标准冒烟必须保持秒级(auto 单迭代由
          * run_budget=140 s 设计收在 300 s floor 内), 且 -n 1 下 n_hi
          * 撞 MDIM_MAX, 写 min 会把冒烟拉到 t(6000) 分钟级。 */
+        /* 【PR#384 检视 R6, 意见 4463986219】SVD 侧不加 GEMM 的
+         * GEMM_AR_CAVEAT_X(3×)加权——量化账在本文件镜像(完整裁定
+         * 记录: gemm_double_max_arm.cpp 的 minimum_duration 注释块 +
+         * spec §4.5 R3/R4 块): 本测试 mem 族表值 25 实测低估仅
+         * 1.56×(单内存节点最坏 child 有效 AR≈39, 远小于 GEMM 的
+         * 3×), SVD VL=128 档因子实测 1.064×(2026-11-04, -n 1 -O
+         * mdim=2048 单迭代 56.06s→59.66s, SDCSHIELD_ARM64_SPEC_MAX_VL
+         * =128 原生降档), 代入裕量 5×25/(39×1.064×1.02)≈3.1×, 打穿
+         * 需档因子 ≥125/(39×1.02)≈3.15×(距实测 2.96× 裕度); 加 3×
+         * 会把 4440012653 已裁定的中间档 min 虚抬成本再放大 3 倍
+         * 且无实测支撑, 维持不加。调本测试 ar 表值/幂律系数时须
+         * 对照本账重算。 */
         test->minimum_duration = (int)(iter_s * 1000.0);   /* ms */
     } else {
         iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;

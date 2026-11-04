@@ -268,6 +268,14 @@ static int size_matrix_preinit(struct test *test)
                 ? sdc_ar_factor(SDC_FAM_MEM_BOUND, sdc_numa_probe()) : 1.0;
         iter_s = ar * 2.0
                * (243.4 * std::pow((double)knob / 4400.0, 3.0) + 1.0);
+        /* 【PR#384 检视 R7, 意见 4464199547】+1.0 系大 N 定标的拟合
+         * 常数, 在此随整个 t(N) 一并乘进 ar×2, 与 auto 分支(desired
+         * 上界模型, 常数不放大)口径不同——后果方向保守(地板更高),
+         * 如实记录为已知口径差: 小 knob 档 min 偏离紧致物理下限
+         * ~3×(mdim=600 -n 1: min 3234ms vs 实测内层单迭代 0.92-1.1s;
+         * -n 2 的 80859ms 中 50s 系 +1×ar×2=50 的常数通胀), 大 knob
+         * 档可忽略(4400 档 +1 占 0.4%)。与二值闸门裁定(4439402800/
+         * 4440012653, 保守方向)一致, 不改模型。 */
         /* 【PR#384 检视, 意见 4432271419】-t 在框架层无条件覆盖
          * desired_duration(sandstone_run.cpp test_duration 的
          * sApp->test_time 分支), 而本测试此前未设 minimum_duration →

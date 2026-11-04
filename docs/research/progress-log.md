@@ -1836,7 +1836,7 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
 
 | 意见 | 结论 | 依据 |
 |---|---|---|
-| #41 [Important] 守卫锚点指错文件（id=4441028166） | 采纳 | 实证 framework/meson.build:232-239 为 OpenSSL 真实守卫（含系统 libcrypto≥3.0 回退），tests/cpu/meson.build:421 注释行/:417 消费方；686/726/761/945 四守卫属实。commit 3f60d55d：README 守卫清单分列真锚点 + 回退条件披露 + 禁用消息注源；本记录 #26 行锚点同步补真 |
+| #41 [Important] 守卫锚点指错文件（id=4441028166） | 采纳（tests 侧行号 2026-11-04 R8 #48 再更正） | 实证 framework/meson.build:232-239 为 OpenSSL 真实守卫（含系统 libcrypto≥3.0 回退）——framework/meson.build 两树零改动、该锚点仍然有效。但 3f60d55d 交付的 tests/cpu/meson.build 锚点（:421 注释行/:417 消费方/686/726/761/945 四守卫）经查系 rebase 前基线 7f0b9c7c 行号——逐行验证发生在 rebase 之前、未随迁移 +84 行重锚；交付树 418e4e09 实测：守卫消息行 = OpenBLAS :699 / SLEEF :739 / pocketfft :774 / isa-l :1041，SANDSTONE_SSL_BUILD 消费方 :429。R8 commit 已按交付树重锚 |
 | #42 [Minor] CLAUDE.md「locks those groups out」未同步（id=4441028186） | 采纳 | R3 #22 在 README 已定案「禁用 + reconfigure 恢复」；CLAUDE.md 孪生块同步同款措辞（locks→disables + `meson setup --reconfigure builddir` recovers），本 commit 落实 |
 | #43 [Minor] CLAUDE.md 390 宿主身份限定语缺失（id=4441028201） | 采纳 | rebase 后 CLAUDE.md 0xd01 行已换 main 侧 439 实测；补「main-side record — host identity not independently re-verified here」来源+限定（439 系 main 侧另一 worker 会话记录，其宿主身份本会话未独立复核；old 390 records attribution-unverifiable 保留） |
 | #44 [Minor] PR body 范围声明滞后（id=4441028208） | 采纳 | PR body 更新为 R1–R7 如实范围（含 rebase + 640 重锚定 + #41–#45 处置），元数据操作无 commit（R5 #37 同例） |

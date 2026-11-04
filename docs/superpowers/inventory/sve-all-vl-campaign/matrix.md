@@ -16,7 +16,10 @@
   **矩阵证据描述的测试代码与基线完全一致**（Task 7 runbook：三腿 570 格分诊 =
   零测试代码缺陷）。注：2026-10-31 起本分支合入了 main（#302/#316/#317 等，
   §0.1 delta 表为权威差异清单），当前 HEAD 的 tests/ framework/ 已不再等于
-  冻结基线——复核上述 diff 请用 `e4720831`，勿用移动的 HEAD。
+  冻结基线——复核上述 diff 请用 `e4720831`，勿用移动的 HEAD。fmmla 引文锚（§3
+  逐字引文，`sve512_fmmla_arm.cpp:209-212`）按 #376（f1560439）合入后的当前树
+  重锚——冻结基线上该引文仍在 :193-196，在冻结基线树上跑 `matrix-gen.sh` 会因
+  quote drift FATAL（exit 2）；重跑复现的前提 = #376 之后的树（PR #404 检视轮）。
 - 二进制：native 两腿 `sdcshield-12ccda540fd4`（四份 summary 头 `version:` 行一致，实测）；
   512 腿 gem5 `/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt`
   md5 `3f9011f40dbe80ec1df478c62ddb0b06`（Task 5 终版 9-stub 链）+ 同源 sdcshield。
@@ -59,7 +62,7 @@
 | 格值 | 含义 | 出处 |
 |---|---|---|
 | `pass` | 腿内默认/自适应几何下直绿（native：全核 `-t 2000` 实测；512：1 轮全量 golden 字节比对成立） | 各 summary / verdicts |
-| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128** = 26 项腿内 baked（triage-128 §1：逐字拷贝自 256 腿 seed2，两 seed 腿内有界实测）；**@256** = 25 格 seed1 有界重跑（triage-256 §5：clamp 下限一次通过、零上调）+ seed2 腿内有界 + `acl_gemm_sve.dim=512` 标定 baked（triage-256 §1，Ruling B）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格） | 对应 triage 分节 |
+| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128** = 26 项腿内 baked（triage-128 §1：逐字拷贝自 256 腿 seed2，构成同 @256——25 项 clamp 下限 + 1 项 `acl_gemm_sve.dim=512` 标定 baked（Ruling B，dim clamp [64,4096]、512 非下限）；两 seed 腿内有界实测）；**@256** = 25 格 seed1 有界重跑（triage-256 §5：clamp 下限一次通过、零上调——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ seed2 腿内有界 + `acl_gemm_sve.dim=512` 标定 baked（triage-256 §1，Ruling B）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格） | 对应 triage 分节 |
 | `SKIP(legal: F64MM UNDEFINED <VL=256)` | 架构性合法 SKIP，唯一格 = (sve512_fmmla_arm, 128)，两 seed 同格同理 | triage-128 §2 + §3 逐字源码引文 |
 | `BOUNDARY(gem5: <标签>)` | gem5 侧限制边界，Ruling I 终局：`PMULL64` = gem5 无该 64-bit PMULL 编码（OpenSSL GHASH `pmull v0.1q`，2 格）；`DC-CIVAC` = SE 模式 `dc civac` 缓存维护路径 raise UndefinedInstruction（3 格）；`SIM-SPEED` = knob 在 clamp 下限或无杠杆，单轮指令量 × ~1400 仿真速超出实用预算（4 格）。native 两腿对应格全绿 | triage-512 §5.1/§5.2 |
 
@@ -82,7 +85,7 @@
 ## 3. fmmla@128 合法 SKIP 的逐字源码引文（T3 minor fix）
 
 triage-128 §2 曾意译此注释（丢了 measured-SIGILL 关键句）；按裁定本矩阵补**逐字**引用
-——`tests/cpu/arm64/sve512_fmmla_arm.cpp:193-196`（当前基线）：
+——`tests/cpu/arm64/sve512_fmmla_arm.cpp:209-212`（#376 之后的树——冻结基线上引文仍在 :193-196，树前提见 §0.1）：
 
 ```c
     /* F64MM needs a 256-bit segment to hold its 2x2 double matrix: at
@@ -312,7 +315,7 @@ pass 仅构成「同条件可跑绿」证据，**不构成基线洁净性证据*
 
 **570 = 560 pass（469 直绿 + 91 有界）+ 1 SKIP(legal) + 9 BOUNDARY(gem5)**，零 FAIL、零非法 SKIP。
 
-- **128 列 = 189 pass + 1 SKIP(legal)** —— 对账 triage-128 §5（189 直绿 × 2 seed + 1 合法 SKIP：fmmla@128，两 seed 同格同理）；其中 26 格为腿内 baked 有界（triage-128 §1 的 26 项 -O 覆盖的测试）。
-- **256 列 = 190 pass** —— 对账 triage-256 §7（seed1 165 腿内直绿 + 25 格 §5 有界重跑 = 190/190；seed2 190 腿内直绿）；26 个有界格 = 25 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿）+ 1 格 baked 直绿（acl dim=512，Ruling B / triage-256 §1）。
+- **128 列 = 189 pass + 1 SKIP(legal)** —— 对账 triage-128 §5（两 seed 各 189 腿内绿 = 163 默认自适应直绿 + 26 格腿内 baked 有界（= 25 项 clamp 下限 + 1 项 acl 标定，构成同 §2 legend @128；clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）；189 与 26 计数对账 triage-128 §5（该表收口口径未携带限定语义），163/25/1 拆分与限定语义对账 triage-256 §1/§5/§7），另有 1 合法 SKIP：fmmla@128，两 seed 同格同理。
+- **256 列 = 190 pass** —— 对账 triage-256 §7（seed1 165 腿内绿（164 格默认自适应直绿 + 1 格 acl 标定 baked）+ 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内 clamp 下限有界））；26 个有界格 = 25 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ 1 格 baked 腿内绿（acl dim=512 标定，Ruling B / triage-256 §1——baked 有界几何、证据强度与有界绿同向受限，非默认自适应直绿等同；按下行有界格计法计入 26 有界格之列、亦计入 165 腿内绿之列，两口径两属）。
 - **512 列 = 181 pass + 9 BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；39 个有界格 = baked 26 项中绿 25（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 15（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 1（acl：baked 512 被 extras 覆盖为 128）。
 - **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。

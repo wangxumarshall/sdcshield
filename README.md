@@ -354,7 +354,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 
 ### SVE 用例全 VL 验证矩阵（2026-10-30 收口）
 
-190 个 SVE 用例（tag∪name 枚举口径）× 128/256/512-bit 三档真实证据矩阵（570 格）：**560 pass（469 直绿 + 91 有界几何）+ 1 合法 SKIP + 9 gem5 边界格 + 0 FAIL**，本轮运动零测试代码缺陷（冻结基线上另有 5 个测试携带 PR #316 检视事后修复的越界缺陷，其 pass 是弱证据，见 matrix.md §4 † 脚注）。三档采集：128 = `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 进程内降档、256 = 原生（各 2 seeds）、512 = gem5 SE 跑真二进制（功能正确性语义，压力维度由 native 腿承担）。边界注记：① 唯一 SKIP = `sve512_fmmla_arm@128`——F64MM 在 VL<256 架构性 UNDEFINED（实测 SIGILL）；② 9 个 gem5 边界格（2×PMULL64 GCM + 3×DC-CIVAC + 4×仿真速超时）native 两档全绿。证据钉在冻结基线 `12ccda540fd4`：[matrix.md](docs/superpowers/inventory/sve-all-vl-campaign/matrix.md)（机械生成，重跑即复现）+ 逐腿分诊 `triage-{128,256,512}.md`（同目录）。
+190 个 SVE 用例（tag∪name 枚举口径）× 128/256/512-bit 三档真实证据矩阵（570 格）：**560 pass（469 直绿 + 91 有界几何）+ 1 合法 SKIP + 9 gem5 边界格 + 0 FAIL**，本轮运动零测试代码缺陷（冻结基线上另有 5 个测试携带 PR #316 检视事后修复的越界缺陷，其 pass 是弱证据，见 matrix.md §4 † 脚注）。三档采集：128 = `SDCSHIELD_ARM64_SPEC_MAX_VL=128` 进程内降档、256 = 原生（各 2 seeds；其中 25 个超时格以 **clamp 下限最小激发几何**取证（128 腿逐字拷贝同值的 26 项 baked = 此 25 项 clamp 下限 + 1 项 `acl_gemm_sve.dim=512` Ruling B 标定，同为远小于自适应值的有界几何）——clamp 下限 = 最小激发强度，功能正确性成立、**不构成满强度激发证据**，量化与限定见 triage-256 §5「证据强度限定」）、512 = gem5 SE 跑真二进制（功能正确性语义，压力维度由 native 腿承担）。边界注记：① 唯一 SKIP = `sve512_fmmla_arm@128`——F64MM 在 VL<256 架构性 UNDEFINED（实测 SIGILL）；② 9 个 gem5 边界格（2×PMULL64 GCM + 3×DC-CIVAC + 4×仿真速超时）native 两档全绿。证据钉在冻结基线 `12ccda540fd4`：[matrix.md](docs/superpowers/inventory/sve-all-vl-campaign/matrix.md)（机械生成，重跑即复现——前提为 #376 之后的树，冻结基线树上引文锚 FATAL，见 matrix.md §0.1）+ 逐腿分诊 `triage-{128,256,512}.md`（同目录）。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|

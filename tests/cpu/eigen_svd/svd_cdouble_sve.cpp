@@ -302,7 +302,12 @@ static int size_matrix_preinit(struct test *test)
          * 2.96× 系算术误差: 125/42.33=2.95, 125/39.78=3.14); 加 3×
          * 会把 4440012653 已裁定的中间档 min 虚抬成本再放大 3 倍
          * 且无实测支撑, 维持不加。调本测试 ar 表值/幂律系数时须
-         * 对照本账重算。 */
+         * 对照本账重算。【R8, 意见 4464388852】本账系三处镜像之一
+         * (本块 / gemm CAVEAT 块 SVD 对照句 / spec §4.5 R3/R4/R7
+         * 块), 单一真源以 spec 为准——注释无编译期机制钉住, 改账
+         * 须三处同步(R6 补镜像、R7 勘误两个提交已实证失同步风险);
+         * 把账本常数化为 constexpr/static_assert 的机制化钉住属
+         * 框架级设计项, 超出本 PR 边界。 */
         test->minimum_duration = (int)(iter_s * 1000.0);   /* ms */
     } else {
         iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;

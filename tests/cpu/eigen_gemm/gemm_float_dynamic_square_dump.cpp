@@ -29,6 +29,7 @@
 #include <sandstone.h>
 #include "sdc_stress_config.h"
 #include "gemm_solve_probe.h"
+#include "sandstone_gemm_common.h"
 
 #include <Eigen/Core>
 #include <cstdlib>
@@ -112,40 +113,7 @@ struct eigen_test_data {
 
 static int eigen_gemm_float_dynamic_square_init(struct test *test) {
     test->data = new(eigen_test_data);
-    auto d = CAST(test->data);
-    int dim = 0;
-    try {
-        dim = gemm_k_dim(test);   /* knob > env > 自适应, 只解一次 */
-        d->dim = dim;
-        d->lhs = Mat::Random(dim, dim);
-        d->rhs = Mat::Random(dim, dim);
-        d->prod = d->lhs * d->rhs;
-    } catch (const std::bad_alloc &) {
-        /* T10 init 降级(m2, 对齐 eigen_sparse 先例): init 期分配失败是
-         * 资源性而非 SDC——降 mdim 到 lo(=16, 与 gemm_k_dim 的联合求解
-         * lo/clamp 下限同值)重分配一次, 仍失败才资源性 SKIP。原
-         * catch(...)->report_fail 对 bad_alloc 打红撤销(其余异常保留)。
-         * 冻结回放轮读 d->lhs/rhs/prod, 降档后三者与 d->dim 同档一致。 */
-        constexpr int kInitRetryLo = 16;
-        log_warning("[init 降级] %s: 共享矩阵分配失败 mdim=%d → 降档 mdim=%d 重试一次",
-                    test->id, dim, kInitRetryLo);
-        try {
-            d->dim = kInitRetryLo;
-            d->lhs = Mat::Random(kInitRetryLo, kInitRetryLo);
-            d->rhs = Mat::Random(kInitRetryLo, kInitRetryLo);
-            d->prod = d->lhs * d->rhs;
-        } catch (const std::bad_alloc &) {
-            log_skip(RuntimeSkipCategory, "memory: %s mdim=%d",
-                     test->id, kInitRetryLo);
-            return EXIT_SKIP;
-        }
-        /* 降档成功 → 同步反馈记账口径(PR#302 检视 #25): 否则 [反馈] 按
-         * 求解 n 折算 eff, c 被压向 0.7× 下限, 后续 n 向 OOM 膨胀。 */
-        sdc_joint_cache_note_dim(test, kInitRetryLo);
-    } catch (...) {
-        report_fail_msg("Exception on Eigen code, most probably OOM");
-    }
-    return EXIT_SUCCESS;
+    return sdc_gemm_init_shared(test, CAST(test->data), gemm_k_dim);
 }
 
 static int eigen_gemm_float_dynamic_square_run(struct test *test, int cpu) {

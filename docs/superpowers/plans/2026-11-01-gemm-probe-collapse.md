@@ -2,6 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **⚠ 勘误(2026-11-04, PR #392 检视 R6)——本 plan 已执行完毕且被检视循环超越, 嵌入代码块是计划时快照、非交付状态。**
+> 本文档开篇即指令 agentic worker「task-by-task 重放」, 但交付物经 PR #392
+> 检视循环 R1-R5 演化, 已多处超出本文嵌入的快照——**照本快照逐字重放会
+> 原样复现后续轮次已修复的缺陷**(魔数双源、`__linux__` 构建收窄、无尺寸
+> 断言、缺头文件的分裂提交), 且现 CI 无 aarch64-非 Linux 与 x86 编译目标,
+> 对该回归全盲。重放/参照一律以交付文件为准: `tests/cpu/eigen_gemm/
+> gemm_solve_probe.h`、`tests/cpu/eigen_splitmix_lineage.h`(谱系魔数/公式
+> 原语唯一权威源, R1 新增)、`tests/cpu/eigen_svd/sandstone_eigen_common.h`。
+> 与快照的主要分歧(逐条就地勘误另见 Global Constraints、Task 2 Step 1、
+> Task 5 Step 2、Task 6 Step 1): 守门 `__aarch64__ && __linux__` →
+> `__aarch64__`(R5 eba09373); 内联魔数/公式 → lineage 头常量与
+> coord_finalize/advance/to_range 原语(R1 cdfe4176 / R4 c968854c);
+> `fill_pair` 补同维方阵契约 assert(R1 932fbccd); 提交范围 eigen_gemm/
+> 单目录 9 文件 → tests/ 三目录 11 文件(R1 起扩至 lineage 头 + SVD 头)。
+> **grep 审计注意**: 本文档是归档取证工件, 含 7 份旧实现的谱系公式逐字
+> 副本(Task 1 harness ×3、Task 2 嵌入 header、附录 harness ×3)——取证
+> 冻结、随交付演化按设计静默陈旧、非同步对象; 全仓 grep 谱系魔数找漂移
+> 副本时, `docs/superpowers/plans/` 下的命中应跳过(权威源与审计范围指引
+> 见 `tests/cpu/eigen_splitmix_lineage.h` 头注)。
+
 **Goal:** 把 `tests/cpu/eigen_gemm/` 中 8 份逐字复制的 `gemm_solve_once` splitmix sizing 探针收敛为 1 份共享 header 模板(参数化 Scalar),让『probe 与 run() fill_rand 同谱系』契约(检视 #51)的漂移在编译期不可能。
 
 **Architecture:** 新建 `tests/cpu/eigen_gemm/gemm_solve_probe.h`(自守门 `#if defined(__aarch64__) && defined(__linux__)`,不 include 任何 Eigen 头,不依赖 boost):`namespace gemm_probe` 内 `fill_pair<Mat>`(splitmix 填充,谱系契约唯一载体)+ `solve_once<Mat>`(构造+填充+一次乘法,计时载荷)。8 个使用方(7 个 T9 文件 + `gemm_double_max_arm_body.cpp` 第 8 份)删除各自副本,替换为一行转发 wrapper——调用点(`sdc_joint_dim_slice(test, "mdim", &ja, gemm_solve_once)`,C 函数指针 `int solve_once(int)`)与 body 的 extern 链接(`gemm_vlNNN::solve_once`)零改动。
@@ -13,6 +33,14 @@
 ## Global Constraints
 
 - CLAUDE.md rule 5(x86-64 untouched):header 自守门 `__aarch64__ && __linux__`;8 个文件的 wrapper 全部位于各自既有 `#if defined(__aarch64__) && defined(__linux__)` 块内(x86 下无展开,x86 非回归 = 纯新增声明,如实声明)。
+  > **勘误(2026-11-04, PR #392 检视 R6)**: 「header 自守门 `__aarch64__ &&
+  > __linux__`」已被 R5(commit eba09373)放宽为仅 `#if defined(__aarch64__)`
+  > ——`__linux__` 属沿 T9 wrapper 惯例的过度复制: header 纯 std 头零 Linux
+  > 依赖, 保留它会使 aarch64-非 Linux 构建从可编译变硬编译错误(检视 R5
+  > 以 clang `--target=aarch64-linux-gnu -U__linux__` 红绿例实证)。本条
+  > 后半句对交付态仍成立(8 个 wrapper 位于各自既有 `__aarch64__ &&
+  > __linux__` 块内, 未动)。Architecture 与 Task 2 Interfaces 小节的同款
+  > 守门声称同此勘误。
 - CLAUDE.md rule 1(一个补丁一个单元):本 plan = 一个单元(探针收口),单 commit。T10 try/catch 降级模板**不在本单元内**(评估结论见任务 8 边界声明:不承载谱系契约,run 侧三种循环体结构差异真实,强行模板化伤可读性)。
 - 行为逐位不变:重构前后探针填充与乘法逐位一致(任务 1 harness 证明);wrapper 保名保签名。
 - header 不 include Eigen 头、不引 boost(`gemm_double_max_arm_body.cpp` 以 `-DEigen=EigenSVEn` 宏改名编译 4 个 VL tier,header 内写任何 `Eigen::` 符号都会被宏劫持;7 个 GEMM 文件当前也不引 boost,保持依赖面不变)。
@@ -76,6 +104,10 @@ wc -l /tmp/old_probe_baseline.txt   # 非零行数
 ```
 
 - [ ] **Step 3: 写 harness(旧实现 = origin/main 探针函数体逐字,包装仅暴露矩阵;新实现 = Task 2 的 header 模板)**
+
+(取证快照标注, PR #392 检视 R6: 下方代码块中 `old_probe_d/f/c` 三变体是
+收口前探针原文的逐字归档, 含谱系魔数副本——取证冻结、不随
+eigen_splitmix_lineage.h 演化, grep 漂移审计时跳过, 见文首勘误横幅。)
 
 ```cpp
 // /tmp/gemm_probe_bitcmp.cpp — issue #389 重构逐位一致性 harness。
@@ -236,6 +268,19 @@ Expected: FAIL——`gemm_solve_probe.h: No such file or directory`(确认 harne
 - 消费方(8 个文件)以 `#include "gemm_solve_probe.h"` 引用;不依赖任何 Eigen/boost 头(`Mat::Scalar` 由调用方的 Mat 提供)。
 
 - [ ] **Step 1: 写 header(全文如下)**
+
+> **勘误(2026-11-04, PR #392 检视 R6)**: 以下「全文」是初版 commit
+> 2895cc0f 的计划时快照, 与交付文件(经 R1-R5 演化)有实质分歧, 原文保留
+> 记录计划时认知——照此重放会重新引入 R1/R2 消灭的魔数双源与 R5 修复的
+> `__linux__` 构建收窄。分歧清单(一律以交付文件为准):
+> ① 守门 `#if defined(__aarch64__) && defined(__linux__)` → `#if
+> defined(__aarch64__)`(R5 eba09373);
+> ② `probe_value`/`probe_stream` 内联魔数实现整体删除, 交付版 include
+> `../eigen_splitmix_lineage.h`, 填充使用 kGolden/kMix/kAvalanche 常量
+> (R1 cdfe4176)与 coord_finalize/advance/to_range 公式原语(R4 c968854c);
+> ③ `fill_pair` 开头补同维方阵契约 assert 与 `<cassert>`(R1 932fbccd);
+> ④ include 块整体挪入守门之内(R3 fe652713, 本快照在守门外);
+> ⑤ 谱系契约/值域/防护边界注释块按 R1-R4 检视意见多处改写。
 
 ```cpp
 /* gemm_solve_probe.h — GEMM 联合求解 sizing 探针的共享实现 (issue #389)。
@@ -470,6 +515,12 @@ done
 ```
 Expected: 每测试 `exit: pass`(引用真实输出进报告)。
 
+> **勘误(2026-11-04, PR #392 检视 R6)**: 本清单为初版范围(7 个 T9)。
+> R1 起收口扩至 SVD 家族(共享 lineage 头), 交付态定向回归集为 11 项:
+> 上述 7 项 + `eigen_gemm_double_max_arm` + `eigen_svd_double` +
+> `eigen_svd_cdouble` + `eigen_svd_jacobi_double`(各 `-t 2000 -n 1` →
+> `exit: pass`, 证据见 PR #392 描述各轮验证记录)。
+
 - [ ] **Step 3: SVE 测试 SKIP 路径诚实验证 + gem5-fi 边界声明**
 
 ```bash
@@ -495,6 +546,16 @@ Expected(按检视声明): 全部改动位于 `#if defined(__aarch64__) && defin
 ### Task 6: 提交、推送、PR、报告
 
 - [ ] **Step 1: 单 commit(DCO)**
+
+> **勘误(2026-11-04, PR #392 检视 R6)**: 下方 `git add tests/cpu/eigen_gemm/`
+> 与「确认仅 9 个文件」冻结在 R1 扩域前——对初版 commit 2895cc0f(彼时
+> header 自含魔数、单目录自洽)准确, 但交付态为 `tests/` 下 11 文件三目录:
+> `tests/cpu/eigen_splitmix_lineage.h`(新增)与 `tests/cpu/eigen_svd/
+> sandstone_eigen_common.h`(改动)都不在 `eigen_gemm/` 路径内, 而交付版
+> gemm_solve_probe.h 硬 include `../eigen_splitmix_lineage.h`——照本命令
+> 暂存会 push 出 include 不可解析的分裂 commit, 分支构建直接红。重放交付
+> 态须把三个路径一并暂存(或按 PR #392 各处置轮次的实际 commit 序列分别
+> 暂存提交)。
 
 ```bash
 cd /home/sdc/wangxu/operator/sdcshield-autoci
@@ -566,6 +627,9 @@ git checkout main && git status   # 期望 clean
 > 归档实际执行的 harness 最终版源码与 2026-11-02 复原重跑的真实输出(新实现
 > 路径为收口后 header 经 R1-R3 全部处置的当前状态, 旧实现逐字提取自
 > 66d83e8d 收口前副本, 提取源文件在源码头注中标明)。
+> (grep 审计标注, PR #392 检视 R6: 下方归档源码含旧实现魔数逐字副本 ×3
+> ——取证冻结、不随 eigen_splitmix_lineage.h 演化, grep 漂移审计时跳过,
+> 见文首勘误横幅。)
 
 编译与运行命令(2026-11-02 实测):
 

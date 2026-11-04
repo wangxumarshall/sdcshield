@@ -270,6 +270,11 @@ END {
     # 工件数据漂移时 FATAL，而非静默产出叙述与计算自相矛盾的对账行。190 总数不单列
     # 断言：p+q+s+y≡190 已由上方 c128n/c256n 断言覆盖，且 256 列格值结构性无
     # SKIP()/BOUNDARY()（cls() 分类边界），再断言 p256+q256 恒为不可达死代码。
+    # 「另有 1 合法 SKIP」的 1 同理不单列断言（检视 #4441098832 驳回依据）：y128
+    # 结构性≡0（c128 无 BOUNDARY 赋值路径）⇒ s128≡c128n−p128−q128，而 s128≠1
+    # 代数上蕴含 p128≠163 ∨ q128≠26（均已在下方断言）——fmmla 双 pass 漂移注入
+    # 实测触 p128 断言 FATAL（got 164）、exit 1、stdout 0 字节，单列 s128==1
+    # 无独立捕获场景，与 p256+q256 死代码同款（派生断言=虚假覆盖，#4439046566 先例）。
     if (p128 != 163)        { printf "FATAL: 128 narrative expects 163 default-adaptive (got %d)\n", p128 > "/dev/stderr"; fatal = 1 }
     if (q128 != 26)         { printf "FATAL: 128 narrative expects 26 baked bounded (got %d)\n", q128 > "/dev/stderr"; fatal = 1 }
     if (p256 != 164)        { printf "FATAL: 256 narrative expects 164 default-adaptive (got %d)\n", p256 > "/dev/stderr"; fatal = 1 }

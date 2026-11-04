@@ -181,7 +181,7 @@ END_DECLARE_TEST
   `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h` (2 pre-existing:
   `eigen_svd_cdouble_sve`/`eigen_gemm_double_max_arm`; 12 new: BDCSVD×4,
   JacobiSVD×4 — SKIP-level, GEMM×4; `eigen_svd_bidiag_sve` retired
-  2026-11-02, its raison d'être eliminated by #410). Every payload runs all
+  2026-11-02, its purpose eliminated by #410). Every payload runs all
   four tiers since the vendored-Eigen ptranspose
   scatter rewrite (issue #410, 2026-11-01: the memory-bridge form read past
   `buf[N][NC]` when NC > N — 1024-bit NC=8; the scatter form is in bounds

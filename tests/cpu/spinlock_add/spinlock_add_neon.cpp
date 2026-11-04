@@ -217,7 +217,16 @@ static uint64_t spinlock_add_neon_now_ns(void)
 /* 任何 FAIL 迹象的统一记账点（绿跑 unlink 的保守条件，见 cleanup）：
  * 新增检测通道 / FAIL 分支时必须调用本函数——漏调用 = 该路径红跑的
  * logverif 取证文件被当绿跑误删且无告警（PR#341 检视：递增点
- * 分散的演进风险，集中到单一命名函数使契约可见）。RELAXED 原子（多线程
+ * 分散的演进风险，集中到单一命名函数使契约可见）。
+ * 契约边界（PR#341 检视）：本契约是注释级约定、无结构性强制——框架侧
+ * 存在更强的失败事实（framework/sandstone_run.cpp run_one_test_inner
+ * 以 thr->has_failed() 判 Failed，任何 'E' 前缀日志经
+ * framework/logging.cpp message_common_check 置位）但测试侧 cleanup
+ * 不可见不可查询，绿跑 unlink 判定只消费本函数记账与通道B 本地 ret
+ * 两个信号；结构性闭合（框架向 cleanup 暴露可查询的 per-test 失败位，
+ * 或本函数与 report_fail 家族在宏层绑定）超出本测试文件范围，作为
+ * 框架级跟进项遗留——本文件以显式契约注释为边界，当前全部 FAIL
+ * 路径已核对均有覆盖（检视实证）。RELAXED 原子（多线程
  * 并发递增，#16 同款纪律；cleanup 在 join 后 quiescent 读） */
 static inline void spinlock_add_neon_note_fail(struct SpinlockAddNeonData *d)
 {

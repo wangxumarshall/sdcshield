@@ -2,9 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 190 个 SVE1 用例在 VL=128/256/512 三档采集真实通过证据（570 格矩阵），发现即修。（计数口径：计划撰写时点预期 188 用例/564 格，清单定稿 190——`wc -l sve-test-list.txt` = 190、matrix.md 实收 190×3=570 格；正文 Task 6/8 与 Goal 按定稿值，Task 1 命令块内「预期 188/≈189」为历史时点预期原文。）
+**Goal:** 为 190 个 SVE 用例在 VL=128/256/512 三档采集真实通过证据（570 格矩阵），发现即修。（计数口径：计划撰写时点预期 188 用例/564 格，清单定稿 190——`wc -l sve-test-list.txt` = 190、matrix.md 实收 190×3=570 格；正文 Task 6/8 与 Goal 按定稿值；Task 1 的 `wc -l` 行已随 2026-11-02 #449 勘误同步为实测口径，同命令块内其余「预期」字样系历史时点原文。）
 
 **范围追记（过程叙事，非目标定义）:** 计数对齐与 Task 6 Step 2 内嵌骨架的执行语义对齐（后经检视裁定收敛：移除代码镜像、单源指向入库脚本）系 PR #418 检视处置轮次追加、超出 issue #403「.log 入库主张消歧」原始边界——因与本同步产出的工件协议注记交织于同一 hunk 邻域不再拆分 PR，处置按轮次独立 commit（git log 逐轮可追溯）+ PR 描述逐轮记录。
+
+> **判据口径（2026-11-02 勘误，issue #449）：** 清单 = Task 1 枚举实测裁决 190 行
+> （union(193) − {neon_add_sve, arm64_sdc_sve, crt_builtins_sve}，见
+> `enumeration.md` §3），非计划期 name-grep 估算的 188×3=564；Task 2/3/6/8
+> 的一切格数以 190 为基（570 = 190×3）。
 
 **Architecture:** native 两腿（128=env 降 spec / 256=原生）在本机全量跑 `--test-list-file`；512 腿走 gem5-fi SE 真二进制，先补 `prctl(PR_SVE_GET_VL/SET_VL)` stub 打通框架 VL 探测（A′），时间盒失败则回退 FS（A）。修复走独立 commit 三档重验。
 
@@ -88,7 +93,7 @@ Expected: 无违规输出，exit 0。有违规 → 每个违规是独立修复�
 ```bash
 mkdir -p docs/superpowers/inventory/sve-all-vl-campaign
 cp /tmp/sve-union.txt docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
-wc -l docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt   # 记入 enumeration.md（预期 ≈189：188 + gemm_double_max_arm）
+wc -l docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt   # 记入 enumeration.md（实测 190：188 named + eigen_gemm_double_max_arm + libomp_ctx_arm；union 193 − 3 件不在默认集，enumeration.md §3）
 # 可执行性抽查：清单跑 3 个代表测试
 ./builddir/sdcshield --test-list-file docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt -t 1000 -n 1 2>&1 | tail -3
 ```

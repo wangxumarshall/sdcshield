@@ -111,17 +111,31 @@ reconfigure，plain ninja 感知不到），`./builddir/sdcshield --quality=0 --
 | `tests_set_base` | 基线 march | 通用测试（绝大多数） |
 | `tests_set_hsw`（仅x86） | `-march=haswell` + `-DEigen=EigenAVX2` | x86 AVX2 |
 | `tests_set_skx`（仅x86） | `-march=skylake-avx512` + `-DEigen=EigenAVX512` | x86 AVX512 |
-| `tests_set_sve`（仅aarch64） | `-march=armv8.2-a+sve -msve-vector-bits=128` + `-DEIGEN_ARM64_USE_SVE -DEigen=EigenSVE` | ARM SVE 定宽 128-bit（all-VL Phase 2 P5 后仅剩 eigen×2——Eigen packet 定宽，测试在 test_run 里 `arm64_sve_pin_vl(16)` 自 pin；Eigen 命名空间改名避免与 NEON 基线符号冲突） |
-| `tests_set_sve_vla`（仅aarch64） | `-march=armv8.2-a+sve`（无 `-msve-vector-bits`） | 真 VLA SVE 测试（sleef_sve + sve_rot×5，all-VL 128..1024-bit；all-VL Phase 2 P5） |
+| `tests_set_sve`（仅aarch64） | `march_arm64_sve`（无 `-msve-vector-bits`） | Eigen SVE **分发 TU**（all-VL Phase 2 后仅剩 eigen×2——Eigen packet 编译期定宽，payload 在 `tests/cpu/meson.build` 的 `foreach spec : [['gemm','128'],…]` 循环按 128/256/512/1024 四档各实例化为 `tests_eigen_{gemm,svd}_vl<N>` 库：每档 `march_arm64_sve` + `-msve-vector-bits=<tier>` + `-DEIGEN_ARM64_SVE_VL`/`-DEigen=EigenSVE<tier>` 命名空间改名；分发 TU 读 worker pinned VL 运行时选档，自身无 Eigen 宏） |
+| `tests_set_sve_vla`（仅aarch64） | `march_arm64_sve`（无 `-msve-vector-bits`） | 真 VLA SVE 测试（sleef_sve + sve_rot×5，all-VL 128..1024-bit；all-VL Phase 2 P5） |
 
-另外几个独立 static_library（带专属 march）：
-- `tests_crc`（aarch64）：`-march=armv8.1-a+crc`——arm_acle CRC intrinsics
-- `tests_arm64`（`tests/cpu/arm64/meson.build`）：`-march=armv8.1-a+crc+crypto`——NEON+AES
-- `tests_arm64_sve`（同文件）：`-march=armv8.2-a+sve`——SVE 全长向量族（每测试 init 里
+全部 march 档位变量统一定义于根 `meson.build`（单一事实来源，`meson setup`
+摘要 `ARM64 ISA march tiers` 打印全部档位）——改动档位只改根一处；完整
+变量↔库对照表见 README「从源码构建」。
+
+另外几个独立 static_library（带专属 march，一律引用根 `meson.build` 的
+`march_arm64_*` 变量）：
+- `tests_crc`（aarch64）：`march_arm64_crc`——arm_acle CRC intrinsics
+- `tests_arm64`（`tests/cpu/arm64/meson.build`）：`march_arm64_neon_crypto`——NEON+AES
+- `tests_arm64_sve`（同文件）：`march_arm64_sve`——SVE 全长向量族（每测试 init 里
   `#include <device/cpu/arm64/arm64_vl.h>` 后调
   `arm64_require_sve_vl(test, min_bits, max_bits)` 一行完成能力+范围探测，跳过时它返回
   `EXIT_SKIP`(-255)——用 `if (vl < 0) return EXIT_SKIP;` 承接（成功侧 vl 是字节数，需保存）；
   无 SVE 硬件干净 skip）
+- `tests_arm64_sve_mm`（同文件）：`march_arm64_sve_mm`——FMMLA 专用档（**刻意不加
+  `+sve2`**，F32MM/F64MM 与 SVE2 正交；编译器不支持时探测剔除、不阻断）
+- `tests_arm64_sve2`（同文件）：`march_arm64_sve2`——SVE2 cross-precision
+- `tests_arm64_sme`（同文件）：`march_arm64_sme`——ZA tile 族（编译器不支持时探测剔除、
+  不阻断）
+- `framework_arm64`（`framework/device/cpu/arm64/meson.build`）与 `tests_sdc_fuzzing`
+  （`tests/cpu/arm64/sdc_fuzzing/meson.build`，自动生成）：`march_arm64_neon_crypto`
+- `tests_sve_crt` / `tests_sve_avx53` / `tests_sve_avx53_ipsec`
+  （`tests/cpu/sve/meson.build`）：`march_arm64_sve`
 - vendored 库探测（openblas/sleef/isa-l/openssl）：`install/` 存在才加，**缺失给 message
   + 空列表，绝不用 disabler()**（会静默杀掉整个二进制的依赖链）
 

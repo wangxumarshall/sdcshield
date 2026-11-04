@@ -1088,6 +1088,29 @@ if host_machine.cpu_family() == 'aarch64'
         )
     )
 endif
+
+# memory-access/ —— 2026-11-04 尾部访存对探针家族：负载头是扫描变量
+# （随机/步长 ldr 扫、纯 str 流、copy 交替、dc-civac 维护、屏障流、
+# ldaxr/stxr 独占对、stnp NT 流、固定 NEON ALU 链），尾部统一
+# str→str / ldr→str→str 背靠背 asm 探针（≤2 周期 store→load 转发窗口）
+# + init 快照 golden + 段轮转防折叠（ma_tail_probe.h）。针对实测故障
+# 签名：负载结束后连续访存对中第二个写回错位。仅 aarch64。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'memory-access/ma_ldr_random.cpp',
+            'memory-access/ma_ldr_stride.cpp',
+            'memory-access/ma_str_stream.cpp',
+            'memory-access/ma_copy_stream.cpp',
+            'memory-access/ma_civac.cpp',
+            'memory-access/ma_barrier.cpp',
+            'memory-access/ma_atomic.cpp',
+            'memory-access/ma_nt.cpp',
+            'memory-access/ma_alu_fixed.cpp',
+        )
+    )
+endif
+
 tests_config_base = tests_set_base.apply(tests_config)
 
 # libatomic provides the __atomic_load_16 / __atomic_store_16 /

@@ -29,8 +29,9 @@
      （止于 iteration 0、无 SIGQUIT 已发出的观测）亦不可区分——「父进程更早
      死亡」的具体形式：本格 buffer_bytes 自适应几何（60% 物理内存 ÷2 消费者 =
      30%，源码 `sdc_target_workset_bytes(600, 2, …)`；稀疏触页——512 访问窗 ×
-     ≤2 页预触，常驻 RSS 上界 ≈4 MiB/线程，依据为测试源码注释（RSS bounded
-     by the 512 access windows, each straddling at most 2 pages），远低于几何值）下的 OOM-kill / 框架自身崩溃
+     ≤2 页预触，常驻 RSS 上界 ≈4 MiB/线程，源码注释逐字引文「RSS is bounded
+     by the 512 access windows (each straddling at most 2 pages: <= 4 MiB per
+     thread at 4 KiB pages, ~2 MiB expected)」，远低于几何值）下的 OOM-kill / 框架自身崩溃
      （框架崩溃属代码 bug 候选；OOM-kill 归类待取证定：若系 sizing 预算失效
      所致则属代码缺陷，若系机器内存状态所致则同 §4 环境边界类）；其余
      命令行同、仅种子不同（LCG:1001 vs LCG:1002）的 seed1 完整走完该格

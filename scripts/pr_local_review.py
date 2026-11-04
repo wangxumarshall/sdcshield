@@ -10,6 +10,9 @@
 # 已落地: 对抗性 prompt 引擎(build_adversarial_prompt)+ 同 head 幂等检查
 # (already_reviewed)+ 检视引擎(run_review: 拉 diff + 跑 claude + 解析 findings)
 # + 意见发布(publish_review)。pr_loop 判据扩展与 wait 内触发见 pr_loop.py。
+# 2026-11-04 P2 失败加固(docs/superpowers/plans/
+# 2026-11-04-pr-local-review-scope-optimize.md): claude 输出落盘取证
+# (review-debug/)+ 解析失败带修复后缀进程内重试一次。
 #
 # 依赖: Python 3 标准库 + gh/claude 子进程,零第三方运行时依赖(与 pr_loop.py
 # 同策略,本脚本不管理 token;claude 凭据 source agent.env——新 state 目录
@@ -28,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Optional
 
 # 把 scripts/ 目录放进 sys.path,供后续 Task `import pr_loop`(复用其 gh 封装、
@@ -185,7 +189,8 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
          `_worktree_remove`),不碰用户主工作区、不抢 autoci clone(设计文档 §9)。
       4. build_adversarial_prompt(diff, pr_context) 组对抗性 prompt。
       5. `source agent.env && claude -p <prompt> --dangerously-skip-permissions`
-         跑 claude(cwd = worktree),解析输出为 findings。
+         跑 claude(cwd = worktree),解析输出为 findings;输出非 JSON 数组时
+         落盘原始输出 + 带修复后缀重试一次(P2)。
     """
     if not force and already_reviewed(pr_number, head_sha):
         return []
@@ -202,10 +207,31 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
     prompt = build_adversarial_prompt(diff, pr_context)
     worktree = _worktree_add(head_sha)
     try:
-        output = _run_claude(build_claude_command(), cwd=worktree, prompt=prompt)
+        output = _run_claude(build_claude_command(), cwd=worktree,
+                             prompt=prompt, debug_tag=f"pr{pr_number}")
+        # P2 解析失败路径: 落盘原始输出(取证)→ 带修复后缀同 worktree 重试
+        # 一次 → 仍失败则自然抛(诚实失败,不假成功)。重试只针对「输出非 JSON
+        # 数组」这一可修复契约违背;空输出在 strict=False 下返回 [](真·零
+        # 意见),不进重试。
+        try:
+            return _parse_findings(output)
+        except GhError as exc:
+            _dump_raw_output(f"pr{pr_number}", output, "",
+                             f"parse: {exc}")
+            retry_prompt = prompt + REPAIR_SUFFIX
+            output2 = _run_claude(build_claude_command(), cwd=worktree,
+                                  prompt=retry_prompt,
+                                  debug_tag=f"pr{pr_number}-retry")
+            try:
+                return _parse_findings(output2)
+            except GhError as exc2:
+                # 重试仍失败: 落盘重试输出(最终失败态是最有价值的取证)
+                # 后如实抛——不假成功。
+                _dump_raw_output(f"pr{pr_number}", output2, "",
+                                 f"parse-retry: {exc2}")
+                raise
     finally:
         _worktree_remove(worktree)
-    return _parse_findings(output)
 
 
 # ============ 检视引擎子进程缝(测试 monkeypatch 离线替身,不触网/不真跑 claude) ============
@@ -232,6 +258,38 @@ def agent_env_path() -> str:
 
 # claude 检视最长运行时间(秒,与 ci_triage.AGENT_TIMEOUT_SEC 一致)
 CLAUDE_TIMEOUT = 3600
+
+# 解析失败重试的输出契约修复后缀(P2,2026-11-04): r7/r7b(PR#341)与 pr391×4
+# 实证——claude 输出违背「只输出 JSON 数组」契约时整轮 30-60 min 检视被弃,
+# 且原始输出被丢弃、失败形状不可诊断。带修复指令重试一次,把可修复的契约
+# 违背从「整轮报废」降为「多跑一次」;重试产物仍走同一幂等门禁与锚定。
+REPAIR_SUFFIX = (
+    "\n\n【输出契约修复指令】你上一次的输出无法解析为 JSON 数组。这一次在"
+    "回复的最开头就输出 JSON 数组本身——不要任何前言、总结、markdown 围栏"
+    "或其他文字;数组为空时只输出 []。"
+)
+
+
+def _dump_raw_output(tag: str, stdout: str, stderr: str, reason: str) -> None:
+    """claude 原始输出落盘(P2 失败取证,2026-11-04)。
+
+    旧行为只把 stderr 前 300 字符嵌进 GhError 消息、stdout 全丢(r7b 实证
+    空 stderr = 零线索,失败形状永久不可诊断)。落盘到 agent.env 同侧 state
+    目录的 review-debug/ 子目录(重定向实例感知,与 agent_env_path 同源);
+    best-effort——落盘失败绝不影响主流程(取证不能反噬检视)。
+    """
+    try:
+        debug_dir = os.path.join(os.path.dirname(agent_env_path()),
+                                 "review-debug")
+        os.makedirs(debug_dir, exist_ok=True)
+        path = os.path.join(
+            debug_dir, f"{tag}-{time.strftime('%Y%m%d-%H%M%S')}.log")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"reason: {reason}\n"
+                    f"--- stdout ({len(stdout or '')} chars) ---\n"
+                    f"{stdout or ''}\n--- stderr ---\n{stderr or ''}\n")
+    except OSError:
+        pass
 
 
 def _gh(argv: list) -> str:
@@ -344,12 +402,15 @@ def build_claude_command() -> str:
             f"claude -p --dangerously-skip-permissions")
 
 
-def _run_claude(cmd: str, cwd: str, prompt: str) -> str:
+def _run_claude(cmd: str, cwd: str, prompt: str,
+                debug_tag: str = "anonymous") -> str:
     """跑 claude 子进程(bash -c cmd,cwd=隔离 worktree),返回 stdout。
 
     prompt 经 stdin 传入(不占命令行,规避大 diff 触发 Errno 7 Argument list
     too long)。模块级子进程出口(测试 monkeypatch 的 claude 缝,离线 fake
     claude 不真跑)。
+    非零退出时先把 stdout/stderr 原始输出落盘(debug_tag 命名,见
+    _dump_raw_output——P2 失败取证)再抛 GhError;正常路径零额外副作用。
     """
     try:
         proc = subprocess.run(["bash", "-c", cmd], input=prompt,
@@ -361,6 +422,8 @@ def _run_claude(cmd: str, cwd: str, prompt: str) -> str:
         raise GhError(f"claude 检视超时({CLAUDE_TIMEOUT}s)")
     if proc.returncode != 0:
         err = " ".join(proc.stderr.strip().split())[:300]
+        _dump_raw_output(debug_tag, proc.stdout, proc.stderr,
+                         f"claude exit {proc.returncode}")
         raise GhError(f"claude 检视失败(exit {proc.returncode}): {err}")
     return proc.stdout
 
@@ -441,7 +504,9 @@ def worktree_remove(path: str) -> None:
 def run_claude(cmd: str, cwd: str, prompt: str) -> str:
     """跑 claude 子进程(bash -c cmd,cwd=隔离 worktree),返回 stdout。
 
-    失败/超时抛 GhError(消息内嵌 stderr 前 300 字符)。"""
+    失败/超时抛 GhError(消息内嵌 stderr 前 300 字符);非零退出时原始
+    stdout/stderr 先落盘到 state 目录 review-debug/(tag=anonymous,P2
+    失败取证——返回/抛错契约不变,纯增量)。"""
     return _run_claude(cmd, cwd, prompt)
 
 

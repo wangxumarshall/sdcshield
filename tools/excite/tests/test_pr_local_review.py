@@ -373,7 +373,7 @@ def test_run_review_sources_agent_env_and_parses_findings(monkeypatch, tmp_path)
 
     captured = {}
 
-    def fake_claude(cmd, cwd, prompt):
+    def fake_claude(cmd, cwd, prompt, debug_tag="anonymous"):
         captured["cmd"] = cmd
         captured["cwd"] = cwd
         captured["prompt"] = prompt
@@ -604,3 +604,91 @@ def test_open_pr_heads_malformed_number_raises_gherror(monkeypatch):
     ]))
     with pytest.raises(plr.GhError):
         plr._open_pr_heads()
+
+
+# ---------------------------------------------------------------------------
+# P2 失败加固(2026-11-04,docs/superpowers/plans/
+# 2026-11-04-pr-local-review-scope-optimize.md): 原始输出落盘(review-debug/)
+# + 解析失败带修复后缀重试一次。全部离线(monkeypatch 缝),不触网。
+
+def test_run_review_retries_once_on_non_json(monkeypatch, tmp_path):
+    """P2: 首次输出非 JSON → 落盘原始输出 + 带修复后缀同 worktree 重试一次;
+    重试输出可解析 → 成功返回。"""
+    import pr_loop
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
+    wt = tmp_path / "wt"
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(wt))
+    removed = []
+    monkeypatch.setattr(plr, "_worktree_remove",
+                        lambda path: removed.append(path))
+    dumps = []
+    monkeypatch.setattr(plr, "_dump_raw_output",
+                        lambda tag, out, err, why: dumps.append((tag, out, why)))
+    calls = []
+
+    def fake_claude(cmd, cwd, prompt, debug_tag="anonymous"):
+        calls.append(prompt)
+        return "垃圾非JSON输出" if len(calls) == 1 else "[]"
+
+    monkeypatch.setattr(plr, "_run_claude", fake_claude)
+
+    assert plr.run_review(7, "b" * 40) == []
+    assert len(calls) == 2
+    assert plr.REPAIR_SUFFIX.strip()[:10] in calls[1]
+    # 原始输出在重试前已落盘(取证),tag 带 PR 号
+    assert dumps and dumps[0][1] == "垃圾非JSON输出" and dumps[0][0] == "pr7"
+    # 重试仍在同一 worktree(不重建、即弃语义不变)
+    assert removed == [str(wt)]
+
+
+def test_run_review_second_failure_raises_after_dump(monkeypatch, tmp_path):
+    """P2 诚实失败: 重试输出仍非 JSON → 落盘重试输出后抛 GhError,
+    绝不把解析失败当零意见。"""
+    import pr_loop
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(tmp_path))
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: None)
+    dumps = []
+    monkeypatch.setattr(plr, "_dump_raw_output",
+                        lambda tag, out, err, why: dumps.append((tag, out, why)))
+    monkeypatch.setattr(plr, "_run_claude",
+                        lambda cmd, cwd, prompt, debug_tag="anonymous":
+                        "仍是垃圾")
+
+    with pytest.raises(plr.GhError):
+        plr.run_review(7, "b" * 40)
+    # 两次输出都落盘(首输 + 重试输,最终失败态是最有价值的取证)
+    assert [d[1] for d in dumps] == ["仍是垃圾", "仍是垃圾"]
+
+
+def test_dump_raw_output_writes_and_never_raises(monkeypatch, tmp_path):
+    """P2 落盘: env 重定向目录下写 review-debug/<tag>-*.log(reason/stdout/
+    stderr 全量);目录不可写等 OSError 绝不外抛(取证不得反噬检视)。"""
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    plr._dump_raw_output("pr7", "RAW-STDOUT", "RAW-STDERR", "why-exit-1")
+    debug_dir = tmp_path / "review-debug"
+    files = list(debug_dir.glob("pr7-*.log"))
+    assert len(files) == 1
+    content = files[0].read_text(encoding="utf-8")
+    assert "why-exit-1" in content and "RAW-STDOUT" in content \
+        and "RAW-STDERR" in content
+    # OSError 路径静默吞(makedirs 失败等)
+    monkeypatch.setattr(plr.os, "makedirs",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
+    plr._dump_raw_output("pr7", "o", "e", "r")   # 不得抛

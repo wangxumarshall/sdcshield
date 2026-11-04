@@ -1810,3 +1810,42 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   （version: sdcshield-cd5d570e857a-dirty，docs-only 不改二进制）；
   --list-tests 三档 570/580/584 本日复测复现；588 注册锚点经 nm 段窗 +
   旁路普查双路实证（见 #30）；crt 探针本机未命中经 test -f 实测。
+
+## PR #413 R7 检视处置（2026-11-04，新 worker 命接手，rebase + 计数重锚定 + R7 意见全处置）
+
+- **开工**: worktree 干净、local=remote=d2c501d0；第 5 bot 对 d2c501d0 的检视
+  已落（2026-11-02 10:00:55 UTC）。R7 collect 计入 5 条（#41–#45，local-claude）。
+- **rebase**: main 推进 6 提交（145c04b7/0a696384/d3288c82 迁移 +121/
+  451c6272/ff74f226/418e4e09 neon 系列）→ PR CONFLICTING，按 git-sanity
+  红线一律 rebase：6 commit 重放至 418e4e09（dc1852d7→32116499→9c2ac16c→
+  55539a6a→8815fe65→fd89ad64），3 区域×6 轮冲突脚本化解决（本命工具
+  pr413-rebase-driver.py，仓库外 reports 目录）。裁定沿用：计数冲突以
+  rebase 树实测裁决；main 侧 439/547/551（0xd01 机迁移后实测，d3288c82
+  记录）取代分支「390 待复测定值」叙事——复测已由 main 侧兑现；main 表
+  538/110/652 系旧基 487+51 算术叠加（487 基为 R1 已证伪降级口径），
+  不沿用。
+- **计数重锚定（commit 0a015da7）**: rebase 树 0xd02 首测 640/750/754
+  （BETA 110 = 原 10 + sdc_fuzz×100；SKIP 4 eigen_svd_jacobi×4）；
+  tests ELF 段 [0xda7ae0,0xdc8400) _test_* 恰 758 = 754+4 具名被滤
+  （SVE2×1+SME×3 全 PROD，能力主机 PROD 644）；_test_mce_check 段外
+  不在列表（与 2026-11-02 树同构）；门控普查 207 两树同值；crt_builtins
+  探针（迁移后路径 /usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/）
+  本机仍 ABSENT——该库存在主机注册 760/PROD 642。迁移前树 570/580/584/
+  588 降为带树归属历史锚点（两树差 +70 PROD/+170 全量）。
+- **意见处置表（R7 collect 当前 head 5 条）**:
+
+| 意见 | 结论 | 依据 |
+|---|---|---|
+| #41 [Important] 守卫锚点指错文件（id=4441028166） | 采纳 | 实证 framework/meson.build:232-239 为 OpenSSL 真实守卫（含系统 libcrypto≥3.0 回退），tests/cpu/meson.build:421 注释行/:417 消费方；686/726/761/945 四守卫属实。commit 3f60d55d：README 守卫清单分列真锚点 + 回退条件披露 + 禁用消息注源；本记录 #26 行锚点同步补真 |
+| #42 [Minor] CLAUDE.md「locks those groups out」未同步（id=4441028186） | 采纳 | R3 #22 在 README 已定案「禁用 + reconfigure 恢复」；CLAUDE.md 孪生块同步同款措辞（locks→disables + `meson setup --reconfigure builddir` recovers），本 commit 落实 |
+| #43 [Minor] CLAUDE.md 390 宿主身份限定语缺失（id=4441028201） | 采纳 | rebase 后 CLAUDE.md 0xd01 行已换 main 侧 439 实测；补「main-side record — host identity not independently re-verified here」来源+限定（439 系 main 侧另一 worker 会话记录，其宿主身份本会话未独立复核；old 390 records attribution-unverifiable 保留） |
+| #44 [Minor] PR body 范围声明滞后（id=4441028208） | 采纳 | PR body 更新为 R1–R7 如实范围（含 rebase + 640 重锚定 + #41–#45 处置），元数据操作无 commit（R5 #37 同例） |
+| #45 [Minor] 三处复制 + footnote 长句（id=4441028219） | RESIDUAL 维持 | 与 R5 #38/#39 同形态（结构性去重 + 句法打磨），归后续文档 PR 专项；本轮计数重锚定已按 R5 判例同步三处（README:126/348/394 + CLAUDE.md），下次计数变更仍须同步 ≥3 处的债务已披露 |
+
+- **验证（本命亲测）**: SDC_BUILD_JOBS=8 全量 782 目标 BUILD_EXIT=0、
+  唯一 warning = mesh_upi_sse_sym.cpp:202 %u/uint64_t（main 侧既有，
+  blob 三树同源非本 PR 引入）；--list-tests 640/750/754；增量 ninja no
+  work to do、零新警告；zstd19 -t 2000 -n 1 → exit: pass（version
+  sdcshield-fd89ad646c83，docs-only 不改二进制）；x86-64 非回归 = 纯文档。
+- **push**: fd89ad64..（0a015da7 → 3f60d55d → 本 commit），线性无 merge，
+  DCO 齐。待第 5 bot → CI → 静默窗 ≥900s → R8 collect。

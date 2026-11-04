@@ -287,12 +287,26 @@ call sites are `#if defined(__aarch64__) && defined(__linux__)`-gated),
 it exists so a future cross-arch caller gets defined, loudly-logged
 behavior instead of a compile error.
 
-One rule-5 exception is disclosed here (approved): the `sdc_calibrated_dim`
-probe threshold was raised 1 ms → 100 ms (M3 — a 1 ms probe is dominated by
-fixed setup overhead and pollutes the power-law fit). That helper is
-deliberately global shared code, so the x86-64 eigen family's calibrated
-dims shift with it; the direction is the intended fix (fit de-distortion),
-not behavior drift. The constructive one-solve ≤ max_single_ms guarantee
-(verification probe + shrink loop) holds on x86-64 unchanged; what shifts
-is the calibrated operating point (larger, less fit-distorted dims) and
-init-time probe cost, both bounded.
+The one rule-5 exception formerly disclosed here (the `sdc_calibrated_dim`
+probe threshold raised 1 ms → 100 ms as a global shared constant) is
+retired (issue #351): the threshold is now a parameter, `probe_floor_ms`.
+Its default 1.0 restores the historical noise-floor semantics for every
+existing 7-argument caller — the x86-64 `#else` legacy chains
+(`eigen_sparse`, the SVD template family) and aarch64-non-Linux — so their
+calibration is semantically equivalent to the pre-#302 behavior: identical
+1 ms probe stopping threshold and code path, with calibrated operating
+points and init probe cost reproducing within timing jitter (calibration
+is wall-clock-dependent and thus not byte-reproducible; the PR-measured
+`mdim` 473 vs the 476 pre-#302 baseline is such jitter). The 100 ms M3
+floor (fixed-overhead share < 10%, needed
+by the difference-based `sdc_fit` `a_ms` extraction; bound to the named
+constant `sdc_m3_probe_floor_ms`) is carried explicitly
+by the joint solver on its ARM64-only path; no non-migrated consumer sees
+it. Two runtime `log_warning`s guard the extraction on that path, both
+emitted only for fit-consuming callers (the legacy 7-argument chains pass
+no `fit` and never warn): one when the probe tier's measured duration
+falls short of the floor, and one when the two-point difference itself
+degenerates — tier collision under `hi` truncation, or flat/inverted
+timings — and the b=0 fallback `a = t1/p1^k` leaves the full fixed
+overhead inside `a_ms` (a_ms inflated → n_run undersized → under-excited
+SDC coverage).

@@ -43,6 +43,7 @@
 #include <test_knobs.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -743,8 +744,21 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
  * 拟合出参 fit(spec §4.3 M3): 成功路径填充 {a_ms, p} —— 单解模型
  * t(n)=a_ms·n^p, a_ms 已按两点差分扣除固定开销 b(见函数尾); 早退
- * 路径保持 {0,0}(无效, 消费方跳过 n_run)。默认 nullptr, 既有调用
- * (7 实参)签名不变。
+ * 路径保持 {0,0}(无效, 消费方跳过 n_run)。
+ * fit/probe_floor_ms 无缺省(主模板 9 参, 见下方转发重载): 既有 7 实参
+ * 调用(跨 arch 存量链, 含 x86-64 #else 分支)经 7 参转发重载——等价于
+ * 旧缺省 {nullptr, 1.0}, 签名与行为不变(rule 5, issue #351——转发
+ * 重载的 1.0 即 f84966bc 之前的历史噪声底语义, 不得随 ARM 侧 M3 口径
+ * 联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)显式传
+ * sdc_m3_probe_floor_ms(100.0)。fit 保持自 f84966bc 引入起(至本
+ * PR 参数化前)的第 8 参位次、probe_floor_ms 殿后: 字面量 0/NULL 作第 8
+ * 实参(『显式不要 fit』的旧写法)经 std::nullptr_t 重载绑 fit 而非经
+ * int→double 隐式转换静默重绑 probe_floor_ms=0.0——后者使 probe 抬档
+ * 循环永假、外推基数退回微档噪声且无告警; double 字面量误入第 8 位
+ * 编译报错(响亮); 传非空 fit 而省略第 9 参(8 参形态)亦编译报错
+ * (R10 检视 id=4463831067: 该形态会以缺省 1.0 停点静默运行——
+ * 固定开销污染差分, 仅剩运行期告警兜底, 与本签名杜绝『经签名
+ * 静默误用』的设计目标不符; fit 消费方必须显式选择 M3 口径)。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
  *   if (dim > lo)
@@ -756,11 +770,25 @@ struct sdc_fit {
     double p;       /* 幂指数(k_floor 修正后) */
 };
 
+/* M3 固定开销口径的 probe 档下限(ms), spec §4.3 M3: 差分扣 b 要求
+ * probe 档**实测时长**不低于该值——固定开销(构造/预处理)在计时中
+ * 占比 <10%, 幂律系数不被抬高。消费方共三处(fit 差分守卫 / 联合求解
+ * 显式实参 / 告警文案), 由本常量绑定, M3 重标定只改一处。 */
+static constexpr double sdc_m3_probe_floor_ms = 100.0;
+
+/* M3 前提告警公共段: 分流文案(传参达标/未达标)共用的病理与后果表述。
+ * 宏参与字面量拼接(format 检查仍生效), 单点维护防双口径漂移——
+ * 分支各自维护曾致 byte-identical 双口径并存(见 8d0dc47e 裁定)。 */
+#define SDC_M3_FIT_WARN_BODY                                          \
+    "fit 差分扣 b 的固定开销占比<10%%前提未达成(spec §4.3 M3), "       \
+    "a_ms 将被固定开销与计时噪声污染(a_ms 虚高→n_run 偏小→激发欠压); "
+
 template <typename F>
 static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                                      const char *test_id, const char *knob,
                                      double k_floor, F solve_once,
-                                     struct sdc_fit *fit = nullptr)
+                                     struct sdc_fit *fit,
+                                     double probe_floor_ms)
 {
     if (fit) { fit->a_ms = 0.0; fit->p = 0.0; }  /* 早退路径保持无效 */
     if (hi <= lo)
@@ -771,14 +799,21 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
         return std::chrono::duration<double, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
     };
-    /* probe 档自适应抬升: 小档求解太快(<100ms)时固定开销(构造/预处理)
-     * 在计时中占比过高——幂律系数被抬高, 外推维度被压低(实测 sve 模型
-     * t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高 ~14×,
-     * 立方根收缩 2.4×)。翻倍 probe 档直到固定开销占比 <10%(>=100ms,
-     * spec §4.3 M3; 1ms→100ms)或触及 hi——否则外推基数失真。 */
+    /* probe 档自适应抬升: 小档求解太快(< probe_floor_ms)时翻倍 probe 档
+     * 直到可测量或触及 hi——否则外推基数失真。两级语义(issue #351):
+     *   - 缺省 1.0(历史噪声底): 求解快到 1ms 以下即被计时噪声淹没
+     *     (实测稀疏 Cholesky 规则带状 probe 在 64 档仅 0.1ms, 外推
+     *     失控)——跨 arch 存量 7 参调用(x86-64 #else 链)语义不变沿用
+     *     此口径(同 1ms 停点与代码路径, 操作点在计时抖动内一致),
+     *     不得随 ARM 侧 M3 口径联动改动(rule 5)。
+     *   - sdc_m3_probe_floor_ms(100.0, spec §4.3 M3): 固定开销(构造/
+     *     预处理)在计时中占比 <10%, 幂律系数不被抬高(实测 sve 模型
+     *     t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高
+     *     ~14×, 立方根收缩 2.4×)——仅由联合求解(ARM-only)显式传入,
+     *     与其 fit 差分扣 b 配套。 */
     int p1 = lo;
     double t1 = probe(p1);
-    while (t1 < 100.0 && p1 * 2 <= hi) {
+    while (t1 < probe_floor_ms && p1 * 2 <= hi) {
         p1 *= 2;
         t1 = probe(p1);
     }
@@ -832,35 +867,139 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
     }
     if (td0 > (double)max_single_ms)
         log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
-                    test_id, knob, xdim, td0, shrinks);
+                    test_id, knob, xdim,
+                    std::ceil(td0 * 10.0) / 10.0, shrinks);
+    /* 显示值按断言方向选截断口径(PR #377 检视 id=4441216644/
+     * 4463472452/4463472461/4463831060): round 渲染会把窗口内的
+     * 实测值渲染到断言对面——下界断言(t1 < sdc_m3_probe_floor_ms)
+     * 在 t1∈[99.95,100) 渲染成 100.0(printf("%.1f", 99.97)="100.0"),
+     * 上界断言(td0/td > max_single_ms)在 (max, max+0.05) 渲染成
+     * max(printf("%.1f", 2000.04)="2000.0"), 打出『实测 2000.0ms
+     * 超预算』的显示值=预算却断言超——同一误导形态的两个方向。
+     * 修法对称: 下界断言配 floor(显示值 ≤ 实测值 ⇒ 显示<阈值恒真),
+     * 上界断言配 ceil(显示值 ≥ 实测值 ⇒ 显示>阈值恒真, 阈值取整十
+     * 值时严格 >)。t1/t2 另有全流一致与单调保持要求(汇总行/M3
+     * 前提告警/差分退化告警同一测量同一数字; t2≤t1 的倒挂不被
+     * 渲染成正挂——round 无此保证)——fit 消费链(联合求解)向下
+     * 截断; 存量 7 参链(fit=nullptr, x86-64 #else)不经 M3/退化
+     * 告警, 无矛盾可消, 保持 f84966bc~1 的 %.1f 原渲染基线零漂移
+     * (rule 5: 不随 ARM 侧口径联动, 显示亦然)。代价均为偏离至多
+     * 一个显示精度(0.1ms), 对诊断处方无损。td0 告警行(断言为真才
+     * 打印)与汇总行超预算后缀为上界断言语境, 两条链都会出现且矛盾
+     * 形态相同——td0 一律 ceil, td 仅在超预算(断言为真)时 ceil,
+     * 正常路径保持原渲染零漂移。 */
+    const double t1_disp = fit ? std::floor(t1 * 10.0) / 10.0 : t1;
+    const double t2_disp = fit ? std::floor(t2 * 10.0) / 10.0 : t2;
+    /* td 仅在超预算(断言为真)时 ceil——正常路径保持原渲染, 存量链
+     * 基线零漂移; 断言为假时无『仍超预算』后缀, 无矛盾语境。 */
+    const double td_disp =
+        (td > (double)max_single_ms) ? std::ceil(td * 10.0) / 10.0 : td;
     log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
                 "k=%.2f) → %d (验证 %.1fms%s)",
-                test_id, knob, max_single_ms, p1, t1, mid, t2, k, dim, td,
+                test_id, knob, max_single_ms, p1, t1_disp, mid, t2_disp, k, dim,
+                td_disp,
                 td > (double)max_single_ms
                     ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
                     : "");
     if (fit) {
+        /* M3 有效性告警: 差分扣 b 的前提是 probe 档**实测时长** t1 ≥
+         * sdc_m3_probe_floor_ms(固定开销占比 <10%, spec §4.3 M3)——
+         * 判据取实测 t1 而非入参 probe_floor_ms(PR #377 检视: 只查入参
+         * 两个方向都判错——floor=100.0 但 hi 截断致档位抬不上去同样是
+         * 致噪源; 反之慢求解器在缺省 1.0 下 lo 档实测已 ≥100ms, 差分
+         * 本干净, 不应告警)。实测 t1 不足时 a_ms 虚高 → n_run 偏小 →
+         * 激发维度静默欠压, 在此从静默变有声。
+         * 阈值锚定 spec §4.3 M3 方法口径而非调用方实参(R4 检视答疑):
+         * 100ms 是差分扣 b 方法本身的档位判据, 非逐求解器可调——显式
+         * 传 sub-100 实参仍告警是有意设计(偏离 spec 的差分口径应被看
+         * 见; 固定开销 b 显著更小的求解器应先修订 spec M3 标定, 常量
+         * 已单点绑定)。文案按传参是否已达 M3 口径分流: 已达标者唯一
+         * 残余致因是 knob hi 截断, 不再误指传参。 */
+        if (t1 < sdc_m3_probe_floor_ms) {
+            /* t1 显示用上方汇总行同源的 t1_disp(fit 链恒为向下截断
+             * 口径, 见其定义处注释)——告警行断言与汇总行数字恒一致。 */
+            if (probe_floor_ms >= sdc_m3_probe_floor_ms)
+                log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
+                            "knob hi 截断致档位抬不上去, " SDC_M3_FIT_WARN_BODY
+                            "检查 knob hi 是否足以抬升 probe 档", test_id,
+                            knob, t1_disp, sdc_m3_probe_floor_ms);
+            else
+                log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
+                            SDC_M3_FIT_WARN_BODY
+                            "检查 probe_floor_ms 传参(M3 消费方应显式传 %.0f)"
+                            "与 knob hi 是否足以抬升 probe 档", test_id, knob,
+                            t1_disp, sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
+        }
         /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
          *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p
          * b≈0 时严格退化为 a = t1/p1^p。差分在 b 为常数的模型下精确,
-         * 常规档(b 占比 <10%, 与 100ms 阈值配套)与 b 主导的对抗档都
-         * 成立; 代价是对差分 (t2−t1) 的测量噪声敏感(p1/mid 档位拉得
-         * 越开越稳)。退化保护(档位重合/计时持平/非有限/非正)回退
-         * b=0 口径 a = t1/p1^p —— 系数只高不低, 消费方 n_run 只小
-         * 不大(保守方向)。 */
+         * 常规档(b 占比 <10%, 与联合求解显式传入的 sdc_m3_probe_floor_ms
+         * 配套)与 b 主导的对抗档都成立; 代价是对差分 (t2−t1) 的测量
+         * 噪声敏感(p1/mid 档位拉得越开越稳)。退化保护(档位重合/计时
+         * 持平/非有限/非正)回退
+         * b=0 口径 a = t1/p1^p —— t1 含全部固定开销, 系数只高不低、
+         * 消费方 n_run 只小不大: 时间预算侧保守, SDC 激发强度侧欠压
+         * (与上方 t1<floor 告警同型污染), 故回退从静默变有声。 */
         double pn = std::pow((double)p1, k);
         double mn = std::pow((double)mid, k);
         double a = 0.0;
         if (mid > p1 && t2 > t1 && mn > pn && std::isfinite(mn - pn))
             a = (t2 - t1) / (mn - pn);
-        if (!(a > 0.0) && pn > 0.0)
-            a = t1 / pn;                 /* t1>0 由上方早退保证 */
+        if (!(a > 0.0) && pn > 0.0) {
+            /* 差分退化告警(PR #377 检视): 非正差分此前零告警——t1 ≥
+             * floor 时 M3 前提告警不触发, 而档位重合(hi 截断使
+             * mid==p1)或计时持平/倒挂(系统抖动、非单调求解器)令差分
+             * 退化为 0/负, b=0 口径把固定开销全数计入 a_ms(a_ms 虚高
+             * →n_run 偏小→激发欠压)。两档实测随告警留档供定位; 处方
+             * 按两类致因: 拉大 knob hi 档距(重合)或复跑(持平)。
+             * 已知边界(R6 检视裁定): 噪声偏置的弱正差分(t2>t1 但
+             * (t2−t1) 信噪比不足)不在本告警与 M3 前提告警覆盖内——
+             * 差分对测量噪声固有敏感(见上方代价声明), M3 口径
+             * (floor≥100ms+档距 2×, k_floor=3.0 下健康比值 ~8×)把
+             * 该场景压在 ±10-30% 固有抖动量级(反向膨胀被消费端
+             * min(n_mem, n_run, hi) 封顶; 128 核高载机实测比值仍
+             * 7.1×/8.3×)。收口须先按 spec §4.3 M3 标定差分信噪比
+             * 判据(如实测 k 距 k_floor 的带阈), 不在此增设无 spec
+             * 依据的阈值——告警疲劳稀释真事件信号(R4/#23 同裁定)。 */
+            log_warning("[时间校准] %s.%s: fit 两点差分退化(档 %d→%d 实测 "
+                        "%.1fms→%.1fms, 档位重合或计时持平/倒挂)——回退 "
+                        "b=0 口径 a=t1/p1^k, 固定开销未扣除, a_ms 虚高→"
+                        "n_run 偏小→激发欠压; 检查 knob hi 拉大档距或复跑"
+                        "消除计时抖动", test_id, knob, p1, mid, t1_disp,
+                        t2_disp);
+            a = t1 / pn;             /* t1>0 由上方早退保证 */
+        }
         if (a > 0.0 && std::isfinite(a)) {
             fit->a_ms = a;
             fit->p = k;
         }
     }
     return dim;
+}
+
+/* 7 参存量转发重载(等价旧缺省 {nullptr, 1.0}): 跨 arch 存量链(含
+ * x86-64 #else 分支)调用点源码零改动(rule 5)——1.0 即 f84966bc 之前
+ * 的历史噪声底语义。 */
+template <typename F>
+static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
+                                     const char *test_id, const char *knob,
+                                     double k_floor, F solve_once)
+{
+    return sdc_calibrated_dim(lo, hi, max_single_ms, test_id, knob, k_floor,
+                              solve_once, nullptr, 1.0);
+}
+
+/* 第 8 参 std::nullptr_t 重载: 『显式不要 fit』的字面量 0/NULL 旧写法
+ * 绑定于此(而非经 int→double 隐式转换静默重绑 probe_floor_ms=0.0),
+ * 语义 = 7 参链。 */
+template <typename F>
+static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
+                                     const char *test_id, const char *knob,
+                                     double k_floor, F solve_once,
+                                     std::nullptr_t)
+{
+    return sdc_calibrated_dim(lo, hi, max_single_ms, test_id, knob, k_floor,
+                              solve_once, nullptr, 1.0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1187,13 +1326,15 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         if (per_solve < 1)
             per_solve = 1;
         /* 探针上限 = knob hi(不用 n_mem 截断): 差分基线 (p1, mid) 拉得
-         * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 阈值
-         * 机制约束(终点档起每档 ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem
-         * 无关。返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit。 */
+         * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 探针档
+         * 下限(下方显式实参 sdc_m3_probe_floor_ms, spec §4.3 M3——模板
+         * 缺省 1.0 是存量 7 参链的历史语义, 不得联动改动, issue #351)
+         * 约束(终点档起每档 ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem 无关。
+         * 返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit。 */
         struct sdc_fit fit;
         sdc_calibrated_dim(a->lo, a->hi, per_solve,
                            test ? test->id : "(global)", knob, 3.0,
-                           solve_once, &fit);
+                           solve_once, &fit, sdc_m3_probe_floor_ms);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
             double nr = std::pow((double)a->run_budget_ms
                                  / (ar * 2.0 * fit.a_ms), 1.0 / fit.p);

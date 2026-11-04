@@ -33,8 +33,12 @@
  * 构建从可编译收窄为硬编译错误(收口前该 TU 的内联实现无 OS 守门)。
  * 7 个 T9 wrapper 自带 __aarch64__&&__linux__ 守门(其 aarch64 路径走
  * sdc_joint_dim_slice 联合求解, 依赖框架 __linux__ 实现; 非 Linux 下
- * wrapper 关闭、mdim 回退 legacy 链, 不引用本头)——是本守门的真子集,
- * 不受放宽影响。 */
+ * wrapper 关闭、mdim 回退 legacy 链, 不实例化本头模板、无符号引用)。
+ * 措辞勘误(检视 #392-R9): 原文「不引用本头」失准——7 个 TU 的
+ * include 指令在各自守门块之外无条件生效, 非 Linux 下本头仍全量展开
+ * (命名空间/std 头/lineage 头在编译面可见, 唯模板不具现), 编译暴露面
+ * 以展开口径如实记。T9 wrapper 守门与头守门的包含关系不变——是本
+ * 守门的真子集, 不受放宽影响。 */
 #ifndef GEMM_SOLVE_PROBE_H
 #define GEMM_SOLVE_PROBE_H
 

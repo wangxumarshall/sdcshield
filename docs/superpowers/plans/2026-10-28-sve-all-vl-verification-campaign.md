@@ -122,6 +122,12 @@ git commit -s -m "docs(campaign): SVE 全 VL 验证清单——tag∪name 枚举
 cd /home/sdc/wangxu/sdcshield-main
 LIST=docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
 LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.log
+# baked -O 注记：本块未示出 baked -O 降容，勿零 -O 照抄重跑。实跑形态：历史 seed1 本跑
+# 带 1 项（-O acl_gemm_sve.dim=512）；Step 2 seed2 为全 26 项（裁定 D：与 512 腿 BAKED
+# 同集——缺之 eigen_svd_bidiag_sve/eigen_svd_cdouble_sve 等全核 TIMEOUT 前科用例收不
+# 了口），其 summary 会被 Task 8 的 matrix-gen.sh 断言以「expected 26 baked -O, got 0」
+# 拒收（烧完全量才暴露）。26 项权威清单 = 入库 summary 的 `# command-line:` 头（本块有
+# 意不镜像，防同源分叉——extract_baked 断言三腿一致即机械锚）。
 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-256-LCG1001.stdout 2>&1
 echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
 tail -5 /tmp/native-256-LCG1001.stdout
@@ -176,6 +182,11 @@ Expected: `ARM64 spec: SVE yes (max VL 128 bits) | SVE2 no | SME no | SME2 no`�
 cd /home/sdc/wangxu/sdcshield-main
 LIST=docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
 LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log
+# baked -O 注记：128 两 seed 实跑各带全 26 项 baked -O 降容（裁定 D：与 512 腿 BAKED
+# 同集——缺之 eigen_svd_bidiag_sve/eigen_svd_cdouble_sve 等全核 TIMEOUT 前科用例收不
+# 了口）。本块有意不镜像该 26 项（权威清单 = 入库 summary 的 `# command-line:` 头，防
+# 同源分叉——extract_baked 断言三腿一致即机械锚）：勿零 -O 照抄重跑——两 seed summary
+# 会被 Task 8 的 matrix-gen.sh 断言以「expected 26 baked -O, got 0」拒收（烧完全量才暴露）。
 SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-128-LCG1001.stdout 2>&1
 echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
 tail -5 /tmp/native-128-LCG1001.stdout
@@ -426,7 +437,7 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield -e <test> -t 2000 -n 1   # 
 cd /home/sdc/wangxu/sdcshield-main
 docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh > docs/superpowers/inventory/sve-all-vl-campaign/matrix.md.new && mv docs/superpowers/inventory/sve-all-vl-campaign/matrix.md.new docs/superpowers/inventory/sve-all-vl-campaign/matrix.md
 ```
-（计划撰写时点的草案指令「执行者写 10 行以内的 awk/grep 管道」系事前形态，实际执行产出即 matrix-gen.sh，以入库脚本为准；本轮同步实测：成功路径重定向输出与入库 matrix.md diff 为空、exit=0；失败路径（断输入副本复现 exit=2）直接重定向把既有 matrix.md 清空为 0 字节、.new+mv 形态下既有文件原样保留仅 .new 残留 0 字节。）
+（计划撰写时点的草案指令「执行者写 10 行以内的 awk/grep 管道」系事前形态，实际执行产出即 matrix-gen.sh，以入库脚本为准；本轮同步实测：成功路径重定向输出与入库 matrix.md diff 为空、exit=0；失败路径（断输入副本复现 exit=2）直接重定向把既有 matrix.md 清空为 0 字节、.new+mv 形态下既有文件原样保留仅 .new 残留 0 字节——**该残留不被 campaign `.gitignore` 任何规则命中（仅 `*.log` 与 `/gem5-512/*`），而各 Commit 步骤一律目录级 `git add sve-all-vl-campaign/`，0 字节残骸会被零提示暂存：失败后先 `rm` 掉 .new 再进 Commit**——issue #403 缺陷模型「盲目执行者 + 目录级 add」的对偶面，方向从「静默丢证据」翻转为「静默收残骸」。）
 - [ ] **Step 2: 验收自查**——570 格全绿或有显式机制性理由（190×3，定稿口径见 Goal 注记）；抽查 10 格回放**入库工件**（`.summary.txt` / `gem5-512-verdicts.txt`）确认引用真实（裁定 E：原始 `.log` 留工作区不入库——Step 1 刚声明其不得作为矩阵输入，新 clone 的验收者拿不到，同样不得作为验收输入）。
 - [ ] **Step 3: Commit**——`docs(campaign): 570 格证据矩阵汇总（190×3：128/256/512）`（实际执行 commit e4720831 同款）。
 

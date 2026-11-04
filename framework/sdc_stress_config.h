@@ -801,7 +801,13 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
         return lo;
     auto probe = [&](int n) -> double {
         auto t0 = std::chrono::steady_clock::now();
-        solve_once(n);
+        if (solve_once(n) != 0)
+            return -1.0;   /* issue #420: 探针自报失败(非零返回码)→ 负哨兵
+                              计时, 与"计时恰好为 0"的不可测语义区分。失败
+                              分支的计时是 μs 级噪声而非求解耗时, 绝不能进
+                              幂律拟合。(历史触发者 bidiag run_bidiag_once
+                              已随用例 2026-11-02 退役; 现役探针全为异常
+                              上抛式, 本谓词对其恒假——纯契约防御) */
         return std::chrono::duration<double, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
     };
@@ -819,12 +825,26 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
      *     与其 fit 差分扣 b 配套。 */
     int p1 = lo;
     double t1 = probe(p1);
-    while (t1 < probe_floor_ms && p1 * 2 <= hi) {
+    /* t1>=0.0(issue #420): 失败哨兵即刻停止抬升——失败探针恒"快",
+     * 不拦会一路把 p1 无谓探到 hi。 */
+    while (t1 >= 0.0 && t1 < probe_floor_ms && p1 * 2 <= hi) {
         p1 *= 2;
         t1 = probe(p1);
     }
     int mid = (p1 * 2 <= hi) ? p1 * 2 : hi;
     double t2 = probe(mid);
+    if (t1 < 0.0 || t2 < 0.0) {
+        /* issue #420: 探针自报失败——失败分支的 μs 级计时噪声曾被当作
+         * 超快求解外推(k 钳制后 dim=hi), 联合层 n_run 失控 → mdim 落
+         * n_mem/hi 上限, 即 P0-2 超时复发路径。失败 ≠ 『时间不是约束』
+         * (那是两档计时皆恰为 0 的语义, 仍交还 hi), 与异常式探针的
+         * catch(...) → lo 教义同向: 退守校准下限。fit 保持无效({0,0}),
+         * 消费方(联合层)据此跳过 n_run、另行整体退守。 */
+        log_warning("[时间校准] %s.%s: 试解探针自报失败(试解 %d→%.2fms, "
+                    "%d→%.2fms) → 退守校准下限 %ld",
+                    test_id, knob, p1, t1, mid, t2, (long)lo);
+        return lo;
+    }
     if (t1 <= 0.0 || t2 <= 0.0) {
         /* 任一档计时不可测即无法拟合 k。仅当两档皆不可测(t1 = t2 = 0)时,
          * 才能断定"时间不是约束"(求解快到连时钟都读不出), 此时交还内存
@@ -909,7 +929,9 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                     "k=%.2f) → %d (验证 %.1fms%s)",
                     test_id, knob, max_single_ms, p1, t1_disp, mid, t2_disp, k, dim,
                     td_disp,
-                    td > (double)max_single_ms
+                    td_disp < 0.0
+                        ? ", 验证探针失败(维度未经复核)"
+                        : td > (double)max_single_ms
                         ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
                         : "");
     } else {
@@ -1338,6 +1360,7 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
 
     double ar = sdc_ar_factor(a->ar_fam, sdc_numa_probe());
     int n_run = 0;
+    bool probe_failed = false;     /* issue #420: 任一抬升/mid 档探针自报失败 */
     if (solve_once && a->run_budget_ms > 0 && n_mem > a->lo) {
         /* k_floor=3.0: 现役/规划消费方(稠密 SVD/GEMM/稀疏
          * Cholesky)的复杂度下限同为 ~3.0(各自旧调用方同值;第四个
@@ -1356,10 +1379,21 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
          * fit_only=true 跳过验证档/收缩轮(issue #487: 验证的全部成本
          * 只为被弃用的返回值, 实测 GEMM 族每 init 白烧 ~per_solve/2
          * 单线程时间)。 */
+        /* issue #420: 包装探针记录自报失败——fit_only(#517)下联合层弃用
+         * 返回值, 模板内早退只落到 fit={0,0}(n_run=0), n 仍会落 n_mem;
+         * 瞬态内存压力下(探针期失败、n_mem 充裕)全核单次迭代分钟级、
+         * TERM 打不断——probe_failed→lo 退守是 fit-only 时代该路径的
+         * 安全机制本体(与模板内哨兵互补, 缺一复活半个 P0-2 路径)。 */
+        auto solve_probe = [&](int n) -> int {
+            int rc = solve_once(n);
+            if (rc != 0)
+                probe_failed = true;
+            return rc;
+        };
         struct sdc_fit fit;
         sdc_calibrated_dim(a->lo, a->hi, per_solve,
                            test ? test->id : "(global)", knob, 3.0,
-                           solve_once, &fit, sdc_m3_probe_floor_ms,
+                           solve_probe, &fit, sdc_m3_probe_floor_ms,
                            /*fit_only=*/true);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
             double nr = std::pow((double)a->run_budget_ms
@@ -1371,12 +1405,24 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         }
     }
     int n = n_mem;
-    if (n_run > 0 && n_run < n)
-        n = n_run;
-    if (a->hi < n)
-        n = a->hi;
-    if (n < a->lo)
+    if (probe_failed) {
+        /* issue #420: 时间模型不可信 → 退守 lo; n_mem 不可交还——瞬态
+         * 内存压力下按 n_mem 选出的全核单次迭代可达分钟级、TERM 打
+         * 不断(P0-2 复发路径)。fit_only(#517)下验证档不存在, 失败
+         * 检测覆盖抬升/mid 两档。 */
+        log_warning("[联合求解] %s.%s: 校准探针自报失败 → 退守 lo=%d "
+                    "(时间模型不可信, n_mem=%d 弃用; issue #420)",
+                    test ? test->id : "(global)", knob ? knob : "?",
+                    a->lo, n_mem);
         n = a->lo;
+    } else {
+        if (n_run > 0 && n_run < n)
+            n = n_run;
+        if (a->hi < n)
+            n = a->hi;
+        if (n < a->lo)
+            n = a->lo;
+    }
     log_warning("[联合求解] %s.%s: n_mem=%d n_run=%d AR=%.1f c=%.1f → %d (预算 %.1fGiB)",
                 test ? test->id : "(global)", knob ? knob : "?",
                 n_mem, n_run, ar, c_bytes, n, (double)node_budget / 1073741824.0);

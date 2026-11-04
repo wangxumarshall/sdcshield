@@ -256,6 +256,21 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   `sdc_joint_dim_slice(..., k_floor=3.0, solve_once=bidiag SVE 求解)`
   【v2/m7：solve_once 必须用与 run 期同构的 SVE 内核路径（非标量参考，
   两者差 4-8×）】。
+  【v3/issue #420 收口（2026-11-01；2026-11-04 重锚定落地）：solve_once 返回码
+  契约——run_bidiag_once
+  分配失败返回 -1 时，probe 曾完全丢弃返回码，μs 级失败分支噪声被当作
+  超快求解外推（k 钳制后 a=t1/p1^k≈1e-13 的"合法" fit，n_run 失控），
+  mdim 落 n_mem/hi 上限 = P0-2 复发路径（机制层复现：dim=2048 /
+  n=1900@n_mem）。修复：sdc_calibrated_dim 以非零返回码为负哨兵计时、
+  任一校准档失败退守 lo（fit 无效）；sdc_joint_dim_slice 任一档失败
+  整体退守 lo、n_mem 弃用——失败教义统一为 lo（现役探针两种：Eigen 族
+  异常上抛 ×2；历史第三种为返回码式——bidiag run_bidiag_once，已随
+  用例 2026-11-02 退役，本谓词对其恒假、属防御性契约封堵）。契约锁定于
+  framework/unit-tests/sdc_stress_config_tests.cpp。
+  2026-11-04 重锚定（#517 fit_only 合入后）：联合层不再执行验证档，
+  失败检测覆盖抬升/mid 两档；fit-only 弃用返回值使模板内早退只落
+  fit={0,0}，联合层 probe_failed→lo（n_mem 弃用）成为该路径的安全
+  机制本体——两者互补，缺一复活半个 P0-2 路径。】
 - **svd_cdouble_sve**（P0-1）：mdim 计算从 preinit 迁到 child `test_init`
   （`sve_probe_and_init` 内，tier 选择后）；preinit 只留 desired_duration
   ——【v2/q2】用最保守 AR（内存密集族单节点 25）+ 静态表 c 推 **n 的

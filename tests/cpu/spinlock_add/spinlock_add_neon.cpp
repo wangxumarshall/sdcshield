@@ -82,7 +82,9 @@
  * 更新（不一致窗口小于 locks.cpp 先例）、日志 O_APPEND 单次 write()。
  *
  * 逐次验证日志（-O spinlock_add_neon.logverif=1，默认 0；logverif/
- * logverif_retain 错值（非 0/1）fail loudly 见 init，键名 typo 为框架级
+ * logverif_retain 错值（非 0/1）及无效组合（logverif_retain=1 而未开
+ * logverif——retain 只豁免绿跑删除、文件本身由 logverif 创建，单开
+ * retain 静默无效）fail loudly 见 init，键名 typo 为框架级
  * 已知缺口、在此披露）：
  * /var/tmp/spinlock_add_neon_<pid>.log，每行 = 迭代号/线程/输入前 4 元素/
  * 输出前 4 元素/验证结果，PASS 绿（\033[32m）、FAIL 红（\033[31m）；
@@ -105,7 +107,8 @@
  * logverif_retain）cleanup 时删除本轮文件，长期战役绿跑稳态存活文件数
  * = O(当前并发子进程数)；任何检出迹象（数据 SDC 红行、通道C FAIL、通道B
  * 对账失败）或 selftest 阳性自检保留文件作取证。-O
- * spinlock_add_neon.logverif_retain=1（默认 0）保留绿跑文件供人工审计
+ * spinlock_add_neon.logverif_retain=1（默认 0，须与 logverif=1 同开、
+ * 组合校验 fail loudly 见 init——单开不建任何文件）保留绿跑文件供人工审计
  * （PR#341 检视：golden 为 init 同源预计算，init/run 一致同错
  * 时三通道全绿，logverif 行是绿跑期唯一可人工核对的计算值迹）——代价
  * 是回到无界堆积，长战役慎用；撞名遗留文件有两形态（PR#341 检视）：
@@ -651,6 +654,24 @@ static int spinlock_add_neon_init(struct test *test)
                   "\"%s\" (valid: 0 or 1, default 0) — failing loudly so a "
                   "wrong value cannot silently flip the audit-retention "
                   "setting (selftest knob discipline)", logverif_retain_s);
+        free(d);
+        return EXIT_FAILURE;
+    }
+    /* 组合交叉校验（PR#341 检视）：logverif_retain=1 而 logverif=0 时
+     * retain 静默无效——retain 的唯一消费点是 cleanup 的绿跑豁免条件，
+     * 该条件处于 if (d->log_fd >= 0) 块内，而 log_fd 仅在下方
+     * if (d->logverif) 才打开：logverif=0 时恒 -1、豁免永不可达。实测
+     * 复现（52ed7ab9 基线）：单开 retain=1 绿跑 exit: pass 且 /var/tmp
+     * 零文件——操作员按 header「需要审计时显式打开」的说明以为审计迹
+     * 在留档而实际一个文件都不存在，与上方两旋钮各自的错值 fail
+     * loudly 同一 typo/误解危害类；init 手中同时持有两值，交叉校验
+     * 闭合。就地 free 返回不 goto（同上方错值路径约束） */
+    if (strcmp(logverif_retain_s, "1") == 0 && strcmp(logverif_s, "1") != 0) {
+        log_error("spinlock_add_neon: logverif_retain=1 requires logverif=1 "
+                  "(retention only exempts the per-slice verification log "
+                  "from green-run cleanup; without logverif the log and its "
+                  "files are never created) — failing loudly so the "
+                  "combination cannot silently no-op");
         free(d);
         return EXIT_FAILURE;
     }

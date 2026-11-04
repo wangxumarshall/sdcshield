@@ -65,8 +65,11 @@
 
      按控制器裁定 D，seed2 以 26 项
      有界覆盖全量重跑（含 `mem_disambig_alu_sve.buffer_bytes=4096`，不再进入
-     超时杀灭路径），本表 seed2 数据全部来自该重跑；尸体已被重跑覆盖（其结局
-     以本条为准）。
+     超时杀灭路径），本表 seed2 数据全部来自该重跑；该重跑采集于重启后 23 分钟
+     的同机——重启原因未取证（候选稳定性信号未决），若其根因为硬件/内核故障，
+     本表 seed2「全绿」的排除性证据力相应折损（对照环境事件 1：彼为已知确定性
+     污染故整跑废弃，此为未定性事件故不废弃、只如实标注证据力边界）；尸体已被
+     重跑覆盖（首跑腿进程层结局未证，见 ①）。
 
 ## 1. 全量跑（2 seeds，真实命令与结果）
 
@@ -95,7 +98,9 @@ LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.log
 - 两 seed 的 pass 计数均含 mce_check（seed1：165 清单腿内绿（164 默认自适应直绿 +
   1 格 acl 标定 baked）+ 25 超时格走 §5 有界重跑 + mce_check = 191 执行 166 绿；
   seed2：190 清单腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内有界）
-  + mce_check = 191 执行 191 绿）。
+  + mce_check = 191 执行 191 绿）；seed2 行全部数据来自 09:24 起的有界重跑腿——
+  首跑腿尸体已被覆盖、不可核验，其进程层结局未证（见头部环境事件 2 ①），
+  不贡献本表 seed2 侧任何计数。
 - 「有界」的语义与证据强度：本表与 §5/§7 的「有界（重跑）」一律 = knob **clamp 下限**的
   最小激发几何（协议首次通过即止、零上调）——功能正确性证据成立，满强度激发证据不成立，
   量化与限定见 §5「证据强度限定」。唯一例外：`acl_gemm_sve.dim=512` 是 Ruling B **标定**
@@ -310,9 +315,11 @@ sve_rot_ldr_at_top_rowmajor_k3res 1/2,154.6；…_k5inter_rand 2/2,019.2；
 
 ## 6. FAIL / CRASH / 意外 SKIP
 
-无（两 seed fail=0 crash=0 skip=0；机械核验：两日志 `result: fail|crash|skip|interrupted|
-operating system error` 计数全 0，两 summary result 列无此类值）。无 crash 类需复现
-定性的项目。
+无（fail=0 crash=0 skip=0；机械核验范围 = 两份可核验日志——seed1 全量 +
+seed2 有界重跑腿：`result: fail|crash|skip|interrupted|operating system error`
+计数全 0、两 summary result 列无此类值；seed2 首跑腿尸体已被覆盖、不在
+核验范围，其进程层结局未证、含框架崩溃候选——见头部环境事件 2 ①，
+「crash=0」不覆盖首跑腿）。核验范围内无 crash 类需复现定性的项目。
 
 ## 7. 结论
 

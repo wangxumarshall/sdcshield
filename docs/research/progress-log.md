@@ -1725,8 +1725,11 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
     算术不相容（天花板 379），出处与宿主身份均不可考，唯『远超旧 299
     推算』定性成立，待 0xd01 机复测定值」。
   - **#26 采纳（README:388）**: 齐备清单漏 pocketfft——meson 静默禁用守卫
-    5 处实证（OpenSSL/OpenBLAS/SLEEF/pocketfft/isa-l，tests/cpu/meson.build
-    :421/:686/:726/:761/:945），570 列表含 pocketfft_fft×1（本构建已放行）；
+    5 处实证（OpenSSL/OpenBLAS/SLEEF/pocketfft/isa-l；锚点 2026-11-04 R7 #41
+    更正：OpenSSL 真实守卫在 framework/meson.build:232-239——tests/cpu/
+    meson.build:421 系注释行、:417 只是 SANDSTONE_SSL_BUILD 消费方，
+    OpenBLAS/SLEEF/pocketfft/isa-l 在 tests/cpu/meson.build:686/726/761/945），
+    570 列表含 pocketfft_fft×1（本构建已放行）；
     清单改为「meson 静默禁用守卫全部放行 + acl/GMP 链接」。
   - **#27 采纳（progress-log 1619）**: 降级→齐备 +82 对账闭合——残差 4
     具名 = openssl×3（openssl_sha/sha3/sm3sm4）+ acl_gemm×1，全量对账

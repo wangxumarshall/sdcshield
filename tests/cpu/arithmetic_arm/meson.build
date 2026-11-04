@@ -33,9 +33,7 @@
 # suffix, which use __int128). The _arm variants use GMP as the golden
 # reference; both sets coexist without ID clash.
 
-arm_cpp_flags = [
-    '-march=armv8.1-a+crc+crypto',
-]
+arm_cpp_flags = [march_arm64_neon_crypto]
 
 # ---------------------------------------------------------------------------
 # GMP: system package. Prefer pkg-config, fall back to find_library.

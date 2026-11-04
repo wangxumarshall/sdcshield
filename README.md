@@ -181,6 +181,19 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 >
 > **clang/BiSheng 工具链（HPC 节点）**：BiSheng clang 5.2.0（LLVM 19.1.7，HPCKit）`source <HPCKit>/setvars.sh`、`export TMPDIR=/tmp` 后 meson/ninja 照常；额外启用 SME 测试 `sme_za_tileview_arm`（`-march=armv9-a+sve+sme+sme-f64f64`，gcc 无该支持时探测剔除、不阻断），运行期 HWCAP2_SME + SVL 几何双门控、不满足诚实 SKIP，运行需 HPCKit 环境（libc++ 在 LD_LIBRARY_PATH）。cn23154（HiSilicon 0xd22，608 核）实测 2026-09-28：默认 quality 320 用例，`zstd19 -t 2000 -n 1` 回归 pass。
 
+> **ARM64 ISA 编译档位（NEON/SVE/SVE2/SME，统一指定）**：哪些用例需要什么编译选项、在构建系统里**统一**在哪儿指定——全部 6 档 march 集中定义为根 `meson.build` 的 `march_arm64_*` 变量（单一事实来源；所有子目录经 `subdir()` 共享作用域引用，绝不散落字面量；`meson setup` 末尾的 `ARM64 ISA march tiers` 摘要会打印全部档位）：
+>
+> | 变量（根 `meson.build`） | 编译选项 | 用到的用例组（static_library） |
+> |---|---|---|
+> | `march_arm64_crc` | `-march=armv8.1-a+crc` | `tests_crc`（`crc32*`，ACLE `__crc32b/h/w`） |
+> | `march_arm64_neon_crypto` | `-march=armv8.1-a+crc+crypto` | `tests_arm64`（NEON+AES `vaeseq`）、`tests_arithmetic_arm_*`（GMP/ACL/compiler-rt/AOR）、`tests_sdc_fuzzing`（自动生成）、`framework_arm64` |
+> | `march_arm64_sve` | `-march=armv8.2-a+sve` | `tests_arm64_sve`（sve512_* 全族）、`tests_sve`（Eigen SVE 分发 TU）、`tests_sve_vla`（sleef_sve + sve_rot 探针族）、`tests_sve_crt`、`tests_sve_avx53{,_ipsec}`（SVE 版 avx53 套件） |
+> | `march_arm64_sve_mm` | `-march=armv8.2-a+sve+f32mm+f64mm` | `tests_arm64_sve_mm`（FMMLA；**刻意不加 `+sve2`**——F32MM/F64MM 与 SVE2 正交，实测有 FMM 无 SVE2 的芯片可跑） |
+> | `march_arm64_sve2` | `-march=armv9-a+sve2+bf16+f32mm+f64mm` | `tests_arm64_sve2`（`sve2_cross_precision_arm`） |
+> | `march_arm64_sme` | `-march=armv9-a+sve+sme+sme-f64f64` | `tests_arm64_sme`（ZA tile 族） |
+>
+> NEON 基线无需任何 `-march`（armv8-a 即含 ASIMD）；`zpclmul{,_rep}` 用函数级 `target("+crypto")`，无库级 march。**Eigen 特例**：Eigen 的 SVE packet 编译期定宽，故按 128/256/512/1024 四档各实例化一个库（`march_arm64_sve` + `-msve-vector-bits=<tier>` + `-DEIGEN_ARM64_SVE_VL=<tier> -DEigen=EigenSVE<tier> -DEIGEN_ARM64_USE_SVE`），运行时分发 TU 按 worker pinned VL 选档。SVE-FMMLA/SVE2/SME 档编译器不支持时探测剔除（message 提示、不阻断；vanilla GCC <14 不认 SME 档——本机 openEuler gcc 12.3.1 backport 实测接受，六档全建）。新写 SVE 测试选库规则见 [docs/research/adding-tests.md](docs/research/adding-tests.md) §4。
+
 ## 离线与多版本构建
 
 离线工具在 `scripts/offline-build/`。单机原生路径（`download-deps.sh`/`install-deps.sh`/`build.sh`，`.os-version` 强制版本匹配）只支持 **24.03**（`_common.sh` 基线硬编码，对 22.03/20.03 误报）；22.03/20.03 必须走容器路径（D）。

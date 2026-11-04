@@ -77,6 +77,20 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ./builddir/sdcshield -s help                  # RNG engines: Constant/LCG/AES
 ```
 
+ARM64 ISA march 档位统一于根 `meson.build` 的 `march_arm64_*` 变量（单一
+事实来源，子目录经 `subdir()` 作用域引用，绝不散落字面量；`meson setup`
+摘要 `ARM64 ISA march tiers` 打印全部档位）：
+- `march_arm64_crc` = `-march=armv8.1-a+crc` → `tests_crc`（ACLE CRC）
+- `march_arm64_neon_crypto` = `-march=armv8.1-a+crc+crypto` → `tests_arm64`/
+  `tests_arithmetic_arm_*`/`tests_sdc_fuzzing`/`framework_arm64`
+- `march_arm64_sve` = `-march=armv8.2-a+sve` → 全部 SVE1 库 + Eigen 四档实例化
+- `march_arm64_sve_mm` = `-march=armv8.2-a+sve+f32mm+f64mm`（FMMLA，刻意无 `+sve2`）
+- `march_arm64_sve2` = `-march=armv9-a+sve2+bf16+f32mm+f64mm`
+- `march_arm64_sme` = `-march=armv9-a+sve+sme+sme-f64f64`
+NEON 基线无需 march（armv8-a 即含）；Eigen SVE 定宽 packet 按四档实例化
+（`-msve-vector-bits=<tier> -DEIGEN_ARM64_SVE_VL`/`-DEigen=EigenSVE<tier>`）+
+运行时分发。新用例选库：`docs/research/adding-tests.md` §4；完整表：README。
+
 Meson changes need `meson setup --reconfigure builddir` before `ninja`.
 Verbose `-v`/`-vv`; logging `-Dlogging_format=yaml|tap|no_output`; full CLI
 incl. undocumented options: `docs/research/usage.md`.

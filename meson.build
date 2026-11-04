@@ -108,6 +108,21 @@ if host_machine.cpu_family() == 'x86_64'
     endif
 endif
 
+# ---------------------------------------------------------------------------
+# ARM64 ISA march tiers — single source of truth. Every aarch64-specific
+# -march in the tree references one of these variables (never a scattered
+# literal): subdir() shares this scope, so every tests/ and framework/
+# subdirectory sees them. Tier -> test-family table: README "从源码构建" and
+# docs/research/adding-tests.md §4. NEON itself needs no -march (the armv8-a
+# baseline already has ASIMD); these tiers exist only where intrinsics demand
+# a specific extension. Untouched on x86-64 (inert string data there).
+march_arm64_crc = '-march=armv8.1-a+crc'                   # tests_crc (ACLE __crc32b/h/w)
+march_arm64_neon_crypto = '-march=armv8.1-a+crc+crypto'    # tests_arm64 / tests_arithmetic_arm_* / tests_sdc_fuzzing / framework_arm64
+march_arm64_sve = '-march=armv8.2-a+sve'                   # every SVE1 library + the Eigen per-tier instantiations
+march_arm64_sve_mm = '-march=armv8.2-a+sve+f32mm+f64mm'    # tests_arm64_sve_mm (FMMLA; deliberately NOT +sve2)
+march_arm64_sve2 = '-march=armv9-a+sve2+bf16+f32mm+f64mm'  # tests_arm64_sve2
+march_arm64_sme = '-march=armv9-a+sve+sme+sme-f64f64'      # tests_arm64_sme
+
 debug_nasm_flags = ''
 if get_option('buildtype') == 'debug'
     debug_c_flags = [
@@ -407,3 +422,17 @@ summary(
     section: 'Configuration',
     bool_yn: true,
 )
+
+if host_machine.cpu_family() == 'aarch64'
+    summary(
+        {
+            'ACLE CRC (march_arm64_crc)': march_arm64_crc,
+            'NEON+crypto (march_arm64_neon_crypto)': march_arm64_neon_crypto,
+            'SVE1 (march_arm64_sve)': march_arm64_sve,
+            'SVE FMMLA (march_arm64_sve_mm)': march_arm64_sve_mm,
+            'SVE2 (march_arm64_sve2)': march_arm64_sve2,
+            'SME (march_arm64_sme)': march_arm64_sme,
+        },
+        section: 'ARM64 ISA march tiers',
+    )
+endif

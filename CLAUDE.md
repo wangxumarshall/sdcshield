@@ -64,15 +64,20 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
 ./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent:
-                                               #   SVE1 host (MIDR part 0xd02): 570 PROD / 580 q0 / 584 q-1
-                                               #     (2026-11-02 pre-migration merge-tree measured, gcc + full vendored deps
-                                               #      incl. OpenSSL/OpenBLAS/SLEEF groups, excl. crt_builtins ×2
-                                               #      (clang-17 libclang_rt.builtins.a probe missed on this host,
-                                               #      +2 PROD where present — README footnote); the historical
-                                               #      486/490 series and its +121 extrapolation 507/517/521 are
-                                               #      the degraded caliber — a fresh-worktree
-                                               #      `meson setup` BEFORE third-party/*/install is populated
-                                               #      locks those groups out and yields ~488, see README)
+                                               #   SVE1 host (MIDR part 0xd02): 640 PROD / 750 q0 / 754 q-1
+                                               #     (2026-11-04 measured on this PR's tree after rebase to
+                                               #      main 418e4e09 — includes the 2026-11-02/03 migration
+                                               #      increments; gcc + full vendored deps incl. OpenSSL/
+                                               #      OpenBLAS/SLEEF groups, excl. crt_builtins ×2
+                                               #      (clang-17 libclang_rt.builtins.a probe missed on this
+                                               #      host, +2 PROD where present — README footnote). The
+                                               #      pre-migration tree (2026-11-02) measured 570/580/584
+                                               #      with registry 588; the historical 486/490 series and
+                                               #      its +121 extrapolation 507/517/521 are the degraded
+                                               #      caliber — a fresh-worktree `meson setup` BEFORE
+                                               #      third-party/*/install is populated locks those
+                                               #      groups out and yields a degraded count (~488 on the
+                                               #      pre-migration tree), see README)
                                                #   no-SVE 920 (MIDR part 0xd01): 439 PROD / 547 q0 / 551 q-1
                                                #     (2026-11-02 实测, = 迁移 121 + arm_add 7 + _neon 14 +
                                                #      cache 新 9 PROD 后; older 390/394/398 records are

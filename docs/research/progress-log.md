@@ -1597,3 +1597,331 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
 - **移交(框架层系统性缺口, 另立 issue)**: knob-from-worker fail-loud
   检查被 NDEBUG 门控(release 全绿盲区)+ 无 selftest 锁契约;
   sdc_stress_config.h worker cache-miss 静默回退 default 同类风险。
+
+## 2026-11-02（PR #413 R1 检视处置：计数口径实测同步 + 降级构建陷阱定案 + 分支线性化）
+
+- **意见 2 条（local-claude 行级，均处置）**: ①490/390 异树并置口径错配——
+  采纳核心（数字换本机 0xd02 实测，各数标注测量树、勿跨树相减）；其「当前树
+  SVE1 ≥581」推算驳回——**R2 复核修正驳回理由**：真实原因是 d61b7de1 的
+  91 个批用例（d7608995 注册 misc/cache/memory 三目录）无一声明
+  arm64_requires/arm64_min_vl_bits 门控（grep 三目录实证 0 命中）且早于
+  490 实测已在其树内（d61b7de1 是 d6e39b96 祖先 + 488=490−4+2 账目唯一
+  自洽解）——「+91」是对已含批树的**重复计数**，并非门控剔除；R1 台账原记
+  「批内用例多被 SVE2/SME 门控剔除、0xd02 默认集净增 0」为错误理由（两处
+  均与事实相反），本条更正；
+  ②cortex x3b/firestorm 特征位别名非 MIDR 身份——采纳（simd-arm.conf:139/141
+  实证：0xd01 TaiShan 命中 "Apple M1 Firestorm-equivalent" 条目 = 按特征位
+  匹配；身份锚改 MIDR part 0xd02/0xd01，弃 dump 标签）。
+- **降级构建陷阱（本轮核心发现，git-sanity 红逼出来的）**: 本 worktree 新建
+  时 ignored 目录（third-party/*/install）为空，前一命在 install/ 齐备前做了
+  `meson setup`——OpenSSL/OpenBLAS/SLEEF 组被锁死 disabled（构建日志
+  `SSL tests disabled. Run third-party/openssl/build.sh to enable`），
+  26162e44 树得到 488/498/502 的**降级计数**（ipsec×70、openblas×5、
+  sleef×2、fisttp_arm 等全缺，488 列表实测 openblas=0/sleef=0/ipsec=0）；
+  install/ 后被补齐（cp -p 保留 9-19 mtime 掩盖了时序），#458 的 meson.build
+  变化触发 ninja regen→reconfigure 重新检测到 vendored OpenSSL——同树完整
+  构建 = **570/580/584**（依赖组齐备实证：openblas×5/sleef×2/isal×11/
+  gmp×4/acl_gemm×2/ipsec×70；SKIP 4 + BETA 10 分解不变，缺失组全为 PROD）。
+  历史 490/486/487 系列计数即降级口径（计数链 490 → #374 −4 = 486 →
+  e95e4514 探针 +1 = 487/501（#433 表格数）→ d238f567 第二探针 +1 = 488，
+  全程降级口径）。README/CLAUDE 已写入警示：复测前先确认 install/ 齐备再
+  meson setup。
+- **线性化（git-sanity 红的修复）**: CI `check-git-history.sh` 禁止 PR 分支
+  含 merge commit——merge commit f713d678 违规红。cherry-pick 55c36ccb +
+  046c60c5 重放到 origin/main（7f0b9c7c）成线性链，冲突解与 merge 版同文
+  （344df32b/cd5d570e，双 commit Signed-off-by 齐、零 merge），A' 树与
+  f713d678 树 diff 仅 #458 的 4 文件（文档状态等价实证）。
+- **验证**: SDC_BUILD_JOBS=8 linear 树 613 目标 BUILD_EXIT=0（reconfigure
+  后 vendored 依赖全检测）；zstd19 -t 2000 -n 1 → exit: pass（cd5d570e
+  线性树二进制，amend 前树构建、docs-only amend 不改二进制）；
+  --list-tests 三档 570/580/584（SKIP 4 = eigen_svd_jacobi*4、
+  BETA 10 差集具名核对 = 旧 6 个 + sched_storm×4）。SVE2/SME 被过滤用例
+  4 个（sve2_cross_precision_arm、sme_fmopa_{za,stress}_arm、
+  sme_za_tileview_arm）具名清点。**目标数对账（R3 补）**: 538 = 26162e44
+  树在 SSL-disabled 降级配置下的目标数，613 = 同树 install/ 齐备后
+  reconfigure（#458 meson.build 变化触发）的目标数——同一棵树两次构建，
+  目标差 = ipsec/openblas/sleef 等组回归；「唯一 warning =
+  mesh_upi_sse_sym.cpp:202 %u/uint64_t」归属 538 降级树构建（三树 blob
+  83073563 同源，main 侧既有非本 PR 引入；613 与 169 目标重编构建均零
+  warning）。
+- **表格口径**: 自「源码全量（选择期过滤前）」改为「0xd02 SVE1 主机实测
+  （vendored 依赖齐备构建，选择期过滤后）」，数字 487/501 → 570/584；
+  BETA 具名列表补 sched_storm×4（与表值 10 一致）。
+
+## 2026-11-02（PR #413 R2 检视处置：0xd01 侧口径披露 + 驳回理由更正 + 588 全量锚点）
+
+- **当前 head 意见 4 条（local-claude 行级，12:53 检视）+ 历史轮次 3 条病灶存活部分**:
+  - **#14 采纳（progress-log:1606）**: R1 驳回「≥581」的理由两处皆假——
+    实证 d7608995 的 91 个批用例（misc/cache/memory 三目录）无一声明门控
+    （grep arm64_requires/min_vl_bits = 0 命中）、批早于 490 实测已在其树内，
+    「+91」是重复计数而非门控剔除。台账已更正（见上节 R2 复核修正）。
+  - **#15 采纳（README:344/CLAUDE.md:72-73 同病）**: 390 与 570 的 PROD 定义
+    不等价——实证 7fb8b43d（#374 sched_storm×4 降级）NOT in d6e39b96 树，
+    390 中 4 个负对照仍计 PROD。390 句三处加「早于 #374 降级」披露。
+  - **#16 采纳（README:126）**: 「依赖齐备全量 570」误标全量 + 同句重复
+    引用——改「选择期过滤后 570」、去重复；footnote 补选择期过滤前注册
+    总数锚点 **588 = 584 + 具名被滤 4**（sve2_cross_precision_arm、
+    sme_za_tileview_arm、sme_fmopa_za_arm、sme_fmopa_stress_arm——构建
+    日志 [428/430/432/613] 实证均编译注册、仅被选择期 spec 过滤）。
+  - **#17 采纳（README:388）**: 390 无依赖齐备限定而 570 有——390 句加
+    「vendored 依赖组齐备性未复核、0xd01 侧未做组级复测」限定。
+  - **#10 变通（历史轮次、病灶存活）**: cn23154 同日同机 320（「clang/
+    BiSheng 工具链」节）vs 322（footnote）矛盾——两处均无附带可复现口径、
+    无第三台机可辨析，如实标注「差 2 个用例待复测辨析」，不拍脑袋选边。
+  - **#11 部分采纳/部分驳回（历史轮次、病灶存活）**: 采纳「arm64_min_vl_bits
+    高档被滤」为空集（全仓唯一声明 256 = 0xd02 最大档，grep 实证）——
+    措辞删 min_vl 部分；驳回「sme 族在 gcc 构建下编译期剔除」——本机
+    gcc 12.3.1 接受 armv9-a+sve+sme+sme-f64f64（meson has_argument 通过、
+    构建日志 [428/613] sme_za_tileview_arm.cpp.o 实证编译），sme 族是
+    编译注册后被选择期过滤，非编译期剔除（README:178 的「探测剔除」是
+    编译器不支持时的条件分支，非本机路径）。
+  - **#12 采纳（历史轮次、与 #16 合并处置）**: 表格口径迁移的 host-independent
+    锚点缺失——588 锚点补入 footnote（见 #16 处置）。
+  - **v2 #9 不采信（历史轮次）**: 其「本机 MIDR=0x481fd010（0xd01）实测
+    388/396/400」——本 PR-loop 宿主机 /proc/cpuinfo 实测 CPU part=0xd02，
+    本机任何记录口径（降级 488/498/502、齐备 570/580/584）都不产 388；
+    原句「v2 会话在本机跑」的检视机归属断言不可核验（多板环境检视机 ≠
+    宿主机，R6 更正）——但无论 v2 产自哪台机，其宿主身份未经独立复核，
+    虽与 390−4+2 独立推算吻合，不以「实测」名义写入文档（390 保留原
+    测量树标注 + 口径披露处置，R4 算术定案独立成立）。
+- **验证**: 文档-only commit（CLAUDE/README/progress-log），二进制与 R1
+  cd5d570e 线性树构建相同（570/580/584 计数与 zstd19 回归 pass 均已实测）。
+
+## 2026-11-02（PR #413 R3 检视处置：390 身份限定 + 归因修正 + reconfigure 修复路径 + 目标数对账）
+
+- **当前 head 意见 5 条（local-claude 行级，13:47 检视）**:
+  - **#19 采纳（README:344/CLAUDE.md:72-73/footnote 三处）**: 「实测 390」的
+    测量宿主身份零佐证且与 R2 驳回 v2 数字的身份标准构成双重标准——390
+    降格为「记录实测」并加「测量宿主身份未经独立复核（出自会话自称 0xd01
+    机的记录，本 PR-loop 宿主机为 0xd02 无法复现）」限定。
+  - **#20 采纳（README:126）**: 221→570 差距单一归因「vendored 组」是错误
+    归因（≥93 例来自晚于 2026-09-12 的源码新增 + 宿主机差异）——改为
+    「差值 = 镜像未含的 vendored 组 + 晚于该二进制的源码新增用例 + 测量
+    宿主机差异，未逐项拆解」。
+  - **#21 部分采纳/部分驳回（README:388）**: 采纳——588 锚点句补 4 例
+    质量分级（全 PROD，grep 实证行号）与能力主机推导值（PROD 574）；
+    驳回表格口径回迁「源码全量」——R1 已实证旧口径从未真实
+    host-independent（501 < 过滤后 502 逻辑矛盾，它就是 0xd02 过滤后
+    带滞后值），588 锚点已在 footnote 承担 host-independent 职责。
+  - **#22 采纳（README:344/388 两处）**: 降级陷阱「锁死」改「禁用」并补
+    修复路径「install/ 齐备后 meson setup --reconfigure builddir 即恢复
+    检测，无需推倒重建」（R1 台账自证 reconfigure 恢复）。
+  - **#23 采纳（progress-log）**: 538/613 两目标数补对账：538 = 26162e44
+    树 SSL-disabled 降级配置目标数，613 = 同树 install/ 齐备后 reconfigure
+    目标数，warning 归属 538 降级树构建。
+- **验证**: 文档-only commit；570/580/584 计数与 zstd19 回归 pass 已实测
+  （b9df4cb3 树，二进制不变）。
+
+## 2026-11-02（PR #413 R4 检视处置：390 树归因证伪定案 + 82 全量对账 + pocketfft 守卫补全）
+
+- **当前 head 意见 4 条（local-claude 行级，14:26 检视）**:
+  - **#25 采纳（Critical，README:344/388 + CLAUDE.md:72-73）**: 390/394/398 与
+    588 注册锚点算术不相容——三前提逐一实证（d6e39b96..HEAD 测试删除 0、
+    门控 203 SVE + 1 SVE2 + 3 SME = 207、净增仅 2 探针）→ d6e39b96 全依赖
+    注册 = 586、no-SVE 机 q-1 天花板 = 586 − 207 = 379 < 记录 398（+19
+    超界，依赖降级只能减不能增、祖先树不可能注册更多）。390 的「main
+    d6e39b96」树归因不可信（或出自含主线外用例的另一棵树，如 122 战役
+    变体树）；三处改写为「历史记录 390/394/398，树归因经复核与注册总数
+    算术不相容（天花板 379），出处与宿主身份均不可考，唯『远超旧 299
+    推算』定性成立，待 0xd01 机复测定值」。
+  - **#26 采纳（README:388）**: 齐备清单漏 pocketfft——meson 静默禁用守卫
+    5 处实证（OpenSSL/OpenBLAS/SLEEF/pocketfft/isa-l；锚点 2026-11-04 R7 #41
+    更正：OpenSSL 真实守卫在 framework/meson.build:232-239——tests/cpu/
+    meson.build:421 系注释行、:417 只是 SANDSTONE_SSL_BUILD 消费方，
+    OpenBLAS/SLEEF/pocketfft/isa-l 在 tests/cpu/meson.build:686/726/761/945），
+    570 列表含 pocketfft_fft×1（本构建已放行）；
+    清单改为「meson 静默禁用守卫全部放行 + acl/GMP 链接」。
+  - **#27 采纳（progress-log 1619）**: 降级→齐备 +82 对账闭合——残差 4
+    具名 = openssl×3（openssl_sha/sha3/sm3sm4）+ acl_gemm×1，全量对账
+    82 = ipsec×70 + openblas×5 + openssl×3 + sleef×2 + acl_gemm×1 +
+    fisttp_arm×1，已写入 README footnote。
+  - **#28 采纳（PR 元数据）**: PR 描述自述「2 文件 3 行」与 R1–R4 实际
+    处置范围不符——PR body 更新为如实范围（原 3 行文档修正 + R1–R4 检视
+    处置链，progress-log 台账可溯源）。
+- **验证**: 文档-only commit（README/CLAUDE/progress-log + PR body）；
+  570/580/584 计数与 zstd19 回归 pass 已实测（7d7331cd 树二进制不变）。
+
+## 2026-11-02（PR #413 R6 检视处置：f34e96d1 悬空引用补真 + crt_builtins 第 6 静默守卫披露 + 06:36 迟到批机器错位驳回）
+
+- **R6 collect（15:37 首导 / 17:00 复导，意见集未变）**: 当前 head 意见
+  仍为 R5 三条（15:11 检视锚定 51feddbd）——#37 已由 R5 以 PR 标题元数据
+  处置（标题不再断言「实测 390」），#38/#39 维持 RESIDUAL（计数事实三处
+  全文复制、footnote 句法可读性——结构性去重与句法打磨归后续文档 PR
+  专项）。06:36 UTC（14:36）迟到检视批 #30–#35（锚 b9df4cb3，R4/R5
+  collect 标历史轮次未处置）按「仍适用于当前代码」全量复核：
+  - **#32 部分采纳（progress-log:1632/1635/1684）**: R1 线性化台账把「双
+    commit」枚举与二进制验证锚写到 f34e96d1——实证 f34e96d1 =
+    f34e96d10250b98d8b9225ea8e18eac81c245336（父 344df32b、作者日期与
+    cd5d570e 同为 11:26:50、主题为旧数版「487/501→488/502」），即 R1
+    commit 被 docs-only amend（降级数 488/502 修正为 570/584）前的原始
+    哈希；`git branch -a --contains f34e96d1` 为空——未推送的悬空对象，
+    远端审计者不可解析（#32 检视在其克隆内 cat-file 报 Not a valid
+    object name 与此一致）。采纳：三处引用补真为已推送的 cd5d570e
+    （1632 双 commit 枚举；1635/1684 二进制锚，保留 amend 前构建出处
+    说明）。驳回「整段验证记录悬空」：验证主张实际锚定在已推送的
+    344df32b/cd5d570e 线性链（git log --format='%h %p' 可复核），仅三处
+    哈希引用未随 amend 更新；git diff f34e96d1 cd5d570e = 纯文档 3
+    文件，docs-only amend 不改二进制，二进制验证等价成立。
+  - **#30 机器错位驳回 + 实质缺口采纳（Critical：「三档各少 2、真实
+    572/582/586、注册总数 590」）**: 三重实证驳回其对文档口径的指控——
+    ① 本机直测（/proc/cpuinfo CPU part 0xd02 + sve、127 核）三档 =
+    570/580/584（本日复测）；② 注册总数 588：readelf `tests` 段地址窗
+    [0xcb7b00,0xcd0f40) 内 `_test_*` 结构体恰 588 个 = 584 列出 + 4 具名
+    被滤，`_test_mce_check` 在段外（0xca9520，special_tests 注入、不经
+    选择期过滤），nm 全量 589 = 588 + 1 恰好闭合；③ 全源名旁路普查：
+    601 个 DECLARE_TEST 源名经 `--test-list-file`（掺 zzz_bogus_test_name
+    对照、走装载报错路径）→ 13 个未注册 = examples（simple_add/
+    vector_add）+ gpu（ze_memcpy/ze_matmul_elemwise）+ fuzzing×2 + ifs×3
+    + atomic_simd_{128,256}_unaligned×2（meson 注释目标）+ crt_builtins×2，
+    601 − 13 = 588，与 nm 双路互证。其「590/572/582/586」属另一构建口径：
+    crt_builtins 探针（tests/cpu/arithmetic_arm/meson.build:111-123、
+    tests/cpu/sve/meson.build:272-279，硬编码 clang-17
+    `libclang_rt.builtins.a` 路径）命中的构建多注册 crt_builtins/
+    crt_builtins_sve（PROD×2）→ 注册 590、0xd02 侧 PROD 572；本机该库
+    不存在（test -f 实测 ABSENT）故不在本口径。**采纳其实质缺口（#26
+    同型第 6 例）**: R4 齐备清单漏此探针——README:388 footnote 与
+    CLAUDE.md 计数块补披露。其 400+186 跨机并集推算方法驳回（两机构建
+    配置不同，不可跨机相加）；其「能力主机 PROD 574」与 R3 #21 已写入
+    文档的推导一致，无新主张。
+  - **#31 驳回（Critical：「降级陷阱叙事在 PR 循环所在机器上不可能发生
+    + 数字应为 572/582/586」）**: 机器前提错位——其全部「本机」证据
+    （MIDR 0x481fd010、firestorm 48-d01-00、无 SVE、--list-tests
+    388/396/400、build.ninja 10:35 再生成）属另一台检视机，与本 PR-loop
+    宿主机（0xd02 + sve，/proc/cpuinfo 实测）不符；R1 降级叙事发生在
+    本机，有导出清单（pr413-listtests-*.txt 488/498/502）与构建日志
+    （SSL-disabled 538 目标 → install/ 齐备 reconfigure 后 613 目标）
+    佐证；「572/582/586」随 #30 一并驳回（系有 crt 库构建的另一口径）。
+  - **#33 采纳事实内核（R2 台账更正）+ 驳回诉求**: 可核验部分成立——
+    R2 台账原句「v2 会话在本机跑」把检视机等同宿主机，多板环境下该
+    归属断言不可核验，R6 已将该句更正（见 R2 节）；但其诉求（把
+    388/396/400 写回文档为「实测」）驳回——该组数字的宿主身份同样
+    未经独立复核，且 R4 算术定案（no-SVE q-1 天花板 586−207=379 < 398）
+    与 R5 处置（0xd01 侧一律「历史记录、归因不可考、待复测定值」）
+    独立于身份争议成立，文档现状即其正确处置。
+  - **#34 变通（与 PR #461 数字冲突）**: #461 为另一台机（0xd01 侧）、
+    另一 worker 的 PR，超出本 PR 处置范围（本 worker 只碰本 PR）；本
+    PR 文档全部带 0xd02/0xd01 机器限定语，两 PR 各自机器限定后不构成
+    同题矛盾；合并顺序与文本冲突由人工 merge gate 裁决。
+  - **#35 已处置（scope drift）**: R4 #28（PR body 更新）+ R5 #37（标题
+    更新）已覆盖，无新内容。
+- **验证**: 文档-only commit（README/CLAUDE/progress-log），x86-64 非回归
+  = 纯文档无代码路径；SDC_BUILD_JOBS=8 ./scripts/build.sh → ninja no
+  work to do、BUILD_EXIT=0、0 警告；zstd19 -t 2000 -n 1 → exit: pass
+  （version: sdcshield-cd5d570e857a-dirty，docs-only 不改二进制）；
+  --list-tests 三档 570/580/584 本日复测复现；588 注册锚点经 nm 段窗 +
+  旁路普查双路实证（见 #30）；crt 探针本机未命中经 test -f 实测。
+
+## PR #413 R7 检视处置（2026-11-04，新 worker 命接手，rebase + 计数重锚定 + R7 意见全处置）
+
+- **开工**: worktree 干净、local=remote=d2c501d0；第 5 bot 对 d2c501d0 的检视
+  已落（2026-11-02 10:00:55 UTC）。R7 collect 计入 5 条（#41–#45，local-claude）。
+- **rebase**: main 推进 6 提交（145c04b7/0a696384/d3288c82 迁移
+  （自记 +121 标签经 R8 #49 证伪——实测 tests/ 净 +170 文件、注册
+  +167）/451c6272/ff74f226/418e4e09 neon 系列）→ PR CONFLICTING，按 git-sanity
+  红线一律 rebase：6 commit 重放至 418e4e09（dc1852d7→32116499→9c2ac16c→
+  55539a6a→8815fe65→fd89ad64），3 区域×6 轮冲突脚本化解决（本命工具
+  pr413-rebase-driver.py，仓库外 reports 目录）。裁定沿用：计数冲突以
+  rebase 树实测裁决；main 侧 439/547/551（0xd01 机迁移后实测，d3288c82
+  记录）取代分支「390 待复测定值」叙事——复测已由 main 侧兑现；main 表
+  538/110/652 系旧基 487+51 算术叠加（487 基为 R1 已证伪降级口径），
+  不沿用。（2026-11-04 R8 #47/#49 更正：「复测已兑现」的日期与分解均
+  不可考——439 记录自记 2026-11-02，而 no-SVE q-1 = 注册−207 门控，
+  551 ⇒ 注册恰 758 ⇒ 唯一相容树为 418e4e09（2026-11-03 22:11）；其
+  自记步进分解在 git 图中不存在，增量实经 d3288c82 一次接线 + neon
+  系列净 +3。应读作「main 侧存在 439/547/551 记录，但测量日期/树
+  归属/宿主身份均不可考」；538/110/652 不沿用的定性不变。）
+- **计数重锚定（commit 0a015da7）**: rebase 树 0xd02 首测 640/750/754
+  （BETA 110 = 原 10 + sdc_fuzz×100；SKIP 4 eigen_svd_jacobi×4）；
+  tests ELF 段 [0xda7ae0,0xdc8400) _test_* 恰 758 = 754+4 具名被滤
+  （SVE2×1+SME×3 全 PROD，能力主机 PROD 644）；_test_mce_check 段外
+  不在列表（与 2026-11-02 树同构）；门控普查 207 两树同值；crt_builtins
+  探针（迁移后路径 /usr/lib/clang/17/lib/aarch64-openEuler-linux-gnu/）
+  本机仍 ABSENT——该库存在主机注册 760/PROD 642。迁移前树 570/580/584/
+  588 降为带树归属历史锚点（两树差 +70 PROD/+170 全量）。
+- **意见处置表（R7 collect 当前 head 5 条）**:
+
+| 意见 | 结论 | 依据 |
+|---|---|---|
+| #41 [Important] 守卫锚点指错文件（id=4441028166） | 采纳（tests 侧行号 2026-11-04 R8 #48 再更正） | 实证 framework/meson.build:232-239 为 OpenSSL 真实守卫（含系统 libcrypto≥3.0 回退）——framework/meson.build 两树零改动、该锚点仍然有效。但 3f60d55d 交付的 tests/cpu/meson.build 锚点（:421 注释行/:417 消费方/686/726/761/945 四守卫）经查系 rebase 前基线 7f0b9c7c 行号——逐行验证发生在 rebase 之前、未随迁移 +84 行重锚；交付树 418e4e09 实测：守卫消息行 = OpenBLAS :699 / SLEEF :739 / pocketfft :774 / isa-l :1041，SANDSTONE_SSL_BUILD 消费方 :429。R8 commit 已按交付树重锚 |
+| #42 [Minor] CLAUDE.md「locks those groups out」未同步（id=4441028186） | 采纳 | R3 #22 在 README 已定案「禁用 + reconfigure 恢复」；CLAUDE.md 孪生块同步同款措辞（locks→disables + `meson setup --reconfigure builddir` recovers），本 commit 落实 |
+| #43 [Minor] CLAUDE.md 390 宿主身份限定语缺失（id=4441028201） | 采纳 | rebase 后 CLAUDE.md 0xd01 行已换 main 侧 439 实测；补「main-side record — host identity not independently re-verified here」来源+限定（439 系 main 侧另一 worker 会话记录，其宿主身份本会话未独立复核；old 390 records attribution-unverifiable 保留） |
+| #44 [Minor] PR body 范围声明滞后（id=4441028208） | 采纳 | PR body 更新为 R1–R7 如实范围（含 rebase + 640 重锚定 + #41–#45 处置），元数据操作无 commit（R5 #37 同例） |
+| #45 [Minor] 三处复制 + footnote 长句（id=4441028219） | RESIDUAL 维持 | 与 R5 #38/#39 同形态（结构性去重 + 句法打磨），归后续文档 PR 专项；本轮计数重锚定已按 R5 判例同步三处（README:126/348/394 + CLAUDE.md），下次计数变更仍须同步 ≥3 处的债务已披露 |
+
+- **验证（本命亲测）**: SDC_BUILD_JOBS=8 全量 782 目标 BUILD_EXIT=0、
+  唯一 warning = mesh_upi_sse_sym.cpp:202 %u/uint64_t（main 侧既有，
+  blob 三树同源非本 PR 引入）；--list-tests 640/750/754；增量 ninja no
+  work to do、零新警告；zstd19 -t 2000 -n 1 → exit: pass（version
+  sdcshield-fd89ad646c83，docs-only 不改二进制）；x86-64 非回归 = 纯文档。
+- **push**: fd89ad64..（0a015da7 → 3f60d55d → 本 commit），线性无 merge，
+  DCO 齐。待第 5 bot → CI → 静默窗 ≥900s → R8 collect。
+
+## PR #413 R8 检视处置（2026-11-04，head 5be9226c 起算，第 5 bot 对 db4a80c5 的 4 条意见全处置）
+
+- **R8 collect（pr413-r8-collect.md）**: 当前 head（db4a80c5）计入 4 条
+  （local-claude 2026-11-04 05:08 检视：#47 [Critical]/#48 [Important]/
+  #49 [Important]/#50 [Minor]）。CI：15 pass + build-cpu fail（main 侧
+  low_load_cache_pressure/_neon 云 runner SIGABRT，舰队级：迁移后全部
+  open PR 同红，本机真机复跑 pass，与本文档 PR 无关——详 pr413.md
+  R7 CI 判定节）。
+- **意见处置表**:
+
+| 意见 | 结论 | 依据 |
+|---|---|---|
+| #47 [Critical] 439 自记日期 2026-11-02 算术不可能（id=4463821143） | 采纳 | 独立复核成立：门控 207 两树同值（grep 实测 203 SVE + 1 SVE2 + 3 SME）；no-SVE q-1 = 注册−207，551 ⇒ 注册恰 758；注册链 588@7f0b9c7c（2026-11-02 10:18）→ 755@d3288c82（11-03 00:48）→ 758@418e4e09（11-03 22:11）经 DECLARE 差分互证（R9 #55 口径声明：672→840→843 系 `DECLARE_TEST(` **原始出现数**口径，唯一名口径 599→767→770、注册口径 588→755→758；出现数 +168 vs 注册 +167 的 1 例差 = sdc_fuzz_case_template.h:6 **注释中的伪名** `DECLARE_TEST(id, desc)` 被出现数/唯一名口径计入、注册口径不含——非账目缺口；R6 #30 的「601 源名」系第三种口径，与 599/672 互不通用、勿跨口径比对）——11-02 当日 no-SVE 天花板 381 < 551，唯一相容树 418e4e09 晚于自记日期一天。三处文档（README:348/394、CLAUDE.md）「2026-11-02 实测」改为「main 侧记录 + 日期/树归属/宿主身份均不可考」的指纹归因 |
+| #48 [Important] R7 #41 交付守卫行号系 rebase 前基线（id=4463821151） | 采纳 | 交付树逐行实测：:686/:726/:761/:945/:417 全部落空（文件清单项/注释/')'/neon_lock 注释），真锚点 = OpenBLAS :699 / SLEEF :739 / pocketfft :774 / isa-l :1041、消费方 :429；framework/meson.build 两树零改动（:232-239 仍有效）。commit 5be9226c 重锚 + 本台账 R7 #41 行补真（验证时点如实：逐行验证发生在 rebase 前、未随 +84 行重锚） |
+| #49 [Important] 「迁移 121 + arm_add 7 + _neon 14 + cache 9」分解在 git 图中不存在（id=4463821159） | 采纳 | 独立复核成立：d3288c82 单 squash 一次接线全部 arm_add/cache/_neon 文件（tests/ name-status 实测 **170 增 3 改 0 删**——R9 #52 更正：R8 首记「171 增 1 删」系 grep 计入 commit 头 Author:/Date: 行的污染；迁移零门控）；neon 系列（451c6272/ff74f226/418e4e09）净 +3；步进树「注册 728」不存在。三处文档去掉假分解，改「经 d3288c82 一次接线 + neon 系列净 +3」；两树差 +70 PROD 标注「PROD 构成未逐 commit 拆解」 |
+| #50 [Minor] RESIDUAL 债务同轮两次发作应本轮修（id=4463821169） | 采纳（精神） | 其指认的两次发作（#48 锚点漂移、#47 日期未对账）即本轮 R8 修复落实；结构性单一事实源化维持 RESIDUAL（R5 #38/#39 判例不变）——本轮三处孪生同步再次证明该债务的真实成本，留给后续文档 PR 专项处理时优先 |
+
+- **验证（R8 亲测）**: 三个数字断言全部本会话实测引用（三树 DECLARE 差分
+  git grep、守卫行 sed 逐行、d3288c82 name-status 计数）；文档-only
+  commit 序列（5be9226c + 本 commit）——ninja no work to do、零新警告；
+  zstd19 -t 2000 -n 1 → exit: pass；x86-64 非回归 = 纯文档。
+- **push 后**: 待第 5 bot（新 head）→ CI → 静默窗 ≥900s → R9 collect
+  （预算：本命 R7/R8 = 2/4）。
+
+## PR #413 R9 检视处置（2026-11-04，head 20c07213 起算，第 5 bot 对 efaabdee 的 5 条意见全处置）
+
+- **R9 collect（pr413-r9-collect.md）**: 当前 head（efaabdee）计入 5 条
+  （local-claude 2026-11-04 05:56 检视：#52 [Important]/#53 [Minor]/
+  #54 [Minor]/#55 [Minor]/#56 [Minor]）。CI：14 pass + build-cpu fail
+  （同一对 main 侧 low_load_cache_pressure/_neon 云 runner SIGABRT，
+  non-本-PR 定性不变）+ analyze pending。
+- **意见处置表**:
+
+| 意见 | 结论 | 依据 |
+|---|---|---|
+| #52 [Important] R8 交付「tests/ 171 增 1 删」与 name-status 不符（id=4464143891） | 采纳 | 复测实锤：我 R8 的 grep 被 commit 头污染（^A 命中 Author: 行 → 多计 1；^D 命中 Date: 行 → 虚构「1 删」）——`--format=''` 重测 d3288c82 tests/ = **170 增 3 改 0 删**（零删除；净 +170 恰因 170A−0D 成立）。footnote 与本台账 R8 #49 行同步改正（20c07213） |
+| #53 [Minor] 「迁移 +84 行」漂移归因不完整（id=4464143901） | 采纳 | 逐 commit numstat 实测：7f0b9c7c→418e4e09 该文件 +106/−3 = d3288c82 +84/−0 + 418e4e09 +70/−51 重写（isa-l 锚点 +96 漂移的真因）；漂移注记改写为逐 commit 实测（20c07213） |
+| #54 [Minor] 同句先跨树相减再禁相减、缺宿主限定（id=4464143910） | 采纳 | CLAUDE.md 同步块本有「the two host figures」限定而 README 两处缺失——统一补「同宿主两树差（0xd02 归因用语）vs 两宿主机数字间勿相减」；439 句改「勿与 0xd02 数字作跨宿主相减」（20c07213） |
+| #55 [Minor] 台账两个互不相容的「实测」DECLARE 普查、+168 vs +167 缺口未释（id=4464143921） | 采纳 | 三基实测：出现数 672→840→843、唯一名 599→767→770、注册 588→755→758；+1 缺口 = sdc_fuzz_case_template.h:6 注释伪名 `DECLARE_TEST(id, desc)` 被出现数/唯一名口径计入而注册口径不含（未接线名 11→12 恰闭合）；R8 #47 行补口径声明，R6 #30「601 源名」标注为第三口径、勿跨口径比对（本 commit） |
+| #56 [Minor] R7 台账行残留已证伪的「迁移 +121」标签（id=4464143932） | 采纳 | R7 rebase 行的 +121 加注「自记标签经 R8 #49 证伪——实测净 +170 文件/+167 注册」，证据链内不再有未标记的假数（本 commit） |
+
+- **验证（R9 亲测）**: d3288c82 name-status 用 `--format=''` 重测；逐
+  commit numstat；三基 DECLARE 普查（git grep -o 出现数 / 唯一名 sort -u /
+  readelf 注册）；文档-only commit 序列（20c07213 + 本 commit）——ninja
+  no work to do、零新警告；zstd19 -t 2000 -n 1 → exit: pass；x86-64
+  非回归 = 纯文档。
+- **push 后**: 待第 5 bot（新 head）→ CI → 静默窗 ≥900s → R10 collect
+  （预算：本命 R7/R8/R9 = 3/4）。
+
+## PR #413 R10 检视处置（2026-11-04，head 12281fc3，第 5 bot 对 R9 head 的 3 条意见处置——本命末轮 4/4）
+
+- **R10 collect（pr413-r10-collect.md）**: 当前 head（12281fc3）计入 3 条
+  （local-claude 06:45 检视：#58 [Important]/#59 [Minor]/#60 [Minor]），
+  均为可维护性、无新事实错误。CI：14 pass + build-cpu fail（同一对
+  main 侧 low_load_cache_pressure/_neon，定性不变）。
+- **意见处置表**:
+
+| 意见 | 结论 | 依据 |
+|---|---|---|
+| #58 [Important] 计数事实 ≥4 处复制、CLAUDE.md 副本 2→32 行加深债务（id=4464505094） | 变通采纳 | 债务实证成立（R5 #38/R7 #45 判 RESIDUAL 后本 diff 确实再落地第 4 份副本且更长）——末轮做实质收敛：CLAUDE.md 计数块 32 行→15 行（保留操作必需：期望数、降级陷阱一句话、reconfigure 恢复、宿主限定、#43 宿主限定语短式），长推导（486/490 史、ceiling 379、439 指纹链）移交 README 单一事实源，并明写「update numbers there」指针。README:126/:348/:394 的进一步合并（spec 节与 footnote 的结构去重）超出末轮安全边际，维持 RESIDUAL 归去重专项 PR（与本轮收敛不冲突：最坏副本已收敛一半并指针化） |
+| #59 [Minor] spec 节 600 字/footnote 1900 字巨型嵌套句（id=4464505106） | RESIDUAL 维持 | R5 #39 同族判例；其最近一次发作（R9 #54 bot 误读）的根源已由宿主限定语修复（20c07213），句法拆分重构与 #58 的 README 内部结构去重同属一个专项 PR——末轮大改写会重开检视周期而处置预算已尽，如实留档 |
+| #60 [Minor] PR body 落后一轮、标题「待复测定值」已过时（id=4464505114） | 采纳 | 元数据操作无 commit（R5 #37/R7 #44 同例）：body 更新为 R1–R10 十轮如实范围；标题「0xd01 历史记录 390 归因不可考、待复测定值」改为反映现行口径（main 侧 439/547/551 记录、日期/树归属不可考） |
+
+- **验证（R10 亲测）**: 文档-only——ninja no work to do、零新警告；
+  zstd19 -t 2000 -n 1 → exit: pass；x86-64 非回归 = 纯文档。
+- **本命收敛状态**: R7/R8/R9/R10 = 4/4 预算用尽。遗留（结构性、均经
+  多轮判例）：#58 README 内部三处去重、#59 巨句拆分——建议后续文档
+  去重 PR 专项（R5 #38/#39 原判）。build-cpu 红 = main 侧舰队级
+  （low_load_cache_pressure{,_neon} 云 runner SIGABRT），与本 PR 无关。

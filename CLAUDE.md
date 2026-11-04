@@ -64,12 +64,21 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
 ./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent:
-                                               #   SVE1 host:  486 PROD / 496 q0 / 500 q-1  (2026-11-01 merge-tree,
-                                               #               post issue #374 sched_storm×4 PROD→BETA re-measure;
-                                               #               +121 迁移后推算 507/517/521, 待该主机重测)
-                                               #   no-SVE 920 (本机): 439 PROD / 547 q0 / 551 q-1  (2026-11-02 实测,
-                                               #               = 迁移 121 + arm_add 7 + _neon 14 + cache 新 9 PROD 后)
-                                               # full dated chain: README「测试用例与检测能力」
+                                               #   SVE1 host (MIDR part 0xd02): 640 PROD / 750 q0 / 754 q-1
+                                               #     (2026-11-04, this tree rebased to main 418e4e09 incl.
+                                               #      the migration; gcc + full vendored deps, excl.
+                                               #      crt_builtins ×2 — clang-17 probe missed here.
+                                               #      Pre-migration tree: 570/580/584, registry 588.)
+                                               #     TRAP: `meson setup` BEFORE third-party/*/install is
+                                               #      populated disables the vendored groups (degraded
+                                               #      count) — `meson setup --reconfigure builddir`
+                                               #      recovers, never rebuild from scratch.
+                                               #   no-SVE 920 (MIDR part 0xd01): 439/547/551 main-side
+                                               #     record — date/tree/host identity unverifiable; older
+                                               #     390/394/398 attribution-unverifiable.
+                                               #   Do NOT cross-host-subtract. Single fact source (all
+                                               #   derivation chains, trap details, registry anchors):
+                                               #   README「测试用例与检测能力」— update numbers there.
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)
 ./builddir/sdcshield --quality=-1 -e <test>   # include SKIP-level tests

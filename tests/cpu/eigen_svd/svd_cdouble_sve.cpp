@@ -28,7 +28,9 @@
  * run_budget_ms note in sve_probe_and_init) — clamped to [300, 6000]. The
  * preinit no
  * longer sizes the matrix at all: it only writes a desired_duration
- * UPPER bound from the same memory ceiling — or from the explicit
+ * UPPER bound from the same memory ceiling — on the auto tier a tight
+ * single-iteration estimate capped at the run budget (AR×2×t(n_hi) capped
+ * at RUN_BUDGET_MS, see size_matrix_preinit) — or from the explicit
  * knob/env, which the child applies VERBATIM and therefore must scale
  * the duration too (issue #352), and on that explicit tier a
  * minimum_duration single-iteration floor, because the framework-level
@@ -123,10 +125,17 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  * SDC_RSS_BDCSVD_C128 = 0.2055 KB/n²/thread measured differential
  * coefficient + the table-AR iteration budget; preinit side: the
  * t(N) = 243.4s·(N/4400)³ + 1s fit of those same points, still used for
- * the desired_duration upper bound below).
+ * the desired_duration single-iteration estimate below).
  */
 #define MDIM_MIN 300
 #define MDIM_MAX 6000
+
+/* 全核单迭代预算(ms): child 的 n_run 校准(ja.run_budget_ms, 方程
+ * run_budget = AR×2×t(n_run))与 preinit 的 desired_duration 上界共用
+ * 同一数值——两处分写会静默漂移(0.2055 字面量的同型教训, b249c97c)。
+ * 140 s 是表 AR=25 的口径, 参考机实测最坏 child AR≈39 时 ≈218 s
+ * (见 sve_probe_and_init 的 run_budget_ms 注释)。 */
+#define RUN_BUDGET_MS 140000
 
 /*
  * preinit (runs once in the PARENT, before run_one_test computes
@@ -153,8 +162,25 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  *           node_cpus), so n_hi tracks it on every host class — not
  *           just the 127-worker reference the value was historically
  *           hard-coded to.
- *   auto:  dur = t(n_hi) × 0.95,  t(N) = 243.4s·(N/4400)³ + 1s  (x3b fit,
- *           within ±2% of the measured points at N>=2400).
+ *   auto:  dur = 0.95 × min(RUN_BUDGET, AR × 2 × t(n_hi)),  t(N) =
+ *           243.4s·(N/4400)³ + 1s  (x3b single-solve fit, within ±2% of
+ *           the measured points at N>=2400) — the same full-core
+ *           single-iteration shape the child's n_run calibrates against
+ *           (sdc_joint_dim_slice: run_budget = AR×2×t(n_run); AR from
+ *           sdc_ar_factor(SDC_FAM_MEM_BOUND), the same family the auto
+ *           branch's ar_fam uses, workers == 1 takes ar = 1). The min
+ *           mirrors the child's min(n_mem, n_run): memory-bound hosts
+ *           get AR×2×t(n_hi), n_run-capped hosts (large memory) get the
+ *           budget. desired_duration must sit AT OR BELOW the child's
+ *           real single iteration: TEST_LOOP continues only while time
+ *           remains, so desired ≤ iteration means exactly one pass
+ *           (issue #421 — the old body-less 0.95×t(n_hi) exceeded the
+ *           ~140-218 s real iteration on large-memory hosts (n_hi above
+ *           ~3650) and on -n 1 (n_hi saturates MDIM_MAX, old desired
+ *           587 s), opening un-budgeted 2nd..25th iterations; adding
+ *           AR×2 without the budget cap is equally wrong — at the table
+ *           AR=25 with n_hi=6000 it would inflate desired to ~7020 s and
+ *           the test would loop to fill it).
  *   knob:  dur = ar × 2 × t(knob) × 0.95 (PR#384 review, id 4432271415):
  *           the explicit tier bypasses the joint solver's AR-aware n_run
  *           protection VERBATIM, so the all-core contention must go into
@@ -172,11 +198,7 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  *           figure and a lone worker contends only with itself, so the
  *           ungated table value would stretch a -n 1 explicit run to
  *           ~ar×t(knob) (breaking the one-iteration semantics of the
- *           standard `-t … -n 1` regression lane). The AUTO branch keeps
- *           the t(n_hi)×0.95 model: its AR protection is the solver's
- *           own AR-aware n_run (run_budget=140 s tier, measured worst
- *           ~213 s — ~25% inside the 300 s hard grace), and n_run pins
- *           child n on the time side on this host class.
+ *           standard `-t … -n 1` regression lane).
  *   min:   the knob tier ALSO writes test->minimum_duration = ar×2×t(knob)
  *           (no 0.95 margin — the floor of "at least one full iteration";
  *           PR#384 review, id 4432271419): the framework-level -t override
@@ -209,7 +231,8 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  * which is the UNSAFE direction, the very P0 timeout mode this PR
  * fixes. Using the actual worker count restores the invariant on every
  * host; the child's own n_run still bounds one iteration at ~140 s
- * (模型, run_budget_ms=140000) / ~213 s (实测最坏) as a second belt.)
+ * (模型, run_budget_ms=RUN_BUDGET_MS) / ~213 s (实测最坏) as a second
+ * belt.)
  */
 static int size_matrix_preinit(struct test *test)
 {
@@ -257,11 +280,12 @@ static int size_matrix_preinit(struct test *test)
      *   - workers == 1 时取 1: AR 表值是全核口径, 单 worker 自争抢
      *     为 1(物理定义); 不折算则 -n 1 显式档裸跑 target 被拉到
      *     ~ar 倍 t(knob), 标准回归路径(-t … -n 1)的单迭代语义破坏;
-     *   - auto 分支维持 t(n_hi)×0.95(P0-1 §4.5 原模型): 其 AR 保护
-     *     来自联合求解 AR-aware 的 n_run(run_budget=140 s 档, 实测
-     *     最坏 ~213 s, 距 300 s floor 留 ~25% 裕量), 且 n_run 在本
-     *     host class 恒把 child n 压在时间侧——显式档恰恰绕过这层
-     *     保护, 才必须把 AR 显式放进模型。 */
+     *   - auto 分支自此同用 AR×2 全迭代模型并取预算封顶(0.95×
+     *     min(RUN_BUDGET, ar×2×t(n_hi)), issue #421): 旧
+     *     t(n_hi)×0.95 只靠联合求解 AR-aware n_run 的间接保护,
+     *     大内存与 -n 1 主机上 desired 越过真实单次、开出未预算
+     *     迭代——两档自此同模型, 差别只在 auto 取预算封顶、
+     *     显式档逐字跟随 knob。 */
     int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
 
     double iter_s;
@@ -312,7 +336,26 @@ static int size_matrix_preinit(struct test *test)
          * 框架级设计项, 超出本 PR 边界。 */
         test->minimum_duration = (int)(iter_s * 1000.0);   /* ms */
     } else {
-        iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
+        /* auto 档(issue #421): 全核单次迭代 = ar×2×t(n_hi)(run 侧
+         * prime+DUT 两解 × 全核 slowdown), 与 child n_run 的校准方程
+         * (run_budget = AR×2×t(n_run), sdc_joint_dim_slice)同口径;
+         * 再与 RUN_BUDGET 取 min——min 结构一阶复刻 child 的
+         * min(n_mem, n_run): n_run 主导的大内存主机单次被预算钉在
+         * RUN_BUDGET, 内存主导的小内存主机单次 ≈ ar×2×t(n_hi)。
+         * 旧公式只有 0.95×t(n_hi)(单线程单解、无 AR 无 ×2), 在大
+         * 内存(n_hi>~3650, duration 越过 140-218 s 的真实单次迭代)
+         * 与少核(-n 1 把 n_hi 推到 MDIM_MAX)主机上超过单次,
+         * do-while 开出未预算的第二~二十五次迭代(issue #421; 本机
+         * -n 1 实测旧 desired 587 s vs 单次 ~23 s)。单加 AR×2 不取
+         * min 同样错误: 参考机口径 AR×2×t(n_hi)≈7020 s, 测试会跑满
+         * desired(31 次迭代)。ar 的 workers==1 折算与显式档同口径
+         * (表值是全核口径; -n 1 下两侧都被预算封顶钉在 RUN_BUDGET,
+         * 折算仅对 n_hi<~3440 的单核小内存场景有数值差)。 */
+        double ar = workers > 1
+                ? sdc_ar_factor(SDC_FAM_MEM_BOUND, sdc_numa_probe()) : 1.0;
+        iter_s = ar * 2.0 * (243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0);
+        if (iter_s > (double)RUN_BUDGET_MS / 1000.0)
+            iter_s = (double)RUN_BUDGET_MS / 1000.0;
     }
     /* 【PR#384 检视 R5, 意见 4463650400】显式档生效侧澄清: 同一 iter_s
      * 下本 desired(0.95×iter_s)恒小于上方 min(1.0×iter_s), 而框架
@@ -394,7 +437,7 @@ static int sve_probe_and_init(struct test *test)
             .shared_bytes_per_slice = 0,   /* make_data holds no matrices */
             .mem_fraction_permille = 650,
             .ar_fam = SDC_FAM_MEM_BOUND,
-            .run_budget_ms = 140000,       /* worst-child iteration budget;
+            .run_budget_ms = RUN_BUDGET_MS, /* worst-child iteration budget;
                                             * 140 s at the table AR=25 ≈
                                             * 218 s at the measured
                                             * worst-child AR≈39 (see above) */
@@ -491,15 +534,16 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
   .test_cleanup = eigen_svd_cdouble_sve_cleanup,
   .minimum_cpu = 0,
   /* desired_duration is written by test_preinit (parent, before the
-   * framework computes test_duration for the first run) as an UPPER-BOUND
-   * estimate from the memory ceiling (auto mode) or the explicit knob
-   * (which the child applies verbatim — issue #352) (P0-1: the child
-   * sizes the dimension itself via the joint solver, always <= that
-   * ceiling. The run-side do-while — which continues while the deadline
-   * has NOT expired — exits after exactly one iteration when dur sits
-   * at or below the child's real single-iteration time; at the
-   * memory-bound ceiling the real iteration carries the AR factor on
-   * top of the same quiet fit, so it sits above the −5%-discounted dur
+   * framework computes test_duration for the first run) as a tight
+   * full-core single-iteration estimate from the memory ceiling (auto
+   * mode, AR×2×t(n_hi) capped at the run budget — issue #421) or the
+   * explicit knob (which the child applies verbatim — issue #352) (P0-1:
+   * the child sizes the dimension itself via the joint solver, always <=
+   * that ceiling. The run-side do-while — which continues while the
+   * deadline has NOT expired — exits after exactly one iteration when dur
+   * sits at or below the child's real single-iteration time; at the
+   * memory-bound ceiling the real iteration carries the AR factor on top
+   * of the same quiet fit, so it sits above the −5%-discounted dur
    * (issue #479: the previous "at or above" wording had this
    * backwards); a dur above the real time would instead start a second,
    * un-budgeted iteration. The derived timeout (5*duration+30s, 300s

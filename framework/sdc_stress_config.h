@@ -577,9 +577,24 @@ static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
  * 从入参 test->id 推导(与 sdc_knob_cache_key 同法), 拼错字面量即单侧
  * env 兜底失效的手工同步点彻底消除——四处调用点此前各手写一次
  * "eigen_svd_cdouble_sve"/"eigen_gemm_double_max_arm" 恰与 test->id
- * 相同, 推导后行为逐字不变(test 为空则跳过 env 通道, 与传空串同义)。
+ * 相同, 推导后行为逐字不变(test 为空则跳过 env 通道, 与传空串同义;
+ * "逐字不变"仅对默认构建成立, NO_TEST_NAMES 边界见下段)。
+ * 【PR#384 检视 R4, 意见 4441045420】SANDSTONE_NO_TEST_NAMES 构建
+ * (framework_options 含 no-test-names, 或 logging_format=no_output,
+ * 见 framework/meson.build)下 DECLARE_TEST_INNER 令
+ * .id = STRINGIFY(TEST_ID_<test>) = shortid 十六进制串(如 "cd14b7")
+ * ——env 名随之从 SDC_EIGEN_SVD_CDOUBLE_SVE_MDIM 漂移为
+ * SDC_CD14B7_MDIM, 已部署旧名静默失配(实测 2026-11-04: 旧名 →
+ * "未显式配置"回退 auto 档; 新名 → "来源: 环境变量"命中显式档。
+ * 回退的 auto 档有 AR 保护, 不重开 #352)。该漂移系框架 test->id
+ * 派既有属性(联合求解 T11 块/eigen common 头 x86 分支/mesh_upi 系
+ * 同此), 且与该构建 -e/-O 的 shortid 寻址一致(-e
+ * eigen_svd_cdouble_sve 同样 Cannot find)——字面量时代的 env 旧名
+ * 反而与寻址体系脱节成两套命名。恢复字面量重开 4439402793 的同步
+ * 点, 单侧剥 shortid 又与全部 test->id 派不一致, 均不取; 稳定短名
+ * 寻址属框架级设计项, 边界在此如实记录。
  * 返回 0 = 未显式配置(调用方走自适应)。内部序列与原四份拷贝逐字
- * 一致, 日志/缓存语义零变化。 */
+ * 一致, 日志/缓存语义零变化(默认构建)。 */
 static inline int64_t sdc_knob_or_env_clamped(struct test *test,
                                               const char *key,
                                               int64_t lo, int64_t hi)

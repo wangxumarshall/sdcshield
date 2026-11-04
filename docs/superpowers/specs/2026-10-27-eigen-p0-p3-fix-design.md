@@ -334,6 +334,26 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   自身的 test 结构 desired/minimum_duration 字段恒 0（M_DIM 日志行
   实证）——纯字段语义瑕疵，迭代时长与超时执法均经 shmem/parent 与 fork
   完全一致，无功能后果。
+  【2026-11-04 勘误，PR#384 检视 R4（意见 4441045420）——9b96ab64
+  声明边界】"env 前缀从 test->id 推导后行为逐字不变"仅对默认构建
+  成立：SANDSTONE_NO_TEST_NAMES 构建（framework_options 含
+  no-test-names 或 logging_format=no_output）下 .id = shortid 十六
+  进制串（如 "cd14b7"——STRINGIFY(TEST_ID_eigen_svd_cdouble_sve) 经
+  sandstone_short_ids.h 展开为 STRINGIFY(cd14b7)），env 名随之从
+  SDC_EIGEN_SVD_CDOUBLE_SVE_MDIM 漂移为 SDC_CD14B7_MDIM，已部署旧名
+  静默失配。实测（2026-11-04，-Dframework_options=no-test-names）：
+  旧名 → "未显式配置"回退 auto 档（11.3s）；新名 → "来源: 环境变量"
+  命中显式档（60.7s 单迭代）；GEMM 同构（旧名 34.4s auto / 新名
+  SDC_7D59EA_MDIM 6.9s 显式）。定性：(a) 回退的 auto 档有 AR 保护
+  （run_budget=140s 收在 300s floor 内），不重开 #352 kill 窗；
+  (b) 漂移是框架 test->id 派既有属性（联合求解 T11 块/eigen common
+  头 x86 分支/mesh_upi 系同此）；(c) 该构建下 -e/-O 寻址本就只认
+  shortid（-e eigen_svd_cdouble_sve 实测 Cannot find，--list-tests
+  输出 shortid），env 新名与寻址体系一致，字面量时代的旧名反而
+  脱节成两套命名。处置：维持推导（恢复字面量重开 4439402793 的
+  同步点；单侧剥 shortid 与全部 test->id 派不一致，均不取），helper
+  注释与 spec 如实记录；稳定短名寻址属框架级设计项，超出本 PR
+  边界。
 - **gemm_double_max_arm**：同样迁移 + 接入时间校准（【v2/M8】它同样
   无校准，v1 漏列）。
 

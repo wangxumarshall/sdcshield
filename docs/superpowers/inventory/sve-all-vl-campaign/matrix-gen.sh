@@ -27,12 +27,14 @@
 #       5+4 分量/25/15/1/16、唯一非超时 baked 身份 acl_gemm_sve=dim=512；
 #       164/181/39/9/190 等和值为代数传递蕴含，派生链见 END 段断言块注释）——
 #       数量与身份均与叙述锁死，工件漂移即 FATAL（见 END 段断言块）。守护边界
-#       （如实声明，检视 #4462912949 后收窄）：值锁 = 25 项非 acl baked 的 -O 值
-#       与 triage-256 §4 clamp 列下限双向锁死（含集合相等；单位展开
-#       K/M/G/T[B] = 2^10/20/30/40）——工件漂移或「下限起步改中间档」的协议
-#       漂移均 FATAL，不再仅靠人工核数；不锁的剩余面 = §4 clamp 列自身的准确性
-#       （真源在测试源码/框架，如 gmp_bigadd_sve.cpp:31 GMP_SVE_LIMBS=256、
-#       cdouble mdim [300,6000]），该对应仍由人工核数承担。
+#       （如实声明，检视 #4462912949/#4463822593 后收窄）：值锁 = 25 项非 acl
+#       baked 的 -O 值与 triage-256 §4 clamp 列下限双向锁死（含集合相等；单位
+#       展开 K/M/G/T[B] = 2^10/20/30/40），§4「有界重跑结果」列（pass @ …）与
+#       §5「有界值」列两份手工同值副本亦归一后交叉锁到同一基准——工件漂移、
+#       「下限起步改中间档」的协议漂移、文档副本单方漂移均 FATAL，不再仅靠
+#       人工核数；不锁的剩余面 = §4 clamp 列自身的准确性（真源在测试源码/框架，
+#       如 gmp_bigadd_sve.cpp:31 GMP_SVE_LIMBS=256、cdouble mdim [300,6000]），
+#       该对应仍由人工核数承担。
 #
 # 一致性断言（任一失败 → 非零退出、不产出 matrix.md）：
 #   清单 190 行；4 份 native summary + 1 份 verdicts 各覆盖全部 190 名；
@@ -42,7 +44,8 @@
 #   其余测试双 skip 或单 seed 分歧 skip 均 FATAL，防「合法 SKIP」标签
 #   张冠李戴 / seed 依赖型 skip 被 pass 掩蔽）；512 列 crash/timeout 格
 #   必有机制理由标签；† 标记行恰 5 行（PR #307 #22）；25 项非 acl baked 的
-#   -O 值 = triage-256 §4 clamp 下限（值锁，双向集合相等，#4462912949）；
+#   -O 值 = triage-256 §4 clamp 下限（值锁，双向集合相等，#4462912949），
+#   §4 重跑结果列与 §5 有界值列同值副本交叉锁到同一基准（#4463822593）；
 #   256 seed1 命令行头恰 1 项 -O = acl_gemm_sve.dim=512 标定（#4463651353）。
 #
 # locale：全链 LC_ALL=C（enumeration.md §6 的 comm/sort 教训）。
@@ -163,6 +166,46 @@ sed -n '/^## 4\./,/^## 5\./p' "$TRI256" | awk -F'|' '
     }' > "$TMP/clamp_lo.tsv"
 [ "$(wc -l < "$TMP/clamp_lo.tsv")" -eq 25 ] \
     || { echo "ERROR: expected 25 §4 timeout rows, got $(wc -l < "$TMP/clamp_lo.tsv")" >&2; exit 2; }
+
+# ---- §4 第 6 列 / §5 第 3 列同值副本交叉锁（检视 #4463822593）：同一证据链内
+#      还有两份手工同值副本——§4 表「有界重跑结果」列（pass @ <knob>=<值>）与
+#      §5 表「有界值（=clamp 下限）」列（<knob>=<值>）——此前不在任何锁内，bot
+#      沙箱实测两处单方漂移（limbs=256→512）均 rc=0 静默通过。本锁把两副本归一
+#      （单位后缀展开，与工件侧裸数字对齐：§4 副本 mesh_upi 写 1M、§5 副本与
+#      工件写 1048576）后与 clamp_lo.tsv 三方比对——任一副本单方漂移即 exit 2。
+norm_val() {  # stdin: <test>\t<knob>=<value>[单位后缀] → stdout: <test>\t<knob>=<展开值>
+    awk -F'\t' '{
+        split($2, kv, "=")
+        if (kv[1] == "" || kv[2] !~ /^[0-9]+([KMGT]B?)?$/) \
+            { printf "ERROR: cannot parse knob=value cell: [%s] %s\n", $1, $2 > "/dev/stderr"; exit 2 }
+        v = kv[2]
+        match(v, /^[0-9]+/); num = substr(v, 1, RLENGTH); suf = substr(v, RLENGTH + 1)
+        sub(/B$/, "", suf)
+        mult = 1
+        if (suf == "K") mult = 1024
+        else if (suf == "M") mult = 1048576
+        else if (suf == "G") mult = 1073741824
+        else if (suf == "T") mult = 1099511627776
+        printf "%s\t%s=%d\n", $1, kv[1], num * mult
+    }'
+}
+sed -n '/^## 4\./,/^## 5\./p' "$TRI256" | awk -F'|' '
+    $2 ~ /^ *[0-9]+ *$/ {
+        test = $3; gsub(/^ +| +$/, "", test)
+        col = $7; gsub(/^ +| +$/, "", col); sub(/^pass @ /, "", col)
+        print test "\t" col
+    }' | norm_val | sort > "$TMP/doc4_val.tsv"
+sed -n '/^## 5\./,/^## 6\./p' "$TRI256" | awk -F'|' '
+    $2 ~ /^ *[0-9]+ *$/ {
+        test = $3; gsub(/^ +| +$/, "", test)
+        col = $4; gsub(/^ +| +$/, "", col)
+        print test "\t" col
+    }' | norm_val | sort > "$TMP/doc5_val.tsv"
+sort "$TMP/clamp_lo.tsv" > "$TMP/clamp_lo_sorted.tsv"
+diff -q "$TMP/doc4_val.tsv" "$TMP/clamp_lo_sorted.tsv" >/dev/null \
+    || { echo "ERROR: triage-256 §4 rerun-result column (pass @ …) drifts from §4 clamp lower bounds (cross-lock #4463822593)" >&2; exit 2; }
+diff -q "$TMP/doc5_val.tsv" "$TMP/clamp_lo_sorted.tsv" >/dev/null \
+    || { echo "ERROR: triage-256 §5 bounded-value column drifts from §4 clamp lower bounds (cross-lock #4463822593)" >&2; exit 2; }
 
 # ---- 主生成：awk 依次加载 9 个输入；END 段产 (a) 表体 (b) §5 汇总算术块。
 #      任一断言失败 → exit 1，不写产物。

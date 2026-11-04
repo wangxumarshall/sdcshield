@@ -48,7 +48,12 @@ bulk stays out，豁免 batch.tsv/identity.txt）；实际入库工件集（`git
   `.gitignore:4` 注释——「one row per executed test」与本 PR round-10 在
   gem5-512-batch.sh 头注纠正的「每测试一行」系同一虚假主张的英文孪生（实测
   batch.tsv 206 行/190 唯一测试/16 多行），注释级纠偏、忽略规则零变化（/tmp
-  仓库 check-ignore 五路径判定与改前逐项一致实测），同循 round-4 豁免逻辑）。
+  仓库 check-ignore 五路径判定与改前逐项一致实测），同循 round-4 豁免逻辑；
+  **补录**：matrix-gen.sh 的历次触碰（eac6a69a round-9 Usage 原子形态注记、
+  2e5f9cb0 round-11 失败残留清理注记、后续注释级纠偏——均注释行，净 diff 行数
+  以 `git diff main...HEAD --stat` 实测为准、不写死计数）此前仅由「对入库脚本的
+  触碰」泛化条款覆盖、未逐一点名，特此立案——非纯 .md 触碰面审计至此对三个
+  非 .md 文件全覆盖）。
 - 影响面已核：`grep -rEn 'native-256-<seed>|native-128-<seed>|<test>\.log|全部日志'`
   （-E 必需——BRE 下 `|` 为字面量，无 -E 原样执行零命中，无法复现下述结论）——命中
   三类：目标计划文档（campaign.md 各 Files/矩阵输入行）+ 本实施计划自身（根因描述

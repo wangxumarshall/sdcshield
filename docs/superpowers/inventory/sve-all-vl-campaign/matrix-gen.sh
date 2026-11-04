@@ -22,10 +22,10 @@
 #   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :209-212）；
 #   (d) §4 表体的 † 弱证据行标记集合 = 5 个 PR #316 已修复越界缺陷测试
 #       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）；
-#   (e) §5 对账行叙述数字的期望值（128 列 163/26、256 列 164/25/1、512 列
-#       181/39/9（5 crash + 4 timeout）/25/15/1/16，及唯一非超时 baked 的身份
-#       acl_gemm_sve=dim=512）——数量与身份均与叙述锁死，工件漂移即 FATAL
-#       （见 END 段断言块）。守护边界（如实声明）：断言锁工件派生计数与 acl
+#   (e) §5 对账行叙述数字的期望值（活锁：128 列 163/26、256 列 25/1、512 列
+#       5+4 分量/25/15/1/16、唯一非超时 baked 身份 acl_gemm_sve=dim=512；
+#       164/181/39/9/190 等和值为代数传递蕴含，派生链见 END 段断言块注释）——
+#       数量与身份均与叙述锁死，工件漂移即 FATAL（见 END 段断言块）。守护边界（如实声明）：断言锁工件派生计数与 acl
 #       身份，不锁「有界值 = 各 knob 的 clamp 下限」取值语义——clamp 范围定义
 #       在测试源码/框架（如 cdouble mdim [300,6000]、有界值 300=下限的对应
 #       仅由 triage-256 §5 表承载），脚本输入不含该信息；重跑协议若漂移
@@ -275,9 +275,12 @@ END {
     # 代数上蕴含 p128≠163 ∨ q128≠26（均已在下方断言）——fmmla 双 pass 漂移注入
     # 实测触 p128 断言 FATAL（got 164）、exit 1、stdout 0 字节，单列 s128==1
     # 无独立捕获场景，与 p256+q256 死代码同款（派生断言=虚假覆盖，#4439046566 先例）。
+    # 256 列的 164 同为派生值不单列断言（检视 #4462912942）：s256≡y256≡0（c256 无
+    # SKIP/BOUNDARY 赋值路径）∧ c256n==190 ⟹ p256≡190−q256，而 n_to==25 ∧
+    # q256−n_to==1（下方两条活锁）⟹ q256==26 ⟹ p256==164——其 FATAL 必伴随
+    # c256n/n_to/q256−n_to 三断言之先触发，无独立捕获场景。
     if (p128 != 163)        { printf "FATAL: 128 narrative expects 163 default-adaptive (got %d)\n", p128 > "/dev/stderr"; fatal = 1 }
     if (q128 != 26)         { printf "FATAL: 128 narrative expects 26 baked bounded (got %d)\n", q128 > "/dev/stderr"; fatal = 1 }
-    if (p256 != 164)        { printf "FATAL: 256 narrative expects 164 default-adaptive (got %d)\n", p256 > "/dev/stderr"; fatal = 1 }
     if (n_to != 25)         { printf "FATAL: 256 narrative expects 25 bounded reruns (got %d)\n", n_to > "/dev/stderr"; fatal = 1 }
     if (q256 - n_to != 1)   { printf "FATAL: 256 narrative expects 1 baked calibration (got %d)\n", q256 - n_to > "/dev/stderr"; fatal = 1 }
     # 身份断言：唯一非超时 baked 必须是 acl_gemm_sve dim=512（计数断言只锁数量，
@@ -294,12 +297,14 @@ END {
         if (res[4 "," t2] != "timed out") { non_to++; non_to_last = t2 }
     if (non_to != 1 || non_to_last != "acl_gemm_sve") \
         { printf "FATAL: sole non-timeout baked must be acl_gemm_sve (got %d non-timeout baked, last = %s)\n", non_to, (non_to ? non_to_last : "<none>") > "/dev/stderr"; fatal = 1 }
-    # 512 列对账行叙述数字断言（检视 #4439756862）：181 pass / 39 有界 / 9 边界
-    # （5 crash + 4 timeout 分量）/ baked 26 项中绿 25 / overrides 16 条中绿 15 /
-    # 重叠 1——512 列手写口径数字与 %d 计算值锁死（同 128/256 列）。
-    if (p512 + q512 != 181) { printf "FATAL: 512 narrative expects 181 pass (got %d)\n", p512 + q512 > "/dev/stderr"; fatal = 1 }
-    if (q512 != 39)         { printf "FATAL: 512 narrative expects 39 bounded (got %d)\n", q512 > "/dev/stderr"; fatal = 1 }
-    if (y512 != 9)          { printf "FATAL: 512 narrative expects 9 boundary (got %d)\n", y512 > "/dev/stderr"; fatal = 1 }
+    # 512 列对账行叙述数字断言（检视 #4439756862 活锁面；#4462912942 派生面）：
+    # 活锁 = 9 边界的分量 5 crash + 4 timeout、baked 26 项中绿 25 / overrides
+    # 16 条中绿 15 / 重叠 1、overrides 行数 16。181 pass / 39 有界 / 9 边界三值
+    # 为传递蕴含不单列断言：y512≡cr512+to512（crash/timeout 分支同格同递增）
+    # 被 5+4 蕴含；s512≡0（c512 无 SKIP 赋值路径）∧ c512n==190 ⟹
+    # p512+q512≡190−y512 被 5+4 蕴含；knob512 = baked ∪ extras（输入 7/8 构造）
+    # ⟹ q512≡bg+eg−bo（容斥恒等）被 25/15/1 蕴含——单列均无独立捕获场景
+    # （派生断言=虚假覆盖，#4439046566 先例，与 s128/p256/190 同款处置）。
     if (cr512 != 5 || to512 != 4) { printf "FATAL: 512 narrative expects 5 crash + 4 timeout boundary (got %d + %d)\n", cr512, to512 > "/dev/stderr"; fatal = 1 }
     if (bg != 25 || eg != 15 || bo != 1) { printf "FATAL: 512 narrative expects baked-25 green / extras-15 green / overlap-1 (got %d/%d/%d)\n", bg, eg, bo > "/dev/stderr"; fatal = 1 }
     for (e in extra) n_ovr++

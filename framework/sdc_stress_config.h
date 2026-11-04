@@ -43,6 +43,7 @@
 #include <test_knobs.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -612,15 +613,20 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  * 拟合出参 fit(spec §4.3 M3): 成功路径填充 {a_ms, p} —— 单解模型
  * t(n)=a_ms·n^p, a_ms 已按两点差分扣除固定开销 b(见函数尾); 早退
  * 路径保持 {0,0}(无效, 消费方跳过 n_run)。
- * fit/probe_floor_ms 缺省 {nullptr, 1.0}: 既有 7 实参调用(跨 arch
- * 存量链, 含 x86-64 #else 分支)签名与行为不变(rule 5, issue #351——
- * probe_floor_ms 缺省值即 f84966bc 之前的历史噪声底语义, 不得随 ARM
- * 侧 M3 口径联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)
- * 显式传 sdc_m3_probe_floor_ms(100.0)。fit 保持自 f84966bc 引入起(至本
+ * fit/probe_floor_ms 无缺省(主模板 9 参, 见下方转发重载): 既有 7 实参
+ * 调用(跨 arch 存量链, 含 x86-64 #else 分支)经 7 参转发重载——等价于
+ * 旧缺省 {nullptr, 1.0}, 签名与行为不变(rule 5, issue #351——转发
+ * 重载的 1.0 即 f84966bc 之前的历史噪声底语义, 不得随 ARM 侧 M3 口径
+ * 联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)显式传
+ * sdc_m3_probe_floor_ms(100.0)。fit 保持自 f84966bc 引入起(至本
  * PR 参数化前)的第 8 参位次、probe_floor_ms 殿后: 字面量 0/NULL 作第 8
- * 实参(『显式不要 fit』的旧写法)仍绑 fit 而非经 int→double 隐式转换静默重绑
- * probe_floor_ms=0.0——后者使 probe 抬档循环永假、外推基数退回微档
- * 噪声且无告警; double 字面量误入第 8 位则编译报错(响亮)。
+ * 实参(『显式不要 fit』的旧写法)经 std::nullptr_t 重载绑 fit 而非经
+ * int→double 隐式转换静默重绑 probe_floor_ms=0.0——后者使 probe 抬档
+ * 循环永假、外推基数退回微档噪声且无告警; double 字面量误入第 8 位
+ * 编译报错(响亮); 传非空 fit 而省略第 9 参(8 参形态)亦编译报错
+ * (R10 检视 id=4463831067: 该形态会以缺省 1.0 停点静默运行——
+ * 固定开销污染差分, 仅剩运行期告警兜底, 与本签名杜绝『经签名
+ * 静默误用』的设计目标不符; fit 消费方必须显式选择 M3 口径)。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
  *   if (dim > lo)
@@ -649,8 +655,8 @@ template <typename F>
 static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                                      const char *test_id, const char *knob,
                                      double k_floor, F solve_once,
-                                     struct sdc_fit *fit = nullptr,
-                                     double probe_floor_ms = 1.0)
+                                     struct sdc_fit *fit,
+                                     double probe_floor_ms)
 {
     if (fit) { fit->a_ms = 0.0; fit->p = 0.0; }  /* 早退路径保持无效 */
     if (hi <= lo)
@@ -837,6 +843,31 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
         }
     }
     return dim;
+}
+
+/* 7 参存量转发重载(等价旧缺省 {nullptr, 1.0}): 跨 arch 存量链(含
+ * x86-64 #else 分支)调用点源码零改动(rule 5)——1.0 即 f84966bc 之前
+ * 的历史噪声底语义。 */
+template <typename F>
+static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
+                                     const char *test_id, const char *knob,
+                                     double k_floor, F solve_once)
+{
+    return sdc_calibrated_dim(lo, hi, max_single_ms, test_id, knob, k_floor,
+                              solve_once, nullptr, 1.0);
+}
+
+/* 第 8 参 std::nullptr_t 重载: 『显式不要 fit』的字面量 0/NULL 旧写法
+ * 绑定于此(而非经 int→double 隐式转换静默重绑 probe_floor_ms=0.0),
+ * 语义 = 7 参链。 */
+template <typename F>
+static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
+                                     const char *test_id, const char *knob,
+                                     double k_floor, F solve_once,
+                                     std::nullptr_t)
+{
+    return sdc_calibrated_dim(lo, hi, max_single_ms, test_id, knob, k_floor,
+                              solve_once, nullptr, 1.0);
 }
 
 /* ------------------------------------------------------------------ */

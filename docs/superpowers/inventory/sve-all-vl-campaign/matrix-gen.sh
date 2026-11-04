@@ -152,11 +152,12 @@ sed -n '/^## 4\./,/^## 5\./p' "$TRI256" | awk -F'|' '
         split(knob, a, " "); name = a[1]
         split(a[2], b, /[,\[\]]/); lo = b[2]
         match(lo, /^[0-9]+/); num = substr(lo, 1, RLENGTH); suf = substr(lo, RLENGTH + 1)
+        sub(/B$/, "", suf)   # KB/MB/GB/TB → K/M/G/T——兑现头注「K/M/G/T[B]」契约（#4463651397）
         mult = 1
         if (suf == "K") mult = 1024
         else if (suf == "M") mult = 1048576
         else if (suf == "G") mult = 1073741824
-        else if (suf == "T" || suf == "TB") mult = 1099511627776
+        else if (suf == "T") mult = 1099511627776
         else if (suf != "") { printf "ERROR: bad §4 clamp unit suffix: %s\n", lo > "/dev/stderr"; exit 2 }
         printf "%s\t%s=%d\n", test, name, num * mult
     }' > "$TMP/clamp_lo.tsv"

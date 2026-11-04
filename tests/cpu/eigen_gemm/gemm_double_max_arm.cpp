@@ -387,11 +387,17 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
      * preinit 成功后 desired_duration 恒 > 0(两分支 iter_s > 0),
      * == 0 即 exec child。 */
     if (test->desired_duration > 0) {
+        /* 【PR#384 检视 R6, 意见 4463986196】min 的文案随值走: auto 档
+         * 设计不写 min(0 = 无下限, -t/默认时长直接生效), 显式档才有
+         * CAVEAT 加权单迭代下限。 */
         log_info("N=%d (~%.2f GB per thread; sized in child init: knob/env, "
                  "else 联合求解 min(n_mem, n_run); preinit desired_duration "
-                 "%d ms, minimum_duration %d ms (显式档: CAVEAT 加权单迭代"
-                 "下限, -t 夹钳); override with -O eigen_gemm_double_max_arm.mdim=N)",
-                 dim, gb, test->desired_duration, test->minimum_duration);
+                 "%d ms, minimum_duration %d ms (%s); "
+                 "override with -O eigen_gemm_double_max_arm.mdim=N)",
+                 dim, gb, test->desired_duration, test->minimum_duration,
+                 test->minimum_duration > 0
+                     ? "显式档: CAVEAT 加权单迭代下限, -t 夹钳"
+                     : "auto 档: 设计不设下限, -t/默认时长直接生效");
     } else {
         log_info("N=%d (~%.2f GB per thread; sized in child init: knob/env, "
                  "else 联合求解 min(n_mem, n_run); exec_each_test child: "

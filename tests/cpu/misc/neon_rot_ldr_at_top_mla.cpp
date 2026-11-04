@@ -164,12 +164,17 @@ static int neon_rot_ldr_at_top_mla_run(struct test *test, int cpu) {
              * binary (verified: with it, the per-case mul/mla/mul+sub/eor
              * sequence matches the s32 original).
              * case 1 spells vmlaq_u32 directly instead of
-             * vaddq_u32(vmulq_u32(a,b),a): the bare mul+add chain has the
-             * same refolding exposure (a*b+a -> a*(b+1) is bit-identical
-             * mod 2^32 so the golden stays green while the accumulate
-             * chain this test exists to excite silently disappears);
-             * vmlaq lowers to a single mla v.4s with no folding surface
-             * (PR #393 review r2). */
+             * vaddq_u32(vmulq_u32(a,b),a). The bare chain's mla is a
+             * compiler fusion choice, not a guarantee: GCC 12.3 fuses
+             * it to the same single mla at -O2/-O3 and under UBSan
+             * (verified — the u32 chain carries no overflow checks to
+             * inhibit fusion), but nothing pins that, and the refold
+             * class is real on this compiler — it rewrites unbarriered
+             * case 2's a*b-b into (a-1)*b, sub gone. a*b+a -> a*(b+1)
+             * would likewise be bit-identical mod 2^32 (golden green,
+             * chain gone), though not observed for the add form. vmlaq
+             * is one intrinsic with no expression surface to refold: a
+             * single mla v.4s in every build config (PR #393 r2/r4). */
             switch (i % 4) {
                 case 0: res = vmulq_u32(a, b); break;
                 case 1: res = vmlaq_u32(a, a, b); break;

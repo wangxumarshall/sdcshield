@@ -177,14 +177,28 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
  *
  * The AR × 2 mirrors the joint solver's run_budget semantics (fill + one
  * solve per iteration, all-core slowdown factor), so dur models the
- * FULL-CORE single-iteration time at the memory ceiling: child n <= n_hi
- * keeps dur at or above the child's real iteration, which is what the
- * do-while and the derived timeout test_timeout() = 5×duration + 30 s
- * (300 s floor) expect — EXCEPT for an explicit knob/env, which the
- * child applies VERBATIM (dim = knob, no min against n_hi, issue #352
- * mirror of the SVD fix): the duration model must follow the knob too,
- * or any knob above n_hi times out at the 300 s hard grace and the
- * child is SIGQUIT-killed mid-iteration.
+ * FULL-CORE single-iteration time at the memory ceiling, and the ×0.95
+ * margin sits dur 5% BELOW that model (issue #479: this sentence, and the
+ * DECLARE_TEST comment below, previously stated the direction backwards).
+ * The run-side do-while — do … while (test_time_condition()), which
+ * CONTINUES while the deadline has not expired — executes exactly one
+ * iteration only when dur is at or BELOW the child's real single-iteration
+ * time: the deadline is then already expired when iteration #1 finishes,
+ * which is what the −5% margin is for; a dur above the real time would
+ * instead start a second, un-budgeted iteration. On this host class dur
+ * sits on that side twice over: the −5% margin, plus the table AR (5)
+ * understating the measured all-core slowdown (~15, CAVEAT in the init
+ * comment) — dur ≈ 42 s vs the ~55-60 s measured multiply. The derived
+ * timeout test_timeout() = 5×duration + 30 s (300 s floor) needs the
+ * OTHER relation — real iteration <= timeout — and child n <= n_hi is
+ * what keeps it: the real iteration stays within the ceiling model times
+ * the model's own error (~3× measured), so one iteration fits the
+ * timeout.
+ * EXCEPT for an explicit knob/env, which the child applies VERBATIM
+ * (dim = knob, no min against n_hi, issue #352 mirror of the SVD fix):
+ * the duration model must follow the knob too, or any knob above n_hi
+ * times out at the 300 s hard grace and the child is SIGQUIT-killed
+ * mid-iteration.
  * (Correction of an earlier comment that claimed
  * a host with fewer threads "only shrinks n_hi — the safe direction":
  * that was backwards. A hard-coded 127 makes the child's n_mem
@@ -454,14 +468,17 @@ DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, 
    * estimate from the memory ceiling + measured GEMM iteration model —
    * or from the explicit knob, which the child applies verbatim
    * (issue #352) — (T6: the child sizes the dimension itself via the
-   * joint solver; this only keeps the parent's timing expectation at or
-   * above the child's choice, so the derived timeout (5*duration+30s,
-   * 300s floor) scales along). On the explicit tier the preinit also
-   * writes minimum_duration = the single full-iteration model (PR#384
-   * review, id 4439402765): the framework-level -t override replaces
-   * desired_duration unconditionally, so without the min clamp
-   * `-t 2000 -O …mdim=<big>` lands on the 300 s floor and is
-   * SIGQUIT-killed mid-iteration. */
+   * joint solver, always <= that ceiling. The run-side do-while — which
+   * continues while the deadline has NOT expired — exits after exactly
+   * one iteration when dur sits at or below the child's real
+   * single-iteration time, the direction the −5% margin takes
+   * (issue #479; analysis and measured numbers in the preinit comment);
+   * the derived timeout (5*duration+30s, 300s floor) scales along).
+   * On the explicit tier the preinit also writes minimum_duration = the
+   * single full-iteration model (PR#384 review, id 4439402765): the
+   * framework-level -t override replaces desired_duration
+   * unconditionally, so without the min clamp `-t 2000 -O …mdim=<big>`
+   * lands on the 300s floor and is SIGQUIT-killed mid-iteration. */
   .desired_duration = 0,
   .quality_level = TEST_QUALITY_PROD,
     .arm64_requires = ARM64_REQUIRES_SVE,

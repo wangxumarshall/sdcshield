@@ -122,13 +122,18 @@ git commit -s -m "docs(campaign): SVE 全 VL 验证清单——tag∪name 枚举
 cd /home/sdc/wangxu/sdcshield-main
 LIST=docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
 LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.log
+# --ignore-timeout：控制器裁定（triage-256.md「TimedOut 不中止全程」，缺省则首个超时
+# 即全局中止）——四腿实跑全带；seed1 实测 25 用例超时后仍 exit: pass 即赖此旗标。
 # baked -O 注记：本块未示出 baked -O 降容，勿零 -O 照抄重跑。实跑形态：历史 seed1 本跑
 # 带 1 项（-O acl_gemm_sve.dim=512）；Step 2 seed2 为全 26 项（裁定 D：与 512 腿 BAKED
 # 同集——缺之 eigen_svd_bidiag_sve/eigen_svd_cdouble_sve 等全核 TIMEOUT 前科用例收不
-# 了口），其 summary 会被 Task 8 的 matrix-gen.sh 断言以「expected 26 baked -O, got 0」
-# 拒收（烧完全量才暴露）。26 项权威清单 = 入库 summary 的 `# command-line:` 头（本块有
-# 意不镜像，防同源分叉——extract_baked 断言三腿一致即机械锚）。
-./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-256-LCG1001.stdout 2>&1
+# 了口）。26 项权威清单 = 入库 summary 的 `# command-line:` 头（本块有意不镜像，防同
+# 源分叉——extract_baked 断言三腿一致即机械锚）。零 -O 重跑的暴露面分腿：seed2 summary
+# 被 Task 8 断言以「expected 26 baked -O, got 0」拒收（烧完全量才暴露）；seed1 无 baked
+# 断言（extract_baked 只锚 128 两 seed 与 256 seed2）——超时行落入 matrix-gen 的
+# pass(bounded) 合法分支（实测 25 超时用例恰全在 26 项 knob 集内），劣化证据被静默
+# 接受，比拒收更隐蔽。
+./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y --ignore-timeout > /tmp/native-256-LCG1001.stdout 2>&1
 echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
 tail -5 /tmp/native-256-LCG1001.stdout
 cp /tmp/native-256-LCG1001.stdout docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.stdout.txt   # 裁定 E：stdout 跑完即回拷入库（防 /tmp 随重启丢失）
@@ -182,12 +187,14 @@ Expected: `ARM64 spec: SVE yes (max VL 128 bits) | SVE2 no | SME no | SME2 no`�
 cd /home/sdc/wangxu/sdcshield-main
 LIST=docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
 LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log
+# --ignore-timeout：控制器裁定（triage-256.md「TimedOut 不中止全程」，缺省则首个超时
+# 即全局中止）——四腿实跑全带。
 # baked -O 注记：128 两 seed 实跑各带全 26 项 baked -O 降容（裁定 D：与 512 腿 BAKED
 # 同集——缺之 eigen_svd_bidiag_sve/eigen_svd_cdouble_sve 等全核 TIMEOUT 前科用例收不
 # 了口）。本块有意不镜像该 26 项（权威清单 = 入库 summary 的 `# command-line:` 头，防
 # 同源分叉——extract_baked 断言三腿一致即机械锚）：勿零 -O 照抄重跑——两 seed summary
 # 会被 Task 8 的 matrix-gen.sh 断言以「expected 26 baked -O, got 0」拒收（烧完全量才暴露）。
-SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-128-LCG1001.stdout 2>&1
+SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y --ignore-timeout > /tmp/native-128-LCG1001.stdout 2>&1
 echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
 tail -5 /tmp/native-128-LCG1001.stdout
 cp /tmp/native-128-LCG1001.stdout docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.stdout.txt   # 裁定 E：stdout 跑完即回拷入库（防 /tmp 随重启丢失）

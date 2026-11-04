@@ -1149,7 +1149,7 @@ if host_machine.cpu_family() == 'aarch64'
         ],
         cpp_args : [
             tests_common_cpp_args,
-            '-march=armv8.1-a+crc',
+            march_arm64_crc,
         ],
     )
     sandstone_tests += [tests_crc_a]
@@ -1268,7 +1268,7 @@ if host_machine.cpu_family() == 'aarch64'
         kind = spec[0]
         tier = spec[1]
         eigen_tier_args = [
-            '-march=armv8.2-a+sve',
+            march_arm64_sve,
             '-msve-vector-bits=' + tier,
             '-DEIGEN_ARM64_SVE_VL=' + tier,
             '-DEigen=EigenSVE' + tier,
@@ -1309,7 +1309,7 @@ if host_machine.cpu_family() == 'aarch64'
     # No -msve-vector-bits: their arm64_sve_vl_bytes() readback and the switch
     # on the actual tier must not be constant-folded, and they hold no Eigen
     # types any more.
-    march_sve_dispatch = ['-march=armv8.2-a+sve']
+    march_sve_dispatch = [march_arm64_sve]
 
     tests_config_sve = tests_set_sve.apply(tests_config)
     tests_sve_sources = tests_config_sve.sources()
@@ -1374,11 +1374,11 @@ if host_machine.cpu_family() == 'aarch64'
             ],
             c_args : [
                 tests_common_c_args,
-                '-march=armv8.2-a+sve',
+                march_arm64_sve,
             ],
             cpp_args : [
                 tests_common_cpp_args,
-                '-march=armv8.2-a+sve',
+                march_arm64_sve,
                 sve_sanitize_exempt,
             ],
         )

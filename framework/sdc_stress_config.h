@@ -751,17 +751,26 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
          * 已单点绑定)。文案按传参是否已达 M3 口径分流: 已达标者唯一
          * 残余致因是 knob hi 截断, 不再误指传参。 */
         if (t1 < sdc_m3_probe_floor_ms) {
+            /* 显示值按显示精度向下截断(PR #377 检视 id=4441216644):
+             * 四舍五入渲染在 t1∈[99.95,100) 窗口把未达阈值的实测值
+             * 渲染成 100.0——printf("%.1f", 99.97)输出"100.0"而守卫
+             * 99.97<100 为真, 告警行呈"实测 100.0ms < 100ms"自相
+             * 矛盾, 操作者易误判误报而忽视真实的 hi 截断/传参缺陷
+             * 事件。向下截断恒有 显示值 ≤ 实测值 < 阈值, 文案两端
+             * 结构性不矛盾; 代价为显示偏低至多一个显示精度(0.1ms),
+             * 对诊断处方(检查 knob hi / 传参)无损。 */
+            const double t1_disp = std::floor(t1 * 10.0) / 10.0;
             if (probe_floor_ms >= sdc_m3_probe_floor_ms)
                 log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
                             "knob hi 截断致档位抬不上去, " SDC_M3_FIT_WARN_BODY
                             "检查 knob hi 是否足以抬升 probe 档", test_id,
-                            knob, t1, sdc_m3_probe_floor_ms);
+                            knob, t1_disp, sdc_m3_probe_floor_ms);
             else
                 log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
                             SDC_M3_FIT_WARN_BODY
                             "检查 probe_floor_ms 传参(M3 消费方应显式传 %.0f)"
                             "与 knob hi 是否足以抬升 probe 档", test_id, knob,
-                            t1, sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
+                            t1_disp, sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
         }
         /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
          *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p

@@ -1823,7 +1823,12 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   rebase 树实测裁决；main 侧 439/547/551（0xd01 机迁移后实测，d3288c82
   记录）取代分支「390 待复测定值」叙事——复测已由 main 侧兑现；main 表
   538/110/652 系旧基 487+51 算术叠加（487 基为 R1 已证伪降级口径），
-  不沿用。
+  不沿用。（2026-11-04 R8 #47/#49 更正：「复测已兑现」的日期与分解均
+  不可考——439 记录自记 2026-11-02，而 no-SVE q-1 = 注册−207 门控，
+  551 ⇒ 注册恰 758 ⇒ 唯一相容树为 418e4e09（2026-11-03 22:11）；其
+  自记步进分解在 git 图中不存在，增量实经 d3288c82 一次接线 + neon
+  系列净 +3。应读作「main 侧存在 439/547/551 记录，但测量日期/树
+  归属/宿主身份均不可考」；538/110/652 不沿用的定性不变。）
 - **计数重锚定（commit 0a015da7）**: rebase 树 0xd02 首测 640/750/754
   （BETA 110 = 原 10 + sdc_fuzz×100；SKIP 4 eigen_svd_jacobi×4）；
   tests ELF 段 [0xda7ae0,0xdc8400) _test_* 恰 758 = 754+4 具名被滤
@@ -1849,3 +1854,27 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   sdcshield-fd89ad646c83，docs-only 不改二进制）；x86-64 非回归 = 纯文档。
 - **push**: fd89ad64..（0a015da7 → 3f60d55d → 本 commit），线性无 merge，
   DCO 齐。待第 5 bot → CI → 静默窗 ≥900s → R8 collect。
+
+## PR #413 R8 检视处置（2026-11-04，head 5be9226c 起算，第 5 bot 对 db4a80c5 的 4 条意见全处置）
+
+- **R8 collect（pr413-r8-collect.md）**: 当前 head（db4a80c5）计入 4 条
+  （local-claude 2026-11-04 05:08 检视：#47 [Critical]/#48 [Important]/
+  #49 [Important]/#50 [Minor]）。CI：15 pass + build-cpu fail（main 侧
+  low_load_cache_pressure/_neon 云 runner SIGABRT，舰队级：迁移后全部
+  open PR 同红，本机真机复跑 pass，与本文档 PR 无关——详 pr413.md
+  R7 CI 判定节）。
+- **意见处置表**:
+
+| 意见 | 结论 | 依据 |
+|---|---|---|
+| #47 [Critical] 439 自记日期 2026-11-02 算术不可能（id=4463821143） | 采纳 | 独立复核成立：门控 207 两树同值（grep 实测 203 SVE + 1 SVE2 + 3 SME）；no-SVE q-1 = 注册−207，551 ⇒ 注册恰 758；注册链 588@7f0b9c7c（2026-11-02 10:18）→ 755@d3288c82（11-03 00:48）→ 758@418e4e09（11-03 22:11）经 DECLARE 差分实测（672→840→843，neon 系列净 +3 与 758−755 互证）——11-02 当日 no-SVE 天花板 381 < 551，唯一相容树 418e4e09 晚于自记日期一天。三处文档（README:348/394、CLAUDE.md）「2026-11-02 实测」改为「main 侧记录 + 日期/树归属/宿主身份均不可考」的指纹归因 |
+| #48 [Important] R7 #41 交付守卫行号系 rebase 前基线（id=4463821151） | 采纳 | 交付树逐行实测：:686/:726/:761/:945/:417 全部落空（文件清单项/注释/')'/neon_lock 注释），真锚点 = OpenBLAS :699 / SLEEF :739 / pocketfft :774 / isa-l :1041、消费方 :429；framework/meson.build 两树零改动（:232-239 仍有效）。commit 5be9226c 重锚 + 本台账 R7 #41 行补真（验证时点如实：逐行验证发生在 rebase 前、未随 +84 行重锚） |
+| #49 [Important] 「迁移 121 + arm_add 7 + _neon 14 + cache 9」分解在 git 图中不存在（id=4463821159） | 采纳 | 独立复核成立：d3288c82 单 squash 一次接线全部 arm_add/cache/_neon 文件（tests/ 171 增 1 删、迁移零门控、DECLARE +168）；neon 系列（451c6272/ff74f226/418e4e09）净 +3；步进树「注册 728」不存在。三处文档去掉假分解，改「经 d3288c82 一次接线 + neon 系列净 +3」（+170 文件/门控/DECLARE 差分均本会话实测）；两树差 +70 PROD 标注「PROD 构成未逐 commit 拆解」 |
+| #50 [Minor] RESIDUAL 债务同轮两次发作应本轮修（id=4463821169） | 采纳（精神） | 其指认的两次发作（#48 锚点漂移、#47 日期未对账）即本轮 R8 修复落实；结构性单一事实源化维持 RESIDUAL（R5 #38/#39 判例不变）——本轮三处孪生同步再次证明该债务的真实成本，留给后续文档 PR 专项处理时优先 |
+
+- **验证（R8 亲测）**: 三个数字断言全部本会话实测引用（三树 DECLARE 差分
+  git grep、守卫行 sed 逐行、d3288c82 name-status 计数）；文档-only
+  commit 序列（5be9226c + 本 commit）——ninja no work to do、零新警告；
+  zstd19 -t 2000 -n 1 → exit: pass；x86-64 非回归 = 纯文档。
+- **push 后**: 待第 5 bot（新 head）→ CI → 静默窗 ≥900s → R9 collect
+  （预算：本命 R7/R8 = 2/4）。

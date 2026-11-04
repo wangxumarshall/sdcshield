@@ -80,9 +80,12 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #      pre-migration tree); `meson setup --reconfigure
                                                #      builddir` recovers, see README)
                                                #   no-SVE 920 (MIDR part 0xd01): 439 PROD / 547 q0 / 551 q-1
-                                               #     (2026-11-02 实测, = 迁移 121 + arm_add 7 + _neon 14 +
-                                               #      cache 新 9 PROD 后, main-side record — host identity
-                                               #      not independently re-verified here; older 390/394/398
+                                               #     (main-side record, post-migration; its self-recorded
+                                               #      date 2026-11-02 is arithmetically impossible —
+                                               #      no-SVE q-1 = registry − 207 gates, 551 ⇒ registry
+                                               #      exactly 758, uniquely matching main 418e4e09
+                                               #      (2026-11-03 22:11); measurement date/tree/host
+                                               #      identity all unverifiable here; older 390/394/398
                                                #      records are attribution-unverifiable — the d6e39b96
                                                #      claim conflicts with registry arithmetic, no-SVE
                                                #      q-1 ceiling 586−207 = 379 < 398, only ">>299" stands;

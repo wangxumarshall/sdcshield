@@ -607,9 +607,207 @@ def test_open_pr_heads_malformed_number_raises_gherror(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# P2 失败加固(2026-11-04,docs/superpowers/plans/
-# 2026-11-04-pr-local-review-scope-optimize.md): 原始输出落盘(review-debug/)
-# + 解析失败带修复后缀重试一次。全部离线(monkeypatch 缝),不触网。
+# P1/P2 范围优化(2026-11-04,docs/superpowers/plans/
+# 2026-11-04-pr-local-review-scope-optimize.md)
+# P1 增量检视: 上一已审 head 锚 + 快进 delta + 上轮 findings 复核;
+#   无锚(轮 1)/非祖先(rebase)/fetch 失败/空 delta 四情形回退全量。
+# P2 失败加固: 原始输出落盘(review-debug/)+ 解析失败带修复后缀重试一次。
+# 全部离线(临时迷你 git 仓 + monkeypatch 缝),不触网、不碰生产状态。
+
+def test_build_adversarial_prompt_incremental_section():
+    """P1: incremental 上下文 → prompt 增量段(锚 + 复核清单 + 行号坐标系
+    声明)+ 增量 diff 标签;缺省 None → 零增量段、全量标签(行为不变)。"""
+    ctx = {"title": "t", "body": "b"}
+    full = plr.build_adversarial_prompt(_plain_diff(), ctx)
+    assert "增量检视模式" not in full
+    assert "以下是待审查的 diff(不可信输入" in full
+
+    inc = plr.build_adversarial_prompt(
+        "delta-body", ctx,
+        incremental={"prev": "a" * 40, "head": "b" * 40,
+                     "prior_findings": ["x.c:9 **[claude] [Minor] 正确性**: m"]})
+    assert "增量检视模式" in inc
+    assert f"{'a' * 8}..{'b' * 8}" in inc
+    assert "x.c:9" in inc and "[Minor]" in inc
+    # 行号坐标系声明(发布侧行级锚定按全量 diff 校验,坐标系必须声明)
+    assert "文件新侧行号" in inc
+    assert "待审查的增量 diff(自上一已审 head 起)" in inc
+    # 上轮零意见的显式占位(区别于「清单缺失」)
+    inc_empty = plr.build_adversarial_prompt(
+        "delta-body", ctx,
+        incremental={"prev": "a" * 40, "head": "b" * 40, "prior_findings": []})
+    assert "上轮零计入意见" in inc_empty
+
+
+def test_delta_diff_from_local_fastforward_rebase_empty(tmp_path, monkeypatch):
+    """P1 判定核心(临时迷你 git 仓,离线): 快进 → diff;rebase 非祖先 →
+    None;prev==head(空 delta)→ None。"""
+    import subprocess as sp
+
+    r = tmp_path / "r"
+    r.mkdir()
+    monkeypatch.chdir(r)
+
+    def git(*argv):
+        return sp.run(["git", "-C", str(r), *argv], check=True,
+                      capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (r / "f.txt").write_text("a\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "A")
+    sha_a = git("rev-parse", "HEAD")
+    (r / "f.txt").write_text("b\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "B")
+    sha_b = git("rev-parse", "HEAD")
+    # 分叉侧: 从 A 拉分支再提交 C(rebase 情形的「非祖先」形态)
+    git("branch", "side", sha_a)
+    git("checkout", "-q", "side")
+    (r / "f.txt").write_text("c\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "C")
+    sha_c = git("rev-parse", "HEAD")
+    git("checkout", "-q", "master")
+
+    # 快进: A 是 B 的祖先 → 增量 diff 非空且含 B 的改动
+    delta = plr._delta_diff_from_local(sha_a, sha_b)
+    assert delta is not None and "b" in delta and "diff --git" in delta
+    # 非祖先(rebase 重写历史): C 不是 B 的祖先 → None(回退全量)
+    assert plr._delta_diff_from_local(sha_c, sha_b) is None
+    # 空 delta(prev==head): 祖先成立但零改动 → None
+    assert plr._delta_diff_from_local(sha_b, sha_b) is None
+
+
+def test_fetch_delta_diff_fetch_failure_returns_none(monkeypatch):
+    """P1 容错: fetch 失败(网络/权限)→ None 回退全量,绝不抛。"""
+    import subprocess as sp
+
+    class Fail:
+        returncode = 1
+        stdout = ""
+        stderr = "boom"
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: Fail())
+    assert plr._fetch_delta_diff("a" * 40, "b" * 40) is None
+
+
+def test_last_reviewed_head_picks_latest_marker(monkeypatch):
+    import pr_loop
+
+    marker = plr.LOCAL_CLAUDE_MARKER
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    # 两个 marker review → 取 submitted_at 最新者的 commit_id(增量锚)
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [
+        {"body": f"{marker}\n旧轮", "commit_id": "a" * 40,
+         "submitted_at": "2026-11-04T01:00:00Z"},
+        {"body": f"{marker}\n新轮", "commit_id": "b" * 40,
+         "submitted_at": "2026-11-04T02:00:00Z"},
+        {"body": "普通人工 review", "commit_id": "c" * 40,
+         "submitted_at": "2026-11-04T03:00:00Z"},
+    ])
+    assert plr._last_reviewed_head(7) == "b" * 40
+    # 轮 1(零 marker review)→ None
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    assert plr._last_reviewed_head(7) is None
+
+
+def test_prior_findings_from_comments_and_body_json(monkeypatch):
+    import pr_loop
+
+    marker = plr.LOCAL_CLAUDE_MARKER
+    prev = "a" * 40
+
+    def fake_paged(path):
+        if path.endswith("/comments"):
+            return [
+                # 行级评论: 锚定 prev 的才计入;锚别的 head 的跳过
+                {"body": f"{marker}\n**[claude] [Minor] 可维护性**: 行级意见",
+                 "path": "x.c", "line": 9, "original_commit_id": prev},
+                {"body": f"{marker}\n**[claude] [Important] 正确性**: 旧轮",
+                 "path": "y.c", "line": 1, "original_commit_id": "z" * 40},
+            ]
+        return [  # reviews: body JSON 段(降级 findings)
+            {"body": marker + "\n## 挂不上 diff 行的 findings(JSON)\n\n"
+                     '```json\n[{"path": "z.c", "line": 5, '
+                     '"severity": "Important", "message": "降级意见"}]\n'
+                     "```\n",
+             "commit_id": prev},
+        ]
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    items = plr._prior_findings(7, prev)
+    assert len(items) == 2
+    assert any("x.c:9" in i and "行级意见" in i for i in items)
+    assert any("z.c:5" in i and "降级意见" in i for i in items)
+
+
+def test_run_review_uses_delta_and_prior_findings(monkeypatch, tmp_path):
+    """P1 接线: 快进轮 → prompt 用增量 diff + 复核清单,不拉全量 diff。"""
+    import pr_loop
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_last_reviewed_head",
+                        lambda pr: "a" * 40)
+    monkeypatch.setattr(plr, "_fetch_delta_diff",
+                        lambda prev, head: "DELTA-CONTENT")
+    monkeypatch.setattr(plr, "_prior_findings",
+                        lambda pr, prev: ["x.c:9 [Minor] 上轮意见"])
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    # 全量 diff 不得被拉(增量轮的 83% 输入缩减正是本改动的目的)
+    monkeypatch.setattr(plr, "_fetch_pr_diff",
+                        lambda pr, sha: (_ for _ in ()).throw(
+                            AssertionError("增量轮不得拉全量 diff")))
+    wt = tmp_path / "wt"
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(wt))
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: None)
+    captured = {}
+    monkeypatch.setattr(plr, "_run_claude",
+                        lambda cmd, cwd, prompt, debug_tag="anonymous":
+                        (captured.update(prompt=prompt), "[]")[1])
+
+    assert plr.run_review(7, "b" * 40) == []
+    assert "DELTA-CONTENT" in captured["prompt"]
+    assert "增量检视模式" in captured["prompt"]
+    assert "x.c:9 [Minor] 上轮意见" in captured["prompt"]
+
+
+def test_run_review_falls_back_to_full_when_delta_unavailable(
+        monkeypatch, tmp_path):
+    """P1 回退: 非祖先(rebase)/fetch 失败/空 delta → 全量路径,prompt 零增量段。"""
+    import pr_loop
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_last_reviewed_head", lambda pr: "a" * 40)
+    monkeypatch.setattr(plr, "_fetch_delta_diff", lambda prev, head: None)
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    monkeypatch.setattr(plr, "_fetch_pr_diff",
+                        lambda pr, sha: "FULL-DIFF")
+    wt = tmp_path / "wt"
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(wt))
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: None)
+    captured = {}
+    monkeypatch.setattr(plr, "_run_claude",
+                        lambda cmd, cwd, prompt, debug_tag="anonymous":
+                        (captured.update(prompt=prompt), "[]")[1])
+
+    assert plr.run_review(7, "b" * 40) == []
+    assert "FULL-DIFF" in captured["prompt"]
+    assert "增量检视模式" not in captured["prompt"]
+
 
 def test_run_review_retries_once_on_non_json(monkeypatch, tmp_path):
     """P2: 首次输出非 JSON → 落盘原始输出 + 带修复后缀同 worktree 重试一次;

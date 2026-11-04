@@ -729,25 +729,37 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
     }
     if (td0 > (double)max_single_ms)
         log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
-                    test_id, knob, xdim, td0, shrinks);
-    /* t1/t2 显示口径(PR #377 检视 id=4441216644/4463472452/4463472461):
-     * fit 消费链(联合求解)用显示精度向下截断——四舍五入在 t1∈[99.95,100)
-     * 窗口把未达阈值的实测值渲染成 100.0(printf("%.1f", 99.97)="100.0")
-     * 而下方 M3 前提告警守卫 99.97<100 为真; 汇总行/M3 告警行/差分退化
-     * 告警行引用同一 t1/t2, 显示口径必须全流一致——单修一处会打出相邻
-     * 两行『…100.0ms』与『…99.9ms < 100ms』, 要消除的操作者误导形态
-     * 跨行存活。向下截断恒有 显示值 ≤ 实测值, 告警行断言(显示值<阈值)
-     * 结构性成立, 且单调保持(t2≤t1 的倒挂不会被渲染成 t2'>t1' 的正挂,
-     * round 无此保证); 代价为显示偏低至多一个显示精度(0.1ms), 对诊断
-     * 处方无损。存量 7 参链(fit=nullptr, x86-64 #else)不经 M3/退化
+                    test_id, knob, xdim,
+                    std::ceil(td0 * 10.0) / 10.0, shrinks);
+    /* 显示值按断言方向选截断口径(PR #377 检视 id=4441216644/
+     * 4463472452/4463472461/4463831060): round 渲染会把窗口内的
+     * 实测值渲染到断言对面——下界断言(t1 < sdc_m3_probe_floor_ms)
+     * 在 t1∈[99.95,100) 渲染成 100.0(printf("%.1f", 99.97)="100.0"),
+     * 上界断言(td0/td > max_single_ms)在 (max, max+0.05) 渲染成
+     * max(printf("%.1f", 2000.04)="2000.0"), 打出『实测 2000.0ms
+     * 超预算』的显示值=预算却断言超——同一误导形态的两个方向。
+     * 修法对称: 下界断言配 floor(显示值 ≤ 实测值 ⇒ 显示<阈值恒真),
+     * 上界断言配 ceil(显示值 ≥ 实测值 ⇒ 显示>阈值恒真, 阈值取整十
+     * 值时严格 >)。t1/t2 另有全流一致与单调保持要求(汇总行/M3
+     * 前提告警/差分退化告警同一测量同一数字; t2≤t1 的倒挂不被
+     * 渲染成正挂——round 无此保证)——fit 消费链(联合求解)向下
+     * 截断; 存量 7 参链(fit=nullptr, x86-64 #else)不经 M3/退化
      * 告警, 无矛盾可消, 保持 f84966bc~1 的 %.1f 原渲染基线零漂移
-     * (rule 5: 不随 ARM 侧口径联动, 显示亦然)。td/td0 无阈值断言
-     * 且无跨行重复渲染, 保持 %.1f 原口径。 */
+     * (rule 5: 不随 ARM 侧口径联动, 显示亦然)。代价均为偏离至多
+     * 一个显示精度(0.1ms), 对诊断处方无损。td0 告警行(断言为真才
+     * 打印)与汇总行超预算后缀为上界断言语境, 两条链都会出现且矛盾
+     * 形态相同——td0 一律 ceil, td 仅在超预算(断言为真)时 ceil,
+     * 正常路径保持原渲染零漂移。 */
     const double t1_disp = fit ? std::floor(t1 * 10.0) / 10.0 : t1;
     const double t2_disp = fit ? std::floor(t2 * 10.0) / 10.0 : t2;
+    /* td 仅在超预算(断言为真)时 ceil——正常路径保持原渲染, 存量链
+     * 基线零漂移; 断言为假时无『仍超预算』后缀, 无矛盾语境。 */
+    const double td_disp =
+        (td > (double)max_single_ms) ? std::ceil(td * 10.0) / 10.0 : td;
     log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
                 "k=%.2f) → %d (验证 %.1fms%s)",
-                test_id, knob, max_single_ms, p1, t1_disp, mid, t2_disp, k, dim, td,
+                test_id, knob, max_single_ms, p1, t1_disp, mid, t2_disp, k, dim,
+                td_disp,
                 td > (double)max_single_ms
                     ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
                     : "");

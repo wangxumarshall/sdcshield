@@ -745,7 +745,7 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  * 拟合出参 fit(spec §4.3 M3): 成功路径填充 {a_ms, p} —— 单解模型
  * t(n)=a_ms·n^p, a_ms 已按两点差分扣除固定开销 b(见函数尾); 早退
  * 路径保持 {0,0}(无效, 消费方跳过 n_run)。
- * fit/probe_floor_ms 无缺省(主模板 9 参, 见下方转发重载): 既有 7 实参
+ * fit/probe_floor_ms 无缺省(主模板 10 参, 见下方转发重载): 既有 7 实参
  * 调用(跨 arch 存量链, 含 x86-64 #else 分支)经 7 参转发重载——等价于
  * 旧缺省 {nullptr, 1.0}, 签名与行为不变(rule 5, issue #351——转发
  * 重载的 1.0 即 f84966bc 之前的历史噪声底语义, 不得随 ARM 侧 M3 口径
@@ -759,6 +759,11 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  * (R10 检视 id=4463831067: 该形态会以缺省 1.0 停点静默运行——
  * 固定开销污染差分, 仅剩运行期告警兜底, 与本签名杜绝『经签名
  * 静默误用』的设计目标不符; fit 消费方必须显式选择 M3 口径)。
+ * fit_only(issue #487, 第 10 参缺省 false): 跳过外推后的验证档与收缩
+ *   轮, 返回未验证的外推档——供只消费 fit 的调用方(联合求解)使用:
+ *   其返回值被弃用, 验证/收缩的全部成本只为被弃用的返回值(2026-11-04
+ *   实测 128 CPU 主机 GEMM 族每 init 验证档单解 11.2s 纯浪费)。fit 的
+ *   两点差分只用验证前的 (p1, mid) 探针, 跳过验证档不改变拟合值。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
  *   if (dim > lo)
@@ -788,7 +793,8 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                                      const char *test_id, const char *knob,
                                      double k_floor, F solve_once,
                                      struct sdc_fit *fit,
-                                     double probe_floor_ms)
+                                     double probe_floor_ms,
+                                     bool fit_only = false)
 {
     if (fit) { fit->a_ms = 0.0; fit->p = 0.0; }  /* 早退路径保持无效 */
     if (hi <= lo)
@@ -852,23 +858,9 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
      * 落点单解 8.3s >> 2s)。在选定 dim 再实测一次, 超预算按实测幂律
      * 收缩并复验——构造性保证 one solve ≤ max_single_ms; 收缩到 lo
      * 仍超限则如实记录(机器极慢/lo 过大, 后果与显式 knob 同级)。
-     * newdim 强制单调递减吸收计时噪声, 轮数上限 4 防抖动。 */
-    int xdim = dim;
-    double td = probe(dim);
-    double td0 = td;
-    int shrinks = 0;
-    while (td > (double)max_single_ms && dim > lo && shrinks < 4) {
-        int newdim = (int)((double)dim * std::pow(budget / td, 1.0 / k));
-        if (newdim >= dim) newdim = dim - 1;
-        if (newdim < lo) newdim = lo;
-        dim = newdim;
-        ++shrinks;
-        td = probe(dim);
-    }
-    if (td0 > (double)max_single_ms)
-        log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
-                    test_id, knob, xdim,
-                    std::ceil(td0 * 10.0) / 10.0, shrinks);
+     * newdim 强制单调递减吸收计时噪声, 轮数上限 4 防抖动。
+     * fit_only(issue #487)整档跳过: 该保证守护的是返回值, 而联合
+     * 求解弃用返回值只取 fit——跳过后返回未验证外推档。 */
     /* 显示值按断言方向选截断口径(PR #377 检视 id=4441216644/
      * 4463472452/4463472461/4463831060): round 渲染会把窗口内的
      * 实测值渲染到断言对面——下界断言(t1 < sdc_m3_probe_floor_ms)
@@ -887,20 +879,44 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
      * 一个显示精度(0.1ms), 对诊断处方无损。td0 告警行(断言为真才
      * 打印)与汇总行超预算后缀为上界断言语境, 两条链都会出现且矛盾
      * 形态相同——td0 一律 ceil, td 仅在超预算(断言为真)时 ceil,
-     * 正常路径保持原渲染零漂移。 */
+     * 正常路径保持原渲染零漂移。上提至验证 wrap 之外: wrap 之下的
+     * M3 前提告警/差分退化告警仍引用 t1_disp/t2_disp, fit-only 路径
+     * 的告警与汇总行亦须同一测量同一数字(issue #487)。 */
     const double t1_disp = fit ? std::floor(t1 * 10.0) / 10.0 : t1;
     const double t2_disp = fit ? std::floor(t2 * 10.0) / 10.0 : t2;
-    /* td 仅在超预算(断言为真)时 ceil——正常路径保持原渲染, 存量链
-     * 基线零漂移; 断言为假时无『仍超预算』后缀, 无矛盾语境。 */
-    const double td_disp =
-        (td > (double)max_single_ms) ? std::ceil(td * 10.0) / 10.0 : td;
-    log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
-                "k=%.2f) → %d (验证 %.1fms%s)",
-                test_id, knob, max_single_ms, p1, t1_disp, mid, t2_disp, k, dim,
-                td_disp,
-                td > (double)max_single_ms
-                    ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
-                    : "");
+    if (!fit_only) {
+        int xdim = dim;
+        double td = probe(dim);
+        double td0 = td;
+        int shrinks = 0;
+        while (td > (double)max_single_ms && dim > lo && shrinks < 4) {
+            int newdim = (int)((double)dim * std::pow(budget / td, 1.0 / k));
+            if (newdim >= dim) newdim = dim - 1;
+            if (newdim < lo) newdim = lo;
+            dim = newdim;
+            ++shrinks;
+            td = probe(dim);
+        }
+        if (td0 > (double)max_single_ms)
+            log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
+                        test_id, knob, xdim,
+                        std::ceil(td0 * 10.0) / 10.0, shrinks);
+        /* td 仅在超预算(断言为真)时 ceil——正常路径保持原渲染, 存量链
+         * 基线零漂移; 断言为假时无『仍超预算』后缀, 无矛盾语境。 */
+        const double td_disp =
+            (td > (double)max_single_ms) ? std::ceil(td * 10.0) / 10.0 : td;
+        log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
+                    "k=%.2f) → %d (验证 %.1fms%s)",
+                    test_id, knob, max_single_ms, p1, t1_disp, mid, t2_disp, k, dim,
+                    td_disp,
+                    td > (double)max_single_ms
+                        ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
+                        : "");
+    } else {
+        log_warning("[时间校准] %s.%s: 试解 %d→%.1fms, %d→%.1fms, k=%.2f → %d "
+                    "(fit-only: 跳过验证档, 未验证外推值)",
+                    test_id, knob, p1, t1_disp, mid, t2_disp, k, dim);
+    }
     if (fit) {
         /* M3 有效性告警: 差分扣 b 的前提是 probe 档**实测时长** t1 ≥
          * sdc_m3_probe_floor_ms(固定开销占比 <10%, spec §4.3 M3)——
@@ -1335,12 +1351,16 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
          * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 探针档
          * 下限(下方显式实参 sdc_m3_probe_floor_ms, spec §4.3 M3——模板
          * 缺省 1.0 是存量 7 参链的历史语义, 不得联动改动, issue #351)
-         * 约束(终点档起每档 ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem 无关。
-         * 返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit。 */
+         * 约束(终点档起每档 ≤ ~8×t1), 与 n_mem 无关。
+         * 返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit——
+         * fit_only=true 跳过验证档/收缩轮(issue #487: 验证的全部成本
+         * 只为被弃用的返回值, 实测 GEMM 族每 init 白烧 ~per_solve/2
+         * 单线程时间)。 */
         struct sdc_fit fit;
         sdc_calibrated_dim(a->lo, a->hi, per_solve,
                            test ? test->id : "(global)", knob, 3.0,
-                           solve_once, &fit, sdc_m3_probe_floor_ms);
+                           solve_once, &fit, sdc_m3_probe_floor_ms,
+                           /*fit_only=*/true);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
             double nr = std::pow((double)a->run_budget_ms
                                  / (ar * 2.0 * fit.a_ms), 1.0 / fit.p);

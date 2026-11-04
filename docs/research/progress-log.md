@@ -1815,8 +1815,9 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
 
 - **开工**: worktree 干净、local=remote=d2c501d0；第 5 bot 对 d2c501d0 的检视
   已落（2026-11-02 10:00:55 UTC）。R7 collect 计入 5 条（#41–#45，local-claude）。
-- **rebase**: main 推进 6 提交（145c04b7/0a696384/d3288c82 迁移 +121/
-  451c6272/ff74f226/418e4e09 neon 系列）→ PR CONFLICTING，按 git-sanity
+- **rebase**: main 推进 6 提交（145c04b7/0a696384/d3288c82 迁移
+  （自记 +121 标签经 R8 #49 证伪——实测 tests/ 净 +170 文件、注册
+  +167）/451c6272/ff74f226/418e4e09 neon 系列）→ PR CONFLICTING，按 git-sanity
   红线一律 rebase：6 commit 重放至 418e4e09（dc1852d7→32116499→9c2ac16c→
   55539a6a→8815fe65→fd89ad64），3 区域×6 轮冲突脚本化解决（本命工具
   pr413-rebase-driver.py，仓库外 reports 目录）。裁定沿用：计数冲突以
@@ -1867,9 +1868,9 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
 
 | 意见 | 结论 | 依据 |
 |---|---|---|
-| #47 [Critical] 439 自记日期 2026-11-02 算术不可能（id=4463821143） | 采纳 | 独立复核成立：门控 207 两树同值（grep 实测 203 SVE + 1 SVE2 + 3 SME）；no-SVE q-1 = 注册−207，551 ⇒ 注册恰 758；注册链 588@7f0b9c7c（2026-11-02 10:18）→ 755@d3288c82（11-03 00:48）→ 758@418e4e09（11-03 22:11）经 DECLARE 差分实测（672→840→843，neon 系列净 +3 与 758−755 互证）——11-02 当日 no-SVE 天花板 381 < 551，唯一相容树 418e4e09 晚于自记日期一天。三处文档（README:348/394、CLAUDE.md）「2026-11-02 实测」改为「main 侧记录 + 日期/树归属/宿主身份均不可考」的指纹归因 |
+| #47 [Critical] 439 自记日期 2026-11-02 算术不可能（id=4463821143） | 采纳 | 独立复核成立：门控 207 两树同值（grep 实测 203 SVE + 1 SVE2 + 3 SME）；no-SVE q-1 = 注册−207，551 ⇒ 注册恰 758；注册链 588@7f0b9c7c（2026-11-02 10:18）→ 755@d3288c82（11-03 00:48）→ 758@418e4e09（11-03 22:11）经 DECLARE 差分互证（R9 #55 口径声明：672→840→843 系 `DECLARE_TEST(` **原始出现数**口径，唯一名口径 599→767→770、注册口径 588→755→758；出现数 +168 vs 注册 +167 的 1 例差 = sdc_fuzz_case_template.h:6 **注释中的伪名** `DECLARE_TEST(id, desc)` 被出现数/唯一名口径计入、注册口径不含——非账目缺口；R6 #30 的「601 源名」系第三种口径，与 599/672 互不通用、勿跨口径比对）——11-02 当日 no-SVE 天花板 381 < 551，唯一相容树 418e4e09 晚于自记日期一天。三处文档（README:348/394、CLAUDE.md）「2026-11-02 实测」改为「main 侧记录 + 日期/树归属/宿主身份均不可考」的指纹归因 |
 | #48 [Important] R7 #41 交付守卫行号系 rebase 前基线（id=4463821151） | 采纳 | 交付树逐行实测：:686/:726/:761/:945/:417 全部落空（文件清单项/注释/')'/neon_lock 注释），真锚点 = OpenBLAS :699 / SLEEF :739 / pocketfft :774 / isa-l :1041、消费方 :429；framework/meson.build 两树零改动（:232-239 仍有效）。commit 5be9226c 重锚 + 本台账 R7 #41 行补真（验证时点如实：逐行验证发生在 rebase 前、未随 +84 行重锚） |
-| #49 [Important] 「迁移 121 + arm_add 7 + _neon 14 + cache 9」分解在 git 图中不存在（id=4463821159） | 采纳 | 独立复核成立：d3288c82 单 squash 一次接线全部 arm_add/cache/_neon 文件（tests/ 171 增 1 删、迁移零门控、DECLARE +168）；neon 系列（451c6272/ff74f226/418e4e09）净 +3；步进树「注册 728」不存在。三处文档去掉假分解，改「经 d3288c82 一次接线 + neon 系列净 +3」（+170 文件/门控/DECLARE 差分均本会话实测）；两树差 +70 PROD 标注「PROD 构成未逐 commit 拆解」 |
+| #49 [Important] 「迁移 121 + arm_add 7 + _neon 14 + cache 9」分解在 git 图中不存在（id=4463821159） | 采纳 | 独立复核成立：d3288c82 单 squash 一次接线全部 arm_add/cache/_neon 文件（tests/ name-status 实测 **170 增 3 改 0 删**——R9 #52 更正：R8 首记「171 增 1 删」系 grep 计入 commit 头 Author:/Date: 行的污染；迁移零门控）；neon 系列（451c6272/ff74f226/418e4e09）净 +3；步进树「注册 728」不存在。三处文档去掉假分解，改「经 d3288c82 一次接线 + neon 系列净 +3」；两树差 +70 PROD 标注「PROD 构成未逐 commit 拆解」 |
 | #50 [Minor] RESIDUAL 债务同轮两次发作应本轮修（id=4463821169） | 采纳（精神） | 其指认的两次发作（#48 锚点漂移、#47 日期未对账）即本轮 R8 修复落实；结构性单一事实源化维持 RESIDUAL（R5 #38/#39 判例不变）——本轮三处孪生同步再次证明该债务的真实成本，留给后续文档 PR 专项处理时优先 |
 
 - **验证（R8 亲测）**: 三个数字断言全部本会话实测引用（三树 DECLARE 差分
@@ -1878,3 +1879,28 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   zstd19 -t 2000 -n 1 → exit: pass；x86-64 非回归 = 纯文档。
 - **push 后**: 待第 5 bot（新 head）→ CI → 静默窗 ≥900s → R9 collect
   （预算：本命 R7/R8 = 2/4）。
+
+## PR #413 R9 检视处置（2026-11-04，head 20c07213 起算，第 5 bot 对 efaabdee 的 5 条意见全处置）
+
+- **R9 collect（pr413-r9-collect.md）**: 当前 head（efaabdee）计入 5 条
+  （local-claude 2026-11-04 05:56 检视：#52 [Important]/#53 [Minor]/
+  #54 [Minor]/#55 [Minor]/#56 [Minor]）。CI：14 pass + build-cpu fail
+  （同一对 main 侧 low_load_cache_pressure/_neon 云 runner SIGABRT，
+  non-本-PR 定性不变）+ analyze pending。
+- **意见处置表**:
+
+| 意见 | 结论 | 依据 |
+|---|---|---|
+| #52 [Important] R8 交付「tests/ 171 增 1 删」与 name-status 不符（id=4464143891） | 采纳 | 复测实锤：我 R8 的 grep 被 commit 头污染（^A 命中 Author: 行 → 多计 1；^D 命中 Date: 行 → 虚构「1 删」）——`--format=''` 重测 d3288c82 tests/ = **170 增 3 改 0 删**（零删除；净 +170 恰因 170A−0D 成立）。footnote 与本台账 R8 #49 行同步改正（20c07213） |
+| #53 [Minor] 「迁移 +84 行」漂移归因不完整（id=4464143901） | 采纳 | 逐 commit numstat 实测：7f0b9c7c→418e4e09 该文件 +106/−3 = d3288c82 +84/−0 + 418e4e09 +70/−51 重写（isa-l 锚点 +96 漂移的真因）；漂移注记改写为逐 commit 实测（20c07213） |
+| #54 [Minor] 同句先跨树相减再禁相减、缺宿主限定（id=4464143910） | 采纳 | CLAUDE.md 同步块本有「the two host figures」限定而 README 两处缺失——统一补「同宿主两树差（0xd02 归因用语）vs 两宿主机数字间勿相减」；439 句改「勿与 0xd02 数字作跨宿主相减」（20c07213） |
+| #55 [Minor] 台账两个互不相容的「实测」DECLARE 普查、+168 vs +167 缺口未释（id=4464143921） | 采纳 | 三基实测：出现数 672→840→843、唯一名 599→767→770、注册 588→755→758；+1 缺口 = sdc_fuzz_case_template.h:6 注释伪名 `DECLARE_TEST(id, desc)` 被出现数/唯一名口径计入而注册口径不含（未接线名 11→12 恰闭合）；R8 #47 行补口径声明，R6 #30「601 源名」标注为第三口径、勿跨口径比对（本 commit） |
+| #56 [Minor] R7 台账行残留已证伪的「迁移 +121」标签（id=4464143932） | 采纳 | R7 rebase 行的 +121 加注「自记标签经 R8 #49 证伪——实测净 +170 文件/+167 注册」，证据链内不再有未标记的假数（本 commit） |
+
+- **验证（R9 亲测）**: d3288c82 name-status 用 `--format=''` 重测；逐
+  commit numstat；三基 DECLARE 普查（git grep -o 出现数 / 唯一名 sort -u /
+  readelf 注册）；文档-only commit 序列（20c07213 + 本 commit）——ninja
+  no work to do、零新警告；zstd19 -t 2000 -n 1 → exit: pass；x86-64
+  非回归 = 纯文档。
+- **push 后**: 待第 5 bot（新 head）→ CI → 静默窗 ≥900s → R10 collect
+  （预算：本命 R7/R8/R9 = 3/4）。

@@ -601,7 +601,20 @@ static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
  * 丢弃当 auto)。当前四调用方(gemm/svd 各 preinit+child)lo =
  * MDIM_MIN(1024/300) > 0 安全; 值域天然含 0 的旋钮(slots/count 类)
  * 不得经由本函数, 须改用显式哨兵/三态协议。
- * 返回 0 = 未显式配置(调用方走自适应; 前提 lo > 0, 见上段)。内部
+ * 【PR#384 检视 R8, 意见 4464388834】哨兵探测还有 **hi + 1** 端别名:
+ * sdc_knob_int_clamped 用 sentinel = hi+1 探测「是否显式配置」, 用户
+ * 显式配置值恰为 hi+1 时(如 -O …mdim=6001, SVD MDIM_MAX=6000; gemm
+ * 同构 4097/4096)以合法路径返回 hi+1 == sentinel, 被当未配置走 env
+ * 兜底——与 lo≤0 端同型失效(env 已设则 -O/env 优先级倒置, 未设则
+ * 静默降级 auto 且日志「未显式配置」与事实矛盾)。实测(2026-11-04):
+ * -O mdim=6001 → 「未显式配置 → 环境变量/内存自适应通道」回退 auto
+ * 档; 对照 -O mdim=9999 走 clamp 分支截到 6000 并告警——全值域唯独
+ * hi+1 一个值被静默吞掉。回退的 auto 档有 AR 保护, 不重开 #352
+ * kill 窗。改双向哨兵(独立 bool 出参等)属框架级接口变更, 超出本 PR
+ * 边界; 契约在此补全: 调用方旋钮值域须排除 {0(lo≤0 时的别名),
+ * hi+1(探测哨兵)} 两个值。
+ * 返回 0 = 未显式配置(调用方走自适应; 前提 lo > 0 且值域避让 hi+1,
+ * 见上两段)。内部
  * 序列与原四份拷贝逐字一致, 日志/缓存语义零变化(默认构建)。 */
 static inline int64_t sdc_knob_or_env_clamped(struct test *test,
                                               const char *key,

@@ -28,10 +28,13 @@
 #     代价：4 个 SIM-SPEED 超时边界格每次重跑都会再烧 3600 s——若有意跳过，
 #     手动 touch .done 并自担语义）。
 #
-# 产物（不入库，.gitignore 覆盖）：gem5-512/<t>.log（原始输出，含
-#   run_sve.sh 的 G5+md5 身份行）、gem5-512/<t>.d/（m5out 工作目录）、
-#   gem5-512/batch.tsv（每测试一行
-#   <test>\trc=<n>\twall=<n>s\t<exit-line>\t<sim-exit-line>\tsrc=batch
+# 产物：gem5-512/<t>.log（原始输出，含 run_sve.sh 的 G5+md5 身份行）与
+#   gem5-512/<t>.d/（m5out 工作目录）不入库（.gitignore /gem5-512/* 覆盖）；
+#   另两个小体积溯源记录**入库**（.gitignore `!` 反选豁免——目录级
+#   `git add` 会真实暂存它们，裁定 E）：gem5-512/batch.tsv（追加式
+#   溯源账本——每执行一格追加一行，幂等重跑为同一测试追加新行，
+#   判定一律取清单内末行；实测 206 行/190 唯一测试/16 个多行测试）
+#   行格式 <test>\trc=<n>\twall=<n>s\t<exit-line>\t<sim-exit-line>\tsrc=batch
 #   ——末列为逐行溯源戳，PR #307 #25：无该列 = 手工并入或早于戳记的
 #   历史行；gem5-512-extract.sh 的机械提取 + 溯源审计输入）、
 #   gem5-512/identity.txt（批量时二进制身份：gem5 md5 + sdcshield 版本，
@@ -181,7 +184,10 @@ if [ -n "$ovrdup" ]; then
     exit 2
 fi
 
-echo "batch start: $(date '+%F %T')  P=$P  list=$(wc -l < "$OUT/list.effective") tests"
+# list= counts non-empty rows (same form as the closing denominator) — a
+# "|"-prefixed raw row leaves an empty line in list.effective that wc -l
+# would misreport as a test.
+echo "batch start: $(date '+%F %T')  P=$P  list=$(grep -cv '^$' "$OUT/list.effective") tests"
 new_md5=$(md5sum "$G5" | cut -d' ' -f1)
 echo "gem5: $G5  md5=$new_md5"
 echo "bin:  $BIN  $($BIN --version 2>/dev/null || echo version-unknown)"
@@ -214,4 +220,35 @@ if [ -f "$OUT/batch.tsv" ]; then
 fi
 xargs -a "$OUT/list.effective" -P "$P" -I{} "$0" --one {}
 echo "batch end:   $(date '+%F %T')"
-echo "cells with 'exit: pass': $(grep -c $'\texit: pass' "$OUT/batch.tsv" 2>/dev/null || echo 0) / $(wc -l < "$OUT/list.effective")"
+# Closing cell count, IDEMPOTENT and LIST-SCOPED: batch.tsv is append-only
+# and an idempotent re-run appends a fresh row per re-executed cell, so a
+# plain `grep -c` counts appended ROWS, not cells — re-running already-green
+# cells would double-count them, and a raw last-row count would keep counting
+# DELETED tests' historical pass rows after the list shrinks (numerator
+# above denominator). This awk counts tests in the CURRENT list.effective
+# whose LAST row is `exit: pass` — a list-scoped last-row-wins QUICK VIEW,
+# NOT the extract verdict: gem5-512-extract.sh's verdict additionally
+# requires rc == 0 AND the tick floor (fail-closed ANOMALY otherwise) and
+# skips empty-name rows, so relative to verdicts.txt this figure can only
+# over-count (an rc!=0 row whose exit line still reads pass, or an
+# init-skip below the tick floor, counts here but not there). Empty test
+# names are skipped here as well — list.effective may carry empty lines
+# where a raw "|time"-prefixed row reduced to nothing — and both the
+# numerator key set and the printed denominator count non-empty list
+# lines only; re-runs never inflate it and the figure never exceeds the
+# denominator.
+# It prints a single 0 on zero rows; ${n:-0} covers missing files (awk then
+# prints nothing; the old `|| echo 0` double-printed "0"). The campaign.md
+# Task 6 Step 2 points HERE as the single authoritative source (PR #418
+# review findings): the plan embeds no code mirror — run this script, do
+# not rebuild one from the plan text. The DENOMINATOR counts the
+# list-contract-filtered list.effective (PR #307 #21): raw-list comment
+# lines and the blank lines a "|"-prefixed row leaves behind are excluded
+# from execution and totals alike — a "|…"-SUFFIXED row is different: the
+# suffix is stripped (sub(/\|.*/, "")) and the bare name is executed and
+# counted like any other.
+n=$(awk -F'\t' 'FILENAME == ARGV[1] { if ($1 != "") list[$1] = 1; next }
+               $1 in list { last[$1] = $4 }
+               END { c = 0; for (t in last) if (last[t] == "exit: pass") c++; print c }' \
+    "$OUT/list.effective" "$OUT/batch.tsv" 2>/dev/null)
+echo "cells with 'exit: pass': ${n:-0} / $(grep -cv '^$' "$OUT/list.effective")"

@@ -277,7 +277,14 @@ static int size_matrix_preinit(struct test *test)
     } else {
         iter_s = 243.4 * std::pow((double)n_hi / 4400.0, 3.0) + 1.0;
     }
-    test->desired_duration = (int)(iter_s * 950.0);   /* ms, -5% margin */
+    /* 【PR#384 检视 R5, 意见 4463650400】显式档生效侧澄清: 同一 iter_s
+     * 下本 desired(0.95×iter_s)恒小于上方 min(1.0×iter_s), 而框架
+     * test_duration 的 min 夹钳最后执行(sandstone_run.cpp:1879-1880)
+     * → 显式档的 target/timeout 恒由 min 决定, 本 desired 在显式档是
+     * 模型记录值(时间预算目标), 单独调它不改显式档时长(须调 min)。
+     * auto 档不写 min, desired 才是生效目标——两档共用本行, "-5%
+     * margin" 仅对 auto 档是真实生效裕量。 */
+    test->desired_duration = (int)(iter_s * 950.0);   /* ms */
     return EXIT_SUCCESS;
 }
 

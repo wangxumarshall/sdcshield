@@ -314,6 +314,16 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   mdim=4400 → min 12220s→36660s）无实测支撑。验证边界如实声明：
   档因子系 -n 1 口径实测（全核口径大 mdim 超本机 61GB 物理内存
   不可运行，与 R3 同构折算限制）。
+  【2026-11-04 勘误，PR#384 检视 R5（意见 4463650400）——显式档
+  desired 的生效侧澄清】显式档同一 iter_s 下 desired(0.95×iter_s)
+  恒小于 min（GEMM workers>1 时 min=3×iter_s≈3.16×desired），框架
+  test_duration 的 min 夹钳最后执行 → 显式档 target/timeout 恒由
+  min 决定，desired 是模型记录值（auto 档不写 min，desired 才是
+  生效目标），「-5% margin」仅对 auto 档是真实生效裕量。kill 链经
+  min 闭合方向安全（意见自认无功能后果），本条为注释/表述勘误：
+  两测试 desired 行注释已改为生效侧澄清，PR 标题「desired_duration
+  跟随 mdim 旋钮」的机制注记见 PR 描述 R5 节（preinit 的 desired
+  确实跟随旋钮计算，显式档的时长执法经 min 生效）。
   天然修复 exec_each_test 模式
   preinit 不跑导致 g_dim 恒 300 的分歧（LSP 核实修正 #3）；
   **exec 模式下 desired_duration 的说明【v2 修正】：`test_duration()`

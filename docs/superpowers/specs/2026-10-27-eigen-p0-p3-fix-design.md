@@ -249,7 +249,12 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   `sdc_joint_dim_slice` per-node 精算。
   【2026-11-02 勘误，PR#384 检视（意见 4432271415）】显式档的
   duration 模型须按**全迭代** ar×2×t(knob) 建模（一次 run 侧迭代 =
-  golden 首算 + DUT 两次 BDCSVD，全核下每次吃 AR 争抢；与 gemm 修复
+  golden 首算 1 次 + DUT 每轮求解 1 次 = 共 2 次 BDCSVD【R6 勘误，
+  意见 4463986208：原文「golden 首算 + DUT 两次 BDCSVD」把总数写成
+  3 次，与 sandstone_eigen_common.h run() 实际（入口 prime 1 次 +
+  每 do-while 轮 DUT 1 次，golden 重算每 16 轮摊 1 次未计入）不符；
+  模型系数 ×2 = 总数 2 次，数值自始正确，错的只是构成描述】，
+  全核下每次吃 AR 争抢；与 gemm 修复
   f6783077 及联合求解自身的迭代模型 per_solve=run_budget/(ar×2) 同构）：
   只乘 0.95×t(knob) 时 timeout=4.75×t(knob)+30s，kill 条件
   AR_real>~2.4，而单内存节点最坏 child 实测有效 AR≈39——多 worker

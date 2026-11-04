@@ -157,7 +157,9 @@ static int solve_once_cdouble_sve(int n)
  *           the explicit tier bypasses the joint solver's AR-aware n_run
  *           protection VERBATIM, so the all-core contention must go into
  *           the model explicitly — the FULL iteration is golden-prime +
- *           DUT (two BDCSVDs), each eating the AR slowdown. This is
+ *           one DUT solve per round (two BDCSVDs in total; the golden
+ *           re-roll every kRerollEvery=16 rounds amortizes 1/16 per round
+ *           and is not modelled), each eating the AR slowdown. This is
  *           isomorphic to the gemm fix (f6783077) and to the joint
  *           solver's own iteration model (per_solve =
  *           run_budget/(ar×2)). ar = the memory-bound family table
@@ -236,9 +238,15 @@ static int size_matrix_preinit(struct test *test)
      * 四份逐字拷贝纯靠手工同步, 任一侧单独改动即静默重开误杀窗口)。
      *
      * 【PR#384 检视, 意见 4432271415】显式档的 duration 必须按全核
-     * 全迭代 ar×2×t(knob) 建模: 一次 run 侧迭代 = golden 首算 + DUT
-     * 两次 BDCSVD, 全核下每次都吃 AR 争抢——与 gemm 修复(f6783077)
-     * 及联合求解自身的迭代模型(per_solve = run_budget/(ar×2))同构。
+     * 全迭代 ar×2×t(knob) 建模: 一次 run 侧迭代 = golden 首算 1 次 +
+     * DUT 每轮求解 1 次, 共 2 次 BDCSVD(golden 重算每 kRerollEvery=16
+     * 轮才摊 1 次, 未计入), 全核下每次都吃 AR 争抢——与 gemm 修复
+     * (f6783077)及联合求解自身的迭代模型(per_solve = run_budget/
+     * (ar×2))同构。【R6 勘误, 意见 4463986208】原文「golden 首算 +
+     * DUT 两次 BDCSVD」把构成写成 3 次分解, 与 sandstone_eigen_common.h
+     * run() 的实际(入口 prime 1 次 + 每 do-while 轮 DUT 1 次)不符
+     * ——模型系数 ×2 = 总数 2 次, 数值自始正确, 错的只是构成描述
+     * (本块与文件头模型注释、spec §4.5 三处同步修正)。
      * 只乘 0.95×t(knob) 时 timeout = 4.75×t(knob)+30 s, kill 条件
      * AR_real > ~2.4, 而 sve_probe_and_init 的 run_budget_ms 注释实测
      * 单内存节点最坏 child 有效 AR≈39——多 worker 显式档必被误杀,

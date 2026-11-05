@@ -1166,3 +1166,31 @@ def test_run_review_true_zero_findings_still_passes(monkeypatch, tmp_path):
                         lambda cmd, cwd, prompt, debug_tag="anonymous": "[]")
 
     assert plr.run_review(7, "b" * 40) == []
+
+
+def test_fetch_pr_diff_git_fallback_timeout_wrapped(monkeypatch):
+    """PR#531 r1 检视 :480: 406 回退的本地 git _git 闭包超时转 GhError——
+    不裸抛 TimeoutExpired 击穿 --all-open 隔离。"""
+    import subprocess as sp
+
+    class Gh406(Exception):
+        pass
+
+    real_gh = plr._gh
+
+    def fake_gh(argv):
+        if argv[:2] == ["pr", "diff"]:
+            raise plr.GhError("gh pr diff … 失败(exit 1): "
+                              "HTTP 406 too_large")
+        if argv[:2] == ["pr", "view"]:
+            return json.dumps({"baseRefName": "main"})
+        return real_gh(argv)
+
+    monkeypatch.setattr(plr, "_gh", fake_gh)
+
+    def fake_run(*a, **k):
+        raise sp.TimeoutExpired(cmd="git", timeout=plr.GH_TIMEOUT)
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    with pytest.raises(plr.GhError):
+        plr._fetch_pr_diff(7, "b" * 40)      # GhError,非裸 TimeoutExpired

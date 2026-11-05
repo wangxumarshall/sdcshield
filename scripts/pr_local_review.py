@@ -501,8 +501,15 @@ def _fetch_pr_diff(pr_number: int, head_sha: str) -> str:
             pass
 
         def _git(argv):
-            proc = subprocess.run(["git", *argv], capture_output=True,
-                                  text=True, timeout=GH_TIMEOUT)
+            # 超时/找不到 git 转 GhError(PR#531 r1 检视 :480):裸抛
+            # TimeoutExpired 会击穿 review_all_open 的 except GhError 隔离
+            # (与 64a50561 修的 delta 路径同款危害,本函数位于全量主路径
+            # 与发布侧行号校验路径——更高频)。
+            try:
+                proc = subprocess.run(["git", *argv], capture_output=True,
+                                      text=True, timeout=GH_TIMEOUT)
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                raise GhError(f"git {' '.join(argv[:2])}… 失败: {exc}")
             if proc.returncode != 0:
                 err = " ".join((proc.stderr or "").strip().split())[:200]
                 raise GhError(f"git {' '.join(argv[:2])}… 失败: {err}")

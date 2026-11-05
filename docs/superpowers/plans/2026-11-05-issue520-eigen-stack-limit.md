@@ -162,6 +162,32 @@ tier 循环内 `tier == '1024' and spec[2] != 0` 时向 `eigen_tier_args` 追加
   4. 主仓构建面唯一变化是两个 ARM64-only per-tier 静态库的编译参数。
 - 用例集/文档计数不受影响：无 test 注册变化，README/CLAUDE.md 计数链无需更新。
 
+### 4.2 CI 实证与边界（PR #532 run 41985710099，2026-11-05；对照 PR #519 run 41816857017）
+
+修复前（PR #519，2026-11-04T10:58:32 日志）：`Build for CPU (Linux)` step 死于
+`../third-party/eigen5/Eigen/src/Core/DenseStorage.h:61:5: error: static assertion failed: OBJECT_ALLOCATED_ON_STACK_IS_TOO_BIG`。
+
+修复后（PR #532）step 级结论（actions/jobs/127105915306）：
+- `Build for CPU (Linux)` => **success**（debugoptimized 断言消除，CI 实证）；
+- `run unittests` / `verify selftests` / `run selftests` => success。
+
+job 级仍红与 Multi-version 红的定性（**独立故障，非 #520 范围，sweep 红线只报告不修**）：
+- `run tests quickly` failure：`low_load_cache_pressure` 与 `low_load_cache_pressure_neon`
+  在 GitHub hosted ARM runner 上 `result: crash, code: 6 (Aborted), core-dump: true`；
+  本机复测两用例 `-t 2000` 均 `exit: pass` ⇒ 环境性（与 host memory 记录的
+  Build-binary 恒红"非载荷所致"同性质）。pre-b12d9ada 对照 run（41790777945）同样
+  Build step 成功而 job 红于 quick——即该环境故障在 b12d9ada 之前已存在。
+- `Multi-version`×3：容器内 `--buildtype=release`（container-build.sh:329，NDEBUG 下
+  断言本就编译掉）构建成功（binary-sha256 已产出），失败在 `[5/5] 功能验证`
+  （smoke = `--list-tests` + `zstd19 -t 1000 -n 1`，verify-built-pristine.sh:66-70）；
+  pre-b12d9ada run 的 Multi-version×3 全 success，post-b12d9ada 变红——直接死因在
+  smoke verify，与本 static_assert 正交，需另行排查（候选：#471 merge 引入的
+  `--list-tests` 输出面变化或镜像/环境因素）。
+
+结论：issue #520 的"Build binary 不可编译"已消除（CI step 级实证）；issue 声称的
+"四档全红"中 Multi-version×3 与 quick suite 红是两个独立故障面，超出本修复范围，
+如实移交后续排查。
+
 ## 5. 风险与诚实边界
 
 - **alloca 窗口副作用仅存在于 1024 档**：128KB..256KB 运行时缓冲改走 alloca；本机无 1024 档

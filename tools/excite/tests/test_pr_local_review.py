@@ -890,3 +890,64 @@ def test_dump_raw_output_writes_and_never_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(plr.os, "makedirs",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
     plr._dump_raw_output("pr7", "o", "e", "r")   # 不得抛
+
+
+def test_run_review_empty_output_retries_then_raises(monkeypatch, tmp_path):
+    """PR#519 r1 :331 [Critical]: claude 退出 0 但 stdout 空(截断/静默失败
+    形状)≠ 零意见——空输出走落盘+修复后缀重试,重试仍空则如实抛,绝不发布
+    假零意见 marker review(锚推进后 P1 增量模式的永久盲区)。"""
+    import pr_loop
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(tmp_path))
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: None)
+    dumps = []
+    monkeypatch.setattr(plr, "_dump_raw_output",
+                        lambda tag, out, err, why: dumps.append((tag, out, why)))
+    calls = []
+
+    def fake_claude(cmd, cwd, prompt, debug_tag="anonymous"):
+        calls.append(prompt)
+        return ""
+
+    monkeypatch.setattr(plr, "_run_claude", fake_claude)
+
+    with pytest.raises(plr.GhError):
+        plr.run_review(7, "b" * 40)
+    assert len(calls) == 2                       # 空 → 重试一次
+    assert plr.REPAIR_SUFFIX.strip()[:10] in calls[1]
+    # 两次空输出都落盘(假零意见的取证)
+    assert [d[1] for d in dumps] == ["", ""]
+
+
+def test_run_review_empty_then_valid_retry_succeeds(monkeypatch, tmp_path):
+    """:331 补充: 首跑空输出、重试输出合法 "[]" → 成功返回零意见(重试
+    恢复路径)。"""
+    import pr_loop
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(tmp_path))
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: None)
+    monkeypatch.setattr(plr, "_dump_raw_output",
+                        lambda tag, out, err, why: None)
+    calls = []
+
+    def fake_claude(cmd, cwd, prompt, debug_tag="anonymous"):
+        calls.append(prompt)
+        return "" if len(calls) == 1 else "[]"
+
+    monkeypatch.setattr(plr, "_run_claude", fake_claude)
+    assert plr.run_review(7, "b" * 40) == []
+    assert len(calls) == 2

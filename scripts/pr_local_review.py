@@ -323,11 +323,18 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
     try:
         output = _run_claude(build_claude_command(), cwd=worktree,
                              prompt=prompt, debug_tag=f"pr{pr_number}")
-        # P2 解析失败路径: 落盘原始输出(取证)→ 带修复后缀同 worktree 重试
-        # 一次 → 仍失败则自然抛(诚实失败,不假成功)。重试只针对「输出非 JSON
-        # 数组」这一可修复契约违背;空输出在 strict=False 下返回 [](真·零
-        # 意见),不进重试。
+        # P2 失败路径(落盘 + 修复后缀重试一次 + 两次失败如实抛,不假成功):
+        # ① 空 stdout(claude 退出 0 但零输出——截断/静默失败形状)= 输出契约
+        # 违背,与「输出非 JSON 数组」同走重试。旧行为把空输出当零意见发布
+        # marker review,锚推进后 P1 增量模式宣称「不再重复攻击」——该 head
+        # 的全部 PR diff 从此永不再审,永久检视盲区(PR#519 r1 检视 :331
+        # Critical);真·零意见的正确输出是 "[]"(非空串),空串不可能是
+        # 合法审查结论。
+        # ② 输出非 JSON 数组 → 同款路径。两次失败 → 落盘重试输出后抛。
         try:
+            if not output.strip():
+                raise GhError("claude 检视输出为空——输出契约要求 JSON 数组"
+                              "(零意见也须输出 [] 而非空串)")
             return _parse_findings(output)
         except GhError as exc:
             _dump_raw_output(f"pr{pr_number}", output, "",
@@ -337,6 +344,9 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
                                   prompt=retry_prompt,
                                   debug_tag=f"pr{pr_number}-retry")
             try:
+                if not output2.strip():
+                    raise GhError("claude 重试输出仍为空——输出契约要求 "
+                                  "JSON 数组(零意见也须输出 [] 而非空串)")
                 return _parse_findings(output2)
             except GhError as exc2:
                 # 重试仍失败: 落盘重试输出(最终失败态是最有价值的取证)

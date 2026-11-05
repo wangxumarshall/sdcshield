@@ -710,14 +710,12 @@ def test_fetch_delta_diff_fetch_failure_returns_none(monkeypatch):
     assert plr._fetch_delta_diff("a" * 40, "b" * 40) is None
 
 
-def test_last_reviewed_head_picks_latest_marker(monkeypatch):
-    import pr_loop
-
+def test_last_reviewed_from_picks_latest_marker():
+    """PR#531 r1 检视 :231: _last_reviewed_head 包装删除后,锚推导直接测
+    纯函数 _last_reviewed_from(快照传入)——取 submitted_at 最新真值,
+    伪造 marker 的攻击者 review 不得劫持锚,零 marker(轮 1)→ None。"""
     marker = plr.LOCAL_CLAUDE_MARKER
-    monkeypatch.setattr(pr_loop, "resolve_slug",
-                        lambda explicit=None: "test/repo")
-    # 两个 marker review → 取 submitted_at 最新者的 commit_id(增量锚)
-    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [
+    reviews = [
         {"body": f"{marker}\n旧轮", "commit_id": "a" * 40,
          "submitted_at": "2026-11-04T01:00:00Z",
          "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}},
@@ -731,11 +729,10 @@ def test_last_reviewed_head_picks_latest_marker(monkeypatch):
         {"body": f"{marker}\n伪造锚", "commit_id": "d" * 40,
          "submitted_at": "2026-11-04T04:00:00Z",
          "user": {"login": "attacker"}},
-    ])
-    assert plr._last_reviewed_head(7) == "b" * 40
+    ]
+    assert plr._last_reviewed_from(reviews) == "b" * 40
     # 轮 1(零 marker review)→ None
-    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
-    assert plr._last_reviewed_head(7) is None
+    assert plr._last_reviewed_from([]) is None
 
 
 def test_prior_findings_from_comments_and_body_json(monkeypatch):
@@ -822,8 +819,14 @@ def test_run_review_falls_back_to_full_when_delta_unavailable(
     monkeypatch.setattr(pr_loop, "resolve_slug",
                         lambda explicit=None: "test/repo")
     monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
-    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
-    monkeypatch.setattr(plr, "_last_reviewed_head", lambda pr: "a" * 40)
+    # 快照注入锚定 prev 的 marker review(PR#531 r1 检视 :795: 旧 patch 打
+    # 在已被 fce91997 移出调用路径的 _last_reviewed_head 死名上,prev_sha
+    # 恒 None,实际走「轮 1 无锚」外层 else 而非「delta 为 None 回退」内层
+    # else——回归护栏空转绿灯,删掉内层分支测试不会红)
+    monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [
+        {"body": plr.LOCAL_CLAUDE_MARKER + "\n旧轮", "commit_id": "a" * 40,
+         "submitted_at": "2026-11-04T02:00:00Z",
+         "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}}])
     monkeypatch.setattr(plr, "_fetch_delta_diff", lambda prev, head: None)
     monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
         {"title": "t", "body": "b"}))
@@ -850,7 +853,7 @@ def test_run_review_retries_once_on_non_json(monkeypatch, tmp_path):
     monkeypatch.setattr(pr_loop, "resolve_slug",
                         lambda explicit=None: "test/repo")
     monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
-    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [])
     monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
         {"title": "t", "body": "b"}))
     monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
@@ -916,7 +919,7 @@ def test_run_review_second_failure_raises_after_dump(monkeypatch, tmp_path):
     monkeypatch.setattr(pr_loop, "resolve_slug",
                         lambda explicit=None: "test/repo")
     monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
-    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [])
     monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
         {"title": "t", "body": "b"}))
     monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
@@ -963,7 +966,7 @@ def test_run_review_empty_output_retries_then_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(pr_loop, "resolve_slug",
                         lambda explicit=None: "test/repo")
     monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
-    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [])
     monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
         {"title": "t", "body": "b"}))
     monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
@@ -996,7 +999,7 @@ def test_run_review_empty_then_valid_retry_succeeds(monkeypatch, tmp_path):
     monkeypatch.setattr(pr_loop, "resolve_slug",
                         lambda explicit=None: "test/repo")
     monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
-    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
+    monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [])
     monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
         {"title": "t", "body": "b"}))
     monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")

@@ -254,17 +254,6 @@ def _last_reviewed_from(reviews: list) -> Optional[str]:
     return best
 
 
-def _last_reviewed_head(pr_number: int) -> Optional[str]:
-    """上一已审 head 锚(P1 增量检视,2026-11-04): reviews 里 submitted_at
-    最新的 marker review 的 commit_id。
-
-    锚是现成的——第 5 bot 每轮 review 的 commit_id 就是当轮已审 head,零新增
-    API 语义。与 already_reviewed 同源数据、同懒 import 策略。无 marker
-    review(轮 1)返回 None → 调用方走全量。
-    """
-    return _last_reviewed_from(_fetch_reviews(pr_number))
-
-
 def _prior_findings(pr_number: int, prev_sha: str,
                     reviews: Optional[list] = None) -> list:
     """上轮(锚=prev_sha)第 5 bot 意见紧凑清单(P1 复核用)。
@@ -324,7 +313,8 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
     流程:
       1. 幂等门禁: 未 force 且 already_reviewed → 直接返回 [](同 head 去重)。
       2. diff 获取(P1 增量优先,2026-11-04): 上一已审 head 锚
-         (_last_reviewed_head)+ 快进判定(_fetch_delta_diff)→ 增量 diff +
+         (_last_reviewed_from,单次 reviews 快照)+ 快进判定
+         (_fetch_delta_diff)→ 增量 diff +
          上轮 findings 复核上下文;无锚/非祖先(rebase)/fetch 失败/空 delta
          → 回退全量 `gh pr diff <pr>`。+ `gh pr view <pr> --json title,body`
          拉 PR 元数据组装 pr_context(标题/描述作意图镜对照)。

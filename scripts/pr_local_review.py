@@ -209,10 +209,29 @@ def _fetch_reviews(pr_number: int) -> list:
     return reviews if isinstance(reviews, list) else []
 
 
+# 第 5 bot 的作者判据(PR#531 r1 检视 :214): marker 是仓库源码里的公开
+# 常量,只信「body 含 marker + commit_id 锚」= 任何能对该 PR 发 review 的
+# 账号(公开仓库=任意小号)可伪造——幂等门禁永真(PR 永不被审)或增量锚
+# 劫持到攻击者选定的祖先(早期恶意提交获永久赦免)。与 pr_loop 的五 bot
+# 判据同口径: 作者 wangxumarshall **且** 正文含标记(双条件)。
+LOCAL_CLAUDE_AUTHOR = "wangxumarshall"
+
+
+def _is_marker_review(item: dict) -> bool:
+    """第 5 bot 信号判据(双条件): 作者 = LOCAL_CLAUDE_AUTHOR 且 body 含
+    LOCAL_CLAUDE_MARKER。user 形状异常(缺失/非 dict)按不满足处理——
+    信任决策侧宁可漏判(当作未审,重审一次)不可误判(把伪造当真)。"""
+    if LOCAL_CLAUDE_MARKER not in (item.get("body") or ""):
+        return False
+    user = item.get("user")
+    if not isinstance(user, dict):
+        return False
+    return user.get("login") == LOCAL_CLAUDE_AUTHOR
+
+
 def already_reviewed_from(reviews: list, head_sha: str) -> bool:
     """纯谓词(快照传入): reviews 里是否有锚定 head_sha 的 marker review。"""
-    return any(LOCAL_CLAUDE_MARKER in (r.get("body") or "")
-               and r.get("commit_id") == head_sha
+    return any(_is_marker_review(r) and r.get("commit_id") == head_sha
                for r in reviews or [])
 
 
@@ -221,7 +240,7 @@ def _last_reviewed_from(reviews: list) -> Optional[str]:
     无 marker review(轮 1)返回 None → 调用方走全量。"""
     best, best_ts = None, ""
     for r in reviews or []:
-        if LOCAL_CLAUDE_MARKER in (r.get("body") or "") and r.get("commit_id"):
+        if _is_marker_review(r) and r.get("commit_id"):
             ts = r.get("submitted_at") or ""
             if ts >= best_ts:
                 best, best_ts = r["commit_id"], ts
@@ -257,7 +276,7 @@ def _prior_findings(pr_number: int, prev_sha: str,
     if isinstance(comments, list):
         for c in comments:
             body = c.get("body") or ""
-            if LOCAL_CLAUDE_MARKER not in body:
+            if not _is_marker_review(c):
                 continue
             if c.get("original_commit_id") != prev_sha:
                 continue
@@ -271,7 +290,7 @@ def _prior_findings(pr_number: int, prev_sha: str,
     if isinstance(reviews, list):
         for r in reviews:
             body = r.get("body") or ""
-            if LOCAL_CLAUDE_MARKER not in body or r.get("commit_id") != prev_sha:
+            if not _is_marker_review(r) or r.get("commit_id") != prev_sha:
                 continue
             # 贪婪匹配到 body 的最后一个 ```(PR#519 r1 检视 :257): JSON 段
             # 由 publish_review 固定追加在 body 末尾,而 finding 的

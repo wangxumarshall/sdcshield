@@ -422,20 +422,36 @@ def test_already_reviewed_true_when_marker_present(monkeypatch):
         monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: items)
 
     # 含标记且 commit_id 匹配当前 head → 已审
-    fake_reviews([{"body": f"{marker}\n检视意见", "commit_id": head_sha}])
+    fake_reviews([{"body": f"{marker}\n检视意见", "commit_id": head_sha,
+                   "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}}])
     assert plr.already_reviewed(7, head_sha) is True
 
     # 无标记(用户本人普通 review)→ 未审
-    fake_reviews([{"body": "普通人工 review", "commit_id": head_sha}])
+    fake_reviews([{"body": "普通人工 review", "commit_id": head_sha,
+                   "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}}])
     assert plr.already_reviewed(7, head_sha) is False
 
     # 有标记但 commit_id 不匹配当前 head(旧 head 检视)→ 未审(commit 锚定)
-    fake_reviews([{"body": f"{marker}\n旧 head 检视", "commit_id": "c" * 40}])
+    fake_reviews([{"body": f"{marker}\n旧 head 检视", "commit_id": "c" * 40,
+                   "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}}])
     assert plr.already_reviewed(7, head_sha) is False
 
     # GraphQL 形状的 commit_id=None 不得误判为已审(旧 bug 场景回归锚:
     # null != head_sha,该 review 不满足 commit 锚定)
-    fake_reviews([{"body": f"{marker}\nnull commit", "commit_id": None}])
+    fake_reviews([{"body": f"{marker}\nnull commit", "commit_id": None,
+                   "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}}])
+    assert plr.already_reviewed(7, head_sha) is False
+
+    # PR#531 r1 检视 :214: marker 是公开常量,伪造者(任意小号)带 marker
+    # 锚定 head → 双条件判据必须拒判(幂等门禁不得被伪造信号永久短路)
+    fake_reviews([{"body": f"{marker}\n伪造", "commit_id": head_sha,
+                   "user": {"login": "attacker"}}])
+    assert plr.already_reviewed(7, head_sha) is False
+    # user 形状异常(缺失/非 dict)按不满足处理(宁漏判重审、不误判采信)
+    fake_reviews([{"body": f"{marker}\n无 user", "commit_id": head_sha}])
+    assert plr.already_reviewed(7, head_sha) is False
+    fake_reviews([{"body": f"{marker}\nuser 非 dict", "commit_id": head_sha,
+                   "user": "wangxumarshall"}])
     assert plr.already_reviewed(7, head_sha) is False
 
 
@@ -703,11 +719,18 @@ def test_last_reviewed_head_picks_latest_marker(monkeypatch):
     # 两个 marker review → 取 submitted_at 最新者的 commit_id(增量锚)
     monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [
         {"body": f"{marker}\n旧轮", "commit_id": "a" * 40,
-         "submitted_at": "2026-11-04T01:00:00Z"},
+         "submitted_at": "2026-11-04T01:00:00Z",
+         "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}},
         {"body": f"{marker}\n新轮", "commit_id": "b" * 40,
-         "submitted_at": "2026-11-04T02:00:00Z"},
+         "submitted_at": "2026-11-04T02:00:00Z",
+         "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}},
         {"body": "普通人工 review", "commit_id": "c" * 40,
-         "submitted_at": "2026-11-04T03:00:00Z"},
+         "submitted_at": "2026-11-04T03:00:00Z",
+         "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}},
+        # 伪造 marker 的攻击者 review submitted_at 最新——锚不得被劫持
+        {"body": f"{marker}\n伪造锚", "commit_id": "d" * 40,
+         "submitted_at": "2026-11-04T04:00:00Z",
+         "user": {"login": "attacker"}},
     ])
     assert plr._last_reviewed_head(7) == "b" * 40
     # 轮 1(零 marker review)→ None
@@ -726,16 +749,23 @@ def test_prior_findings_from_comments_and_body_json(monkeypatch):
             return [
                 # 行级评论: 锚定 prev 的才计入;锚别的 head 的跳过
                 {"body": f"{marker}\n**[claude] [Minor] 可维护性**: 行级意见",
-                 "path": "x.c", "line": 9, "original_commit_id": prev},
+                 "path": "x.c", "line": 9, "original_commit_id": prev,
+                 "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}},
                 {"body": f"{marker}\n**[claude] [Important] 正确性**: 旧轮",
-                 "path": "y.c", "line": 1, "original_commit_id": "z" * 40},
+                 "path": "y.c", "line": 1, "original_commit_id": "z" * 40,
+                 "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}},
+                # 伪造 marker 的攻击者评论(锚 prev)→ 双条件拒判
+                {"body": f"{marker}\n**[claude] [Important] 正确性**: 伪造",
+                 "path": "w.c", "line": 2, "original_commit_id": prev,
+                 "user": {"login": "attacker"}},
             ]
         return [  # reviews: body JSON 段(降级 findings)
             {"body": marker + "\n## 挂不上 diff 行的 findings(JSON)\n\n"
                      '```json\n[{"path": "z.c", "line": 5, '
                      '"severity": "Important", "message": "降级意见"}]\n'
                      "```\n",
-             "commit_id": prev},
+             "commit_id": prev,
+             "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}},
         ]
 
     monkeypatch.setattr(pr_loop, "resolve_slug",
@@ -758,7 +788,8 @@ def test_run_review_uses_delta_and_prior_findings(monkeypatch, tmp_path):
     # (run_review 单次拉取口径——幂等门禁/增量锚/prior 共用,F5)
     monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [
         {"body": plr.LOCAL_CLAUDE_MARKER + "\n旧轮", "commit_id": "a" * 40,
-         "submitted_at": "2026-11-04T02:00:00Z"}])
+         "submitted_at": "2026-11-04T02:00:00Z",
+         "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}}])
     monkeypatch.setattr(plr, "_fetch_delta_diff",
                         lambda prev, head: "DELTA-CONTENT")
     monkeypatch.setattr(plr, "_prior_findings",
@@ -867,7 +898,8 @@ def test_prior_findings_tolerates_internal_code_fences(monkeypatch):
                         lambda explicit=None: "test/repo")
     monkeypatch.setattr(pr_loop, "gh_api_paged",
                         lambda path: [] if path.endswith("/comments")
-                        else [{"body": body, "commit_id": prev}])
+                        else [{"body": body, "commit_id": prev,
+                               "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}}])
     items = plr._prior_findings(7, prev)
     # 回归信号 = len==1: 旧非贪婪正则在证据内首个 ``` 处截断 → json.loads
     # 失败 → 静默 continue → 0 条(复核清单整体丢失);贪婪正则完整提取。
@@ -1041,7 +1073,8 @@ def test_run_review_single_reviews_snapshot(monkeypatch, tmp_path):
             return [{"body": f"{marker}\n**[claude] [Minor] 可维护性**: 上轮",
                      "path": "x.c", "line": 9, "original_commit_id": prev}]
         return [{"body": f"{marker}\n旧轮", "commit_id": prev,
-                 "submitted_at": "2026-11-04T02:00:00Z"}]
+                 "submitted_at": "2026-11-04T02:00:00Z",
+                 "user": {"login": plr.LOCAL_CLAUDE_AUTHOR}}]
 
     monkeypatch.setattr(pr_loop, "resolve_slug",
                         lambda explicit=None: "test/repo")

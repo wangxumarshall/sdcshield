@@ -652,7 +652,7 @@ def test_delta_diff_from_local_fastforward_rebase_empty(tmp_path, monkeypatch):
         return sp.run(["git", "-C", str(r), *argv], check=True,
                       capture_output=True, text=True).stdout.strip()
 
-    git("init", "-q")
+    git("init", "-q", "-b", "master")   # 显式分支名(默认分支因环境而异)
     git("config", "user.email", "t@t")
     git("config", "user.name", "t")
     (r / "f.txt").write_text("a\n")

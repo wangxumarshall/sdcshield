@@ -474,15 +474,22 @@ def _delta_diff_from_local(prev_sha: str, head_sha: str) -> Optional[str]:
     """本地 git 判定 + 增量 diff(P1,无网络): prev 是 head 的祖先(快进)→
     `git diff prev..head`;非祖先(rebase 重写历史——raw delta 会混入 main
     变更,PR#341 r8→r9 实证 15,543 行假增量)→ None;空 diff → None。
-    纯本地函数(测试离线喂真实 git 对象);git 调用继承调用方 cwd。"""
-    proc = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", prev_sha, head_sha],
-        capture_output=True, text=True, timeout=GH_TIMEOUT)
-    if proc.returncode != 0:
+    纯本地函数(测试离线喂真实 git 对象);git 调用继承调用方 cwd。
+    超时/找不到 git → None 回退全量(PR#519 r1 检视 :463:裸抛
+    TimeoutExpired 会击穿 review_all_open 的 `except GhError` 隔离,
+    --all-open 循环整体崩溃、后续 PR 不再受审——与 _fetch_delta_diff
+    的包裹纪律对齐)。"""
+    try:
+        proc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", prev_sha, head_sha],
+            capture_output=True, text=True, timeout=GH_TIMEOUT)
+        if proc.returncode != 0:
+            return None
+        diff = subprocess.run(
+            ["git", "diff", prev_sha, head_sha],
+            capture_output=True, text=True, timeout=GH_TIMEOUT)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
-    diff = subprocess.run(
-        ["git", "diff", prev_sha, head_sha],
-        capture_output=True, text=True, timeout=GH_TIMEOUT)
     if diff.returncode != 0:
         return None
     return diff.stdout.strip() or None

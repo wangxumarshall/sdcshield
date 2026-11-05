@@ -1007,3 +1007,16 @@ def test_run_claude_timeout_dumps_partial_output(monkeypatch, tmp_path):
     body = files[0].read_text(encoding="utf-8")
     assert "claude timeout" in body and "思考到一半的部分输出" in body \
         and "PARTIAL-STDERR" in body
+
+
+def test_delta_diff_from_local_timeout_returns_none(monkeypatch):
+    """PR#519 r1 :463: merge-base/diff 子进程超时(45s)不得裸抛
+    TimeoutExpired——那会击穿 review_all_open 的 except GhError 隔离令
+    --all-open 整循环崩溃;回退 None(= 全量路径)。"""
+    import subprocess as sp
+
+    def fake_run(*a, **k):
+        raise sp.TimeoutExpired(cmd="git", timeout=plr.GH_TIMEOUT)
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    assert plr._delta_diff_from_local("a" * 40, "b" * 40) is None

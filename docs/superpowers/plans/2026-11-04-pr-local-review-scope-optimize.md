@@ -66,13 +66,15 @@
 ## 终态补录（2026-11-04 晚，PR#519 r1 检视 11 条处置）
 
 PR#519 于 19:45 被合并（squash d896240c，用户侧执行——早于 r1 检视发布
-21:23），11 条意见构成 post-merge findings，处置 = 9 采纳修复 + 1 采纳
-对齐 + 1 驳回，全部落到跟进分支 fix/pr-local-review-r1-findings：
+21:23），11 条意见构成 post-merge findings（10 条行级 + 1 条 review body
+JSON 段内——后者在首轮处置时被漏网，由 PR#531 r1 检视 :69 台账数字
+不闭合抓获后补修），处置 = 10 采纳（8 代码修复 + 1 文档对齐 + 1 漏网
+补修）+ 1 驳回，全部落到跟进分支 fix/pr-local-review-r1-findings：
 
 | 意见 | 裁定 | 落地 |
 |---|---|---|
 | :331 [Critical] 空输出假成功被增量模式放大成永久盲区 | 采纳 | 空输出并入落盘+重试+如实抛 |
-| :258 [Important] 非贪婪正则遇证据内三反引号截断、复核清单整体丢失 | 采纳 | 贪婪匹配到 body 末段围栏 |
+| :258 [Important] 非贪婪正则遇证据内三反引号截断、复核清单整体丢失 | 采纳 | 贪婪匹配到 body 末段围栏（锚点统一按 PR 检视页 :258） |
 | :570 [Important] 超时路径不落盘、部分输出丢弃 | 采纳 | TimeoutExpired 部分输出落盘 |
 | :463 [Minor] _delta_diff_from_local 裸抛 TimeoutExpired 击穿 --all-open 隔离 | 采纳 | 包裹回退 None |
 | :216 [Minor] reviews 三次冗余分页 + TOC-TOU | 采纳 | 单次快照三处共用 |
@@ -80,6 +82,7 @@ PR#519 于 19:45 被合并（squash d896240c，用户侧执行——早于 r1 �
 | :673 [Minor] 测试硬编码 master 环境耦合 | 采纳 | init -b master |
 | plan:38 [Minor] 计划「五情形」与实现四情形不符 | 采纳 | 本节勘误 |
 | plan:49 [Important] 端到端增量实弹证据未兑现 | 采纳 | 跟进 PR 的 r2 轮兑现（首轮全量后任一修复 push） |
+| body-JSON :108 [Minor] 增量轮镜头按 delta 行数降档（68 行=2 镜头 vs 全量 613 行=3 镜头），与「不降反升」矛盾 | **采纳（漏网补修）** | 增量轮恒满 3 镜头——首处置漏掉本条，PR#531 r1 台账数字不闭合抓获 |
 | :184 [Minor] raison 解锁 scope creep | **驳回** | #426/#427 valu lint 解锁先例：独立 commit + 归因记录，不加则所有 PR lint 恒红；已按先例披露 |
 
 E2E 实弹数据：r1（全量轮）engine 端到端跑通并发布 review

@@ -1113,3 +1113,56 @@ def test_incremental_section_banners_prior_findings():
     # 全量模式不受影响(零增量段)
     full = plr.build_adversarial_prompt("d", {"title": "t", "body": "b"})
     assert decl not in full
+
+
+def test_run_review_schema_drift_zero_valid_retries_then_raises(
+        monkeypatch, tmp_path):
+    """PR#531 r1 检视 :364: 「JSON 数组但零条有效」的 schema 漂移(如
+    message 字段被改名)≠ 零意见——strict=True 走落盘+重试,重试仍漂移
+    则如实抛,不发布假零意见 marker review。真·零意见 "[]" 不受影响。"""
+    import pr_loop
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [])
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(tmp_path))
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: None)
+    dumps = []
+    monkeypatch.setattr(plr, "_dump_raw_output",
+                        lambda tag, out, err, why: dumps.append((out, why)))
+    calls = []
+
+    def fake_claude(cmd, cwd, prompt, debug_tag="anonymous"):
+        calls.append(prompt)
+        return '[{"msg": "drifted", "path": "x.c"}]'
+
+    monkeypatch.setattr(plr, "_run_claude", fake_claude)
+
+    with pytest.raises(plr.GhError):
+        plr.run_review(7, "b" * 40)
+    assert len(calls) == 2                       # schema 漂移 → 重试一次
+    assert plr.REPAIR_SUFFIX.strip()[:10] in calls[1]
+    assert len(dumps) == 2 and "schema" in dumps[0][1]
+
+
+def test_run_review_true_zero_findings_still_passes(monkeypatch, tmp_path):
+    """:364 边界: 真·零意见的合法输出 "[]" 不进重试、正常返回。"""
+    import pr_loop
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
+    monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [])
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    monkeypatch.setattr(plr, "_fetch_pr_diff", lambda pr, sha: "D")
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(tmp_path))
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: None)
+    monkeypatch.setattr(plr, "_run_claude",
+                        lambda cmd, cwd, prompt, debug_tag="anonymous": "[]")
+
+    assert plr.run_review(7, "b" * 40) == []

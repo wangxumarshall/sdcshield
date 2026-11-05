@@ -376,11 +376,16 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
         # Critical);真·零意见的正确输出是 "[]"(非空串),空串不可能是
         # 合法审查结论。
         # ② 输出非 JSON 数组 → 同款路径。两次失败 → 落盘重试输出后抛。
+        # ③ 「JSON 数组但零条有效」的 schema 漂移形态(message 字段被改名后
+        # 全部条目被跳过,PR#531 r1 检视 :364)与 ① 同机制制造永久盲区
+        # ——发布通道改走 strict=True(本文件 :646-651 早已为该形态点名、
+        # task_loop 审计通道 :686-689 已用 strict 惩罚,唯独发布通道漏网);
+        # 真·零意见的 "[]" 两模式都返回 [],不受影响。
         try:
             if not output.strip():
                 raise GhError("claude 检视输出为空——输出契约要求 JSON 数组"
                               "(零意见也须输出 [] 而非空串)")
-            return _parse_findings(output)
+            return _parse_findings(output, strict=True)
         except GhError as exc:
             _dump_raw_output(f"pr{pr_number}", output, "",
                              f"parse: {exc}")
@@ -392,7 +397,7 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
                 if not output2.strip():
                     raise GhError("claude 重试输出仍为空——输出契约要求 "
                                   "JSON 数组(零意见也须输出 [] 而非空串)")
-                return _parse_findings(output2)
+                return _parse_findings(output2, strict=True)
             except GhError as exc2:
                 # 重试仍失败: 落盘重试输出(最终失败态是最有价值的取证)
                 # 后如实抛——不假成功。

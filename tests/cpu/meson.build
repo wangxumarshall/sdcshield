@@ -1279,28 +1279,49 @@ if host_machine.cpu_family() == 'aarch64'
     # any N/NC and is bit-identical to the old permutation in every square
     # shape, so all four tiers are built.
     # Table-driven (2026-11-02 eigen SVE unification, design §3):
-    #   [body-source, namespace-prefix] — library name = tests_eigen_<pfx>_vl<t>
+    #   [body-source, namespace-prefix, eigen_stack_limit_1024]
+    #   — library name = tests_eigen_<pfx>_vl<t>
     # The existing svd/gemm prefixes keep their library names; the per-tier
     # symbol namespace is now injected uniformly as
     # -DEIGEN_SVE_BODY_NS=<pfx>_vl<t> (the body TUs' old
     # SVD_TEST_NAMESPACE/GEMM_TEST_NAMESPACE macros are unified into the one
     # body contract: make_data/solve_once/run_body(test,cpu)/cleanup — see
     # tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h).
+    #
+    # eigen_stack_limit_1024 (issue #520): EIGEN_STACK_ALLOCATION_LIMIT
+    # override applied ONLY to that spec's tier=='1024' compilation
+    # (0 = no override). At VL=1024 the f32 SVD bodies (BDCSVD via
+    # HouseholderQR/copyUV, JacobiSVD via qr_preconditioner_impl) instantiate
+    # Eigen's triangular product kernel, whose fixed panel buffer
+    # Matrix<float, SmallPanelWidth = 2*max(mr,nr) = 192, 192> = 147456 B
+    # exceeds Eigen's default 131072 B sentinel. Without NDEBUG (CI's
+    # debugoptimized buildtype) that sentinel is a hard static_assert
+    # (OBJECT_ALLOCATED_ON_STACK_IS_TOO_BIG, DenseStorage.h:61); with NDEBUG
+    # (release) it compiles away — which is why only CI saw it. The f64/c128
+    # bodies and every 128/256/512 tier stay under the default sentinel
+    # (per-TU verified) and are NOT overridden, keeping them bit-identical
+    # to main. 262144 = smallest power-of-two budget over 147456. Known
+    # side effect (same macro also gates the alloca/malloc switch,
+    # Memory.h:803-810): run-time buffers in the 128 KiB..256 KiB window
+    # switch from aligned_malloc to alloca in these two TUs only —
+    # computation stays value-identical, worker stacks are 8 MiB
+    # (THREAD_STACK_SIZE, framework/sandstone.h).
     eigen_sve_body_specs = [
-        ['eigen_svd/svd_cdouble_sve_body.cpp',       'svd'],
-        ['eigen_gemm/gemm_double_max_arm_body.cpp', 'gemm'],
-        ['eigen_gemm/gemm_f64_sve_body.cpp', 'gemm_f64'],
-        ['eigen_gemm/gemm_f32_sve_body.cpp', 'gemm_f32'],
-        ['eigen_gemm/gemm_c128_sve_body.cpp', 'gemm_c128'],
-        ['eigen_svd/svd_double_sve_body.cpp',      'svd_f64'],
-        ['eigen_svd/svd_float_sve_body.cpp',       'svd_f32'],
-        ['eigen_svd_jacobi/svd_cdouble_sve_body.cpp', 'svd_j_c128'],
-        ['eigen_svd_jacobi/svd_double_sve_body.cpp', 'svd_j_f64'],
-        ['eigen_svd_jacobi/svd_float_sve_body.cpp', 'svd_j_f32'],
+        ['eigen_svd/svd_cdouble_sve_body.cpp',         'svd',        0],
+        ['eigen_gemm/gemm_double_max_arm_body.cpp',    'gemm',       0],
+        ['eigen_gemm/gemm_f64_sve_body.cpp',          'gemm_f64',   0],
+        ['eigen_gemm/gemm_f32_sve_body.cpp',          'gemm_f32',   0],
+        ['eigen_gemm/gemm_c128_sve_body.cpp',         'gemm_c128',  0],
+        ['eigen_svd/svd_double_sve_body.cpp',         'svd_f64',    0],
+        ['eigen_svd/svd_float_sve_body.cpp',          'svd_f32',    262144],
+        ['eigen_svd_jacobi/svd_cdouble_sve_body.cpp', 'svd_j_c128', 0],
+        ['eigen_svd_jacobi/svd_double_sve_body.cpp',   'svd_j_f64',  0],
+        ['eigen_svd_jacobi/svd_float_sve_body.cpp',    'svd_j_f32',  262144],
     ]
     foreach spec : eigen_sve_body_specs
         body_src = spec[0]
         pfx = spec[1]
+        stack_limit_1024 = spec[2]
         foreach tier : ['128', '256', '512', '1024']
             eigen_tier_args = [
                 '-march=armv8.2-a+sve',
@@ -1309,6 +1330,13 @@ if host_machine.cpu_family() == 'aarch64'
                 '-DEigen=EigenSVE' + tier,
                 '-DEIGEN_SVE_BODY_NS=' + pfx + '_vl' + tier,
             ]
+            # issue #520: only the f32 SVD bodies exceed Eigen's 128 KiB
+            # stack sentinel at VL=1024 (see the table comment above).
+            if tier == '1024' and stack_limit_1024 != 0
+                eigen_tier_args += [
+                    '-DEIGEN_STACK_ALLOCATION_LIMIT=' + stack_limit_1024.to_string(),
+                ]
+            endif
             eigen_vl_a = static_library(
                 'tests_eigen_' + pfx + '_vl' + tier,
                 sources : body_src,

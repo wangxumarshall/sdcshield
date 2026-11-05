@@ -192,15 +192,39 @@ def already_reviewed(pr_number: int, head_sha: str) -> bool:
     锚定)——事件线 + 时间线撞车只审一次;body 含标记但锚定旧 head 的
     review 不算已审。
     """
-    import pr_loop   # 懒 import(与 publish_review 同策略): pr_loop 顶层
-    #              import 本模块,顶层互相 import 会循环。
+    return already_reviewed_from(_fetch_reviews(pr_number), head_sha)
+
+
+def _fetch_reviews(pr_number: int) -> list:
+    """一次性拉全量 reviews(pr_loop 分页,PR#519 r1 检视 :216)。
+
+    run_review 单轮内的三处消费(幂等门禁/增量锚/prior findings)共用同一
+    快照——旧行为三次独立分页既浪费两次冗余 API 往返,又留 TOC-TOU 窗口
+    (门禁与增量锚可基于不同时刻的 reviews 快照作出不一致判定)。
+    非 list 形状(数据异常)返回 []。"""
+    import pr_loop
     slug = pr_loop.resolve_slug(None)
     reviews = pr_loop.gh_api_paged(f"repos/{slug}/pulls/{pr_number}/reviews")
-    if not isinstance(reviews, list):
-        return False
+    return reviews if isinstance(reviews, list) else []
+
+
+def already_reviewed_from(reviews: list, head_sha: str) -> bool:
+    """纯谓词(快照传入): reviews 里是否有锚定 head_sha 的 marker review。"""
     return any(LOCAL_CLAUDE_MARKER in (r.get("body") or "")
                and r.get("commit_id") == head_sha
-               for r in reviews)
+               for r in reviews or [])
+
+
+def _last_reviewed_from(reviews: list) -> Optional[str]:
+    """纯函数(快照传入): submitted_at 最新的 marker review 的 commit_id。
+    无 marker review(轮 1)返回 None → 调用方走全量。"""
+    best, best_ts = None, ""
+    for r in reviews or []:
+        if LOCAL_CLAUDE_MARKER in (r.get("body") or "") and r.get("commit_id"):
+            ts = r.get("submitted_at") or ""
+            if ts >= best_ts:
+                best, best_ts = r["commit_id"], ts
+    return best
 
 
 def _last_reviewed_head(pr_number: int) -> Optional[str]:
@@ -211,26 +235,18 @@ def _last_reviewed_head(pr_number: int) -> Optional[str]:
     API 语义。与 already_reviewed 同源数据、同懒 import 策略。无 marker
     review(轮 1)返回 None → 调用方走全量。
     """
-    import pr_loop
-    slug = pr_loop.resolve_slug(None)
-    reviews = pr_loop.gh_api_paged(f"repos/{slug}/pulls/{pr_number}/reviews")
-    if not isinstance(reviews, list):
-        return None
-    best, best_ts = None, ""
-    for r in reviews:
-        if LOCAL_CLAUDE_MARKER in (r.get("body") or "") and r.get("commit_id"):
-            ts = r.get("submitted_at") or ""
-            if ts >= best_ts:
-                best, best_ts = r["commit_id"], ts
-    return best
+    return _last_reviewed_from(_fetch_reviews(pr_number))
 
 
-def _prior_findings(pr_number: int, prev_sha: str) -> list:
+def _prior_findings(pr_number: int, prev_sha: str,
+                    reviews: Optional[list] = None) -> list:
     """上轮(锚=prev_sha)第 5 bot 意见紧凑清单(P1 复核用)。
 
     两来源: 行级评论(pulls/comments,original_commit_id 锚定,取结论行
     「**[claude] …」)+ review body 的 JSON 段(挂不上 diff 行的降级 findings)。
     解析失败静默跳过该来源(复核清单缺失只降弱增量上下文,不失败检视)。
+    reviews 传入时复用调用方快照(run_review 单次拉取口径,PR#519 r1
+    检视 :216),缺省 None 自行拉取(独立调用兼容)。
     """
     import pr_loop
     slug = pr_loop.resolve_slug(None)
@@ -249,7 +265,8 @@ def _prior_findings(pr_number: int, prev_sha: str) -> list:
                     items.append(f"{c.get('path') or '?'}:{c.get('line') or '?'} "
                                  f"{line.strip()}")
                     break
-    reviews = pr_loop.gh_api_paged(f"repos/{slug}/pulls/{pr_number}/reviews")
+    if reviews is None:
+        reviews = _fetch_reviews(pr_number)
     if isinstance(reviews, list):
         for r in reviews:
             body = r.get("body") or ""
@@ -292,7 +309,10 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
          跑 claude(cwd = worktree),解析输出为 findings;输出非 JSON 数组时
          落盘原始输出 + 带修复后缀重试一次(P2)。
     """
-    if not force and already_reviewed(pr_number, head_sha):
+    # 单次 reviews 快照(PR#519 r1 检视 :216): 幂等门禁/增量锚/prior
+    # findings 三处消费共用——消两次冗余分页与 TOC-TOU 不一致窗口。
+    reviews = _fetch_reviews(pr_number)
+    if not force and already_reviewed_from(reviews, head_sha):
         return []
     # P1 增量检视(2026-11-04): 上一已审 head 锚 + 快进判定 → 增量 diff +
     # 上轮 findings 复核上下文;四种情形回退全量(无锚=轮 1/force 重审同
@@ -301,13 +321,13 @@ def run_review(pr_number: int, head_sha: str, force: bool = False) -> list[dict]
     # 真实增量 68 行)——每轮 29-59 min ≈100% 模型推理,输入收窄是唯一
     # 有效杠杆。
     incremental = None
-    prev_sha = _last_reviewed_head(pr_number)
+    prev_sha = _last_reviewed_from(reviews)
     if prev_sha and prev_sha != head_sha:
         delta = _fetch_delta_diff(prev_sha, head_sha)
         if delta:
             incremental = {"prev": prev_sha, "head": head_sha,
-                           "prior_findings": _prior_findings(pr_number,
-                                                             prev_sha)}
+                           "prior_findings": _prior_findings(
+                               pr_number, prev_sha, reviews=reviews)}
             diff = delta
         else:
             diff = _fetch_pr_diff(pr_number, head_sha)

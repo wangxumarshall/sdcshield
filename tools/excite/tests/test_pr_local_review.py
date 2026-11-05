@@ -754,13 +754,15 @@ def test_run_review_uses_delta_and_prior_findings(monkeypatch, tmp_path):
     monkeypatch.setattr(pr_loop, "resolve_slug",
                         lambda explicit=None: "test/repo")
     monkeypatch.setattr(pr_loop, "gh_api_paged", lambda path: [])
-    monkeypatch.setattr(plr, "already_reviewed", lambda pr, sha: False)
-    monkeypatch.setattr(plr, "_last_reviewed_head",
-                        lambda pr: "a" * 40)
+    # 快照注入: _fetch_reviews 返回一条锚定 prev 的 marker review
+    # (run_review 单次拉取口径——幂等门禁/增量锚/prior 共用,F5)
+    monkeypatch.setattr(plr, "_fetch_reviews", lambda pr: [
+        {"body": plr.LOCAL_CLAUDE_MARKER + "\n旧轮", "commit_id": "a" * 40,
+         "submitted_at": "2026-11-04T02:00:00Z"}])
     monkeypatch.setattr(plr, "_fetch_delta_diff",
                         lambda prev, head: "DELTA-CONTENT")
     monkeypatch.setattr(plr, "_prior_findings",
-                        lambda pr, prev: ["x.c:9 [Minor] 上轮意见"])
+                        lambda pr, prev, reviews=None: ["x.c:9 [Minor] 上轮意见"])
     monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
         {"title": "t", "body": "b"}))
     # 全量 diff 不得被拉(增量轮的 83% 输入缩减正是本改动的目的)
@@ -1020,3 +1022,45 @@ def test_delta_diff_from_local_timeout_returns_none(monkeypatch):
 
     monkeypatch.setattr(sp, "run", fake_run)
     assert plr._delta_diff_from_local("a" * 40, "b" * 40) is None
+
+
+def test_run_review_single_reviews_snapshot(monkeypatch, tmp_path):
+    """PR#519 r1 :216: run_review 单轮内 reviews 端点只分页拉一次
+    (幂等门禁/增量锚/prior findings 共用快照)——不再三次冗余往返,
+    门禁与增量锚不再有 TOC-TOU 不一致窗口。"""
+    import pr_loop
+
+    marker = plr.LOCAL_CLAUDE_MARKER
+    prev = "a" * 40
+    head = "b" * 40
+    fetches = []
+
+    def fake_paged(path):
+        fetches.append(path)
+        if path.endswith("/comments"):
+            return [{"body": f"{marker}\n**[claude] [Minor] 可维护性**: 上轮",
+                     "path": "x.c", "line": 9, "original_commit_id": prev}]
+        return [{"body": f"{marker}\n旧轮", "commit_id": prev,
+                 "submitted_at": "2026-11-04T02:00:00Z"}]
+
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged", fake_paged)
+    monkeypatch.setattr(plr, "_gh", lambda argv: json.dumps(
+        {"title": "t", "body": "b"}))
+    monkeypatch.setattr(plr, "_fetch_delta_diff",
+                        lambda prev_sha, head_sha: "DELTA")
+    monkeypatch.setattr(plr, "_fetch_pr_diff",
+                        lambda pr, sha: (_ for _ in ()).throw(
+                            AssertionError("增量轮不得拉全量 diff")))
+    monkeypatch.setattr(plr, "_worktree_add", lambda sha: str(tmp_path))
+    monkeypatch.setattr(plr, "_worktree_remove", lambda path: None)
+    monkeypatch.setattr(plr, "_run_claude",
+                        lambda cmd, cwd, prompt, debug_tag="anonymous": "[]")
+
+    assert plr.run_review(7, head) == []
+    # reviews 端点恰好一次(门禁+锚+prior 共用);comments 一次
+    reviews_fetches = [f for f in fetches if f.endswith("/reviews")]
+    comments_fetches = [f for f in fetches if f.endswith("/comments")]
+    assert len(reviews_fetches) == 1
+    assert len(comments_fetches) == 1

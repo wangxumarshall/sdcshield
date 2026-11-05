@@ -106,6 +106,13 @@ def build_adversarial_prompt(diff: str, pr_context: dict,
     body = pr_context.get("body") or "(无)"
     issue = pr_context.get("issue") or "(无)"
     lens, lines = _lens_scale(diff)
+    # 增量轮恒满镜头(PR#519 r1 检视 body-JSON :108): _lens_scale 按 diff
+    # 行数缩放镜头,增量模式下 diff=delta——68 行 delta=2 镜头 vs 同 PR 全量
+    # 613 行=3 镜头,新内容实际获得的交叉验证强度低于全量轮本可获得的,
+    # 与「对抗性不降反升」宣称直接矛盾。输入收窄省出的预算投给镜头强度:
+    # 增量轮一律 3 镜头满配。
+    if incremental:
+        lens = 3
     sev = " / ".join(SEVERITIES)
     sev_pipe = "|".join(SEVERITIES)
     cat = " / ".join(CATEGORIES)

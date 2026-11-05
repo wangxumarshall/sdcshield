@@ -1194,3 +1194,19 @@ def test_fetch_pr_diff_git_fallback_timeout_wrapped(monkeypatch):
     monkeypatch.setattr(sp, "run", fake_run)
     with pytest.raises(plr.GhError):
         plr._fetch_pr_diff(7, "b" * 40)      # GhError,非裸 TimeoutExpired
+
+
+def test_incremental_mode_uses_full_lens_intensity():
+    """PR#519 r1 body-JSON :108(漏网意见补修): 增量轮不得按 delta 行数
+    降档镜头——68 行 delta 落 2 镜头档而同 PR 全量 613 行为 3 镜头档,
+    新内容交叉验证强度被静默降级,与「对抗性不降反升」矛盾;增量轮恒
+    3 镜头满配。全量模式缩放行为不变。"""
+    small_delta = "x\n" * 68
+    inc = plr.build_adversarial_prompt(
+        small_delta, {"title": "t", "body": "b"},
+        incremental={"prev": "a" * 40, "head": "b" * 40,
+                     "prior_findings": []})
+    assert "须至少用 3 个镜头" in inc
+    # 全量模式缩放不变: 68 行 → 2 镜头档
+    full = plr.build_adversarial_prompt(small_delta, {"title": "t", "body": "b"})
+    assert "须至少用 2 个镜头" in full

@@ -255,7 +255,12 @@ def _prior_findings(pr_number: int, prev_sha: str) -> list:
             body = r.get("body") or ""
             if LOCAL_CLAUDE_MARKER not in body or r.get("commit_id") != prev_sha:
                 continue
-            m = re.search(r"```json\n(.*?)```", body, re.S)
+            # 贪婪匹配到 body 的最后一个 ```(PR#519 r1 检视 :257): JSON 段
+            # 由 publish_review 固定追加在 body 末尾,而 finding 的
+            # message/evidence 可含三反引号(对抗检视证据引用代码围栏的高频
+            # 形态)——非贪婪 (.*?) 会在证据内首个 ``` 处提前截断,json.loads
+            # 失败后静默 continue,该轮 prior findings 整体丢失、复核静默失效。
+            m = re.search(r"```json\n(.*)```", body, re.S)
             if not m:
                 continue
             try:

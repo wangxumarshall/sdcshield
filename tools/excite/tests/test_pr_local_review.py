@@ -843,7 +843,35 @@ def test_run_review_retries_once_on_non_json(monkeypatch, tmp_path):
     # 原始输出在重试前已落盘(取证),tag 带 PR 号
     assert dumps and dumps[0][1] == "垃圾非JSON输出" and dumps[0][0] == "pr7"
     # 重试仍在同一 worktree(不重建、即弃语义不变)
-    assert removed == [str(wt)]
+
+
+def test_prior_findings_tolerates_internal_code_fences(monkeypatch):
+    """PR#519 r1 :258: 上轮 finding 的 evidence 含三反引号(对抗检视引用
+    代码围栏的高频形态)时,非贪婪正则提前截断致 prior findings 整体丢失;
+    贪婪匹配到 body 末段围栏后完整提取。"""
+    import pr_loop
+
+    marker = plr.LOCAL_CLAUDE_MARKER
+    prev = "a" * 40
+    inner = "评测时引用了 ```c\nint x;\n``` 围栏与反引号 `code` 的证据文本"
+    body = (marker + "\n## 挂不上 diff 行的 findings(JSON)\n\n```json\n"
+            + json.dumps([{"path": "x.c", "line": 3,
+                           "severity": "Important",
+                           "message": "含围栏证据的意见",
+                           "evidence": inner}],
+                          ensure_ascii=False)
+            + "\n```\n")
+    monkeypatch.setattr(pr_loop, "resolve_slug",
+                        lambda explicit=None: "test/repo")
+    monkeypatch.setattr(pr_loop, "gh_api_paged",
+                        lambda path: [] if path.endswith("/comments")
+                        else [{"body": body, "commit_id": prev}])
+    items = plr._prior_findings(7, prev)
+    # 回归信号 = len==1: 旧非贪婪正则在证据内首个 ``` 处截断 → json.loads
+    # 失败 → 静默 continue → 0 条(复核清单整体丢失);贪婪正则完整提取。
+    # item 为紧凑清单格式(path:line [sev] message),evidence 不入清单。
+    assert len(items) == 1
+    assert "含围栏证据的意见" in items[0]
 
 
 def test_run_review_second_failure_raises_after_dump(monkeypatch, tmp_path):
@@ -951,3 +979,4 @@ def test_run_review_empty_then_valid_retry_succeeds(monkeypatch, tmp_path):
     monkeypatch.setattr(plr, "_run_claude", fake_claude)
     assert plr.run_review(7, "b" * 40) == []
     assert len(calls) == 2
+

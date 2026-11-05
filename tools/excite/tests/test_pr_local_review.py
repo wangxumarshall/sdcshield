@@ -980,3 +980,30 @@ def test_run_review_empty_then_valid_retry_succeeds(monkeypatch, tmp_path):
     assert plr.run_review(7, "b" * 40) == []
     assert len(calls) == 2
 
+
+
+def test_run_claude_timeout_dumps_partial_output(monkeypatch, tmp_path):
+    """PR#519 r1 :570: claude 超时(TimeoutExpired)时异常携带的部分
+    stdout/stderr 必须落盘(卡死位置的唯一线索)——超时形状与非零退出
+    同治,不留「失败不可诊断」死角。"""
+    import subprocess as sp
+
+    monkeypatch.delenv("TASKLOOP_STATE_DIR", raising=False)
+    monkeypatch.delenv("CITRIAGE_STATE_DIR", raising=False)
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+
+    exc = sp.TimeoutExpired(cmd="claude", timeout=plr.CLAUDE_TIMEOUT)
+    exc.stdout = "思考到一半的部分输出"
+    exc.stderr = "PARTIAL-STDERR"
+
+    def fake_run(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    with pytest.raises(plr.GhError):
+        plr.run_claude("cmd", str(tmp_path), "prompt")
+    files = list((tmp_path / "review-debug").glob("anonymous-*.log"))
+    assert len(files) == 1
+    body = files[0].read_text(encoding="utf-8")
+    assert "claude timeout" in body and "思考到一半的部分输出" in body \
+        and "PARTIAL-STDERR" in body

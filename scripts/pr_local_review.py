@@ -565,6 +565,17 @@ def build_claude_command() -> str:
             f"claude -p --dangerously-skip-permissions")
 
 
+def _exc_partial(exc: subprocess.TimeoutExpired, which: str) -> str:
+    """TimeoutExpired 异常里的部分输出(bytes/str/None 三形状统一成 str,
+    PR#519 r1 检视 :570)——text=True 时为 str,极端竞态下仍可能为 bytes。"""
+    v = getattr(exc, which, None)
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    return str(v)
+
+
 def _run_claude(cmd: str, cwd: str, prompt: str,
                 debug_tag: str = "anonymous") -> str:
     """跑 claude 子进程(bash -c cmd,cwd=隔离 worktree),返回 stdout。
@@ -573,7 +584,10 @@ def _run_claude(cmd: str, cwd: str, prompt: str,
     too long)。模块级子进程出口(测试 monkeypatch 的 claude 缝,离线 fake
     claude 不真跑)。
     非零退出时先把 stdout/stderr 原始输出落盘(debug_tag 命名,见
-    _dump_raw_output——P2 失败取证)再抛 GhError;正常路径零额外副作用。
+    _dump_raw_output——P2 失败取证)再抛 GhError;超时同理——
+    TimeoutExpired 异常携带已产生的部分 stdout/stderr(卡死位置的唯一
+    线索,PR#519 r1 检视 :570:超时形状下「失败不可诊断」必须与非零退出
+    同治);正常路径零额外副作用。
     """
     try:
         proc = subprocess.run(["bash", "-c", cmd], input=prompt,
@@ -581,7 +595,10 @@ def _run_claude(cmd: str, cwd: str, prompt: str,
                               timeout=CLAUDE_TIMEOUT, cwd=cwd)
     except FileNotFoundError:
         raise GhError("找不到 bash/claude——请安装 claude CLI 并配置 agent.env")
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        _dump_raw_output(debug_tag, _exc_partial(exc, "stdout"),
+                         _exc_partial(exc, "stderr"),
+                         f"claude timeout {CLAUDE_TIMEOUT}s(部分输出)")
         raise GhError(f"claude 检视超时({CLAUDE_TIMEOUT}s)")
     if proc.returncode != 0:
         err = " ".join(proc.stderr.strip().split())[:300]

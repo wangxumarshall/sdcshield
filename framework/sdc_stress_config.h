@@ -1194,8 +1194,10 @@ static inline int64_t sdc_joint_knob_value(struct test *test, const char *key,
  * (m3, 与 sdc_auto_square_dim 同捷径; 但位于 knob 早退之后——显式值
  * 优先, 与迁移前调用方短路语义一致)。
  * solve_once 可为 NULL(不校时间, 只算 n_mem); run_budget_ms=0 同理。
- * x86-64(rule 5: byte-identical): 仅 n_mem 全局口径(等价旧行为),
- * 见函数内 #else 分支。
+ * x86-64(#482): 全局四源预算 + sdc_calibrated_dim 时间校准(AR=1),
+ * 无 per-node/AR/反馈——见函数内 #else 分支; 现行 x86 调用点均 guard
+ * 挡在旧链上, 该分支是未来跨 arch 迁移的安全落点(行为边界详见 #else
+ * 注释)。
  */
 static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                                       const struct sdc_joint_args *a,
@@ -1435,29 +1437,66 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     }
     return n;
 #else
-    /* x86-64 fallback(rule 5: 行为不变): 仅 n_mem 全局口径——物理×‰ 按
-     * 全机线程×c 分摊(等价 sdc_auto_square_dim 的内存模型, 含 slice
-     * 数×shared), 无 per-node/AR/时间外推; solve_once/run_budget_ms
-     * 在 x86 被忽略, 时间校准维持调用方既有的 sdc_calibrated_dim 链。 */
-    (void)solve_once;
+    /* x86-64 fallback(#482): 四源全局预算 + 时间校准——能力面与 ARM
+     * 分支同构, 减去 per-node/AR/VmHWM 反馈(x86 无 sdc_numa.h 基础设施):
+     *   - 内存: sdc_budget_bytes(四源取 min) 按全机线程×c 分摊 + slices×
+     *     shared。旧口径仅物理×‰——批处理/容器限额下超分("job oom"
+     *     实测前科, svd_cdouble_sve.cpp 注释; #310 的四源函数本就
+     *     arch-independent, 读不到的源自动跳过, 退化回物理×‰)。
+     *   - 时间: solve_once 非空且 run_budget_ms>0 时经 sdc_calibrated_dim
+     *     幂律拟合求 n_run(AR=1: x86 无 AR 表, 与调用方旧链同为单线程
+     *     探针口径; run_budget_ms 语义与 ARM 一致 = 全核单迭代(2 解)
+     *     预算)。旧 fallback `(void)solve_once` 静默丢弃时间校准——
+     *     跨 arch 调用方拆 guard 迁移时会失去单解时间上限,
+     *     eigen_sparse 注释自述的『自适应档满核 600s SIGQUIT』故障类
+     *     随之复活(#482 的 armed trap), 本补丁解除之。
+     * 行为边界(如实): 当前 x86 无调用方经此分支(调用点均 aarch64
+     *     guard, 见各调用方 #else 注释), 本补丁不改变任何现行 x86
+     *     行为; 改变的是未来迁移者得到的契约。rule 5 依归: Intel 原代码
+     *     零触碰, 调用方 #else 旧链原样保留。 */
     int total = sdc_total_threads();
     if (total < 1)
         total = 1;
     int cur = thread_count();
     int slices = (cur > 0 && total > cur) ? (total + cur - 1) / cur : 1;
-    double budget = (double)sdc_phys_mem_bytes() * (double)permille / 1000.0;
+    double budget = (double)sdc_budget_bytes(permille);
     double avail = budget - a->shared_bytes_per_slice * (double)slices;
     int n_mem = (c_bytes > 0.0 && avail > 0.0)
             ? (int)std::sqrt(avail / ((double)total * c_bytes)) : 0;
+    int n_run = 0;
+    if (solve_once && a->run_budget_ms > 0 && n_mem > a->lo) {
+        /* 与 ARM 分支同构: 只取 fit(两点差分已扣固定开销 b), 返回值
+         * 弃用(其内向外推是未扣 b 的保守口径); k_floor=3.0 与 ARM 分支
+         * 同值(现役/规划消费方复杂度下限, sdc_joint_args 不带此参的
+         * 签名契约); 探针上限 = knob hi(同 ARM: 差分基线拉得越开,
+         * 固定开销扣除对计时噪声越稳)。AR=1 → per_solve=run_budget/2。 */
+        long per_solve = (long)((double)a->run_budget_ms / 2.0);
+        if (per_solve < 1)
+            per_solve = 1;
+        struct sdc_fit fit;
+        sdc_calibrated_dim(a->lo, a->hi, per_solve,
+                           test ? test->id : "(global)", knob, 3.0,
+                           solve_once, &fit);
+        if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
+            double nr = std::pow((double)a->run_budget_ms
+                                 / (2.0 * fit.a_ms), 1.0 / fit.p);
+            if (nr >= 2147483647.0)
+                n_run = 2147483647;        /* 防溢出截断 */
+            else if (nr > 0.0)
+                n_run = (int)nr;
+        }
+    }
     int n = n_mem;
+    if (n_run > 0 && n_run < n)
+        n = n_run;
     if (a->hi < n)
         n = a->hi;
     if (n < a->lo)
         n = a->lo;
-    log_warning("[联合求解] %s.%s: n_mem=%d → %d (全局口径 %.1fGiB; rule 5: "
-                "x86 原路径, 无 per-node/AR/时间外推)",
-                test ? test->id : "(global)", knob ? knob : "?", n_mem, n,
-                budget / 1073741824.0);
+    log_warning("[联合求解] %s.%s: n_mem=%d n_run=%d → %d (全局四源口径 %.1fGiB; "
+                "x86: 无 per-node/AR/反馈)",
+                test ? test->id : "(global)", knob ? knob : "?",
+                n_mem, n_run, n, budget / 1073741824.0);
     return n;
 #endif
 }

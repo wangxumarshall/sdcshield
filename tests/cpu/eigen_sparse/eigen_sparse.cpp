@@ -180,8 +180,10 @@ static size_t sparse_n(struct test *test)
 #else
     /* rule 5 (x86-64 untouched): 旧两步链原样保留——理由同
      * sandstone_eigen_common.h 的 #else 分支(sdc_joint_dim_slice 的
-     * x86 分支忽略 solve_once/run_budget_ms, 无条件迁移会静默丢掉
-     * 2s 单解时间校准并把内存三元组换成 ARM 实测的 RSS 表)。 */
+     * x86 分支已补齐时间校准与四源预算(#482), 但迁移仍会把内存
+     * 三元组换成 ARM 实测的 RSS 表、把 2s 单解上限换成按 ARM 宿主
+     * AR 校准的 run_budget_ms 口径——sizing 数值变化, rule 5 保持
+     * 旧链)。 */
     int mem_dim = sdc_auto_square_dim(8, 4, 4.0, 700, thread_count(), 64, 8192,
                                       test->id, "n");
     /* P2 time calibration: one full Cholesky solve at the memory-adaptive

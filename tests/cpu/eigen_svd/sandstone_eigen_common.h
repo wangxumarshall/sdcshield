@@ -230,11 +230,13 @@ template <typename SVD, int Dim> struct EigenSVDTest
         }
 #else
         /* rule 5 (x86-64 untouched): the legacy two-step chain stays
-         * VERBATIM on non-aarch64 — sdc_joint_dim_slice's x86 branch
-         * ignores solve_once/run_budget_ms (its time calibration is the
-         * CALLER's chain by contract), so routing x86 through the joint
-         * solver would silently drop the 2 s single-solve cap and swap
-         * the legacy memory triple for the ARM-measured RSS table. The
+         * VERBATIM on non-aarch64 — the joint solver's x86 branch now
+         * honors solve_once (#482: four-source global budget + power-law
+         * time cap), but routing x86 through it would still swap the
+         * legacy memory triple for the ARM-measured RSS table, the
+         * physical-only budget for the four-source one, and the 2 s
+         * single-solve cap for the run_budget_ms semantics (calibrated
+         * on ARM hosts' AR) — a sizing change rule 5 forbids. The
          * ten template users are the first CROSS-ARCH joint consumers
          * (T4/T5/T6's were ARM-only TUs); this guard is the additive
          * porting pattern.

@@ -573,7 +573,7 @@ Do not append a `Co-Authored-By` trailer (repository rule).
 - Consumes: the built binary and test list produced by Task 1.
 - Produces: accurate README counts and a catalog row mentioning `memcpy_l2_cache_size_neon_fp64`.
 
-- [ ] **Step 1: Measure the actual test counts**
+- [x] **Step 1: Measure the actual test counts**
 
 Run:
 
@@ -588,7 +588,7 @@ printf 'PROD=%s BETA=%s SKIP=%s TOTAL=%s\n' \
 
 Record the four printed values. If the pre-Task-1 counts were captured, `PROD` and `TOTAL` should each be exactly one greater now (the new test is PROD). If `meson --reconfigure` picked up other stale tests, that delta may be larger; in that case verify instead that (a) `./builddir/sdcshield --list-tests | grep -qx memcpy_l2_cache_size_neon_fp64`, and (b) `PROD + BETA + SKIP == TOTAL` with the measured values. Do not edit README until the new test is present and the arithmetic is consistent.
 
-- [ ] **Step 2: Update the count sentence**
+- [x] **Step 2: Update the count sentence**
 
 In `README.md`, replace the sentence that currently starts with `当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）共 **273 个用例**` with the same sentence using the measured values:
 
@@ -598,7 +598,7 @@ In `README.md`, replace the sentence that currently starts with `当前 ARM64 �
 
 Replace `<TOTAL>`, `<PROD>`, `<BETA>`, `<SKIP>` with the numbers from Step 1. Do not leave angle brackets in the file.
 
-- [ ] **Step 3: Update the quality-level table**
+- [x] **Step 3: Update the quality-level table**
 
 In the `### 用例质量分级` table, set the three counts to the measured values:
 
@@ -613,7 +613,7 @@ In the `### 用例质量分级` table, set the three counts to the measured valu
 
 Replace the placeholders with the measured numbers. Keep the BETA and SKIP name lists below the table unchanged.
 
-- [ ] **Step 4: Add the new test to the catalog table**
+- [x] **Step 4: Add the new test to the catalog table**
 
 In the `| 内存 / 拷贝 | ... |` row, add the new test name to the representative list and mention the FP64 NEON path. For example, change the row's representative list to include:
 
@@ -633,7 +633,7 @@ Also add `memcpy_l2_cache_size_neon_fp64` to the `| FMA / 浮点 | ... |` row's 
 | FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values`、`memcpy_l2_cache_size_neon_fp64` | FMA 模式与尾数精度穷举、特殊值逐字节 golden 比对、FP64 NEON L2 块拷贝+FMA |
 ```
 
-- [ ] **Step 5: Verify the README numbers match the commands**
+- [x] **Step 5: Verify the README numbers match the commands**
 
 Run:
 
@@ -644,7 +644,7 @@ grep -nE '共 \*\*[0-9]+ 个用例|实有数量|\| [0-9-]+ \| (SKIP|BETA|PROD)' 
 
 Manually compare each printed number with the Step 1 output. Every number must match; no stale 273/264 values may remain.
 
-- [ ] **Step 6: Commit the README update**
+- [x] **Step 6: Commit the README update**
 
 Run:
 

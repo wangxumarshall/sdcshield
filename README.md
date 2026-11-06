@@ -39,7 +39,7 @@ cd third-party/rpms/openEuler-24.03/openEuler-24.03LTS_SP3/built
 sudo dnf install -y meson ninja-build gcc g++ cmake boost-devel zlib-devel libzstd-devel gtest-devel
 PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 ninja -C builddir
-./builddir/sdcshield --list-tests        # 应列出 264 个 PROD 用例
+./builddir/sdcshield --list-tests        # 应列出 236 个 PROD 用例
 ```
 
 > ARM64 要求 Eigen 5.0.0+（系统 Eigen 3.3.x 在 GCC 12+ 下编译失败）。仓库自带 `third-party/eigen5/`，aarch64 构建路径在 `tests/cpu/meson.build` 中直接 `include_directories` 指向它，**无需系统安装 eigen3**；`PKG_CONFIG_PATH` 仅为兼容 x86 路径而保留，带上无害。
@@ -119,15 +119,15 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 
 ## 测试用例与检测能力
 
-当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）共 **273 个用例**：PROD 264、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
+当前 ARM64 构建（Kunpeng 920 / openEuler 24.03 SP3）共 **245 个用例**：PROD 236、BETA 4、SKIP 5。许多用例沿用上游 x86 名字（如 `mesh_upi_avx2_*`、`ipsec_*_avx`、`fma_*_avx512`），但实现已落到 NEON / ARM 原生指令，命名保留是为与 x86 参考用例跨架构比对。
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
-| 内存 / 拷贝 | `memcpy_l{1d,2,3}_cache_size`、`memcpy_rewr`、`mem_disambiguation`、`mmu_stress_arm` | 各级缓存带宽、store-to-load 转发、跨行一致性与内存序、TLB 扰动 |
+| 内存 / 拷贝 | `memcpy_l{1d,2,3}_cache_size`、`memcpy_l2_cache_size_neon_fp64`、`memcpy_rewr`、`mem_disambiguation`、`mmu_stress_arm` | 各级缓存带宽、FP64 NEON 拷贝+FMA 字节级校验、store-to-load 转发、跨行一致性与内存序、TLB 扰动 |
 | 缓存 / 互联 | `cachebounce`、`mesh_upi_*`（27） | cache line 弹跳、CLFLUSH 压力、MESH/UPI 多核读写协同 |
 | 锁 / 原子 | `lock*`、`lockless_cmpxchg*`、`atomic_simd_*`、`spinlock_*`（32） | 锁指令、无锁 cmpxchg、128/256/512 位原子、自旋锁各类竞争（ARM64 atomic） |
 | 向量 / SIMD | `swizzle`、`insert_extract`、`kreg1`–`kreg9`、`gather*` | NEON 排列/插入抽取、掩码寄存器（x86 k-reg 仿真）、gather/scatter |
-| FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values` | FMA 模式与尾数精度穷举、特殊值逐字节 golden 比对 |
+| FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values`、`memcpy_l2_cache_size_neon_fp64` | FMA 模式与尾数精度穷举、特殊值逐字节 golden 比对、FP64 NEON L2 块拷贝+FMA |
 | 算术 / 大整数 | `adcx`、`adox`、`adcxlong`、`adcx_arm`、`bigint_mulx_arm`、`gmp_big*` | 进位/溢出链、GMP 大整数乘加、高汉明距离操作数压满加法器 |
 | CRC / 校验 | `crc32`、`isal_crc{32,64}_*`、`zpclmul*` | `crc32` 指令、isa-l CRC32/CRC64 各标准、zlib PCLMUL 折叠 |
 | 压缩 | `zlib*`、`zstd*`、`zfuzz` | zlib/zstd 压缩-解压往返、各级别、fuzz |
@@ -147,8 +147,8 @@ ninja -C builddir && ./builddir/sdcshield --list-tests | grep openssl_sha
 |---|---|---|---|
 | -1 | SKIP | `quality >= -1` | 5 |
 | 0 | BETA | `quality >= 0` | 4 |
-| 2 | PROD（默认）| `quality >= 2` | 264 |
-| | **合计** | | **273** |
+| 2 | PROD（默认）| `quality >= 2` | 236 |
+| | **合计** | | **245** |
 
 - **BETA（`--quality=0`）**：`arm64_sdc`、`arm_crypto`、`ist_sbaf`、`neon_add`
 - **SKIP（`--quality=-1`）**：`smi_count`、`eigen_svd_jacobi`、`eigen_svd_jacobi_cdouble`、`eigen_svd_jacobi_double`、`eigen_svd_jacobi_fvectors`

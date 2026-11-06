@@ -242,6 +242,13 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
     int workers = sdc_total_threads();
     if (workers < 1)
         workers = 1;
+    /* 防御(issue #489, 与 svd_cdouble_sve 同型守卫 b249c97c): 表函数以 0 为
+     * "无表/越界"哨兵(联合求解 sdc_joint_dim_slice 同语义), 无守卫则
+     * budget_kb/(workers×0.0) = +inf, (int)inf 是 UB([conv.fpint])。退守
+     * 字面量取当前实测表值口径——表重标定时会陈旧(0.0290→0.0315 即例),
+     * 但仅此异常路径受影响, 健康表路径 n_hi 逐值不变。 */
+    if (c_kb <= 0.0)
+        c_kb = 0.0315;
     int n_hi = (int)std::sqrt(budget_kb / ((double)workers * c_kb));
     if (n_hi > MDIM_MAX) n_hi = MDIM_MAX;
     if (n_hi < MDIM_MIN) n_hi = MDIM_MIN;

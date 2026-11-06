@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793882988068,
+  "lastUpdate": 1793969125749,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -3298,6 +3298,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.041,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "aeb2c1eacd05196f3cd1463fa8e919c55da6a68a",
+          "message": "fix(build): SVE1024 f32 SVD tier 过 Eigen 栈哨兵——per-TU 抬 EIGEN_STACK_ALLOCATION_LIMIT (#520) (#532)\n\n* fix(build): SVE1024 f32 SVD tier 过 Eigen 栈哨兵——per-TU 抬 EIGEN_STACK_ALLOCATION_LIMIT (#520)\n\n根因:eigen-sve-unification(b12d9ada)后,f32 SVD body 的 1024 档编译\n(f32 packet=32 → SmallPanelWidth=2*max(mr,nr)=192)实例化 Eigen 三角乘积\n内核固定 panel Matrix<float,192,192>=147456B > 默认栈哨兵 131072B\n(Macros.h:50-52);debugoptimized(无 NDEBUG → EIGEN_NO_DEBUG 未定义)下\nOBJECT_ALLOCATED_ON_STACK_IS_TOO_BIG static_assert(DenseStorage.h:61)\n炸 → main CI 四档全红,所有含 main 的 PR 恒红;release(NDEBUG)编译掉\n哨兵故本地常规口径全绿——CI-only 回归。\n\n修复:eigen_sve_body_specs 表加第三列 eigen_stack_limit_1024(0=不覆盖),\n仅 svd_f32/svd_j_f32(BDCSVD/JacobiSVD 两受害 body,同 147456 越哨兵)置\n262144,tier 循环只对 tier==1024 追加 -DEIGEN_STACK_ALLOCATION_LIMIT=262144。\n唯一被改行为的编译单元 = 唯一实际炸的编译单元;其余 38 个 per-tier 编译\n单元与 main bit-identical。该宏同时控制运行时 alloca/malloc 切换\n(Memory.h:803-810,不受 NDEBUG 控制),故拒绝公共头/源文件 #define 形态,\n最小暴露面只在 meson per-tier。改 vendored Eigen heap 化否决:破坏上游\n形状且同源服务 x86-64(rule 5);#518 独立联动不等待;EIGEN_NO_DEBUG\n否决:会关掉 debugoptimized 口径激活的 Eigen 运行时 assert,等于在\ndebug 构建里谎称 release。\n\n同类面排查(vl1024 全部 10 body TU 逐个编译实测):仅两个 f32 SVD body 炸\n(BDCSVD 经 HouseholderQR/copyUV,Jacobi 经 qr_preconditioner_impl,汇于\nproduct_triangular_matrix_matrix);gemm_f32 走 level3_blocking 不进\nTriangularShape 路径不炸;f64/c128 packet 减半远离哨兵;f32 的 128/256/512\n档断言口径 0 error。\n\n验证(rule 2,全部真实输出):\n- debugoptimized 全量构建 779/779 exit 0(修复前该档不可编译);断言激活\n  口径实跑三受害用例 -t 5000 全核: eigen_svd_sve/eigen_svd_fvectors_sve/\n  eigen_svd_jacobi_sve(--quality=-1) 均 exit: pass\n- release 构建 769/769 exit 0;唯一 warning 为 mesh_upi_sse_sym.cpp:202\n  既有(git stash 对照实证),零新警告\n- 本机 SVE-256 实跑(release 口径)三受害用例均 exit: pass\n- gem5-fi 1024 档(CHAOS/SE, --cpu O3 --sve_vl 8,同源双内核双口径对照):\n  eigen_svd_sve 镜像 main/fixed 双口径 SDCSHIELD_FAILS=0,checksum\n  e487897d65f3c710 逐字节一致(并复现 ed88fd13 先例);eigen_svd_jacobi_sve\n  镜像 main/fixed 双口径 SDCSHIELD_FAILS=0,checksum d8477b6e1a735f3c\n  逐字节一致(并复现 4f8d2a41 先例)—— 抬哨兵引起的 128-256KiB\n  alloca/malloc 窗口切换数值零变化的实证封堵\n- 回归 zstd19 -t 2000 -n 1 -v: result: pass, exit: pass(非 skip)\n- x86-64 非回归:改动全在 aarch64 guard 内,零源文件改动,vendored\n  Eigen 零改动,per-TU -D 只进两个 ARM64-only 静态库\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(plan): #520 自检视收口——CI step 级实证 + 四档红归因修正\n\n对抗式自检视三项产出(随修复同一 PR 的文档收口 commit):\n\n1. bit-identical 声明从抽查升级为全量审计:40 个 per-tier 编译命令逐条\n   核对,-DEIGEN_STACK_ALLOCATION_LIMIT=262144 恰好且只在 svd_f32_vl1024/\n   svd_j_f32_vl1024 两条命令出现,其余 38 条零出现。\n\n2. issue 归因修正(取证推翻'四档全红同一根因'的暗示):\n   - Build binary (GCC-arm64) = debugoptimized(.github/actions/build-cpu/\n     action.yaml:61)断言,修复前 PR#519 Build step 死于\n     DenseStorage.h:61 static_assert(日志实锤),修复后 PR#532 Build step\n     success + unittests/selftests 全 success——CI step 级实证生效;\n   - job 级仍红 = run tests quickly step 的 low_load_cache_pressure{,_neon}\n     在 hosted ARM runner crash(code 6),本机复测两用例 -t 2000 均\n     exit: pass ⇒ 环境性,pre-b12d9ada run 41790777945 同款(非 #520 范围);\n   - Multi-version×3 = 容器内 release 构建(container-build.sh:329)成功\n     (binary-sha256 已产出),死在 [5/5] smoke verify(verify-built-\n     pristine.sh:66-70),与本断言正交(独立故障面,候选 --list-tests/\n     镜像因素,移交后续排查)。\n\n3. 验证矩阵补 CI 实证节(§4.2),效果声明边界校准:本修复消除的是\n   debugoptimized 断言红;quick suite 环境红与 Multi-version smoke 红\n   如实声明为独立故障,不归因本修复、亦不由其修复。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n---------\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\nCo-authored-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-05T09:11:40Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/aeb2c1eacd05196f3cd1463fa8e919c55da6a68a"
+        },
+        "date": 1793969124305,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 82976.266,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44101.616,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 17.035,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 18.377,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.951,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.89,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.675,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.675,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21741.019,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.002,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.185,
             "unit": "s"
           }
         ]

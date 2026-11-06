@@ -93,6 +93,23 @@ TEST(PageSizeTest, RoundUpToPageRoundsUpToNextPage)
     EXPECT_EQ(ROUND_UP_TO_PAGE(ps + 1), 2 * ps); // first byte of page 2
 }
 
+TEST(PageSizeTest, RoundUpToAlignsToAnyPowerOfTwo)
+{
+    // ROUND_UP_TO is the general power-of-two alignment macro ROUND_UP_TO_PAGE
+    // is built on; the framework also uses it with non-page alignments
+    // (alignof in sandstone.cpp, 256 in resource.cpp, 1024U in child_debug.cpp).
+    EXPECT_EQ(ROUND_UP_TO(0, 64), 0);            // zero stays zero
+    EXPECT_EQ(ROUND_UP_TO(1, 64), 64);           // sub-align rounds up
+    EXPECT_EQ(ROUND_UP_TO(64, 64), 64);          // aligned value unchanged
+    EXPECT_EQ(ROUND_UP_TO(65, 64), 128);         // first byte past the boundary
+    EXPECT_EQ(ROUND_UP_TO(255, 256), 256);
+    EXPECT_EQ(ROUND_UP_TO(1024, 1024), 1024);
+    EXPECT_EQ(ROUND_UP_TO(1025, 1024), 2048);
+    // size_t operands, as at the alignof() call site (sandstone.cpp)
+    EXPECT_EQ(ROUND_UP_TO(static_cast<size_t>(16385), static_cast<size_t>(4096)),
+              static_cast<size_t>(20480));
+}
+
 // ======================================================================
 // Weighted Test Picker Tests
 // ======================================================================

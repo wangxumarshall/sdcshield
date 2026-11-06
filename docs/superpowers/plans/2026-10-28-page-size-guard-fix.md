@@ -99,3 +99,22 @@ pre-fix 无声 SIGSEGV（SEGV_ACCERR，libc `str q0` 清栈现场）；post-fix
 （64K 的 128 倍）使 guard = max(8192, page) 时全部 mprotect/madvise 地址
 自然页对齐——而非任何「取整」行为。该静默吞错路径未随 1f06467e 消除，
 已由 issue #396 修复（3fbfecc5，三处吞错改响亮 abort，机制注释同步勘误）。
+
+## 勘误（2026-11-06，issue #495 审计）
+
+本文件 :58-59 声称「运行单测二进制（sandstone_test_utils_tests.cpp 覆盖改动
+头）」——验证声明虚标：1f06467e 当时未向该单测文件添加任何用例，新函数
+sandstone_page_size()（含缓存与 sysconf 失败路径）零覆盖；既有
+ManagedCodeBuffer/WeightedPicker 测试只是碰巧 include 改动头，不构成对新增
+内容的覆盖。这违反了 sandstone_test_utils.h :11-13 的 clean-file 硬规则
+（「Please do not add anything to this file unless it is unit tested」）。
+
+事实补齐（均晚于 issue #495 的 2026-11-03 审计时点）：
+
+- issue #446 修复（PR #455，36ac4f12，2026-11-04）：补
+  sandstone_is_valid_page_size / sandstone_page_size_fatal /
+  sandstone_page_size 并发单测共 43 行；
+- issue #451 修复（PR #470，41c403fa，2026-11-04）：双实现收敛到权威头
+  sandstone_page.h，补 ROUND_UP_TO_PAGE 契约单测 27 行；
+- issue #495 修复：补 ROUND_UP_TO 任意 2 的幂对齐的直接单测，
+  sandstone_page.h 全部五个公开接口至此均有直接单测。

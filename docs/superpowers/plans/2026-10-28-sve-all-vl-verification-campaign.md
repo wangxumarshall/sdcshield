@@ -224,7 +224,7 @@ git commit -s -m "docs(campaign): native 128 腿全量证据（2 seeds，env 降
 - Modify: `CHAOS/gem5/src/arch/arm/linux/se_workload.cc`（表项 `{base + 167, "prctl"}` 在第 ~679 行；handler 函数加在同文件表定义之前）
 
 **Interfaces:**
-- Produces: gem5.opt 支持 `prctl(PR_SVE_GET_VL=51)`（返回当前 VL 字节）与 `PR_SVE_SET_VL=50`（请求 ≥ 当前 VL → 返回当前 VL；请求 < 当前 VL → -EINVAL，单档限制如实警告）；其它 option 忽略返回 0。契约对齐 `framework/device/cpu/arm64/arm64_vl.h`：**返回 0 会被框架判为"执行层忽略"→ENOSYS→SKIP，所以成功路径必须返回正的 VL 字节数**。
+- Produces: gem5.opt 支持 `prctl(PR_SVE_GET_VL=51)`（返回当前 VL 字节）与 `PR_SVE_SET_VL=50`——按 Linux v6.6 `arch/arm64/kernel/fpsimd.c` 真实语义（2026-11-08 勘误，issue #500，详见 Step 2 注记）：长度取 `arg2 & PR_SVE_VL_LEN_MASK`，非法长度（0 / 非 16 字节倍数 / > SVE_VL_MAX=8192）→ -EINVAL；合法长度一律**授予单配置档并返回该档字节数**（单档 vq_map 下内核超限 `vl > max_vl → max_vl` 向下钳、低档 `vl < min_vl → min_vl` 向上钳、再 `find_next_bit` 向上取整——三个方向都落在配置档；低于配置档的授予 warn_once：真硬件恒含 128-bit 架构最小档，低档授予在真机不会发生，SE 证据须可见这个 simulator-only 边缘）；其它 option 返回 0 **并 warn_once**（树内 `ignoreFunc` 先例对每个被忽略 syscall 都告警，静默假成功低于树内基准）。契约对齐 `framework/device/cpu/arm64/arm64_vl.h`：**返回 0 会被框架判为"执行层忽略"→ENOSYS→SKIP，所以成功路径必须返回正的 VL 字节数**——该 ENOSYS 判定只作用于 `PR_SVE_SET_VL` 自身的返回值；default 分支对其它 option 返回的 0 是告警后放行的"假成功"，不进入该判定。
 
 - [ ] **Step 1: gem5-fi 仓建分支与 plan**
 
@@ -239,15 +239,64 @@ git switch -c feat/sve-se-prctl-stub-2026-10-28
 
 `se_workload.cc` syscall 表（64-bit 表，`{base + 167, "prctl"}` 处）改为 `{base + 167, "prctl", prctlFunc}`，并在表定义前加：
 
+> **Step 2 设计勘误（2026-11-08，issue #500）：** 下方代码为勘误后设计，
+> 取代本 Task 原设计与 gem5-fi 实际落地形态（commit `ee0ce761`——Task 5
+> 九 stub 构建含它，512 腿证据由其产出；其仓内 plan 文档
+> `2026-10-28-sve-se-prctl-stub.md` 为同款设计，跟进时须一并勘误）。
+> 原设计两处缺陷：
+> **(1) `default` 静默假成功。** 非 SVE option（框架实际会发的
+> `PR_SET_NAME`〔framework/sysdeps/linux/cpu_affinity.cpp:20〕、
+> `PR_SET_TIMERSLACK`〔framework/sandstone.cpp:1027〕，及 debug 路径的
+> `PR_SET_DUMPABLE`/`PR_SET_PTRACER`）一律返回 0 无告警——SE 证据与真实
+> 内核语义无声漂移。树内 `ignoreFunc`（`src/sim/syscall_emul.cc:84-88`）
+> 对每个被忽略 syscall 都 `warn`，静默假成功低于树内基准；勘误后至少
+> warn_once。
+> **(2) 低档请求拒绝 -EINVAL，与 Linux 相反。** Linux v6.6
+> `find_supported_vector_length`（fpsimd.c:533；:546-549 钳制、:551
+> `find_next_bit` 向上取整）：合法长度先钳到 `[min_vl, max_vl]` 再向上
+> 取整到受支持档——单档主机（vq_map 仅配置档，min_vl=max_vl=配置档）上
+> **任何合法请求都授予配置档**。原审计主张「请求高于配置档应按 Linux
+> 拒绝/-EINVAL」不成立：`vec_set_vector_length`（fpsimd.c:848，:866-867
+> 超限钳制到 `VL_ARCH_MAX`）与本仓 arm64_vl.h 2026-10-27 原生实测
+> （256-bit 芯片请求 512/1024/2048/4096 均返回 256）同口径——原设计
+> 「arg2 ≥ vl → 返回 vl」在超限方向本就与 Linux 一致，分歧仅在低档方向
+> （原设计拒绝，Linux 授予）。勘误后：合法请求一律授予配置档；**低于
+> 配置档的授予 warn_once**（真硬件恒含 128-bit 架构最小档，该情形不会
+> 发生——SE 证据须可见）；超限钳制保持静默（内核常规行为，框架探针
+> 每次健康运行都走它，告警即噪声）。
+> **512 腿证据不受两处缺陷影响**（逐路径核实）：框架探针
+> （arm64_vl.h `arm64_vl_probe_max`，请求 2048-bit）走超限路径——新旧
+> 语义同样授予配置档；控制线程/worker pin（arm64_spec_prepare.h）请求
+> 精确探测档——无舍入；唯一低档请求者 `selftest_arm64_vl_require_sve`
+> 不在 sve-test-list.txt（grep 零命中，190 行清单实测）；default 静默 0
+> 只作用于无读回的 write-only option，不动计算结果。tier 主张的残余
+> 薄弱点在 gem5 启动配置管线（`--vl 4` 是否真达 ISA），与 stub 无关，
+> 详见 issue #500 处置报告。gem5-fi 仓的 stub 修正按其自身分支纪律另行
+> 跟进（本仓不携带该仓改动）。
+
 ```cpp
 /// prctl() for SE: SVE vector-length get/pin, mirroring the Linux uapi
 /// semantics SDCShield's framework layer (arm64_vl.h) depends on — a
 /// successful PR_SVE_SET_VL returns the granted VL IN BYTES (returning 0
 /// would be read as "execution layer ignored" -> ENOSYS -> test SKIP).
-/// gem5 SE has exactly one tier (ArmISA::sve_vl_se, in quadwords), so a
-/// request at or above the configured VL is granted at the configured VL;
-/// anything lower is refused with EINVAL (single-tier limitation, warned
-/// once). Other prctl options are ignored, returning success.
+///
+/// Linux v6.6 arch/arm64/kernel/fpsimd.c: sve_set_current_vl() takes the
+/// length from arg2 & PR_SVE_VL_LEN_MASK and fails an invalid one (0, not
+/// a 16-byte multiple, > SVE_VL_MAX) with EINVAL; a valid length is then
+/// clamped to [min_vl, max_vl] and rounded UP to the next supported tier
+/// (find_supported_vector_length: find_next_bit over vq_map). gem5 SE has
+/// exactly one tier — a single-vq host whose min_vl == max_vl == the
+/// configured VL — so every valid request grants that tier: over-limit
+/// clamps down to max_vl (silent, kernel-normal), below-tier clamps up to
+/// min_vl. The below-tier grant warns once: real hardware always
+/// implements the architectural 128-bit minimum tier, so it cannot happen
+/// there — the SE evidence must show this simulator-only edge. Flags
+/// (PR_SVE_VL_INHERIT / PR_SVE_SET_VL_ONEXEC) parse with the LEN_MASK but
+/// are not modeled; the framework layer never passes them.
+///
+/// Other prctl options return success WITH warn_once: the in-tree
+/// ignoreFunc precedent (syscall_emul.cc) warns on every ignored call, so
+/// silent fake success is below the tree's own bar (issue #500).
 static SyscallReturn
 prctlFunc(SyscallDesc *desc, ThreadContext *tc, long option, long arg2)
 {
@@ -256,20 +305,25 @@ prctlFunc(SyscallDesc *desc, ThreadContext *tc, long option, long arg2)
         return SyscallReturn(
             (int64_t)tc->getIsaPtr()->getVectorLengthInBytes());
       case 50 /* PR_SVE_SET_VL */: {
+        const int64_t len = arg2 & 0xffff /* PR_SVE_VL_LEN_MASK */;
         const int64_t vl = tc->getIsaPtr()->getVectorLengthInBytes();
-        if (arg2 >= vl)
-            return SyscallReturn(vl);
-        warn_once("%s: PR_SVE_SET_VL %ld below the single configured SE "
-                  "tier (%ld bytes) refused with EINVAL",
-                  desc->name(), arg2, vl);
-        return SyscallReturn(-EINVAL);
+        if (len < 16 || (len & 0xf) || len > 8192 /* SVE_VL_MAX */)
+            return SyscallReturn(-EINVAL);
+        if (len < vl)
+            warn_once("%s: PR_SVE_SET_VL %ld granted at the single "
+                      "configured SE tier (%ld bytes): Linux clamps a "
+                      "valid request up to min_vl on a single-vq host",
+                      desc->name(), len, vl);
+        return SyscallReturn(vl);
       }
       default:
+        warn_once("%s: prctl option %ld not modeled, returning success",
+                  desc->name(), option);
         return SyscallReturn(0);
     }
 }
 ```
-（若带参 handler 签名编译不匹配，参照同文件 `timesFunc<ArmLinux64>` 与 `syscall_emul.hh` 的 `closeFunc(SyscallDesc*, ThreadContext*, int)` 模式修正参数形式；`getVectorLengthInBytes()` 为 `BaseISA` 公有虚方法，返回 `sveVL*16` 字节，已在 `src/arch/arm/isa.hh` 核实。`SyscallReturn(-EINVAL)` 的负值即 errno 语义，同仓既有 handler 惯例。）
+（若带参 handler 签名编译不匹配，参照同文件 `timesFunc<ArmLinux64>` 与 `syscall_emul.hh` 的 `closeFunc(SyscallDesc*, ThreadContext*, int)` 模式修正参数形式；`getVectorLengthInBytes()` 为 `BaseISA` 公有虚方法，返回 `sveVL*16` 字节，已在 `src/arch/arm/isa.hh` 核实。`SyscallReturn(-EINVAL)` 的负值即 errno 语义，同仓既有 handler 惯例。`warn_once` 已在原落地 `ee0ce761` 的低档分支使用过，编译面无新依赖。）
 
 - [ ] **Step 3: 重建 gem5.opt（campaign 与构建不并行）**
 

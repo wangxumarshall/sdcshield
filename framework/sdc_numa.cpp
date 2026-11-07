@@ -141,13 +141,19 @@ double sdc_ar_factor(enum sdc_mem_family fam, const struct sdc_numa_topology *t)
      * 探测失败(nodes_with_mem==0)一律最差档; 中间档向下取整(取
      * nodes<=n 的最大行)——表值宁高估, 永不向上猜。 */
     static const struct { int nodes; double mem, comp; } tbl[] = {
-        { 1, 25.0, 5.0 },   /* 单节点内存: SVD 实测带 18-25 取上界; GEMM 4.4+余量 */
+        { 1, 40.0, 15.0 },  /* 单节点内存(#506 重标定): worst-child 实测带
+                             * 39-40 取上界——T5 复数 BDCSVD AR≈39(2026-10-27,
+                             * 127 线程 n=1100, 远程 child SIGQUIT 304-314s×2)、
+                             * T8 eigen_svd float AR≥40(SIGQUIT@321s); 旧 25 系
+                             * 本地/平均 child 口径, 未覆盖无内存节点的远程 DRAM
+                             * worst-child。GEMM: 天花板足迹(时侧 binding 档)
+                             * 实测 ~15(中足迹 4.4、256-bit 档 11.2, 取上界)。 */
         { 2, 10.0, 4.0 },   /* 保守估计, TODO(实测): 无真 2 节点内存机器 */
         { 4,  5.0, 3.0 },   /* 同上 */
         { 8,  4.0, 2.5 },   /* >=8 节点 */
     };
     int n = t->nodes_with_mem;
-    if (n <= 0) return fam == SDC_FAM_MEM_BOUND ? 25.0 : 5.0;
+    if (n <= 0) return fam == SDC_FAM_MEM_BOUND ? 40.0 : 15.0;
     /* 表按 nodes 升序; 取最大的 r.nodes <= n 的行。
      * n>=1 必命中首行; n 超过所有行仍取 >=8 档(最后一行)。 */
     const auto *row = &tbl[0];

@@ -22,10 +22,11 @@
  * per-NUMA-node memory budget against the measured complex-BDCSVD RSS
  * coefficient (RSS_RATIO_TABLE SDC_RSS_BDCSVD_C128), n_run caps the
  * full-core single iteration (prime BDCSVD + recomputation, both in run)
- * at a 140 s table-AR budget via the measured power-law fit and the
- * memory-bound all-core slowdown factor (140 s at the table AR=25 works
- * out to ~218 s at this host class' measured worst-child AR≈39 — see the
- * run_budget_ms note in sve_probe_and_init) — clamped to [300, 6000]. The
+ * at a 200 s table-AR budget via the measured power-law fit and the
+ * memory-bound all-core slowdown factor (200 s at the recalibrated table
+ * AR=40, #506, works out to ~195 s at this host class' measured
+ * worst-child AR≈39 — see the run_budget_ms note in sve_probe_and_init)
+ * — clamped to [300, 6000]. The
  * preinit no
  * longer sizes the matrix at all: it only writes a desired_duration
  * UPPER bound from the same memory ceiling — on the auto tier a tight
@@ -133,9 +134,12 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
 /* 全核单迭代预算(ms): child 的 n_run 校准(ja.run_budget_ms, 方程
  * run_budget = AR×2×t(n_run))与 preinit 的 desired_duration 上界共用
  * 同一数值——两处分写会静默漂移(0.2055 字面量的同型教训, b249c97c)。
- * 140 s 是表 AR=25 的口径, 参考机实测最坏 child AR≈39 时 ≈218 s
- * (见 sve_probe_and_init 的 run_budget_ms 注释)。 */
-#define RUN_BUDGET_MS 140000
+ * 200 s = 联合层契约值(300s 硬宽限×0.67)。#506 重标定前表 AR=25 低估
+ * 实测最坏 child AR≈39, 曾以 140000 私有补偿(218s 实测口径); 表改 40 后
+ * 按补偿注释的回调承诺回到契约值——最坏 child 单迭代 ≈200×39/40 ≈195 s,
+ * 含 init ~210-240 s, 宽限内 ~20-25% 裕度(见 sve_probe_and_init 的
+ * run_budget_ms 注释)。 */
+#define RUN_BUDGET_MS 200000
 
 /*
  * preinit (runs once in the PARENT, before run_one_test computes
@@ -175,11 +179,13 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  *           real single iteration: TEST_LOOP continues only while time
  *           remains, so desired ≤ iteration means exactly one pass
  *           (issue #421 — the old body-less 0.95×t(n_hi) exceeded the
- *           ~140-218 s real iteration on large-memory hosts (n_hi above
- *           ~3650) and on -n 1 (n_hi saturates MDIM_MAX, old desired
+ *           real single iteration on large-memory hosts (n_hi above
+ *           ~3650; the #421-era band was ~140-218 s, the #506 contract
+ *           budget at table AR=40 puts it at ~195-200 s) and on -n 1
+ *           (n_hi saturates MDIM_MAX, old desired
  *           587 s), opening un-budgeted 2nd..25th iterations; adding
  *           AR×2 without the budget cap is equally wrong — at the table
- *           AR=25 with n_hi=6000 it would inflate desired to ~7020 s and
+ *           AR=40 with n_hi=6000 it would inflate desired to ~49500 s and
  *           the test would loop to fill it).
  *   knob:  dur = ar × 2 × t(knob) × 0.95 (PR#384 review, id 4432271415):
  *           the explicit tier bypasses the joint solver's AR-aware n_run
@@ -207,14 +213,15 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  *           and is SIGQUIT-killed mid-iteration. The AUTO branch writes
  *           NO min: the standard `-t 2000 -n 1` smoke lane must stay
  *           seconds-fast (the auto single iteration is designed inside
- *           the 300 s grace by run_budget=140 s), and at -n 1 n_hi hits
+ *           the 300 s grace by run_budget=200 s at the recalibrated
+ *           table AR=40, #506), and at -n 1 n_hi hits
  *           MDIM_MAX, so an auto min would stretch the smoke to the
  *           t(6000) minutes scale.
  *
  * Child n <= n_hi holds for the AUTO branch only: the child returns
  * min(n_mem, n_run, hi), n_mem uses
  * the same budget/c/worker-scaled threads, and its most-conservative
- * AR(25) keeps n_run below the memory ceiling on this host class.
+ * AR(40, #506) keeps n_run below the memory ceiling on this host class.
  * An explicit knob/env is applied VERBATIM (dim = knob, no min against
  * n_hi — issue #352), so the duration model must follow the knob too:
  * with n_hi alone, every knob above n_hi times out at the 300 s hard
@@ -230,13 +237,13 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  * the derived timeout 5×duration+30 s (300 s floor) loses its headroom,
  * which is the UNSAFE direction, the very P0 timeout mode this PR
  * fixes. Using the actual worker count restores the invariant on every
- * host; the child's own n_run still bounds one iteration at ~140 s
- * (模型, run_budget_ms=RUN_BUDGET_MS) / ~213 s (实测最坏) as a second
- * belt.)
+ * host; the child's own n_run still bounds one iteration at ~200 s
+ * (模型, run_budget_ms=RUN_BUDGET_MS; #506 表 AR=40 重标定后实测最坏
+ * ≈195 s) as a second belt.)
  */
 static int size_matrix_preinit(struct test *test)
 {
-    /* 最保守 AR(25) + RSS 表 c 推 n 上界, 再推 duration 上界:
+    /* 最保守 AR(40, #506 重标定) + RSS 表 c 推 n 上界, 再推 duration 上界:
      * child 精算 n 恒 <= 此上界(spec §4.5)。c 引用表函数而非字面量
      * (0.2055)——GEMM_F64 表值已实测重标定过一次(0.0290→0.0315),
      * 字面量会静默陈旧; 分母用实际全机 worker 数而非参考机 127,
@@ -313,23 +320,25 @@ static int size_matrix_preinit(struct test *test)
          * minimum_duration, -t 小值档的 target 被夹钳到单迭代,
          * timeout(5×min+30)随之随 knob 缩放。auto 分支不写:
          * `-t 2000 -n 1` 标准冒烟必须保持秒级(auto 单迭代由
-         * run_budget=140 s 设计收在 300 s floor 内), 且 -n 1 下 n_hi
+         * run_budget=200 s(表 AR=40, #506)设计收在 300 s floor 内),
+         * 且 -n 1 下 n_hi
          * 撞 MDIM_MAX, 写 min 会把冒烟拉到 t(6000) 分钟级。 */
-        /* 【PR#384 检视 R6, 意见 4463986219】SVD 侧不加 GEMM 的
-         * GEMM_AR_CAVEAT_X(3×)加权——量化账在本文件镜像(完整裁定
-         * 记录: gemm_double_max_arm.cpp 的 minimum_duration 注释块 +
-         * spec §4.5 R3/R4 块): 本测试 mem 族表值 25 实测低估仅
-         * 1.56×(单内存节点最坏 child 有效 AR≈39, 远小于 GEMM 的
-         * 3×), SVD VL=128 档因子实测 1.064×(2026-11-04, -n 1 -O
+        /* 【PR#384 检视 R6, 意见 4463986219; #506 表重标定后重算】
+         * SVD 侧不加 GEMM 历史上的 GEMM_AR_CAVEAT_X(3×)加权(该补偿
+         * 已随 #506 comp 表值 5→15 退役)——量化账在本文件镜像(完整
+         * 裁定记录: gemm_double_max_arm.cpp 的 minimum_duration 注释块
+         * + spec §4.5 R3/R4 块): 本测试 mem 族表值已 #506 重标定为
+         * 40(实测最坏 child 有效 AR≈39-40 取上界, 低估闭合), SVD
+         * VL=128 档因子实测 1.064×(2026-11-04, -n 1 -O
          * mdim=2048 单迭代 56.06s→59.66s, SDCSHIELD_ARM64_SPEC_MAX_VL
-         * =128 原生降档), 代入裕量 5×25/(39×1.064×1.02)≈2.95×, 打穿
-         * 需档因子 ≥125/(39×1.02)≈3.14×(裕量=阈值/实测档因子, 同
-         * 一量; 【R7 勘误, 意见 4464199557】R4 原记 ≈3.1×/3.15×/
-         * 2.96× 系算术误差: 125/42.33=2.95, 125/39.78=3.14); 加 3×
-         * 会把 4440012653 已裁定的中间档 min 虚抬成本再放大 3 倍
-         * 且无实测支撑, 维持不加。调本测试 ar 表值/幂律系数时须
+         * =128 原生降档), 代入裕量 5×40/(39×1.064×1.02)≈4.73×, 打穿
+         * 需档因子 ≥200/(39×1.02)≈5.03×(裕量=阈值/实测档因子, 同
+         * 一量; 重标定前表值 25 时为 2.95×/3.14×, 【R7 勘误, 意见
+         * 4464199557】的算术口径 125/42.33=2.95、125/39.78=3.14);
+         * 表已覆盖实测最坏, 无需额外加权, 维持不加(4440012653 裁定
+         * 的中间档 min 成本口径不变)。调本测试 ar 表值/幂律系数时须
          * 对照本账重算。【R8, 意见 4464388852】本账系三处镜像之一
-         * (本块 / gemm CAVEAT 块 SVD 对照句 / spec §4.5 R3/R4/R7
+         * (本块 / gemm 注释块 SVD 对照句 / spec §4.5 R3/R4/R7
          * 块), 单一真源以 spec 为准——注释无编译期机制钉住, 改账
          * 须三处同步(R6 补镜像、R7 勘误两个提交已实证失同步风险);
          * 把账本常数化为 constexpr/static_assert 的机制化钉住属
@@ -343,12 +352,14 @@ static int size_matrix_preinit(struct test *test)
          * min(n_mem, n_run): n_run 主导的大内存主机单次被预算钉在
          * RUN_BUDGET, 内存主导的小内存主机单次 ≈ ar×2×t(n_hi)。
          * 旧公式只有 0.95×t(n_hi)(单线程单解、无 AR 无 ×2), 在大
-         * 内存(n_hi>~3650, duration 越过 140-218 s 的真实单次迭代)
+         * 内存(n_hi>~3650, duration 越过真实单次迭代——#421 时代带
+         * 140-218 s, #506 契约预算/表 40 下 ~195-200 s)
          * 与少核(-n 1 把 n_hi 推到 MDIM_MAX)主机上超过单次,
          * do-while 开出未预算的第二~二十五次迭代(issue #421; 本机
          * -n 1 实测旧 desired 587 s vs 单次 ~23 s)。单加 AR×2 不取
-         * min 同样错误: 参考机口径 AR×2×t(n_hi)≈7020 s, 测试会跑满
-         * desired(31 次迭代)。ar 的 workers==1 折算与显式档同口径
+         * min 同样错误: 参考机口径 AR×2×t(n_hi)≈11200 s(#506 表 40
+         * 口径; 旧表 25 时 7020 s), 测试会跑满
+         * desired(~56 次迭代)。ar 的 workers==1 折算与显式档同口径
          * (表值是全核口径; -n 1 下两侧都被预算封顶钉在 RUN_BUDGET,
          * 折算仅对 n_hi<~3440 的单核小内存场景有数值差)。 */
         double ar = workers > 1
@@ -405,24 +416,25 @@ static int sve_probe_and_init(struct test *test)
      * single-iteration budget via the power-law fit and the memory-bound
      * AR factor. quick mode collapses to MDIM_MIN.
      *
-     * run_budget_ms deviates from the joint contract value 200000 (= 300 s
-     * hard grace × 0.67): the measured WORST-child slowdown on a
-     * single-memory-node host exceeds the AR table's 1-node mem-bound
-     * entry (25). Measured 2026-10-27, 127 threads, n=1100 (~31 GiB
-     * footprint): the node-0 (local-DRAM) children finish while the
-     * children on the memory-less nodes (remote DRAM) see an effective AR
-     * of ~39 — 1.55×, just past the 1.5× margin the 0.67 factor embeds.
-     * With 200000 the solver picked n≈1229 and the remote children could
-     * not finish one iteration inside the 300 s grace (SIGQUIT at
-     * 304-314 s, reproduced twice). 140000 lands n_run ≈ 1050-1095
-     * (n=1100 measured 228 s wall including init), i.e. ~225 s total —
-     * inside the grace with ~25 % margin, and within the plan's expected
-     * [750, 1100]. The principled fix is the AR table entry itself
-     * (framework/sdc_numa.cpp — Task 1 scope, flagged to the
-     * coordinator); this per-test budget is the in-scope compensation
-     * and should be revisited when the table is re-calibrated.
-     * (注: n=1100 是定点实验档; auto 档在同一 run_budget_ms 下实测最坏
-     * ~213 s, 见上方 size_matrix_preinit 注释, 两个口径不矛盾.) */
+     * run_budget_ms keeps the joint contract value 200000 (= 300 s hard
+     * grace × 0.67). Measurement history: the pre-#506 table's 1-node
+     * mem-bound entry (25) understated the measured WORST-child slowdown
+     * on a single-memory-node host. Measured 2026-10-27, 127 threads,
+     * n=1100 (~31 GiB footprint): the node-0 (local-DRAM) children finish
+     * while the children on the memory-less nodes (remote DRAM) see an
+     * effective AR of ~39 — 1.55×, just past the 1.5× margin the 0.67
+     * factor embeds. With 200000/table-25 the solver picked n≈1229 and
+     * the remote children could not finish one iteration inside the 300 s
+     * grace (SIGQUIT at 304-314 s, reproduced twice), so this test carried
+     * a private 140000 compensation (n_run ≈ 1050-1095, n=1100 measured
+     * 228 s wall including init, i.e. ~225 s total — inside the grace
+     * with ~25 % margin). #506 re-calibrated the table entry to the
+     * measured band's ceiling (40), and this budget returned to the
+     * contract value per the compensation's own revisit promise: the
+     * worst-child full-core iteration is now sized at 200×39/40 ≈ 195 s,
+     * +init ≈ 210-240 s, inside the grace with the designed margin.
+     * (注: n=1100 是定点实验档; auto 档实测最坏口径见上方
+     * size_matrix_preinit 注释, 两个口径不矛盾.) */
     int dim;
     int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0) {
@@ -438,8 +450,9 @@ static int sve_probe_and_init(struct test *test)
             .mem_fraction_permille = 650,
             .ar_fam = SDC_FAM_MEM_BOUND,
             .run_budget_ms = RUN_BUDGET_MS, /* worst-child iteration budget;
-                                            * 140 s at the table AR=25 ≈
-                                            * 218 s at the measured
+                                            * 200 s contract value at the
+                                            * #506-recalibrated table AR=40
+                                            * ≈ 195 s at the measured
                                             * worst-child AR≈39 (see above) */
         };
         try {

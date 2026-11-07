@@ -123,25 +123,22 @@ template <typename SVD, int Dim> struct EigenSVDTest
      * legacy two-step chain VERBATIM below — see the #else branch
      * comment for why.
      *
-     * run_budget_ms deviates from the joint contract value 200000 (= 300 s
-     * hard grace × 0.67): the measured WORST-child slowdown on a
-     * single-memory-node host exceeds the AR table's 1-node mem-bound
-     * entry (25). T5 measured AR≈39 for complex BDCSVD at a ~31 GiB
+     * run_budget_ms keeps the joint contract value 200000 (= 300 s hard
+     * grace × 0.67). The AR table's 1-node mem-bound entry was
+     * re-calibrated to the measured worst-child band (issue #506,
+     * 25→40): T5 measured AR≈39 for complex BDCSVD at a ~31 GiB
      * footprint (eigen_svd_cdouble_sve.cpp run_budget_ms note); T8
-     * re-measured the same class here — at 200000 the solver picked
-     * n=2048 for eigen_svd (float, ~30.5 GiB aggregate) and the
+     * re-measured the same class here — at 200000/table-25 the solver
+     * picked n=2048 for eigen_svd (float, ~30.5 GiB aggregate) and the
      * children on the memory-less NUMA nodes could not finish ONE
      * full-core iteration inside the 300 s grace (SIGQUIT at 321 s
      * elapsed, /tmp/t8_eigen_svd.log, 2026-10-28): effective worst-child
-     * AR ≥ 40 = 1.6× the table row. 140000 sizes the iteration so that
-     * budget × 1.6 + init probes ≈ 232 s stays inside the grace with
-     * ~23% margin (T5's measured outcome: ~225 s wall including init),
-     * while still lifting the memory-bound dims well above the legacy
-     * triple's (eigen_svd_double: 763 → ~1450). The principled fix is
-     * the AR table entry itself (framework/sdc_numa.cpp — T7/T9 scope,
-     * footprint-aware recalibration); this per-family budget is the
-     * in-scope compensation and should be revisited when the table is
-     * re-calibrated. */
+     * AR ≥ 40. With the table at 40 the 140000 private compensation this
+     * family carried since T8 is retired per its own revisit promise:
+     * the worst-child full-core iteration lands at 200×39/40 ≈ 195 s,
+     * +init ≈ 210-240 s, inside the grace with the contract's designed
+     * ~20-25% margin, while the memory-bound dims stay well above the
+     * legacy triple's (eigen_svd_double: 763 → ~1450). */
     static constexpr enum sdc_rss_family rss_family()
     {
         return svd_rss_family_of(static_cast<const SVD *>(nullptr));
@@ -214,7 +211,7 @@ template <typename SVD, int Dim> struct EigenSVDTest
                                           * primes per-thread state itself */
             .mem_fraction_permille = mem_fraction_permille,
             .ar_fam = SDC_FAM_MEM_BOUND,  /* dense SVD is bandwidth-bound at full core */
-            .run_budget_ms = 140000,      /* 全核单迭代(2解×AR)预算; 见上方块注释 */
+            .run_budget_ms = 200000,      /* 全核单迭代(2解×AR)预算; 见上方块注释 */
         };
         try {
             return sdc_joint_dim_slice(test, "mdim", &ja, sizing_probe);

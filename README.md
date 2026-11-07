@@ -47,7 +47,7 @@ bash scripts/run/sdc_detect.sh
 
 | 优先级 | 负载域（分桶正则实测口径） | 依据 |
 |---|---|---|
-| P1 | 向量 FMA/矩阵（`openblas_*gemm`/`eigen_gemm`/`eigen_svd`/`eigen_sparse`/`sleef_*`/`pocketfft_fft`/`fma*`/`sve512_f*`）+ `arm64_sdc`、`acl_gemm`、`neon_add` | SEVI(ASPLOS'26)：>92% SDC 事故由 FMA 指令贡献 |
+| P1 | 向量 FMA/矩阵（`openblas_*gemm`/`openblas_lu`/`eigen_gemm`/`eigen_svd`/`eigen_sparse`/`sleef_*`/`pocketfft_fft`/`fma*`/`sve512_f*`）+ `arm64_sdc`、`acl_gemm`、`neon_add` | SEVI(ASPLOS'26)：>92% SDC 事故由 FMA 指令贡献 |
 | P2 | ARM64 SDC 专项（`sve512_*`、`power_virus_dit`、`lsu_store_forward`、`l2c_cross_cache_line`、`mmu_split_tlb`、`fisttp`、`libomp_ctx`、`sme_za` 等） | 本仓库为已知鲲鹏故障签名定向编写 |
 | P3 | memcpy/store→reload 访存通路 | CPU179 实证触发判别条件 |
 | P4 | 位扩散（压缩/哈希/CRC/加密） | From Gates to SDCs(DATE'25)：sha 类位掩蔽最少 |

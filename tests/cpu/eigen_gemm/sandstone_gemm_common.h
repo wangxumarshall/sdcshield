@@ -9,8 +9,9 @@
  *
  * 此前 T10 init 降档块(约 25 行)与联合求解探针 gemm_solve_once 在本目录
  * 7 个文件中逐字复制粘贴(double14 / {double,float,cdouble}_dynamic_square
- * 及其 _dump 变体), PR#302 检视 #25 的 sdc_joint_cache_note_dim 修复
- * (09a1c4cf)被迫同步打进全部 7 份——漏一处即口径分叉。本头收敛 init
+ * 及其 _dump 变体), 降档处的反馈口径失效(PR#302 检视 #25 引入的
+ * sdc_joint_cache_note_dim 同步, issue #545 改为 sdc_joint_cache_drop)
+ * 被迫同步打进全部 7 份——漏一处即口径分叉。本头收敛 init
  * 降档块; 联合求解探针已由 PR #392 的 gemm_solve_probe.h(谱系单源
  * eigen_splitmix_lineage.h, issue #389)承载——本头不复制探针, 两类
  * 修正各落各的唯一权威处。
@@ -42,9 +43,12 @@
  * 文件的尺寸求解函数。与被收敛的 7 份内联拷贝逐行等价:
  *   - init 期分配失败是资源性而非 SDC → 降 mdim 到 16(与联合求解的
  *     lo/clamp 下限同值)重分配一次, 仍失败才资源性 SKIP(不打红);
- *   - 降档成功 → sdc_joint_cache_note_dim 同步反馈记账口径(PR#302
- *     检视 #25): 否则反馈按求解 n 折算 eff, c 被压向 0.7× 下限, 后续
- *     n 向 OOM 膨胀;
+ *   - 降档成功 → sdc_joint_cache_drop 注销反馈登记(issue #545, 取代
+ *     PR#302 检视 #25 的『同步分母 n』): 本 child 的 VmHWM 含降档前
+ *     部分成功的 O(n²) 分配峰值, 只同步分母会把 eff 高估
+ *     (n_solved/16)² 倍, 读侧向上无死区无上钳直接采纳 → 后续
+ *     fracture 的 n 被压向 lo、压力静默塌缩; 不发布样本是唯一不引入
+ *     虚假记忆的选择(基线扣除属 #385);
  *   - 其余异常 → report_fail_msg(打红)。
  * dump 变体的冻结回放轮读 d->lhs/rhs/prod——降档后三者与 d->dim 同档
  * 一致(降档路径对 dump 同样成立)。 */
@@ -74,7 +78,10 @@ static inline int sdc_gemm_init_shared(struct test *test, Data *d,
                      test->id, kInitRetryLo);
             return EXIT_SKIP;
         }
-        sdc_joint_cache_note_dim(test, kInitRetryLo);
+        /* issue #545: 降档后 run 的工作集是 retry 档, 但 VmHWM 峰值
+         * 含降档前部分成功的 O(n²) 分配, 无法按 retry 口径折算——
+         * 注销登记, 本 child 不写反馈。 */
+        sdc_joint_cache_drop(test);
     } catch (...) {
         report_fail_msg("Exception on Eigen code, most probably OOM");
     }

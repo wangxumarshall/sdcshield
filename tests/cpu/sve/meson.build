@@ -237,6 +237,10 @@ if host_machine.cpu_family() == 'aarch64'
         'core179/neon_rot_ldr_at_top_rowmajor_gps_sve.cpp',
         'core179/neon_rot_ldr_at_top_rowmajor_dualcmp_sve.cpp',
         'core179/neon_rot_ldr_at_top_rowmajor_str3_checkall_sve.cpp',
+        # fp64 FPU-datapath extension of str3_checkall (user-mandated
+        # experiment: does the CPU122 load-return defect fire on the FP
+        # pipeline?) — svfloat64_t with fadd/fsub/fmul/abd rotation.
+        'core179/neon_rot_ldr_at_top_str3_checkall_fp64_sve.cpp',
         # missing_testcases_20261009 ports (batch 7/8): K-cells — the
         # interleaved dual-source layout cell (GPS-tagged + its natural-
         # random control), the 4x-footprint residency cell (byte_off tag

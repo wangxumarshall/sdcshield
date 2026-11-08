@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794052440631,
+  "lastUpdate": 1794139670905,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -3452,6 +3452,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 20.539,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "ac8648be6e859e6daf3b51ed6c319df5ea78d58f",
+          "message": "fix: cpulist/cpu-online 解析加溢出防护与全量读取防截断 (#480) (#493)\n\n* fix: cpulist 解析加溢出防护(strtol ERANGE/负号段终止 + 区间上界钳制) (#480)\n\nfor_each_cpu_in_list 对 strtol 溢出区间段无防护: '0-9223372036854775807'\n使 b=LONG_MAX, -O0 下源码语义循环 2^63 次近乎无限执行(实测 5s 超时不\n终止); -O3 下 count_cpu_list 的 int 计数有符号溢出 UB(实测 UBSan 报\nsdc_numa.cpp:54 '2147483647 + 1 cannot be represented in type int',\n仓库 -O3 构建则静默得 total_cpus=0)。\n\n修复:\n- strtol 溢出段(errno==ERANGE)与负号段视为损坏输入, 停止解析\n  —— 宁可低估(计数 0, 下游 total_cpus 不可读走 sysconf 兜底),\n  绝不失控;\n- 区间上端钳到 SDC_NUMA_MAX_CPUS-1, 与归属表 'c 越界忽略' 的既有\n  语义一致(arm64 内核 NR_CPUS 上限 4096, 真实编号不越界), 每段\n  循环次数有界, count_cpu_list 的 int 计数与 (int)c 截断均不可能。\n\n验证: -O0/-O3/UBSan 三构建行为一致(四种恶意输入不再失控不再 UB,\n真 sysfs total_cpus=128 不变); ./scripts/build.sh 零警告;\n-e eigen_svd_double -t 2000 -n 1 exit: pass。x86-64 非回归: 改动\n整体在 __aarch64__ && __linux__ 守卫内, x86-64 编译产物零变化。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* fix: node cpulist 与 cpu/online 全量读取, 防稀疏编号超长截断 (#480)\n\nprobe_uncached 读 nodeN/cpulist(buf[1024])与 cpu/online(buf[256])用\n固定缓冲 fgets, 稀疏编号超长列表截断低估: LD_PRELOAD 重定向实测,\n1945 字节/500-CPU 的 online 列表被数成 78, 2445 字节/600-CPU 的\nnode0/cpulist 被数成 270。total_cpus 低估使 sdc_joint_dim_slice 的\nworker/total_cpus 折算(sdc_stress_config.h 联合求解)失真, ncpus\n低估使节点预算分摊分母失真。\n\n修复: 新增 read_sysfs_line(getline 动态扩容)全量读取单行 sysfs,\n不受固定缓冲上限约束; 两处调用点替换, 语义不变(不可读仍为 0,\n下游走 sysconf 兜底)。\n\n验证: 重定向实测 total_cpus 78→500、node0_ncpus 270→600; 真 sysfs\n基线修复前后完全一致(total_cpus=128, node0_ncpus=32, 4 节点×32);\n./scripts/build.sh 零警告; -e eigen_svd_double -t 2000 -n 1 exit:\npass。x86-64 非回归: 改动整体在 __aarch64__ && __linux__ 守卫内。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n---------\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\nCo-authored-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-08T11:38:07Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/ac8648be6e859e6daf3b51ed6c319df5ea78d58f"
+        },
+        "date": 1794139669368,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 170849.248,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 88948.592,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 47.009,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 95.761,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.836,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 3.915,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 5.686,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 8.576,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 43980.991,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.846,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 22.261,
             "unit": "s"
           }
         ]

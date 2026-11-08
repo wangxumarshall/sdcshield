@@ -26,6 +26,7 @@ namespace { /* ODR: per-TU LLPNData */
 struct LLPNData {
     alignas(64) uint32_t slot[LLPN_MAX_THREADS][4];   /* NEON epoch vectors */
     alignas(64) std::atomic<uint64_t> started[LLPN_MAX_THREADS];
+    uint64_t duty_us;                /* duty knob, clamped once in test_init */
 };
 }
 
@@ -53,6 +54,13 @@ static inline uint64_t llpn_timer_freq(void) {
 static int low_load_cache_pressure_neon_init(struct test *test) {
     auto *d = new LLPNData;
     if (!d) return EXIT_FAILURE;
+    /* Test options are init-only (the framework's fail-loud check aborts on
+     * any worker-thread query): clamp duty_us once here and let run() lanes
+     * read the cached value. */
+    uint64_t duty_us = get_testspecific_knob_value_uint(test, "duty_us", 1000);
+    if (duty_us < 500)  duty_us = 500;
+    if (duty_us > 3000) duty_us = 3000;
+    d->duty_us = duty_us;
     for (int i = 0; i < LLPN_MAX_THREADS; ++i) {
         for (int l = 0; l < 4; ++l) d->slot[i][l] = 0;
         d->started[i].store(0, std::memory_order_relaxed);
@@ -70,9 +78,8 @@ static int low_load_cache_pressure_neon_cleanup(struct test *test) {
 static int low_load_cache_pressure_neon_run(struct test *test, int cpu) {
     auto *d = static_cast<LLPNData *>(test->data);
 
-    uint64_t duty_us = get_testspecific_knob_value_uint(test, "duty_us", 1000);
-    if (duty_us < 500)  duty_us = 500;
-    if (duty_us > 3000) duty_us = 3000;
+    /* duty knob: clamped and cached in test_init (knobs are init-only). */
+    const uint64_t duty_us = d->duty_us;
 
     const uint64_t freq = llpn_timer_freq();
     const uint64_t active_ticks = duty_us * freq / 1000000ULL;

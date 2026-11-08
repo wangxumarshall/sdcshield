@@ -38,6 +38,22 @@ always appended last regardless of selection.
 `test_run`, which must be non-NULL**), `minimum_cpu` (feature gate),
 `quality_level`, `groups`, `flags`.
 
+## Test knobs (test options)
+
+Test options (`-O <test>.<key>=<value>`, `sdc_stress.conf`, …) are read via
+`get_testspecific_knob_value_{int,uint,double,string}()` and are **init-only**:
+the getters may only run from `test_init` (control thread, `thread_num == -1`).
+`logging_mark_knob_used()` enforces this with a `thread_num != -1` check that
+aborts — since issue #417 the check is **not** NDEBUG-gated (release builds
+included) and sits ahead of the `no_output` short-circuit, so a quiet output
+format cannot mask the bug; `selftest_knob_from_run` locks the negative path
+in `bats/sanity-check/20-selftests.bats` and
+`scripts/gha/verify-params.py`. A payload that needs a knob inside `test_run`
+must query it in `test_init` and cache it (the gather/openssl prewarm pattern).
+The sizing helper `sdc_knob_int_clamped()` is equally fail-loud on a worker
+cache miss — its former silent `def` fallback bypassed the getter check
+entirely and ignored `-O` in every build type (issue #417 gap 3).
+
 ## Quality levels
 
 `TEST_QUALITY_SKIP`(-1) < `BETA`(0) < `PROD`(2, default `--quality=2`). A test

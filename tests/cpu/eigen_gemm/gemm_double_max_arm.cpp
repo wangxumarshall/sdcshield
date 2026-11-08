@@ -156,12 +156,49 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
  *          and RSS-table coefficient the child's n_mem uses, with
  *          workers = the run's actual whole-machine worker count
  *          (sdc_total_threads(), available in preinit: commit_shmem()
- *          runs before test_preinit). The child's n_mem denominator is
- *          the same worker count scaled to its node
- *          (sdc_joint_dim_slice folds workers/total_cpus into
- *          node_cpus), so n_hi tracks it on every host class — not
- *          just the 127-worker reference the value was historically
- *          hard-coded to.
+ *          runs before test_preinit). That aligns the DENOMINATOR —
+ *          the worker scale, whose misalignment was the old 127
+ *          hardcode bug (child n up to sqrt(127/workers) above n_hi
+ *          on sub-127-worker hosts). The full child-side relation
+ *          (issue #536: the earlier "n_hi tracks it on every host
+ *          class" overclaimed — the folding argument covers the
+ *          worker scale only) is
+ *              n_mem = n_hi × sqrt(memshare / cpushare),
+ *          because the child's node budget is the same budget
+ *          weighted by the node's MemFree/ΣMemFree share while its
+ *          node_threads is the node's CPU share × the same worker
+ *          count (sdc_numa.cpp weights, sdc_joint_dim_slice folds
+ *          workers/total_cpus into node_cpus; zero-memory nodes fold
+ *          their CPUs into the fallback node). n_mem == n_hi only
+ *          where the shares match: single-memory-node hosts (both
+ *          shares 1 — the reference class — exact) and MemFree/CPU-
+ *          balanced NUMA (approximate). Off that domain TWO bounded
+ *          mechanisms push n above n_hi, each eroding the
+ *          5×dur+30 s timeout margin by (n/n_hi)³ — for GEMM it
+ *          stacked on this host class' own AR understatement pre-#506
+ *          (table 5 vs ~15 measured, see the init comment's
+ *          re-calibration record; #506 closed that leg — the remaining
+ *          arithmetic is in the timeout paragraph below):
+ *            - MemFree-rich node: 75% of free memory on 50% of the
+ *              CPUs → n ≈ 1.22× n_hi → dur under-estimates the real
+ *              iteration ~1.8×.
+ *            - VmHWM feedback adopting a lower c (outside the 15%
+ *              deadzone, 0.7× table-anchor floor in
+ *              sdc_stress_config.h): n up to 1/sqrt(0.7) ≈ 1.2× even
+ *              on balanced hosts — designed (OOM-bounded) and
+ *              structurally invisible to this preinit, which runs
+ *              before any child VmHWM exists and never rewrites.
+ *          Deliberately NOT clamped (n = min(n_mem, n_hi)): the
+ *          clamp's "never fires on balanced topologies" premise is
+ *          false — it would cancel the designed feedback inflation
+ *          on every host where feedback adopts, under-stress
+ *          MemFree-rich nodes, and still miss the reverse imbalance
+ *          (memshare < cpushare → n < n_hi → dur OVER-estimates →
+ *          un-budgeted extra iterations, the do-while mode described
+ *          below). Belts that remain: n_run (min(n_mem, n_run) pins
+ *          the real iteration to the 200 s calibration wherever time
+ *          binds first) and the 5× timeout factor absorbing the
+ *          model's own error.
  *   dur  = AR(compute) × 2 × t(n_hi) × 0.95,  t(N) = T1024·(N/1024)³ s
  *          (quiet single-probe power law, two-point differential fit —
  *          see the measurement record below). The explicit knob tier
@@ -191,10 +228,22 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
  * vs the ~55-60 s measured multiply; the #506 re-calibration (comp 5→15)
  * closes that gap. The derived
  * timeout test_timeout() = 5×duration + 30 s (300 s floor) needs the
- * OTHER relation — real iteration <= timeout — and child n <= n_hi is
- * what keeps it: the real iteration stays within the ceiling model,
- * so one iteration fits the
- * timeout.
+ * OTHER relation — real iteration <= timeout — and that holds only
+ * within the model-error budget: child n <= n_hi on the reference
+ * class, but the two mechanisms in the n_hi bullet above (issue #536)
+ * push n above it (MemFree/CPU share imbalance up to sqrt(share ratio)
+ * ×, feedback adoption up to 1.2×), and each (n/n_hi)³ of inflation
+ * eats the 5× factor directly. The #506 re-calibration removed the
+ * old stacking (the compute-table value IS the measured ~15 now), so
+ * (n/n_hi)³ = 4.75 exhausts the factor at n/n_hi ≈ 1.68 — a ≈2.8×
+ * MemFree/CPU share imbalance alone, or ≈2.0× stacked with the 1.2×
+ * feedback adoption (SIGQUIT mid-iteration — the P0 mode, now
+ * reachable from the sizing side as well; pre-#506, with the 3×
+ * table understatement, the same kill needed only ≈1.4×). The belt
+ * that remains is n_run (min(n_mem, n_run) pins the real iteration
+ * to the 200 s calibration wherever time binds first); on this host
+ * class memory binds first (n_mem=3364 < n_run~4900), so the
+ * imbalance exposure is live here.
  * EXCEPT for an explicit knob/env, which the child applies VERBATIM
  * (dim = knob, no min against n_hi, issue #352 mirror of the SVD fix):
  * the duration model must follow the knob too, or any knob above n_hi
@@ -207,8 +256,10 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
  * can EXCEED n_hi by up to sqrt(127/workers) — dur then UNDER-estimates
  * the real iteration (cubic: ~2.8× at 64 workers) and the derived
  * timeout loses its headroom, the UNSAFE direction. Using the actual
- * worker count restores the invariant on every host; the child's own
- * n_run still bounds one iteration at 200 s as a second belt.)
+ * worker count restores the invariant's worker-scale leg on every
+ * host; the MemFree/CPU-share leg (n_hi bullet above) is what still
+ * gates it — issue #536. The child's own n_run still bounds one
+ * iteration at 200 s as a second belt.)
  *
  * T1024 measurement record (2026-10-28, this host, 256-bit tier — the
  * joint solver's own [时间校准] probes on the quiet single-slice -n 1
@@ -230,7 +281,10 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
 static int eigen_gemm_double_max_arm_preinit(struct test *test)
 {
     /* 静态表 c + 实际全机 worker 数推 n 上界, 再按 AR×2×t(N) 推 duration
-     * 上界: child 精算 n 恒 <= 此上界(spec §4.5)。worker 数用
+     * 上界: child 精算 n 在节点 MemFree/CPU 份额匹配且 VmHWM 反馈未采信
+     * 的拓扑上 <= 此上界(spec §4.5; 两机制可使其有界超出——失衡 NUMA
+     * 至 sqrt(份额比)×、反馈采信至 1.2×——完整口径与失效边界见上方
+     * n_hi bullet, issue #536)。worker 数用
      * sdc_total_threads()(preinit 时 commit_shmem 已初始化, -n/--cpuset
      * 下是请求的 worker 数)而非参考机 127——子进程 n_mem 分母是同一
      * worker 口径(折算到节点), 硬编码 127 在 worker<127 主机上使
@@ -471,7 +525,9 @@ DECLARE_TEST(eigen_gemm_double_max_arm, "Eigen max-matrix GEMM payload (double, 
    * estimate from the memory ceiling + measured GEMM iteration model —
    * or from the explicit knob, which the child applies verbatim
    * (issue #352) — (T6: the child sizes the dimension itself via the
-   * joint solver, always <= that ceiling. The run-side do-while — which
+   * joint solver, <= that ceiling wherever the node MemFree/CPU shares
+   * match and VmHWM feedback stays in its deadzone — issue #536,
+   * account in the preinit comment. The run-side do-while — which
    * continues while the deadline has NOT expired — exits after exactly
    * one iteration when dur sits at or below the child's real
    * single-iteration time, the direction the −5% margin takes

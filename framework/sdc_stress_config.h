@@ -765,7 +765,8 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  * 调用(跨 arch 存量链, 含 x86-64 #else 分支)经 7 参转发重载——等价于
  * 旧缺省 {nullptr, 1.0}, 签名与行为不变(rule 5, issue #351——转发
  * 重载的 1.0 即 f84966bc 之前的历史噪声底语义, 不得随 ARM 侧 M3 口径
- * 联动); 需要 M3 固定开销口径的调用方(联合求解, ARM-only)显式传
+ * 联动); 需要 M3 固定开销口径的调用方(联合求解两分支——ARM 分支与
+ * x86 fallback(#482))显式传
  * sdc_m3_probe_floor_ms(100.0)。fit 保持自 f84966bc 引入起(至本
  * PR 参数化前)的第 8 参位次、probe_floor_ms 殿后: 字面量 0/NULL 作第 8
  * 实参(『显式不要 fit』的旧写法)经 std::nullptr_t 重载绑 fit 而非经
@@ -837,7 +838,8 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
      *   - sdc_m3_probe_floor_ms(100.0, spec §4.3 M3): 固定开销(构造/
      *     预处理)在计时中占比 <10%, 幂律系数不被抬高(实测 sve 模型
      *     t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高
-     *     ~14×, 立方根收缩 2.4×)——仅由联合求解(ARM-only)显式传入,
+     *     ~14×, 立方根收缩 2.4×)——仅由联合求解(ARM 分支与 x86
+     *     fallback(#482))显式传入,
      *     与其 fit 差分扣 b 配套。 */
     int p1 = lo;
     double t1 = probe(p1);
@@ -1473,7 +1475,10 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
      *     预算)。旧 fallback `(void)solve_once` 静默丢弃时间校准——
      *     跨 arch 调用方拆 guard 迁移时会失去单解时间上限,
      *     eigen_sparse 注释自述的『自适应档满核 600s SIGQUIT』故障类
-     *     随之复活(#482 的 armed trap), 本补丁解除之。
+     *     随之复活(#482 的 armed trap), 本补丁解除之。探针自报失败的
+     *     probe_failed→lo 退守(issue #420)与 fit_only 验证档跳过
+     *     (issue #487)同 ARM 分支口径——安全机制本体, 不随 fallback
+     *     缺省。
      * 行为边界(如实): 当前 x86 无调用方经此分支(调用点均 aarch64
      *     guard, 见各调用方 #else 注释), 本补丁不改变任何现行 x86
      *     行为; 改变的是未来迁移者得到的契约。rule 5 依归: Intel 原代码
@@ -1488,19 +1493,36 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     int n_mem = (c_bytes > 0.0 && avail > 0.0)
             ? (int)std::sqrt(avail / ((double)total * c_bytes)) : 0;
     int n_run = 0;
+    bool probe_failed = false;     /* issue #420: 任一抬升/mid 档探针自报失败 */
     if (solve_once && a->run_budget_ms > 0 && n_mem > a->lo) {
         /* 与 ARM 分支同构: 只取 fit(两点差分已扣固定开销 b), 返回值
          * 弃用(其内向外推是未扣 b 的保守口径); k_floor=3.0 与 ARM 分支
          * 同值(现役/规划消费方复杂度下限, sdc_joint_args 不带此参的
          * 签名契约); 探针上限 = knob hi(同 ARM: 差分基线拉得越开,
-         * 固定开销扣除对计时噪声越稳)。AR=1 → per_solve=run_budget/2。 */
+         * 固定开销扣除对计时噪声越稳)。AR=1 → per_solve=run_budget/2。
+         * probe_floor_ms=sdc_m3_probe_floor_ms 与 fit_only=true 亦同
+         * ARM 显式实参: 前者是 fit 差分扣 b 的配套 M3 口径(省略第 9 参
+         * 的 8 参形态无匹配重载——PR #503 合入版即此形态, x86 构建全
+         * 断, 本修复补齐); 后者跳过只为被弃用返回值服务的验证档/收缩
+         * 轮(issue #487, ARM 同款实测浪费), 跳过不改变拟合值。 */
         long per_solve = (long)((double)a->run_budget_ms / 2.0);
         if (per_solve < 1)
             per_solve = 1;
+        /* issue #420: 包装探针记录自报失败——fit_only 下联合层弃用
+         * 返回值, 模板内早退只落到 fit={0,0}(n_run=0), n 仍会落
+         * n_mem; probe_failed→lo 退守是该路径的安全机制本体(与模板
+         * 内哨兵互补, 缺一复活半个 P0-2 路径, 同 ARM 分支)。 */
+        auto solve_probe = [&](int n) -> int {
+            int rc = solve_once(n);
+            if (rc != 0)
+                probe_failed = true;
+            return rc;
+        };
         struct sdc_fit fit;
         sdc_calibrated_dim(a->lo, a->hi, per_solve,
                            test ? test->id : "(global)", knob, 3.0,
-                           solve_once, &fit);
+                           solve_probe, &fit, sdc_m3_probe_floor_ms,
+                           /*fit_only=*/true);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
             double nr = std::pow((double)a->run_budget_ms
                                  / (2.0 * fit.a_ms), 1.0 / fit.p);
@@ -1511,12 +1533,24 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         }
     }
     int n = n_mem;
-    if (n_run > 0 && n_run < n)
-        n = n_run;
-    if (a->hi < n)
-        n = a->hi;
-    if (n < a->lo)
+    if (probe_failed) {
+        /* issue #420: 时间模型不可信 → 退守 lo; n_mem 不可交还(同 ARM
+         * 分支——瞬态内存压力下按 n_mem 选出的全核单次迭代可达分钟级、
+         * TERM 打不断, P0-2 复发路径)。fit_only 下验证档不存在, 失败
+         * 检测覆盖抬升/mid 两档。 */
+        log_warning("[联合求解] %s.%s: 校准探针自报失败 → 退守 lo=%d "
+                    "(时间模型不可信, n_mem=%d 弃用; issue #420)",
+                    test ? test->id : "(global)", knob ? knob : "?",
+                    a->lo, n_mem);
         n = a->lo;
+    } else {
+        if (n_run > 0 && n_run < n)
+            n = n_run;
+        if (a->hi < n)
+            n = a->hi;
+        if (n < a->lo)
+            n = a->lo;
+    }
     log_warning("[联合求解] %s.%s: n_mem=%d n_run=%d → %d (全局四源口径 %.1fGiB; "
                 "x86: 无 per-node/AR/反馈)",
                 test ? test->id : "(global)", knob ? knob : "?",

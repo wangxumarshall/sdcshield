@@ -48,8 +48,10 @@ static int gemm_solve_once(int n)
 /* 矩阵维度: 优先级链同 eigen_gemm_double_dynamic_square
  * (-O eigen_gemm_double14.mdim=N / 配置文件 / 环境变量 / 自适应)。
  * 尺寸只在 test_init 求解一次并缓存进 eigen_test_data.dim——worker
- * 读缓存不重算(T9, 旧链的 run 期重跑自适应路径已删除)。 */
-static int gemm_mdim(struct test *test)
+ * 读缓存不重算(T9, 旧链的 run 期重跑自适应路径已删除)。
+ * is_explicit 出参(issue #488): 显式通道(knob/env)来源时置 true,
+ * 供 sdc_gemm_init_shared 的 bad_alloc 分流(显式值不可降档)。 */
+static int gemm_mdim(struct test *test, bool *is_explicit)
 {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
     if (v == 0) {
@@ -57,8 +59,10 @@ static int gemm_mdim(struct test *test)
         if (sdc_env_knob_int("eigen_gemm_double14", "mdim", &envv))
             v = (envv < 16) ? 16 : (envv > 4096 ? 4096 : envv);
     }
-    if (v > 0)
+    if (v > 0) {
+        *is_explicit = true;    /* knob(-O/配置文件)/env 显式通道 */
         return (int)v;
+    }
 #if defined(__aarch64__) && defined(__linux__)
     /* 联合求解(T9)——但对本用例刻意不走 RSS 表: double14 的 run 循环
      * 每线程同时驻留 6 个矩阵(l_lhs/l_rhs/l_prod + 循环内 _x/_y/_prod,

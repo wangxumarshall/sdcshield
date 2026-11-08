@@ -64,7 +64,10 @@ static int gemm_solve_once(int n)
 // eigen_test_data.dim — workers read the cache and never re-solve (T9: the
 // old static-in-function cache existed for run()-side re-entry, which is
 // gone).
-static int gemm_k_dim(struct test *test) {
+// is_explicit out-param (issue #488): set true when the value came from an
+// explicit channel (knob or the legacy GEMM_K_DIM env), for
+// sdc_gemm_init_shared's bad_alloc split (explicit dims are not downgraded).
+static int gemm_k_dim(struct test *test, bool *is_explicit) {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 8192);
     if (v == 0) {
         if (const char *env = getenv("GEMM_K_DIM")) {
@@ -72,8 +75,10 @@ static int gemm_k_dim(struct test *test) {
             if (parsed > 0) v = parsed;
         }
     }
-    if (v > 0)
+    if (v > 0) {
+        *is_explicit = true;    /* knob (-O/config file) / GEMM_K_DIM env */
         return (int)(v < 16 ? 16 : (v > 8192 ? 8192 : v));
+    }
 #if defined(__aarch64__) && defined(__linux__)
     /* 联合求解(T9, 参数依据见 gemm_double_dynamic_square.cpp 同位注释;
      * 本文件差异仅 clamp [16,8192] 与 fam GEMM_F32)。 */

@@ -55,8 +55,10 @@ static int gemm_solve_once(int n)
  * 尺寸只在 test_init 求解一次并缓存进 eigen_test_data.dim——worker
  * 读缓存, 不再重算(T9: 联合求解的探针与口径登记不能在 worker 上下文
  * 重入, 旧链的 run 期重跑自适应路径已删除)。
+ * is_explicit 出参(issue #488): 显式通道(knob/env)来源时置 true,
+ * 供 sdc_gemm_init_shared 的 bad_alloc 分流(显式值不可降档)。
  */
-static int gemm_mdim(struct test *test)
+static int gemm_mdim(struct test *test, bool *is_explicit)
 {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
     if (v == 0) {
@@ -64,8 +66,10 @@ static int gemm_mdim(struct test *test)
         if (sdc_env_knob_int("eigen_gemm_double_dynamic_square", "mdim", &envv))
             v = (envv < 16) ? 16 : (envv > 4096 ? 4096 : envv);
     }
-    if (v > 0)
+    if (v > 0) {
+        *is_explicit = true;    /* knob(-O/配置文件)/env 显式通道 */
         return (int)v;
+    }
 #if defined(__aarch64__) && defined(__linux__)
     /* 联合求解(T9, 同 T6 gemm_double_max_arm / T8 SVD 族模式): 一次
      * sdc_joint_dim_slice 同时约束内存(per-NUMA-node 四源预算 vs RSS

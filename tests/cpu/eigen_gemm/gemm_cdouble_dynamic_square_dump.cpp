@@ -57,10 +57,14 @@ static int gemm_solve_once(int n)
  * (-O eigen_gemm_cdouble_dynamic_square_dump.mdim=N / 配置文件 / 自适应)。
  * 历史硬编码 221 是刻意的"怪"维度, 显式配置时保留任意值语义。尺寸只
  * 在 test_init 求解一次并缓存进 eigen_test_data.dim——worker 读缓存
- * 不重算(T9, 旧 static 缓存因 run 期重入而存在, 该路径已删除)。 */
-static int gemm_mdim(struct test *test)
+ * 不重算(T9, 旧 static 缓存因 run 期重入而存在, 该路径已删除)。
+ * is_explicit 出参(issue #488): 显式通道(knob)来源时置 true, 供
+ * sdc_gemm_init_shared 的 bad_alloc 分流(显式值不可降档)。 */
+static int gemm_mdim(struct test *test, bool *is_explicit)
 {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 4096);
+    if (v > 0)
+        *is_explicit = true;    /* knob(-O/配置文件) 显式通道 */
     if (v <= 0) {
 #if defined(__aarch64__) && defined(__linux__)
         /* 联合求解(T9, 参数依据见 gemm_double_dynamic_square.cpp 同位

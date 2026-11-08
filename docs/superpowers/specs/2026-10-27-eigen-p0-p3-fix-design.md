@@ -76,6 +76,7 @@ sdc_numa_probe() ──┐
   AR 表(族×拓扑)     │   = min(n_mem, n_run200, clamp)          │
                     │   n_mem = sqrt((node_budget−sh)/(node_thr·c)) ↓
 sdc_budget_*() ─────┘   n_run200 = (200s/(AR·2·a_ms))^(1/p)  VmHWM(sdc_read_vm_hwm)
+                        ↑ AR: workers==1 → 1（issue #563，表值为全核口径）
                                                              写 PerThreadData::Main
 RSS_RATIO_TABLE ──→ c 初值（族→实测系数）                      （每 slice 一槽）
                     ↑                                            │
@@ -198,6 +199,15 @@ n_opt = min(
   均匀集折算值恒等（零变化）；选中集不可读退全机口径（修复前行为）。
 - 时间预算 240s→**200s**【v2/M1】：300s 硬宽限需容纳 init 探针 + fill +
   AR 方差（SVD 实测带 18-25×，25 时迭代+init ≈296s 刀锋）。
+- AR 的 workers 口径【2026-11-08 增补，issue #563】：上式 AR 表值是
+  **全核争抢**口径；workers==1（`-n 1` 档）时单 worker 自争抢为 1，
+  AR 取 1——不折算则 n_run 被虚缩 AR^(1/p)（mem 族单节点 25，p≈3 →
+  ~2.9×），确定性单线程回归档激发面积静默回退（与 preinit 显式档
+  f23e2fd9/意见 4439402781 的 workers>1 闸门同构，即 svd_cdouble_sve
+  头注对联合求解记载的契约——PR#384 引入）。中间档（1<w<全核）不插值（无标定数据，
+  与 minimum_duration 侧二值闸门裁定 4439402800/4440012653 同向保守）；
+  全核表达式不变、行为零变化。per_solve 同用该 ar：fit_only 下只影响
+  被联合层弃用的返回值，探针档位由 probe_floor_ms 决定。
 - `c` 来源优先级：VmHWM 反馈（本 slice 槽有效且命中同 test）→
   RSS_RATIO_TABLE 静态初值 → 调用方传统三元组（未迁移用例）。
 - RSS_RATIO_TABLE：算法族 → 实测 c（KB/n²/线程）。【v2/q1 口径注明】
@@ -333,8 +343,12 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   ——compute 族表值 5.0 在大足迹下实测低估 3×，`-t 2000 -O mdim=4096`
   全核单迭代 ≈242-264s 距 300s floor 余量不足 20%，表值档 host class
   上确定性 SIGQUIT）。GEMM auto 分支维持 f6783077 原模型（ar×2×t(n_hi)
-  不随 worker 数折算——与联合求解 per_solve=run_budget/(ar×2) 同一口
-  径，全框架统一的拓扑表习语）。
+  不随 worker 数折算：表值 ar 在 -n 1 下只虚抬 desired——有 -t 时被框架
+  层覆盖，无 -t 时 target 与 5×target+30 宽限同涨、单迭代时长由 child
+  侧联合求解的 n（#563 起 -n 1 档 ar=1）决定，只多跑迭代不膨胀单迭代；
+  【2026-11-08 勘误，issue #563】原文「与联合求解 per_solve=run_budget/
+  (ar×2) 同一口径，全框架统一的拓扑表习语」随联合求解 workers==1 闸门
+  上线失准，依上述自有理由成立）。
   【2026-11-02 勘误，PR#384 检视 R3（意见 4440012669）】GEMM 显式档 min
   的全核口径再加 CAVEAT 低估系数 3×（min=3×ar×2×t(knob)，仅
   workers>1）：仅表值口径的 min 裕量只有 433s/264s≈1.6×（mdim=4096 全核

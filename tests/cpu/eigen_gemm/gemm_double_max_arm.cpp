@@ -271,8 +271,11 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
          * compute 表值 #506 后为 15 → ~14.3 次迭代; 旧表 5.0 时 4.76),
          * 标准 -t…-n 1 回归路径的单迭代
          * 语义破坏。auto 分支维持 f6783077 原模型(ar×2×t(n_hi) 不随
-         * worker 数折算——与联合求解 per_solve=run_budget/(ar×2) 同一口
-         * 径, 全框架统一的拓扑表习语)。 */
+         * worker 数折算: 表值 ar 在 -n 1 下只虚抬 desired——有 -t 时被
+         * 框架层覆盖, 无 -t 时 target 与 5×target+30 宽限同涨、单迭代
+         * 时长由 child 侧联合求解的 n(#563 起 -n 1 档 ar=1)决定, 只多
+         * 跑迭代不膨胀单迭代; 原注释「与联合求解 per_solve 同一口径」
+         * 的论据随 #563 闸门失准, 依上述自有理由成立)。 */
         double ar = workers > 1
                 ? sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe()) : 1.0;
         iter_s = ar * 2.0 * GEMM_T1024_S * std::pow((double)knob / 1024.0, 3.0);

@@ -67,7 +67,7 @@ static int eigen_svd_double2_sve_init(struct test *test)
             .shared_bytes_per_slice = 0,   /* make_data holds no matrices */
             .mem_fraction_permille = 650,
             .ar_fam = SDC_FAM_MEM_BOUND,
-            .run_budget_ms = 140000,   /* 镜像 sandstone_eigen_common.h 联合层值 */
+            .run_budget_ms = 200000,   /* 镜像 sandstone_eigen_common.h 联合层值 */
         };
         try {
             dim = sdc_joint_dim_slice(test, "mdim", &ja, svd_f64_solve_once);

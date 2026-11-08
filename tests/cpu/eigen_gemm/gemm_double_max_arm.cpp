@@ -186,13 +186,14 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
  * time: the deadline is then already expired when iteration #1 finishes,
  * which is what the −5% margin is for; a dur above the real time would
  * instead start a second, un-budgeted iteration. On this host class dur
- * sits on that side twice over: the −5% margin, plus the table AR (5)
- * understating the measured all-core slowdown (~15, CAVEAT in the init
- * comment) — dur ≈ 42 s vs the ~55-60 s measured multiply. The derived
+ * sits on that side twice over: the −5% margin, plus (pre-#506) the table
+ * AR (5) understating the measured all-core slowdown (~15) — dur ≈ 42 s
+ * vs the ~55-60 s measured multiply; the #506 re-calibration (comp 5→15)
+ * closes that gap. The derived
  * timeout test_timeout() = 5×duration + 30 s (300 s floor) needs the
  * OTHER relation — real iteration <= timeout — and child n <= n_hi is
- * what keeps it: the real iteration stays within the ceiling model times
- * the model's own error (~3× measured), so one iteration fits the
+ * what keeps it: the real iteration stays within the ceiling model,
+ * so one iteration fits the
  * timeout.
  * EXCEPT for an explicit knob/env, which the child applies VERBATIM
  * (dim = knob, no min against n_hi, issue #352 mirror of the SVD fix):
@@ -220,11 +221,11 @@ EIGEN_SVE_DEFINE_DISPATCHERS(gemm);
  * count deviate, but only in the safe direction above.
  */
 #define GEMM_T1024_S 0.1260    /* quiet fill+multiply at N=1024, seconds */
-/* PR#384 检视 R3 (意见 4440012669): the compute-family AR table entry
- * understates ceiling-footprint GEMM 3x (effective AR ~15, measured —
- * see the init CAVEAT below); the explicit-tier anti-kill floor (min)
- * scales its full-core AR by this factor. */
-#define GEMM_AR_CAVEAT_X 3.0
+/* 【#506 退役记录】PR#384 检视 R3 (意见 4440012669) 曾以
+ * GEMM_AR_CAVEAT_X=3.0 给显式档 anti-kill 地板(min)的全核 AR 加权,
+ * 补 compute 族表值 5.0 对天花板足迹 GEMM 的 3× 实测低估(有效
+ * AR≈15)。#506 把表行重标定为 15 后该补偿数值上恒等(5×3=15)且
+ * 双重计入, 已删除——min 直接取表 AR 口径, 语义不变。 */
 
 static int eigen_gemm_double_max_arm_preinit(struct test *test)
 {
@@ -267,7 +268,8 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
          * 与 svd_cdouble_sve(f23e2fd9)同构: AR 表值是全核口径, 单 worker
          * 自争抢为 1(物理定义); 不折算则 -n 1 显式档裸跑 target 被拉到
          * ~ar 倍 t(knob)(GEMM_T1024_S 本身是 quiet -n 1 口径, 本机单节点
-         * compute 表值 5.0 → 4.76 次迭代), 标准 -t…-n 1 回归路径的单迭代
+         * compute 表值 #506 后为 15 → ~14.3 次迭代; 旧表 5.0 时 4.76),
+         * 标准 -t…-n 1 回归路径的单迭代
          * 语义破坏。auto 分支维持 f6783077 原模型(ar×2×t(n_hi) 不随
          * worker 数折算——与联合求解 per_solve=run_budget/(ar×2) 同一口
          * 径, 全框架统一的拓扑表习语)。 */
@@ -278,48 +280,40 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
          * 与 svd_cdouble_sve(9a82f53b)同构: -t 在框架层无条件覆盖
          * desired_duration(sandstone_run.cpp test_duration), 无 min 夹钳时
          * `-t 2000 -O …mdim=<大>` 的 timeout 落 300s floor, 而全核单迭代
-         * = 有效AR×2×t(knob)——本文件下方 CAVEAT 自认 compute 族表值 5.0
-         * 在大足迹下实测低估 3×(有效 AR≈15, 甚至 '~600s' host class),
-         * mdim=4096 全核单迭代 ≈242s(计入立方模型 -9% 低估 ≈264s), 余量
-         * 不足 20%, 表值档 host class 上确定性 SIGQUIT。min=单次全迭代
-         * 模型(无 0.95 裕量), -t 小值档 target 被夹钳到单迭代, timeout
+         * = 有效AR×2×t(knob)——pre-#506 表值 5.0 在大足迹下实测低估
+         * 3×(有效 AR≈15, 甚至 '~600s' host class), mdim=4096 全核单迭代
+         * ≈242s(计入立方模型 -9% 低估 ≈264s), 余量不足 20%, 表值档
+         * host class 上确定性 SIGQUIT。min=单次全迭代模型(无 0.95
+         * 裕量), -t 小值档 target 被夹钳到单迭代, timeout
          * (5×min+30)随之随 knob 缩放。auto 分支不写: auto 单迭代由
          * run_budget=200s×AR 表值设计收在 300s floor 内(本 host class
          * 内存侧先绑住, n_run 非绑定侧)。
-         * 【PR#384 检视 R3, 意见 4440012669】min 的全核口径再乘 CAVEAT
-         * 低估系数(GEMM_AR_CAVEAT_X=3×): 仅表值口径的 min 裕量只有
-         * 433s/264s≈1.6×(mdim=4096 全核 -t 小值档), 而 GEMM_T1024_S 系
-         * 本机 256-bit quiet 定标——VL=128 档实测每迭代慢 1.78×(2026-11-02,
-         * -n 1 -O mdim=2048: 每内层迭代 1.757s→3.133s), 与 CAVEAT 有效
-         * AR≈15 叠加后 kill 阈值 5×ar_table=25 被 15×1.78=26.7 打穿
-         * (计入 T1024 立方模型 -9% 低估更甚), timeout=5×min+30 在该档
-         * 贴线/击穿。min 是反 kill 地板, 须以最坏真实单迭代为口径:
-         * ×3 后 VL=128 叠加最坏仍有 5×15/(15×1.78)≈2.8× 裕量(计入
-         * -9% ≈2.5×)。workers==1 不放大: CAVEAT 3× 是全核争抢效应,
-         * 单 worker 自争抢为 1, -n 1 显式档单迭代语义保持(意见
-         * 4439402781); desired 维持表值标称口径(时间预算目标, 非反
-         * kill 地板)。SVD 侧不加: 其 mem 族表值 25 实测低估仅 1.56×
-         * (39), 5×25/(39×1.78)≈1.8× 裕量仍足。【R4, 意见 4441045425
-         * 复算】计入 SVD 幂律拟合误差 ±2%(1.02) 精化为 1.77×, 打穿
-         * 需 SVD 档因子 ≥125/(39×1.02)≈3.14×; R4 实测 SVD VL=128
-         * 档因子 1.064×(2026-11-04, -n 1 -O mdim=2048 单迭代
-         * 56.06s→59.66s, SDCSHIELD_ARM64_SPEC_MAX_VL=128 原生降档;
-         * GEMM 同法对照 4.18s→5.87s 证降档改变执行)——代入实测因子
-         * 裕量 5×25/(39×1.064×1.02)≈2.95×【R7 勘误, 意见 4464199557:
-         * R4 原记 ≈3.1× 系算术误差(125/42.33=2.95), 裕量=阈值/实测
-         * 档因子同一量】, R3 借用 GEMM 1.78 系保守
-         * 上界(AR 与 tier 反相关不叠加, R3 GEMM 实测)。中间 worker 档
+         * 【PR#384 检视 R3, 意见 4440012669; #506 表重标定后改述】min 的
+         * 全核口径曾再乘 CAVEAT 低估系数(GEMM_AR_CAVEAT_X=3×, 已退役):
+         * 仅表值口径的 min 裕量只有 433s/264s≈1.6×(mdim=4096 全核 -t
+         * 小值档), 而 GEMM_T1024_S 系本机 256-bit quiet 定标——VL=128
+         * 档实测每迭代慢 1.78×(2026-11-02, -n 1 -O mdim=2048: 每内层
+         * 迭代 1.757s→3.133s), 与有效 AR≈15 叠加后旧 kill 阈值
+         * 5×ar_table=25 被 15×1.78=26.7 打穿(计入 T1024 立方模型 -9%
+         * 低估更甚)。#506 把 compute 表值重标定为实测上界 15 后, min
+         * = 表值口径×2×t(knob) 即最坏真实单迭代(数值与旧 5×3 恒等),
+         * VL=128 叠加最坏仍有 5×15/(15×1.78)≈2.8× 裕量(计入 -9%
+         * ≈2.5×)——账目数值不变, 构成自 CAVEAT 加权改为表值直取。
+         * workers==1 不折算(意见 4439402781, 上方): 表值是全核口径,
+         * -n 1 显式档单迭代语义保持; desired 维持表值标称口径(时间
+         * 预算目标, 非反 kill 地板)。SVD 侧对照: 其 mem 族表值已 #506
+         * 重标定为 40(实测最坏 child AR≈39-40 取上界), 裕量
+         * 5×40/(39×1.064×1.02)≈4.73×, 无需任何额外加权。中间 worker 档
          * (1<w<全核) min 随之更保守——二值闸门裁定见意见 4439402800/
          * 4440012653(保守方向, 插值无标定数据反开 kill 窗)。 */
-        test->minimum_duration = (int)(iter_s * 1000.0
-                * (workers > 1 ? GEMM_AR_CAVEAT_X : 1.0));   /* ms */
+        test->minimum_duration = (int)(iter_s * 1000.0);   /* ms */
     } else {
         double ar = sdc_ar_factor(SDC_FAM_COMPUTE_BOUND, sdc_numa_probe());
         iter_s = ar * 2.0 * GEMM_T1024_S * std::pow((double)n_hi / 1024.0, 3.0);
     }
     /* 【PR#384 检视 R5, 意见 4463650400】显式档生效侧澄清: 本 desired
-     * (0.95×iter_s)恒小于上方 min(1.0×iter_s, workers>1 时 3×iter_s
-     * ≈ 3.16×desired), 而框架 test_duration 的 min 夹钳最后执行
+     * (0.95×iter_s)恒小于上方 min(1.0×iter_s ≈ 1.05×desired),
+     * 而框架 test_duration 的 min 夹钳最后执行
      * (sandstone_run.cpp:1879-1880)→ 显式档的 target/timeout 恒由
      * min 决定, 本 desired 在显式档是模型记录值(表值标称口径的时间
      * 预算目标, 见意见 4440012669 裁定), 单独调它不改显式档时长(须调
@@ -364,15 +358,17 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
      * quick mode collapses to MDIM_MIN. run_budget_ms keeps the contract
      * value 200000: on this host class the memory side binds first
      * (n_mem=3364 < n_run~4900-5300), so the time budget is not the
-     * sizing constraint. CAVEAT (fix round 1, 2026-10-28): the
-     * compute-family AR table entry (5.0; 4.4 measured at MEDIUM
-     * footprint) UNDERSTATES ceiling-footprint GEMM — the T6 verification
-     * run's full-core single multiply at N=3364 took ~55-60 s against a
-     * ~4.0 s quiet model, an effective AR of ~15 (3x the table). A host
-     * where the time side binds would size n_run for a 200 s iteration
-     * that really takes ~600 s — past the 300 s hard grace (T5's failure
-     * class). Flagged as T7/T9 input (footprint-aware AR entry or
-     * per-test compensation); no code change in this round. */
+     * sizing constraint. Measurement history (fix round 1 CAVEAT,
+     * 2026-10-28): the pre-#506 compute-family AR table entry (5.0; 4.4
+     * measured at MEDIUM footprint) UNDERSTATED ceiling-footprint GEMM —
+     * the T6 verification run's full-core single multiply at N=3364 took
+     * ~55-60 s against a ~4.0 s quiet model, an effective AR of ~15 (3x
+     * the table). A host where the time side binds would size n_run for
+     * a 200 s iteration that really took ~600 s — past the 300 s hard
+     * grace (T5's failure class). #506 re-calibrated the 1-node compute
+     * entry to the measured ceiling (15), so the time-bound sizing now
+     * lands a real 200 s iteration — the flagged T7/T9 gap is closed at
+     * the table root (this comment is the record). */
     int dim;
     int64_t knob = sdc_knob_or_env_clamped(test, "mdim", MDIM_MIN, MDIM_MAX);
     if (knob > 0) {
@@ -418,14 +414,14 @@ static int eigen_gemm_double_max_arm_init(struct test *test)
     if (test->desired_duration > 0) {
         /* 【PR#384 检视 R6, 意见 4463986196】min 的文案随值走: auto 档
          * 设计不写 min(0 = 无下限, -t/默认时长直接生效), 显式档才有
-         * CAVEAT 加权单迭代下限。 */
+         * 单迭代下限(#506 起为表 AR 口径, CAVEAT 加权已退役)。 */
         log_info("N=%d (~%.2f GB per thread; sized in child init: knob/env, "
                  "else 联合求解 min(n_mem, n_run); preinit desired_duration "
                  "%d ms, minimum_duration %d ms (%s); "
                  "override with -O eigen_gemm_double_max_arm.mdim=N)",
                  dim, gb, test->desired_duration, test->minimum_duration,
                  test->minimum_duration > 0
-                     ? "显式档: CAVEAT 加权单迭代下限, -t 夹钳"
+                     ? "显式档: 表 AR 口径单迭代下限, -t 夹钳"
                      : "auto 档: 设计不设下限, -t/默认时长直接生效");
     } else {
         log_info("N=%d (~%.2f GB per thread; sized in child init: knob/env, "

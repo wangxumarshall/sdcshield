@@ -45,6 +45,19 @@ uint64_t sdc_node_budget_bytes(int permille, int cpu);
  * 探测失败(无节点内存信息)退化为全局在线 CPU 数。 */
 int sdc_numa_effective_threads(int cpu);
 
+/* sdc_numa_effective_threads 的选中设备集口径(issue #515): 折算域从
+ * 「全机在线 CPU」(sysfs, --cpuset/taskset 无关)收缩为「框架实际选中的
+ * 设备集」——启动亲和(taskset 生效, ambient_logical_processor_set)与
+ * --cpuset/--deviceset 过滤后的 shmem->device_info[], 即 worker 的真实
+ * 分布域。返回: effective 节点(含 C1 并入, 与上函数同一归属口径)命中
+ * 的选中设备数; *total_selected 非空时写入选中设备总数(折算分母)。
+ * 选中集不可读(shmem 未建/设备数为 0)或 NUMA 探测失败返回 -1 且
+ * *total_selected 置 0 —— 调用方退回全机口径(修复前行为)。全核时
+ * 返回值与 sdc_numa_effective_threads(cpu) 恒等, *total_selected 与
+ * sdc_numa_probe()->total_cpus 恒等(默认路径零变化); 跨节点均匀的
+ * 受限集下新旧折算同值(均匀假设仅对非均匀集失真)。 */
+int sdc_numa_effective_threads_selected(int cpu, int *total_selected);
+
 /* /proc/self/status 的 VmHWM(峰值 RSS, kB→字节); 读不到返回 0。
  * T7 反馈闭环专用 —— 刻意不用 memfpt_current_high_water_mark(): 它在
  * release 构建返回 0, 且把它转正会激活 x86 诊断路径(spec §4.4 修正 #2)。

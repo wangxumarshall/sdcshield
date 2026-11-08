@@ -1270,13 +1270,30 @@ double sdc_feedback_eff_median(const char *test_id)
     return (m & 1) ? vals[m / 2] : 0.5 * (vals[m / 2 - 1] + vals[m / 2]);
 }
 
-/* 写入点(run_one_test_inner 尾部调用): eff_ratio = VmHWM/(n²·elem·本
- * slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/threads 取自本
- * child test_init 里联合求解登记的 sdc_joint_cache —— 显式 knob/未迁移
- * 用例无口径则不写。写侧始终记录(±15% 死区与 0.7×静态锚下限都在读侧
- * 判断, 见 sdc_joint_dim_slice)。基线污染口径: fork child 的 VmHWM 起点
- * = 父进程当时 RSS(实测 ~8.3MB, eigen 家族 <1%); 联合求解探针的高水位
- * 同样计入(探针远小于正式工作集)—— 记录为已知口径。 */
+/* issue #385: 反馈写入的 fork 基线。VmHWM 只增不减, fork child 的起点 =
+ * 父进程当时 RSS(实测 ~8.3MB)。此前写入点直接用整个 VmHWM 作分子, 基线
+ * 项 8.3e6/(n²·threads) 在 n 小/线程少时压过真实工作集: 按自证数据复算,
+ * n=16×1 线程时基线贡献 32422 B/n²/线程, 对 GEMM_F64 表值 32.256 B 放大
+ * ~1000×, 且 EMA 半衰、向下修正的 15% 死区 + 0.7×锚下限都护着膨胀值,
+ * 读侧向上无死区无上钳全额采纳 → c 被锁死、n 压向 lo、压力静默塌缩。
+ * 修法(本侧): 在 run_one_test_inner 入口、任何测试分配之前采样本 child
+ * 的起始 VmHWM 作基线, 写入时 eff_ratio = (VmHWM − baseline)/(n²·elem·
+ * threads), 结果 clamp ≥ 0。读取失败(baseline=0)退化为原口径并告警一次;
+ * hwm ≤ baseline(增量不可测)则不发布样本, 不写零/负值。联合求解探针的
+ * 高水位仍在分子内(探针远小于 n_mem 路径的正式工作集; n_run 受限的小 n
+ * 路径由读侧 4× 锚上钳兜底, 见 sdc_stress_config.h)。 */
+static uint64_t s_feedback_vm_hwm_baseline;
+
+static void sdc_feedback_capture_baseline(void)
+{
+    s_feedback_vm_hwm_baseline = sdc_read_vm_hwm();
+}
+
+/* 写入点(run_one_test_inner 尾部调用): eff_ratio = (VmHWM − fork 基线)/
+ * (n²·elem·本 slice线程), EMA α=0.5 写进本 slice 的 Main 槽。n/elem/
+ * threads 取自本 child test_init 里联合求解登记的 sdc_joint_cache ——
+ * 显式 knob/未迁移用例无口径则不写。写侧始终记录(±15% 死区、0.7×静态
+ * 锚下限与 4×锚上钳都在读侧判断, 见 sdc_joint_dim_slice)。 */
 static void sdc_feedback_write(const struct test *test)
 {
     if (!test || !test->id)
@@ -1290,11 +1307,29 @@ static void sdc_feedback_write(const struct test *test)
     uint64_t hwm = sdc_read_vm_hwm();
     if (hwm == 0)
         return;
+    /* #385: 扣除 fork 基线(父进程 RSS 随 fork 计入本 child VmHWM)。 */
+    uint64_t baseline = s_feedback_vm_hwm_baseline;
+    uint64_t used;
+    if (baseline == 0) {
+        used = hwm;                     /* 基线读取失败 → 退原口径(告警) */
+        log_warning("[反馈] %s: fork 基线读取失败 → 本样本未扣除基线 "
+                    "(VmHWM=%.1f MiB, issue #385)", test->id,
+                    (double)hwm / 1048576.0);
+    } else if (hwm <= baseline) {
+        /* 工作集增量小于 /proc 的 1 KiB 粒度或测试根本未增长 RSS: 样本
+         * 不含有效信息, 不发布(写 0 会把 c 压向 0.7×锚下限)。 */
+        log_warning("[反馈] %s: VmHWM=%.1f MiB 未超过 fork 基线 %.1f MiB → "
+                    "无有效增量, 本 child 不发布样本", test->id,
+                    (double)hwm / 1048576.0, (double)baseline / 1048576.0);
+        return;
+    } else {
+        used = hwm - baseline;
+    }
     double denom = (double)ctx.n * (double)ctx.n
                  * (double)ctx.elem_bytes * (double)ctx.threads;
     if (!(denom > 0.0))
         return;
-    double eff = (double)hwm / denom;
+    double eff = (double)used / denom;
 
     PerThreadData::MemFeedback *fb = &sApp->main_thread_data()->mem_feedback;
     uint64_t hash = sdc_test_id_hash(test->id);
@@ -1345,15 +1380,20 @@ static void sdc_feedback_write(const struct test *test)
         fb->eff_ratio = 0.5 * fb->eff_ratio + 0.5 * eff;   /* EMA α=0.5 */
     ++fb->samples;
     __atomic_store_n(&fb->seq, s1 + 1, __ATOMIC_RELEASE);   /* 偶数=稳定 */
-    log_warning("[反馈] %s: VmHWM=%.1f MiB / (n=%d²×%dB×%d线程) → "
-                "eff_ratio=%.3f (EMA α=0.5, 样本=%u)",
-                test->id, (double)hwm / 1048576.0, ctx.n, ctx.elem_bytes,
+    log_warning("[反馈] %s: VmHWM=%.1f MiB − 基线 %.1f MiB = 净 %.1f MiB / "
+                "(n=%d²×%dB×%d线程) → eff_ratio=%.3f (EMA α=0.5, 样本=%u)",
+                test->id, (double)hwm / 1048576.0, (double)baseline / 1048576.0,
+                (double)used / 1048576.0, ctx.n, ctx.elem_bytes,
                 ctx.threads, fb->eff_ratio, (unsigned)fb->samples);
 }
 #endif /* __aarch64__ && __linux__ */
 
 static TestResult run_one_test_inner(struct test *test, bool init_in_aux_thread = false)
 {
+#if defined(__aarch64__) && defined(__linux__)
+    /* #385: 在任何测试分配之前采样 fork 基线(见 sdc_feedback_write)。 */
+    sdc_feedback_capture_baseline();
+#endif
     s_current_test = test;
     auto resetCurrentTest = scopeExit([&] { s_current_test = nullptr; });
 

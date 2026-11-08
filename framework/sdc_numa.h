@@ -48,9 +48,11 @@ int sdc_numa_effective_threads(int cpu);
 /* /proc/self/status 的 VmHWM(峰值 RSS, kB→字节); 读不到返回 0。
  * T7 反馈闭环专用 —— 刻意不用 memfpt_current_high_water_mark(): 它在
  * release 构建返回 0, 且把它转正会激活 x86 诊断路径(spec §4.4 修正 #2)。
- * 口径注意: fork child 的 VmHWM 起点 = 父进程当时 RSS(实测 8.3MB,
- * eigen 家族 <1%, 记录为已知口径); 联合求解探针的高水位同样计入
- * (探针远小于正式工作集)。 */
+ * 口径注意: fork child 的 VmHWM 起点 = 父进程当时 RSS(实测 8.3MB)。
+ * 反馈写入点自 issue #385 起在 run_one_test_inner 入口采样该起点并在
+ * 折算 eff_ratio 时扣除(见 sandstone_run.cpp sdc_feedback_write); 联合
+ * 求解探针的高水位仍计入(探针远小于 n_mem 路径的正式工作集, 小 n 路径
+ * 由读侧 4×静态锚上钳兜底)。 */
 uint64_t sdc_read_vm_hwm(void);
 
 #endif /* __aarch64__ && __linux__ */

@@ -1187,29 +1187,32 @@ inline std::map<std::string, struct sdc_joint_ctx> &sdc_joint_cache()
     return cache;
 }
 
-/* T10 降档路径的口径同步(PR#302 检视 #25): init 期 bad_alloc/分配失败
- * 降档到 kInitRetryLo 重试成功后, 联合求解登记的 sdc_joint_ctx.n 仍是
- * 求解值——run_one_test_inner 尾部的反馈写入点按 ctx.n 折算 eff_ratio
- * = VmHWM/(n²·elem·threads), 实际工作集只有 retry 值会使 eff 被低估
- * (n/retry)² 倍, 反馈通道被污染、c 被压向 0.7× 静态锚下限, 后续
- * fracture 的 n 向 OOM 方向膨胀。降档处调用本函数把登记口径同步为
- * 实际值; 显式 knob/未迁移用例无登记条目时为 no-op。init 双重失败
- * (EXIT_SKIP)不需要: run_one_test_inner 对 init SKIP 提前返回, 到不了
- * 反馈写入点。已知残差(如实记录): worker 期 bad_alloc 的线程级 SKIP
- * 仍按求解 n 记账(VmHWM 是不完整分配的峰值)——低估方向受读侧 0.7×
- * 锚下限钳制(n 至多膨胀 1/√0.7≈1.2×), 且生产构建 malloc 插桩拦截空
- * 分配(仅 ASAN 可达), 不单独设通道。 */
-static inline void sdc_joint_cache_note_dim(struct test *test, int actual_n)
+/* T10 降档路径的反馈口径失效(issue #545; 取代 PR#302 检视 #25 的
+ * 『同步分母』修复): init 期 bad_alloc 降档到 kInitRetryLo 重试成功后,
+ * run_one_test_inner 尾部的反馈写入点按 ctx.n 折算 eff_ratio
+ * = VmHWM/(n²·elem·threads)。分子 VmHWM 是本 child 进程的峰值, 包含
+ * 降档前部分成功的 O(n²) 分配(d->lhs 已建成、d->rhs 才抛 bad_alloc);
+ * 只把分母 ctx.n 改成 retry 值会把 eff 高估 (n_solved/retry)² 倍
+ * (n=3500/retry=16 约 48000×)。读侧向上修正本就无死区无上钳, 一次
+ * 瞬时 OOM 会被直接采纳为 c, 后续 fracture 的 n 被压向 lo、压力静默
+ * 塌缩(EMA α=0.5 下还要 ~18 个 fracture 才衰减回 ±15% 死区)。
+ * 分子无法在不对 VmHWM 做基线扣除的前提下按 retry 口径折算(基线
+ * 扣除/上钳改造属 #385 范围), 因此降档 child 诚实的选择是不发布
+ * 样本: 注销本 child 的联合求解登记, sdc_feedback_write 见无条目即
+ * 不写。下一 fracture 重新求解, 不受本次瞬态事件污染。显式 knob/
+ * 未迁移用例无登记条目时为 no-op。init 双重失败(EXIT_SKIP)不需要:
+ * run_one_test_inner 对 init SKIP 提前返回, 到不了反馈写入点。已知
+ * 残差不变(如实记录): worker 期 bad_alloc 的线程级 SKIP 仍按求解 n
+ * 记账(VmHWM 是不完整分配的峰值)——低估方向受读侧 0.7× 锚下限钳制
+ * (n 至多膨胀 1/√0.7≈1.2×), 且生产构建 malloc 插桩拦截空分配(仅
+ * ASAN 可达), 不单独设通道。 */
+static inline void sdc_joint_cache_drop(struct test *test)
 {
     if (!test || !test->id)
         return;
     auto it = sdc_joint_cache().find(test->id);
-    if (it == sdc_joint_cache().end())
-        return;
-    if (actual_n > 0)
-        it->second.n = actual_n;
-    else
-        sdc_joint_cache().erase(it);   /* 0 = 口径无效 → 本 child 不写反馈 */
+    if (it != sdc_joint_cache().end())
+        sdc_joint_cache().erase(it);
 }
 
 /* framework/sandstone_run.cpp 提供(arm64+linux 编译): 遍历全部 slice 的

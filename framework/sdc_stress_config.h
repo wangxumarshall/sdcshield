@@ -443,8 +443,10 @@ static inline int sdc_load_config_file(const char *path, char *errmsg, size_t er
  * knob 值缓存: 框架约定 test option 只能在 test_init()(主线程,
  * thread_num == -1)查询——在 worker 线程(test_run)调用
  * get_testspecific_knob_value_int() 会触发 logging_mark_knob_used 的
- * abort(debug 构建)。故 init 查询时把最终生效值缓存, run 里只读缓存。
- * fork 模式下子进程写时复制继承主进程已填充的缓存。
+ * abort(该检查自 #417 起对所有构建类型生效, 不再受 NDEBUG 门控)。
+ * 故 init 查询时把最终生效值缓存, run 里只读缓存; worker 侧 cache miss
+ * 同样 fail loudly(见 sdc_knob_int_clamped)。fork 模式下子进程写时
+ * 复制继承主进程已填充的缓存。
  */
 static inline std::string sdc_knob_cache_key(const struct test *test, const char *key)
 {
@@ -472,11 +474,21 @@ static inline int64_t sdc_knob_int_clamped(struct test *test, const char *key,
     const std::string cache_key = sdc_knob_cache_key(test, key);
 
     /* worker 线程(test_run): 不查 knob, 直接读 init 预热过的缓存。
-     * 未命中说明该测试在 init 里没有查询过此 knob(测试 bug)——回退 def
-     * 走自适应, 与 init 侧的 def 路径语义一致, 避免 debug 构建 abort。 */
+     * 未命中说明该测试在 init 里没有查询过此 knob(测试 bug)。旧行为是
+     * 静默返回 def——release 与 debug 下同样发生, 会让
+     * `-O <test>.<knob>=N` 被无声无视(#417 缺口 3)。现在 fail loudly:
+     * log_error + abort, 与 logging_mark_knob_used 的 worker 线程检查
+     * 同口径。 */
     if (thread_num != -1) {
         auto it = sdc_knob_cache().find(cache_key);
-        return it != sdc_knob_cache().end() ? it->second : def;
+        if (it != sdc_knob_cache().end())
+            return it->second;
+        log_error("%s: worker 线程读取 knob \"%s\" 但 init 未预热缓存——"
+                  "测试 bug: 请在 test_init 里无条件调用本 helper(或读取同 "
+                  "knob 的 sdc_knob_int_clamped)预填缓存, 否则 -O 显式配置"
+                  "会被无视",
+                  test ? test->id : "(global)", key);
+        abort();
     }
 
     /* 主线程(test_init): 正常查询 + clamp + 缓存 */

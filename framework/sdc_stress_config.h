@@ -509,7 +509,9 @@ static inline int64_t sdc_knob_int_clamped(struct test *test, const char *key,
 }
 
 /* 环境变量兜底: SDC_<TESTID>_<KNOB> —— 配置文件未提供时的轻量通道。
- * 返回值: 找到并解析成功返回 1 且 *out 填充; 否则返回 0。
+ * 返回值: 找到且解析成功(可表示, 无 ERANGE 溢出)返回 1 且 *out 填充;
+ * 否则返回 0(含形态非法/溢出饱和——饱和值不是用户真实输入, 不得当
+ * "解析成功"送进 clamp 通道, issue #490)。
  * (位于联合求解段之前——T11 的 knob 早退块补查 env 通道要用。) */
 static inline int sdc_env_knob_int(const char *test_id, const char *key,
                                    int64_t *out)
@@ -534,6 +536,20 @@ static inline int sdc_env_knob_int(const char *test_id, const char *key,
     long long parsed = strtoll(v, &end, 0);
     if (end == v || (end && *end != '\0'))
         return 0;
+    /* ERANGE: strtoll 饱和到 LLONG_MAX/LLONG_MIN, parsed 不是用户输入。
+     * 若放行, 越界告警打出的会是饱和值而非用户真实输入(实测 23 位输入
+     * 打出 9223372036854775807), 且与 -O 通道的溢出行为不可比(该通道
+     * strtoull 饱和回绕成 -1 反向 clamp, 上游事故不在本处修)——按契约
+     * "解析成功才返回 1"拒绝, 告警真实值后回退未配置路径(默认/自适应),
+     * 与 -O 整数选项的 ERANGE 口径同构(也查 errno==ERANGE、越界错误打
+     * 原始入参串, sandstone_opts.cpp ParseIntArgument); 位置在形态检查
+     * 之后, 溢出且带尾随垃圾的输入保持原有静默拒绝不变。 */
+    if (errno == ERANGE) {
+        log_warning("[压力映射] %s.%s: 环境变量值 '%s' 超出 long long 可表示"
+                    "范围 (strtoll 溢出饱和), 按未配置处理 — 回退默认/自适应通道",
+                    test_id, key, v);
+        return 0;
+    }
     if (out)
         *out = (int64_t)parsed;
     return 1;

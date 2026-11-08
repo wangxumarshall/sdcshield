@@ -689,12 +689,36 @@ instead of assuming one tier:
   `scripts/check-scalar-golden.sh <binary> <init-symbol>...` (resolves the
   C++-mangled name itself; an unresolvable symbol or empty disassembly is a
   FAIL, not a pass — a plain `objdump --disassemble=<plain name>` silently
-  returns nothing and greps to a hollow PASS). Precedents:
+  returns nothing and greps to a hollow PASS; matches both NEON `vN.` and
+  SVE `zN.`/`pN.` instruction forms — the SVE half verified against real
+  disassembly of the pre-conversion golden symbols, e.g. `fmad z1.s, p0/m,
+  z3.s, z0.s` and `cmpeq p1.s, p0/z, z0.s, z1.s`). Precedents:
   `tests/cpu/sve/case/neon_rot_2src_sve.cpp`,
   `neon_rot_store_only_sve.cpp`, `neon_rot_u8x16_sve.cpp`; migrated family:
   `tests/cpu/misc/neon_rot_*.cpp` (except `rowmajor_scalar64` — already
-  fully scalar, a separate scalar-vs-scalar same-code gap) +
-  `tests/cpu/arm64/neon_rot_2src.cpp`.
+  fully scalar, a separate scalar-vs-scalar same-code gap, see below) +
+  `tests/cpu/arm64/neon_rot_2src.cpp` + the issue #373 second baton:
+  `tests/cpu/sve/sve_rot_*.cpp` (5 files / 8 tests), the 15
+  `tests/cpu/sve/case/neon_rot_*_sve.cpp` VLA variants,
+  `tests/cpu/sve/kreg/arm0102_*_sve.cpp` (5 files; the fma_f32 member uses
+  a bit-exact `fmaf` scalar replica on the scalar FP pipe — the independent
+  path for an FMA-vector test. Probe-measure the actual SVE semantics
+  first: `svmsb_f32_x(pg, c, a, b)` computes `b - c*a` (FMSB writes the
+  subtractor), NOT the NEON `vfmsq` shape `c - a*b` the old docblocks
+  claimed — replicate the measured per-case compositions with exact
+  negations, never an algebraically-simplified form; the divergences
+  include the sign of zero when a product is ±0), `core179_kernel_sdc_repro.cpp`,
+  `arm64/neon_test.cpp`, `sve/fma2/neon_add_sve.cpp`,
+  `misc/neon_rot_ldr_rand{,_thread}.cpp` (a PR #412 leftover found by the
+  second baton's marker sweep). The scalar64 gap ruling (2026-11-08, second
+  baton): left as-is by design — its tested datapath IS the scalar ALU, the
+  paradigm's fix direction inverts (a NEON-computed golden), which needs
+  phase-strided pairing with no tree precedent, opts out of the mechanical
+  gate (which asserts zero vector ALU in the golden), and would make a
+  persistent NEON fault FAIL a test whose name declares the scalar chassis
+  (cross-attribution noise in the core-179 campaign); a persistent scalar
+  ALU fault therefore remains undetectable by that one test — recorded, and
+  deferred to an explicit owner decision.
 - **A self-inverse transform's intermediate must be verified against an
   independent golden** (issue #374 paradigm, template:
   `docs/superpowers/plans/2026-11-01-issue374-movbe-roundtrip-golden.md`):

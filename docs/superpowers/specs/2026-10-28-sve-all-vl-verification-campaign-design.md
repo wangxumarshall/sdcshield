@@ -72,7 +72,8 @@ sched_setaffinity、forkfd/signalfd、futex 一类）。**时间盒约束：
 + `configs/se/arm_chaos_fs.py` 批量跑，eigen FS 先例）。
 
 ### 5c. 批量执行
-64 路并行（gem5 单线程进程 × 本机 128 核），每用例一条
+20 路并行（控制器修正案 2：执行期由初版设计的 64 修正为 20，内存预算与
+实测见 §9；gem5 单线程进程 × 本机 128 核），每用例一条
 `run_sve.sh` 命令 + `-O` 降容（slots/mdim 按用例 knob 清单）；仿真
 速率先用 3–5 个代表用例标定，再定 `-t`（预算：每用例仿真墙钟
 ≤30 min）。判据：`exit: pass` @ VL=512。

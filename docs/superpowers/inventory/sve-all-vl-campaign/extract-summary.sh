@@ -16,9 +16,22 @@
 # 2-space-indented "result:" and "test-runtime:" line; see
 # framework/logging.cpp YamlLogger::print_result_line/print_fixed and
 # framework/sandstone_run.cpp run_one_test):
-#   - result     = the LAST "result:" line of that test's blocks (the block's
-#                  own final verdict; per-thread/per-iteration sub-entries sit
-#                  at deeper indentation and never match the 2-space anchor).
+#   - result     = the MOST SERIOUS "result:" of that test's blocks (worst-wins;
+#                  per-thread/per-iteration sub-entries sit at deeper indentation
+#                  and never match the 2-space anchor). Not last-wins: the
+#                  framework retries a failed test (framework/sandstone_run.cpp
+#                  run_one_test — default retest_count = 10, and it still
+#                  returns Failed if ANY round failed), so an intermittent-SDC
+#                  log reads pass…fail…retry-pass and last-wins would record
+#                  "pass" for a test the log's own exit line calls fail.
+#                  Severity follows the TestResult enum as logged:
+#                  pass < skip < fail < crash < operating system error <
+#                  timed out < interrupted < unknown (an unrecognized value
+#                  outranks everything so it is never silently dropped; ties
+#                  keep the first). "skip" outranks "pass" because a skip ends
+#                  the fracture loop immediately (run_one_test "don't repeat
+#                  skipped tests"), so a pass→skip sequence is a skip, matching
+#                  the framework's final verdict.
 #   - iterations = number of "- test:" fracture blocks for that test.
 #   - test-runtime-ms = sum of the blocks' "test-runtime:" values (ms).
 #   - rows are restricted to tests named in <test-list.txt> (the framework
@@ -66,8 +79,22 @@ fi
             blocks[name]++
             cur = name
         }
+        function rank(r) {
+            if (r == "pass") return 0
+            if (r == "skip") return 1
+            if (r == "fail") return 2
+            if (r == "crash") return 3
+            if (r == "operating system error") return 4
+            if (r == "timed out") return 5
+            if (r == "interrupted") return 6
+            return 9       # unknown result value: outranks everything, never dropped
+        }
         /^  result: / {
-            if (cur != "") { r = $0; sub(/^  result: */, "", r); last[cur] = r }
+            if (cur != "") {
+                r = $0; sub(/^  result: */, "", r)
+                if (!(cur in worst) || rank(r) > rank(worst[cur]))
+                    worst[cur] = r
+            }
         }
         /^  test-runtime: / {
             if (cur != "") { v = $0; sub(/^  test-runtime: */, "", v); rt[cur] += v + 0 }
@@ -75,10 +102,10 @@ fi
         END {
             for (i = 1; i <= n; i++) {
                 t = order[i]
-                printf "%s\t%s\t%d\t%.3f\n", t, (t in last ? last[t] : "MISSING"), blocks[t] + 0, rt[t] + 0
+                printf "%s\t%s\t%d\t%.3f\n", t, (t in worst ? worst[t] : "MISSING"), blocks[t] + 0, rt[t] + 0
             }
-            if ("mce_check" in last)
-                printf "# mce_check (framework-appended, not a list test): %s\n", last["mce_check"]
+            if ("mce_check" in worst)
+                printf "# mce_check (framework-appended, not a list test): %s\n", worst["mce_check"]
         }
     ' "$LOG"
 } > "$OUT"

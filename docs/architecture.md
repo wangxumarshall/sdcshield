@@ -272,9 +272,12 @@ sdc_joint_dim_slice()  n_mem: node budget vs RSS_RATIO_TABLE
                        all-core-slowdown table (family×topology)
       ↓
 VmHWM feedback     per-slice MemFeedback slots in shmem (written at
-                   run_one_test_inner tail, no_fork excluded): EMA
-                   α=0.5, median aggregation, 0.7× table floor —
-                   c corrections feed the *next* fracture/test
+                   run_one_test_inner tail, no_fork excluded):
+                   eff_ratio=(VmHWM − fork baseline)/(n²·elem·threads)
+                   (baseline sampled before any test allocation, #385),
+                   EMA α=0.5, median aggregation, 0.7× table floor and
+                   4× table-anchor upward cap — c corrections feed the
+                   *next* fracture/test
 ```
 
 `eigen_svd_cdouble_sve` / `eigen_gemm_double_max_arm` moved sizing from

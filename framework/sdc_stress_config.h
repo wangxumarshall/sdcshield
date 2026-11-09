@@ -43,6 +43,7 @@
 #include <test_knobs.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -442,8 +443,10 @@ static inline int sdc_load_config_file(const char *path, char *errmsg, size_t er
  * knob 值缓存: 框架约定 test option 只能在 test_init()(主线程,
  * thread_num == -1)查询——在 worker 线程(test_run)调用
  * get_testspecific_knob_value_int() 会触发 logging_mark_knob_used 的
- * abort(debug 构建)。故 init 查询时把最终生效值缓存, run 里只读缓存。
- * fork 模式下子进程写时复制继承主进程已填充的缓存。
+ * abort(该检查自 #417 起对所有构建类型生效, 不再受 NDEBUG 门控)。
+ * 故 init 查询时把最终生效值缓存, run 里只读缓存; worker 侧 cache miss
+ * 同样 fail loudly(见 sdc_knob_int_clamped)。fork 模式下子进程写时
+ * 复制继承主进程已填充的缓存。
  */
 static inline std::string sdc_knob_cache_key(const struct test *test, const char *key)
 {
@@ -471,11 +474,21 @@ static inline int64_t sdc_knob_int_clamped(struct test *test, const char *key,
     const std::string cache_key = sdc_knob_cache_key(test, key);
 
     /* worker 线程(test_run): 不查 knob, 直接读 init 预热过的缓存。
-     * 未命中说明该测试在 init 里没有查询过此 knob(测试 bug)——回退 def
-     * 走自适应, 与 init 侧的 def 路径语义一致, 避免 debug 构建 abort。 */
+     * 未命中说明该测试在 init 里没有查询过此 knob(测试 bug)。旧行为是
+     * 静默返回 def——release 与 debug 下同样发生, 会让
+     * `-O <test>.<knob>=N` 被无声无视(#417 缺口 3)。现在 fail loudly:
+     * log_error + abort, 与 logging_mark_knob_used 的 worker 线程检查
+     * 同口径。 */
     if (thread_num != -1) {
         auto it = sdc_knob_cache().find(cache_key);
-        return it != sdc_knob_cache().end() ? it->second : def;
+        if (it != sdc_knob_cache().end())
+            return it->second;
+        log_error("%s: worker 线程读取 knob \"%s\" 但 init 未预热缓存——"
+                  "测试 bug: 请在 test_init 里无条件调用本 helper(或读取同 "
+                  "knob 的 sdc_knob_int_clamped)预填缓存, 否则 -O 显式配置"
+                  "会被无视",
+                  test ? test->id : "(global)", key);
+        abort();
     }
 
     /* 主线程(test_init): 正常查询 + clamp + 缓存 */
@@ -508,7 +521,9 @@ static inline int64_t sdc_knob_int_clamped(struct test *test, const char *key,
 }
 
 /* 环境变量兜底: SDC_<TESTID>_<KNOB> —— 配置文件未提供时的轻量通道。
- * 返回值: 找到并解析成功返回 1 且 *out 填充; 否则返回 0。
+ * 返回值: 找到且解析成功(可表示, 无 ERANGE 溢出)返回 1 且 *out 填充;
+ * 否则返回 0(含形态非法/溢出饱和——饱和值不是用户真实输入, 不得当
+ * "解析成功"送进 clamp 通道, issue #490)。
  * (位于联合求解段之前——T11 的 knob 早退块补查 env 通道要用。) */
 static inline int sdc_env_knob_int(const char *test_id, const char *key,
                                    int64_t *out)
@@ -533,6 +548,20 @@ static inline int sdc_env_knob_int(const char *test_id, const char *key,
     long long parsed = strtoll(v, &end, 0);
     if (end == v || (end && *end != '\0'))
         return 0;
+    /* ERANGE: strtoll 饱和到 LLONG_MAX/LLONG_MIN, parsed 不是用户输入。
+     * 若放行, 越界告警打出的会是饱和值而非用户真实输入(实测 23 位输入
+     * 打出 9223372036854775807), 且与 -O 通道的溢出行为不可比(该通道
+     * strtoull 饱和回绕成 -1 反向 clamp, 上游事故不在本处修)——按契约
+     * "解析成功才返回 1"拒绝, 告警真实值后回退未配置路径(默认/自适应),
+     * 与 -O 整数选项的 ERANGE 口径同构(也查 errno==ERANGE、越界错误打
+     * 原始入参串, sandstone_opts.cpp ParseIntArgument); 位置在形态检查
+     * 之后, 溢出且带尾随垃圾的输入保持原有静默拒绝不变。 */
+    if (errno == ERANGE) {
+        log_warning("[压力映射] %s.%s: 环境变量值 '%s' 超出 long long 可表示"
+                    "范围 (strtoll 溢出饱和), 按未配置处理 — 回退默认/自适应通道",
+                    test_id, key, v);
+        return 0;
+    }
     if (out)
         *out = (int64_t)parsed;
     return 1;
@@ -561,6 +590,70 @@ static inline int sdc_env_knob_int_clamped(const char *test_id, const char *key,
     if (out)
         *out = v;
     return 1;
+}
+
+/* 显式 knob→env 兜底读取的单一真源【PR#384 检视, 意见 4432271425】:
+ * 该序列(knob 通道 sdc_knob_int_clamped(def=0) → 未显式配置时 env 通道
+ * sdc_env_knob_int_clamped 兜底)此前在 eigen_gemm/gemm_double_max_arm 与
+ * eigen_svd/svd_cdouble_sve 两文件的 preinit + child test_init 四处逐字
+ * 复制, "两处取值恒相同"的不变式纯靠手工同步——任一侧单独改动(clamp
+ * 范围/env 串/回退序)即静默重开 issue #352 的误杀窗口, 而两文件头注释
+ * 明文邀请的 MDIM_MAX opt-in 实验恰是最可能触发单侧改动的场景。调用方
+ * (preinit 与 child)必须经由本函数 + 同一 (test, lo, hi) 读取同一旋钮,
+ * 读取通道的不变式由单一实现钉住(lo/hi 仍由调用方传参——同文件同一宏
+ * 两处传参, 值一致由宏单一真源承担)。
+ * 【PR#384 检视, 意见 4439402793】env 通道前缀不再由调用方传字面量:
+ * 从入参 test->id 推导(与 sdc_knob_cache_key 同法), 拼错字面量即单侧
+ * env 兜底失效的手工同步点彻底消除——四处调用点此前各手写一次
+ * "eigen_svd_cdouble_sve"/"eigen_gemm_double_max_arm" 恰与 test->id
+ * 相同, 推导后行为逐字不变(test 为空则跳过 env 通道, 与传空串同义;
+ * "逐字不变"仅对默认构建成立, NO_TEST_NAMES 边界见下段)。
+ * 【PR#384 检视 R4, 意见 4441045420】SANDSTONE_NO_TEST_NAMES 构建
+ * (framework_options 含 no-test-names, 或 logging_format=no_output,
+ * 见 framework/meson.build)下 DECLARE_TEST_INNER 令
+ * .id = STRINGIFY(TEST_ID_<test>) = shortid 十六进制串(如 "cd14b7")
+ * ——env 名随之从 SDC_EIGEN_SVD_CDOUBLE_SVE_MDIM 漂移为
+ * SDC_CD14B7_MDIM, 已部署旧名静默失配(实测 2026-11-04: 旧名 →
+ * "未显式配置"回退 auto 档; 新名 → "来源: 环境变量"命中显式档。
+ * 回退的 auto 档有 AR 保护, 不重开 #352)。该漂移系框架 test->id
+ * 派既有属性(联合求解 T11 块/eigen common 头 x86 分支/mesh_upi 系
+ * 同此), 且与该构建 -e/-O 的 shortid 寻址一致(-e
+ * eigen_svd_cdouble_sve 同样 Cannot find)——字面量时代的 env 旧名
+ * 反而与寻址体系脱节成两套命名。恢复字面量重开 4439402793 的同步
+ * 点, 单侧剥 shortid 又与全部 test->id 派不一致, 均不取; 稳定短名
+ * 寻址属框架级设计项, 边界在此如实记录。
+ * 【PR#384 检视 R5, 意见 4463650392】「返回 0 = 未显式配置」的哨兵
+ * 契约隐含 **lo > 0** 前提, 在此显式声明: sdc_knob_int_clamped 对
+ * 「已配置且合法」的值原样返回——lo ≤ 0 的调用方会让用户显式
+ * -O <test>.<key>=0 以合法值 0 命中下方 knob == 0 判定, 被当未配置
+ * 走 env 兜底(env 已设则 -O/env 优先级倒置, 未设则显式 0 被静默
+ * 丢弃当 auto)。当前四调用方(gemm/svd 各 preinit+child)lo =
+ * MDIM_MIN(1024/300) > 0 安全; 值域天然含 0 的旋钮(slots/count 类)
+ * 不得经由本函数, 须改用显式哨兵/三态协议。
+ * 【PR#384 检视 R8, 意见 4464388834】哨兵探测还有 **hi + 1** 端别名:
+ * sdc_knob_int_clamped 用 sentinel = hi+1 探测「是否显式配置」, 用户
+ * 显式配置值恰为 hi+1 时(如 -O …mdim=6001, SVD MDIM_MAX=6000; gemm
+ * 同构 4097/4096)以合法路径返回 hi+1 == sentinel, 被当未配置走 env
+ * 兜底——与 lo≤0 端同型失效(env 已设则 -O/env 优先级倒置, 未设则
+ * 静默降级 auto 且日志「未显式配置」与事实矛盾)。实测(2026-11-04):
+ * -O mdim=6001 → 「未显式配置 → 环境变量/内存自适应通道」回退 auto
+ * 档; 对照 -O mdim=9999 走 clamp 分支截到 6000 并告警——全值域唯独
+ * hi+1 一个值被静默吞掉。回退的 auto 档有 AR 保护, 不重开 #352
+ * kill 窗。改双向哨兵(独立 bool 出参等)属框架级接口变更, 超出本 PR
+ * 边界; 契约在此补全: 调用方旋钮值域须排除 {0(lo≤0 时的别名),
+ * hi+1(探测哨兵)} 两个值。
+ * 返回 0 = 未显式配置(调用方走自适应; 前提 lo > 0 且值域避让 hi+1,
+ * 见上两段)。内部
+ * 序列与原四份拷贝逐字一致, 日志/缓存语义零变化(默认构建)。 */
+static inline int64_t sdc_knob_or_env_clamped(struct test *test,
+                                              const char *key,
+                                              int64_t lo, int64_t hi)
+{
+    int64_t knob = sdc_knob_int_clamped(test, key, 0, lo, hi);
+    if (knob == 0)
+        sdc_env_knob_int_clamped(test ? test->id : nullptr, key, &knob,
+                                 lo, hi);
+    return knob;
 }
 
 /* ------------------------------------------------------------------ */
@@ -679,8 +772,27 @@ static inline int sdc_auto_square_dim(int bytes_per_elem,
  *   显式 knob/env 指定维度的路径不得调用本函数(用户自担)。
  * 拟合出参 fit(spec §4.3 M3): 成功路径填充 {a_ms, p} —— 单解模型
  * t(n)=a_ms·n^p, a_ms 已按两点差分扣除固定开销 b(见函数尾); 早退
- * 路径保持 {0,0}(无效, 消费方跳过 n_run)。默认 nullptr, 既有调用
- * (7 实参)签名不变。
+ * 路径保持 {0,0}(无效, 消费方跳过 n_run)。
+ * fit/probe_floor_ms 无缺省(主模板 10 参, 见下方转发重载): 既有 7 实参
+ * 调用(跨 arch 存量链, 含 x86-64 #else 分支)经 7 参转发重载——等价于
+ * 旧缺省 {nullptr, 1.0}, 签名与行为不变(rule 5, issue #351——转发
+ * 重载的 1.0 即 f84966bc 之前的历史噪声底语义, 不得随 ARM 侧 M3 口径
+ * 联动); 需要 M3 固定开销口径的调用方(联合求解两分支——ARM 分支与
+ * x86 fallback(#482))显式传
+ * sdc_m3_probe_floor_ms(100.0)。fit 保持自 f84966bc 引入起(至本
+ * PR 参数化前)的第 8 参位次、probe_floor_ms 殿后: 字面量 0/NULL 作第 8
+ * 实参(『显式不要 fit』的旧写法)经 std::nullptr_t 重载绑 fit 而非经
+ * int→double 隐式转换静默重绑 probe_floor_ms=0.0——后者使 probe 抬档
+ * 循环永假、外推基数退回微档噪声且无告警; double 字面量误入第 8 位
+ * 编译报错(响亮); 传非空 fit 而省略第 9 参(8 参形态)亦编译报错
+ * (R10 检视 id=4463831067: 该形态会以缺省 1.0 停点静默运行——
+ * 固定开销污染差分, 仅剩运行期告警兜底, 与本签名杜绝『经签名
+ * 静默误用』的设计目标不符; fit 消费方必须显式选择 M3 口径)。
+ * fit_only(issue #487, 第 10 参缺省 false): 跳过外推后的验证档与收缩
+ *   轮, 返回未验证的外推档——供只消费 fit 的调用方(联合求解)使用:
+ *   其返回值被弃用, 验证/收缩的全部成本只为被弃用的返回值(2026-11-04
+ *   实测 128 CPU 主机 GEMM 族每 init 验证档单解 11.2s 纯浪费)。fit 的
+ *   两点差分只用验证前的 (p1, mid) 探针, 跳过验证档不改变拟合值。
  * 调用契约:
  *   int dim = sdc_auto_square_dim(...);        // 内存上限
  *   if (dim > lo)
@@ -692,34 +804,77 @@ struct sdc_fit {
     double p;       /* 幂指数(k_floor 修正后) */
 };
 
+/* M3 固定开销口径的 probe 档下限(ms), spec §4.3 M3: 差分扣 b 要求
+ * probe 档**实测时长**不低于该值——固定开销(构造/预处理)在计时中
+ * 占比 <10%, 幂律系数不被抬高。消费方共三处(fit 差分守卫 / 联合求解
+ * 显式实参 / 告警文案), 由本常量绑定, M3 重标定只改一处。 */
+static constexpr double sdc_m3_probe_floor_ms = 100.0;
+
+/* M3 前提告警公共段: 分流文案(传参达标/未达标)共用的病理与后果表述。
+ * 宏参与字面量拼接(format 检查仍生效), 单点维护防双口径漂移——
+ * 分支各自维护曾致 byte-identical 双口径并存(见 8d0dc47e 裁定)。 */
+#define SDC_M3_FIT_WARN_BODY                                          \
+    "fit 差分扣 b 的固定开销占比<10%%前提未达成(spec §4.3 M3), "       \
+    "a_ms 将被固定开销与计时噪声污染(a_ms 虚高→n_run 偏小→激发欠压); "
+
 template <typename F>
 static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
                                      const char *test_id, const char *knob,
                                      double k_floor, F solve_once,
-                                     struct sdc_fit *fit = nullptr)
+                                     struct sdc_fit *fit,
+                                     double probe_floor_ms,
+                                     bool fit_only = false)
 {
     if (fit) { fit->a_ms = 0.0; fit->p = 0.0; }  /* 早退路径保持无效 */
     if (hi <= lo)
         return lo;
     auto probe = [&](int n) -> double {
         auto t0 = std::chrono::steady_clock::now();
-        solve_once(n);
+        if (solve_once(n) != 0)
+            return -1.0;   /* issue #420: 探针自报失败(非零返回码)→ 负哨兵
+                              计时, 与"计时恰好为 0"的不可测语义区分。失败
+                              分支的计时是 μs 级噪声而非求解耗时, 绝不能进
+                              幂律拟合。(历史触发者 bidiag run_bidiag_once
+                              已随用例 2026-11-02 退役; 现役探针全为异常
+                              上抛式, 本谓词对其恒假——纯契约防御) */
         return std::chrono::duration<double, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
     };
-    /* probe 档自适应抬升: 小档求解太快(<100ms)时固定开销(构造/预处理)
-     * 在计时中占比过高——幂律系数被抬高, 外推维度被压低(实测 sve 模型
-     * t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高 ~14×,
-     * 立方根收缩 2.4×)。翻倍 probe 档直到固定开销占比 <10%(>=100ms,
-     * spec §4.3 M3; 1ms→100ms)或触及 hi——否则外推基数失真。 */
+    /* probe 档自适应抬升: 小档求解太快(< probe_floor_ms)时翻倍 probe 档
+     * 直到可测量或触及 hi——否则外推基数失真。两级语义(issue #351):
+     *   - 缺省 1.0(历史噪声底): 求解快到 1ms 以下即被计时噪声淹没
+     *     (实测稀疏 Cholesky 规则带状 probe 在 64 档仅 0.1ms, 外推
+     *     失控)——跨 arch 存量 7 参调用(x86-64 #else 链)语义不变沿用
+     *     此口径(同 1ms 停点与代码路径, 操作点在计时抖动内一致),
+     *     不得随 ARM 侧 M3 口径联动改动(rule 5)。
+     *   - sdc_m3_probe_floor_ms(100.0, spec §4.3 M3): 固定开销(构造/
+     *     预处理)在计时中占比 <10%, 幂律系数不被抬高(实测 sve 模型
+     *     t(N)=243.4·(N/4400)³+1 的 +1 项在 N=300 档占 93%, 系数虚高
+     *     ~14×, 立方根收缩 2.4×)——仅由联合求解(ARM 分支与 x86
+     *     fallback(#482))显式传入,
+     *     与其 fit 差分扣 b 配套。 */
     int p1 = lo;
     double t1 = probe(p1);
-    while (t1 < 100.0 && p1 * 2 <= hi) {
+    /* t1>=0.0(issue #420): 失败哨兵即刻停止抬升——失败探针恒"快",
+     * 不拦会一路把 p1 无谓探到 hi。 */
+    while (t1 >= 0.0 && t1 < probe_floor_ms && p1 * 2 <= hi) {
         p1 *= 2;
         t1 = probe(p1);
     }
     int mid = (p1 * 2 <= hi) ? p1 * 2 : hi;
     double t2 = probe(mid);
+    if (t1 < 0.0 || t2 < 0.0) {
+        /* issue #420: 探针自报失败——失败分支的 μs 级计时噪声曾被当作
+         * 超快求解外推(k 钳制后 dim=hi), 联合层 n_run 失控 → mdim 落
+         * n_mem/hi 上限, 即 P0-2 超时复发路径。失败 ≠ 『时间不是约束』
+         * (那是两档计时皆恰为 0 的语义, 仍交还 hi), 与异常式探针的
+         * catch(...) → lo 教义同向: 退守校准下限。fit 保持无效({0,0}),
+         * 消费方(联合层)据此跳过 n_run、另行整体退守。 */
+        log_warning("[时间校准] %s.%s: 试解探针自报失败(试解 %d→%.2fms, "
+                    "%d→%.2fms) → 退守校准下限 %ld",
+                    test_id, knob, p1, t1, mid, t2, (long)lo);
+        return lo;
+    }
     if (t1 <= 0.0 || t2 <= 0.0) {
         /* 任一档计时不可测即无法拟合 k。仅当两档皆不可测(t1 = t2 = 0)时,
          * 才能断定"时间不是约束"(求解快到连时钟都读不出), 此时交还内存
@@ -753,50 +908,166 @@ static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
      * 落点单解 8.3s >> 2s)。在选定 dim 再实测一次, 超预算按实测幂律
      * 收缩并复验——构造性保证 one solve ≤ max_single_ms; 收缩到 lo
      * 仍超限则如实记录(机器极慢/lo 过大, 后果与显式 knob 同级)。
-     * newdim 强制单调递减吸收计时噪声, 轮数上限 4 防抖动。 */
-    int xdim = dim;
-    double td = probe(dim);
-    double td0 = td;
-    int shrinks = 0;
-    while (td > (double)max_single_ms && dim > lo && shrinks < 4) {
-        int newdim = (int)((double)dim * std::pow(budget / td, 1.0 / k));
-        if (newdim >= dim) newdim = dim - 1;
-        if (newdim < lo) newdim = lo;
-        dim = newdim;
-        ++shrinks;
-        td = probe(dim);
+     * newdim 强制单调递减吸收计时噪声, 轮数上限 4 防抖动。
+     * fit_only(issue #487)整档跳过: 该保证守护的是返回值, 而联合
+     * 求解弃用返回值只取 fit——跳过后返回未验证外推档。 */
+    /* 显示值按断言方向选截断口径(PR #377 检视 id=4441216644/
+     * 4463472452/4463472461/4463831060): round 渲染会把窗口内的
+     * 实测值渲染到断言对面——下界断言(t1 < sdc_m3_probe_floor_ms)
+     * 在 t1∈[99.95,100) 渲染成 100.0(printf("%.1f", 99.97)="100.0"),
+     * 上界断言(td0/td > max_single_ms)在 (max, max+0.05) 渲染成
+     * max(printf("%.1f", 2000.04)="2000.0"), 打出『实测 2000.0ms
+     * 超预算』的显示值=预算却断言超——同一误导形态的两个方向。
+     * 修法对称: 下界断言配 floor(显示值 ≤ 实测值 ⇒ 显示<阈值恒真),
+     * 上界断言配 ceil(显示值 ≥ 实测值 ⇒ 显示>阈值恒真, 阈值取整十
+     * 值时严格 >)。t1/t2 另有全流一致与单调保持要求(汇总行/M3
+     * 前提告警/差分退化告警同一测量同一数字; t2≤t1 的倒挂不被
+     * 渲染成正挂——round 无此保证)——fit 消费链(联合求解)向下
+     * 截断; 存量 7 参链(fit=nullptr, x86-64 #else)不经 M3/退化
+     * 告警, 无矛盾可消, 保持 f84966bc~1 的 %.1f 原渲染基线零漂移
+     * (rule 5: 不随 ARM 侧口径联动, 显示亦然)。代价均为偏离至多
+     * 一个显示精度(0.1ms), 对诊断处方无损。td0 告警行(断言为真才
+     * 打印)与汇总行超预算后缀为上界断言语境, 两条链都会出现且矛盾
+     * 形态相同——td0 一律 ceil, td 仅在超预算(断言为真)时 ceil,
+     * 正常路径保持原渲染零漂移。上提至验证 wrap 之外: wrap 之下的
+     * M3 前提告警/差分退化告警仍引用 t1_disp/t2_disp, fit-only 路径
+     * 的告警与汇总行亦须同一测量同一数字(issue #487)。 */
+    const double t1_disp = fit ? std::floor(t1 * 10.0) / 10.0 : t1;
+    const double t2_disp = fit ? std::floor(t2 * 10.0) / 10.0 : t2;
+    if (!fit_only) {
+        int xdim = dim;
+        double td = probe(dim);
+        double td0 = td;
+        int shrinks = 0;
+        while (td > (double)max_single_ms && dim > lo && shrinks < 4) {
+            int newdim = (int)((double)dim * std::pow(budget / td, 1.0 / k));
+            if (newdim >= dim) newdim = dim - 1;
+            if (newdim < lo) newdim = lo;
+            dim = newdim;
+            ++shrinks;
+            td = probe(dim);
+        }
+        if (td0 > (double)max_single_ms)
+            log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
+                        test_id, knob, xdim,
+                        std::ceil(td0 * 10.0) / 10.0, shrinks);
+        /* td 仅在超预算(断言为真)时 ceil——正常路径保持原渲染, 存量链
+         * 基线零漂移; 断言为假时无『仍超预算』后缀, 无矛盾语境。 */
+        const double td_disp =
+            (td > (double)max_single_ms) ? std::ceil(td * 10.0) / 10.0 : td;
+        log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
+                    "k=%.2f) → %d (验证 %.1fms%s)",
+                    test_id, knob, max_single_ms, p1, t1_disp, mid, t2_disp, k, dim,
+                    td_disp,
+                    td_disp < 0.0
+                        ? ", 验证探针失败(维度未经复核)"
+                        : td > (double)max_single_ms
+                        ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
+                        : "");
+    } else {
+        log_warning("[时间校准] %s.%s: 试解 %d→%.1fms, %d→%.1fms, k=%.2f → %d "
+                    "(fit-only: 跳过验证档, 未验证外推值)",
+                    test_id, knob, p1, t1_disp, mid, t2_disp, k, dim);
     }
-    if (td0 > (double)max_single_ms)
-        log_warning("[时间校准] %s.%s: 初选 %d 实测 %.1fms 超预算 → 按实测幂律收缩 %d 轮",
-                    test_id, knob, xdim, td0, shrinks);
-    log_warning("[时间校准] %s.%s: 单次求解预算 %ldms (试解 %d→%.1fms, %d→%.1fms, "
-                "k=%.2f) → %d (验证 %.1fms%s)",
-                test_id, knob, max_single_ms, p1, t1, mid, t2, k, dim, td,
-                td > (double)max_single_ms
-                    ? (dim <= lo ? ", lo 档仍超预算" : ", 收缩轮数上限后仍超预算")
-                    : "");
     if (fit) {
+        /* M3 有效性告警: 差分扣 b 的前提是 probe 档**实测时长** t1 ≥
+         * sdc_m3_probe_floor_ms(固定开销占比 <10%, spec §4.3 M3)——
+         * 判据取实测 t1 而非入参 probe_floor_ms(PR #377 检视: 只查入参
+         * 两个方向都判错——floor=100.0 但 hi 截断致档位抬不上去同样是
+         * 致噪源; 反之慢求解器在缺省 1.0 下 lo 档实测已 ≥100ms, 差分
+         * 本干净, 不应告警)。实测 t1 不足时 a_ms 虚高 → n_run 偏小 →
+         * 激发维度静默欠压, 在此从静默变有声。
+         * 阈值锚定 spec §4.3 M3 方法口径而非调用方实参(R4 检视答疑):
+         * 100ms 是差分扣 b 方法本身的档位判据, 非逐求解器可调——显式
+         * 传 sub-100 实参仍告警是有意设计(偏离 spec 的差分口径应被看
+         * 见; 固定开销 b 显著更小的求解器应先修订 spec M3 标定, 常量
+         * 已单点绑定)。文案按传参是否已达 M3 口径分流: 已达标者唯一
+         * 残余致因是 knob hi 截断, 不再误指传参。 */
+        if (t1 < sdc_m3_probe_floor_ms) {
+            /* t1 显示用上方汇总行同源的 t1_disp(fit 链恒为向下截断
+             * 口径, 见其定义处注释)——告警行断言与汇总行数字恒一致。 */
+            if (probe_floor_ms >= sdc_m3_probe_floor_ms)
+                log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
+                            "knob hi 截断致档位抬不上去, " SDC_M3_FIT_WARN_BODY
+                            "检查 knob hi 是否足以抬升 probe 档", test_id,
+                            knob, t1_disp, sdc_m3_probe_floor_ms);
+            else
+                log_warning("[时间校准] %s.%s: probe 档实测 %.1fms < %.0fms——"
+                            SDC_M3_FIT_WARN_BODY
+                            "检查 probe_floor_ms 传参(M3 消费方应显式传 %.0f)"
+                            "与 knob hi 是否足以抬升 probe 档", test_id, knob,
+                            t1_disp, sdc_m3_probe_floor_ms, sdc_m3_probe_floor_ms);
+        }
         /* 两点差分扣除固定开销 b(M3): t = a·n^p + b ⇒
          *   a = (t2−t1)/(mid^p − p1^p),   b = t1 − a·p1^p
          * b≈0 时严格退化为 a = t1/p1^p。差分在 b 为常数的模型下精确,
-         * 常规档(b 占比 <10%, 与 100ms 阈值配套)与 b 主导的对抗档都
-         * 成立; 代价是对差分 (t2−t1) 的测量噪声敏感(p1/mid 档位拉得
-         * 越开越稳)。退化保护(档位重合/计时持平/非有限/非正)回退
-         * b=0 口径 a = t1/p1^p —— 系数只高不低, 消费方 n_run 只小
-         * 不大(保守方向)。 */
+         * 常规档(b 占比 <10%, 与联合求解显式传入的 sdc_m3_probe_floor_ms
+         * 配套)与 b 主导的对抗档都成立; 代价是对差分 (t2−t1) 的测量
+         * 噪声敏感(p1/mid 档位拉得越开越稳)。退化保护(档位重合/计时
+         * 持平/非有限/非正)回退
+         * b=0 口径 a = t1/p1^p —— t1 含全部固定开销, 系数只高不低、
+         * 消费方 n_run 只小不大: 时间预算侧保守, SDC 激发强度侧欠压
+         * (与上方 t1<floor 告警同型污染), 故回退从静默变有声。 */
         double pn = std::pow((double)p1, k);
         double mn = std::pow((double)mid, k);
         double a = 0.0;
         if (mid > p1 && t2 > t1 && mn > pn && std::isfinite(mn - pn))
             a = (t2 - t1) / (mn - pn);
-        if (!(a > 0.0) && pn > 0.0)
-            a = t1 / pn;                 /* t1>0 由上方早退保证 */
+        if (!(a > 0.0) && pn > 0.0) {
+            /* 差分退化告警(PR #377 检视): 非正差分此前零告警——t1 ≥
+             * floor 时 M3 前提告警不触发, 而档位重合(hi 截断使
+             * mid==p1)或计时持平/倒挂(系统抖动、非单调求解器)令差分
+             * 退化为 0/负, b=0 口径把固定开销全数计入 a_ms(a_ms 虚高
+             * →n_run 偏小→激发欠压)。两档实测随告警留档供定位; 处方
+             * 按两类致因: 拉大 knob hi 档距(重合)或复跑(持平)。
+             * 已知边界(R6 检视裁定): 噪声偏置的弱正差分(t2>t1 但
+             * (t2−t1) 信噪比不足)不在本告警与 M3 前提告警覆盖内——
+             * 差分对测量噪声固有敏感(见上方代价声明), M3 口径
+             * (floor≥100ms+档距 2×, k_floor=3.0 下健康比值 ~8×)把
+             * 该场景压在 ±10-30% 固有抖动量级(反向膨胀被消费端
+             * min(n_mem, n_run, hi) 封顶; 128 核高载机实测比值仍
+             * 7.1×/8.3×)。收口须先按 spec §4.3 M3 标定差分信噪比
+             * 判据(如实测 k 距 k_floor 的带阈), 不在此增设无 spec
+             * 依据的阈值——告警疲劳稀释真事件信号(R4/#23 同裁定)。 */
+            log_warning("[时间校准] %s.%s: fit 两点差分退化(档 %d→%d 实测 "
+                        "%.1fms→%.1fms, 档位重合或计时持平/倒挂)——回退 "
+                        "b=0 口径 a=t1/p1^k, 固定开销未扣除, a_ms 虚高→"
+                        "n_run 偏小→激发欠压; 检查 knob hi 拉大档距或复跑"
+                        "消除计时抖动", test_id, knob, p1, mid, t1_disp,
+                        t2_disp);
+            a = t1 / pn;             /* t1>0 由上方早退保证 */
+        }
         if (a > 0.0 && std::isfinite(a)) {
             fit->a_ms = a;
             fit->p = k;
         }
     }
     return dim;
+}
+
+/* 7 参存量转发重载(等价旧缺省 {nullptr, 1.0}): 跨 arch 存量链(含
+ * x86-64 #else 分支)调用点源码零改动(rule 5)——1.0 即 f84966bc 之前
+ * 的历史噪声底语义。 */
+template <typename F>
+static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
+                                     const char *test_id, const char *knob,
+                                     double k_floor, F solve_once)
+{
+    return sdc_calibrated_dim(lo, hi, max_single_ms, test_id, knob, k_floor,
+                              solve_once, nullptr, 1.0);
+}
+
+/* 第 8 参 std::nullptr_t 重载: 『显式不要 fit』的字面量 0/NULL 旧写法
+ * 绑定于此(而非经 int→double 隐式转换静默重绑 probe_floor_ms=0.0),
+ * 语义 = 7 参链。 */
+template <typename F>
+static inline int sdc_calibrated_dim(int lo, int hi, long max_single_ms,
+                                     const char *test_id, const char *knob,
+                                     double k_floor, F solve_once,
+                                     std::nullptr_t)
+{
+    return sdc_calibrated_dim(lo, hi, max_single_ms, test_id, knob, k_floor,
+                              solve_once, nullptr, 1.0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -808,14 +1079,22 @@ enum sdc_rss_family {
     SDC_RSS_BDCSVD_F32, SDC_RSS_BDCSVD_F64, SDC_RSS_BDCSVD_C128,
     SDC_RSS_JACOBI_F32, SDC_RSS_JACOBI_F64, SDC_RSS_JACOBI_C128,
     SDC_RSS_GEMM_F32, SDC_RSS_GEMM_F64, SDC_RSS_GEMM_C128,
-    SDC_RSS_SPARSE, SDC_RSS_BIDIAG, SDC_RSS_INVALID
+    SDC_RSS_SPARSE, SDC_RSS_INVALID
 };
 
 /* 族 → 实测 c(KB/n²/线程)。Phase A 2026-10-27, (child@T4−child@T1)/3
  * 差分增量口径——与 svd_cdouble_sve.cpp:92-95 的"单进程 9.7-10× 输入
  * 体积"(含基线, ~155B/n²)口径不同, 差异 ~35% 属口径差非矛盾: 联合
- * 求解的增量模型取差分口径。c 是算法内在属性(矩阵驻留数×元素大小),
- * 跨机可移植; Eigen 版本升级需重标定本表。 */
+ * 求解的增量模型取差分口径。
+ * c 的可移植性(issue #511 勘误, 2026-11-08): 主体(≈矩阵驻留数×元素
+ * 大小, 如 GEMM_F64 4 矩阵×8B=0.03125)是算法内在、一阶跨机近似; 但
+ * 差分口径只测 n² 斜率项, 漏计非 n² 缩放驻留(Eigen packing buffer、
+ * 联合求解探针高水位、分配器 slack)——VmHWM 实测隐含 c 同机即偏高:
+ * GEMM_F64 重标定前 +8.8%(T6), 重标定后 61G 单节点机 +1.3%(max_arm)、
+ * 128C/30G 四节点机 +3.4~4.1%(NEON dynamic_square, 2026-11-08 实测),
+ * 残差随机器/用例漂移, 不构成"逐机精确"。表值是初始锚: 精度由 T7
+ * VmHWM 反馈闭环同机收敛(向上修正无死区, spec §4.4), 跨机首跑的
+ * ±5% 级残差同样由反馈吸收。Eigen 版本升级需重标定本表。 */
 static const double s_rss_ratio_table[SDC_RSS_INVALID] = {
     0.0669,   /* SDC_RSS_BDCSVD_F32  */
     0.1352,   /* SDC_RSS_BDCSVD_F64  */
@@ -834,7 +1113,6 @@ static const double s_rss_ratio_table[SDC_RSS_INVALID] = {
     0.0315,   /* SDC_RSS_GEMM_F64    */
     0.0631,   /* SDC_RSS_GEMM_C128   */
     0.0091,   /* SDC_RSS_SPARSE      */
-    0.0313,   /* SDC_RSS_BIDIAG      */
 };
 
 static inline double sdc_rss_table_c(enum sdc_rss_family f)
@@ -954,8 +1232,10 @@ static inline int64_t sdc_joint_knob_value(struct test *test, const char *key,
  * (m3, 与 sdc_auto_square_dim 同捷径; 但位于 knob 早退之后——显式值
  * 优先, 与迁移前调用方短路语义一致)。
  * solve_once 可为 NULL(不校时间, 只算 n_mem); run_budget_ms=0 同理。
- * x86-64(rule 5: byte-identical): 仅 n_mem 全局口径(等价旧行为),
- * 见函数内 #else 分支。
+ * x86-64(#482): 全局四源预算 + sdc_calibrated_dim 时间校准(AR=1),
+ * 无 per-node/AR/反馈——见函数内 #else 分支; 现行 x86 调用点均 guard
+ * 挡在旧链上, 该分支是未来跨 arch 迁移的安全落点(行为边界详见 #else
+ * 注释)。
  */
 static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                                       const struct sdc_joint_args *a,
@@ -1091,13 +1371,19 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     if (node_cpus < 1)
         node_cpus = 1;                     /* T2 保证 ≥1, 双保险 */
     /* node_threads 用 worker 口径(spec §4.3 "该节点全部 worker 数"):
-     * -n/--cpuset 下 worker 少于 CPU, 按 全机worker/全机CPU 折算(全核
-     * 时恰等)——不折算则 -n 1 把节点预算按 127 线程分摊, mdim 欠压
-     * ~11×(旧全局模型 total_thread_count 补偿的同型问题)。 */
+     * -n/--cpuset 下 worker 与 CPU 数不等时, 按 全机worker/全机CPU 折算
+     * (全核时恰等)——worker 少于 CPU 时不折算则 -n 1 把节点预算按 127
+     * 线程分摊, mdim 欠压 ~11×(旧全局模型 total_thread_count 补偿的同
+     * 型问题); worker 多于 CPU(超额订阅)时不折算则 node_cpus 停在物理
+     * CPU 数, 节点聚合 RSS = (workers/cpus)×预算, 击穿 OOM 不变量
+     * (issue #423; x86 fallback 与旧全局模型均按真实 worker 数分摊,
+     * 双向正确, 此处与它们对齐)。当前 -n 在解析层 Saturate 到亲和集
+     * CPU 数(sandstone_opts.cpp), 合法 CLI 无法超订——本分支是防御
+     * 性封堵(模型不变量在超订输入域的完整性), 非当前可达的行为。 */
     {
         int workers = sdc_total_threads();
         int cpus_all = sdc_numa_probe()->total_cpus;
-        if (workers > 0 && cpus_all > 0 && workers < cpus_all)
+        if (workers > 0 && cpus_all > 0 && workers != cpus_all)
             node_cpus = node_cpus * workers / cpus_all;   /* 向下取整 */
         if (node_cpus < 1)
             node_cpus = 1;
@@ -1114,22 +1400,41 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
 
     double ar = sdc_ar_factor(a->ar_fam, sdc_numa_probe());
     int n_run = 0;
+    bool probe_failed = false;     /* issue #420: 任一抬升/mid 档探针自报失败 */
     if (solve_once && a->run_budget_ms > 0 && n_mem > a->lo) {
-        /* k_floor=3.0: 现役/规划消费方(稠密 SVD/GEMM/稀疏 Cholesky/
-         * bidiag)的复杂度下限同为 ~3.0(各自旧调用方同值);
+        /* k_floor=3.0: 现役/规划消费方(稠密 SVD/GEMM/稀疏
+         * Cholesky)的复杂度下限同为 ~3.0(各自旧调用方同值;第四个
+         * bidiag 消费方已随用例 2026-11-02 退役);
          * sdc_joint_args 不带此参(签名契约)。 */
         double per_solve_ms = (double)a->run_budget_ms / (ar * 2.0);
         long per_solve = (long)per_solve_ms;
         if (per_solve < 1)
             per_solve = 1;
         /* 探针上限 = knob hi(不用 n_mem 截断): 差分基线 (p1, mid) 拉得
-         * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 阈值
-         * 机制约束(终点档起每档 ≤ ~8×t1, 验证档 ≤ 预算), 与 n_mem
-         * 无关。返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit。 */
+         * 越开, 固定开销扣除对计时噪声越稳; 探针成本由 100ms 探针档
+         * 下限(下方显式实参 sdc_m3_probe_floor_ms, spec §4.3 M3——模板
+         * 缺省 1.0 是存量 7 参链的历史语义, 不得联动改动, issue #351)
+         * 约束(终点档起每档 ≤ ~8×t1), 与 n_mem 无关。
+         * 返回值弃用(其内向外推是未扣 b 的保守口径), 只取 fit——
+         * fit_only=true 跳过验证档/收缩轮(issue #487: 验证的全部成本
+         * 只为被弃用的返回值, 实测 GEMM 族每 init 白烧 ~per_solve/2
+         * 单线程时间)。 */
+        /* issue #420: 包装探针记录自报失败——fit_only(#517)下联合层弃用
+         * 返回值, 模板内早退只落到 fit={0,0}(n_run=0), n 仍会落 n_mem;
+         * 瞬态内存压力下(探针期失败、n_mem 充裕)全核单次迭代分钟级、
+         * TERM 打不断——probe_failed→lo 退守是 fit-only 时代该路径的
+         * 安全机制本体(与模板内哨兵互补, 缺一复活半个 P0-2 路径)。 */
+        auto solve_probe = [&](int n) -> int {
+            int rc = solve_once(n);
+            if (rc != 0)
+                probe_failed = true;
+            return rc;
+        };
         struct sdc_fit fit;
         sdc_calibrated_dim(a->lo, a->hi, per_solve,
                            test ? test->id : "(global)", knob, 3.0,
-                           solve_once, &fit);
+                           solve_probe, &fit, sdc_m3_probe_floor_ms,
+                           /*fit_only=*/true);
         if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
             double nr = std::pow((double)a->run_budget_ms
                                  / (ar * 2.0 * fit.a_ms), 1.0 / fit.p);
@@ -1140,12 +1445,24 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         }
     }
     int n = n_mem;
-    if (n_run > 0 && n_run < n)
-        n = n_run;
-    if (a->hi < n)
-        n = a->hi;
-    if (n < a->lo)
+    if (probe_failed) {
+        /* issue #420: 时间模型不可信 → 退守 lo; n_mem 不可交还——瞬态
+         * 内存压力下按 n_mem 选出的全核单次迭代可达分钟级、TERM 打
+         * 不断(P0-2 复发路径)。fit_only(#517)下验证档不存在, 失败
+         * 检测覆盖抬升/mid 两档。 */
+        log_warning("[联合求解] %s.%s: 校准探针自报失败 → 退守 lo=%d "
+                    "(时间模型不可信, n_mem=%d 弃用; issue #420)",
+                    test ? test->id : "(global)", knob ? knob : "?",
+                    a->lo, n_mem);
         n = a->lo;
+    } else {
+        if (n_run > 0 && n_run < n)
+            n = n_run;
+        if (a->hi < n)
+            n = a->hi;
+        if (n < a->lo)
+            n = a->lo;
+    }
     log_warning("[联合求解] %s.%s: n_mem=%d n_run=%d AR=%.1f c=%.1f → %d (预算 %.1fGiB)",
                 test ? test->id : "(global)", knob ? knob : "?",
                 n_mem, n_run, ar, c_bytes, n, (double)node_budget / 1073741824.0);
@@ -1158,29 +1475,98 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     }
     return n;
 #else
-    /* x86-64 fallback(rule 5: 行为不变): 仅 n_mem 全局口径——物理×‰ 按
-     * 全机线程×c 分摊(等价 sdc_auto_square_dim 的内存模型, 含 slice
-     * 数×shared), 无 per-node/AR/时间外推; solve_once/run_budget_ms
-     * 在 x86 被忽略, 时间校准维持调用方既有的 sdc_calibrated_dim 链。 */
-    (void)solve_once;
+    /* x86-64 fallback(#482): 四源全局预算 + 时间校准——能力面与 ARM
+     * 分支同构, 减去 per-node/AR/VmHWM 反馈(x86 无 sdc_numa.h 基础设施):
+     *   - 内存: sdc_budget_bytes(四源取 min) 按全机线程×c 分摊 + slices×
+     *     shared。旧口径仅物理×‰——批处理/容器限额下超分("job oom"
+     *     实测前科, svd_cdouble_sve.cpp 注释; #310 的四源函数本就
+     *     arch-independent, 读不到的源自动跳过, 退化回物理×‰)。
+     *   - 时间: solve_once 非空且 run_budget_ms>0 时经 sdc_calibrated_dim
+     *     幂律拟合求 n_run(AR=1: x86 无 AR 表, 与调用方旧链同为单线程
+     *     探针口径; run_budget_ms 语义与 ARM 一致 = 全核单迭代(2 解)
+     *     预算)。旧 fallback `(void)solve_once` 静默丢弃时间校准——
+     *     跨 arch 调用方拆 guard 迁移时会失去单解时间上限,
+     *     eigen_sparse 注释自述的『自适应档满核 600s SIGQUIT』故障类
+     *     随之复活(#482 的 armed trap), 本补丁解除之。探针自报失败的
+     *     probe_failed→lo 退守(issue #420)与 fit_only 验证档跳过
+     *     (issue #487)同 ARM 分支口径——安全机制本体, 不随 fallback
+     *     缺省。
+     * 行为边界(如实): 当前 x86 无调用方经此分支(调用点均 aarch64
+     *     guard, 见各调用方 #else 注释), 本补丁不改变任何现行 x86
+     *     行为; 改变的是未来迁移者得到的契约。rule 5 依归: Intel 原代码
+     *     零触碰, 调用方 #else 旧链原样保留。 */
     int total = sdc_total_threads();
     if (total < 1)
         total = 1;
     int cur = thread_count();
     int slices = (cur > 0 && total > cur) ? (total + cur - 1) / cur : 1;
-    double budget = (double)sdc_phys_mem_bytes() * (double)permille / 1000.0;
+    double budget = (double)sdc_budget_bytes(permille);
     double avail = budget - a->shared_bytes_per_slice * (double)slices;
     int n_mem = (c_bytes > 0.0 && avail > 0.0)
             ? (int)std::sqrt(avail / ((double)total * c_bytes)) : 0;
+    int n_run = 0;
+    bool probe_failed = false;     /* issue #420: 任一抬升/mid 档探针自报失败 */
+    if (solve_once && a->run_budget_ms > 0 && n_mem > a->lo) {
+        /* 与 ARM 分支同构: 只取 fit(两点差分已扣固定开销 b), 返回值
+         * 弃用(其内向外推是未扣 b 的保守口径); k_floor=3.0 与 ARM 分支
+         * 同值(现役/规划消费方复杂度下限, sdc_joint_args 不带此参的
+         * 签名契约); 探针上限 = knob hi(同 ARM: 差分基线拉得越开,
+         * 固定开销扣除对计时噪声越稳)。AR=1 → per_solve=run_budget/2。
+         * probe_floor_ms=sdc_m3_probe_floor_ms 与 fit_only=true 亦同
+         * ARM 显式实参: 前者是 fit 差分扣 b 的配套 M3 口径(省略第 9 参
+         * 的 8 参形态无匹配重载——PR #503 合入版即此形态, x86 构建全
+         * 断, 本修复补齐); 后者跳过只为被弃用返回值服务的验证档/收缩
+         * 轮(issue #487, ARM 同款实测浪费), 跳过不改变拟合值。 */
+        long per_solve = (long)((double)a->run_budget_ms / 2.0);
+        if (per_solve < 1)
+            per_solve = 1;
+        /* issue #420: 包装探针记录自报失败——fit_only 下联合层弃用
+         * 返回值, 模板内早退只落到 fit={0,0}(n_run=0), n 仍会落
+         * n_mem; probe_failed→lo 退守是该路径的安全机制本体(与模板
+         * 内哨兵互补, 缺一复活半个 P0-2 路径, 同 ARM 分支)。 */
+        auto solve_probe = [&](int n) -> int {
+            int rc = solve_once(n);
+            if (rc != 0)
+                probe_failed = true;
+            return rc;
+        };
+        struct sdc_fit fit;
+        sdc_calibrated_dim(a->lo, a->hi, per_solve,
+                           test ? test->id : "(global)", knob, 3.0,
+                           solve_probe, &fit, sdc_m3_probe_floor_ms,
+                           /*fit_only=*/true);
+        if (fit.a_ms > 0.0 && fit.p > 1.0 && std::isfinite(fit.a_ms)) {
+            double nr = std::pow((double)a->run_budget_ms
+                                 / (2.0 * fit.a_ms), 1.0 / fit.p);
+            if (nr >= 2147483647.0)
+                n_run = 2147483647;        /* 防溢出截断 */
+            else if (nr > 0.0)
+                n_run = (int)nr;
+        }
+    }
     int n = n_mem;
-    if (a->hi < n)
-        n = a->hi;
-    if (n < a->lo)
+    if (probe_failed) {
+        /* issue #420: 时间模型不可信 → 退守 lo; n_mem 不可交还(同 ARM
+         * 分支——瞬态内存压力下按 n_mem 选出的全核单次迭代可达分钟级、
+         * TERM 打不断, P0-2 复发路径)。fit_only 下验证档不存在, 失败
+         * 检测覆盖抬升/mid 两档。 */
+        log_warning("[联合求解] %s.%s: 校准探针自报失败 → 退守 lo=%d "
+                    "(时间模型不可信, n_mem=%d 弃用; issue #420)",
+                    test ? test->id : "(global)", knob ? knob : "?",
+                    a->lo, n_mem);
         n = a->lo;
-    log_warning("[联合求解] %s.%s: n_mem=%d → %d (全局口径 %.1fGiB; rule 5: "
-                "x86 原路径, 无 per-node/AR/时间外推)",
-                test ? test->id : "(global)", knob ? knob : "?", n_mem, n,
-                budget / 1073741824.0);
+    } else {
+        if (n_run > 0 && n_run < n)
+            n = n_run;
+        if (a->hi < n)
+            n = a->hi;
+        if (n < a->lo)
+            n = a->lo;
+    }
+    log_warning("[联合求解] %s.%s: n_mem=%d n_run=%d → %d (全局四源口径 %.1fGiB; "
+                "x86: 无 per-node/AR/反馈)",
+                test ? test->id : "(global)", knob ? knob : "?",
+                n_mem, n_run, n, budget / 1073741824.0);
     return n;
 #endif
 }

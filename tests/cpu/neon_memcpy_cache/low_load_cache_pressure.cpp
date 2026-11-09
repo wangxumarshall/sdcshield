@@ -41,6 +41,7 @@ namespace { /* ODR: per-TU LLPData */
 struct LLPData {
     alignas(64) uint64_t slot[LLP_MAX_THREADS];  /* plain str/ldr via asm */
     alignas(64) std::atomic<uint64_t> started[LLP_MAX_THREADS];
+    uint64_t duty_us;                /* duty knob, clamped once in test_init */
 };
 }
 
@@ -69,6 +70,14 @@ static inline uint64_t llp_timer_freq(void) {
 static int low_load_cache_pressure_init(struct test *test) {
     auto *d = new LLPData;
     if (!d) return EXIT_FAILURE;
+    /* duty knob: active-window length in us (5%..30% of the 10 ms period).
+     * Test options are init-only (the framework's fail-loud check aborts on
+     * any worker-thread query), so clamp here once and let run() read the
+     * cached value. */
+    uint64_t duty_us = get_testspecific_knob_value_uint(test, "duty_us", 1000);
+    if (duty_us < 500)  duty_us = 500;
+    if (duty_us > 3000) duty_us = 3000;
+    d->duty_us = duty_us;
     for (int i = 0; i < LLP_MAX_THREADS; ++i) {
         d->slot[i] = 0;
         d->started[i].store(0, std::memory_order_relaxed);
@@ -86,10 +95,9 @@ static int low_load_cache_pressure_cleanup(struct test *test) {
 static int low_load_cache_pressure_run(struct test *test, int cpu) {
     auto *d = static_cast<LLPData *>(test->data);
 
-    /* duty knob: active-window length in us (5%..30% of the 10 ms period) */
-    uint64_t duty_us = get_testspecific_knob_value_uint(test, "duty_us", 1000);
-    if (duty_us < 500)  duty_us = 500;
-    if (duty_us > 3000) duty_us = 3000;
+    /* duty knob: active-window length in us (5%..30% of the 10 ms period),
+     * clamped and cached in test_init (knobs are init-only). */
+    const uint64_t duty_us = d->duty_us;
 
     const uint64_t freq = llp_timer_freq();          /* ticks per second */
     const uint64_t active_ticks = duty_us * freq / 1000000ULL;

@@ -7,8 +7,10 @@
 1. `ROUND_UP_TO_PAGE` 硬编码 `4096U`：mprotect() 按内核实际页边界取整，
    4K 假设在 >4K 页内核上会把相邻数据页连带改为只读 → SIGSEGV。
 2. `SandstoneTestThreadAttributes::GuardSize` 硬编码 `8192`：>8K 页内核上
-   mprotect 把可写区起点向下取整、越过 guard，使线程栈底落入 PROT_NONE 页
-   → pthread_create 的 explicit_bzero SIGSEGV。
+   guard+THREAD_STACK_SIZE 步进使 mprotect 起点不再页对齐，Linux 对非页
+   对齐 addr 返回 EINVAL（不取整），被 IGNORE_RETVAL 静默吞掉 → 栈滞留
+   PROT_NONE → pthread_create 的 explicit_bzero SIGSEGV（MADV 路径则是
+   guard 安装 madvise 失败被吞、线程间栈无保护；见文末勘误）。
 
 验证机页大小 = 4096（`getconf PAGESIZE` 实测）→ 本机行为 no-op；
 >4K 页修复效果只能检视论证（诚实边界，见"验证"节）。
@@ -59,8 +61,10 @@
    `exit: pass`；`-e mce_check` → pass。
 4. 受影响行为实跑：线程栈 guard 几何 = 任何多线程测试正常起线程即证
    未破坏（引用真实输出）；页大小 = `getconf PAGESIZE` = 4096，本机
-   no-op 如实声明；>4K 页修复为检视论证（内核 mprotect 向下取整语义），
-   无本机可执行路径——验证边界诚实声明。
+   no-op 如实声明；>4K 页修复为检视论证（对齐几何算术：guard =
+   max(8192, page)、THREAD_STACK_SIZE = 8192*1024 为 64K 整倍数 → 全部
+   mprotect/madvise 地址页对齐；非对齐 addr → EINVAL 的内核语义实证见
+   文末勘误），无本机可执行路径——验证边界诚实声明。
 5. x86-64 非回归：检视（中立代码，4K 页行为等价；Windows 不在范围）。
 
 ## 交付
@@ -70,3 +74,47 @@
   - commit 2：代码改动（`git commit -s`，DCO `Signed-off-by: wangxu
     <wangxumarshall@qq.com>`，无 Co-Authored-By）。
 - push origin（feature 分支，绝不 main）。
+
+## 勘误（2026-11-01，issue #396 审计）
+
+本文件 :10/:62 原文（及 1f06467e 提交信息，历史不改写）把 >8K 页内核上的
+故障机制写成「mprotect 把可写区起点向下取整、越过 guard」——与 Linux
+语义相反。实测（kernel 6.6 / aarch64 / 4K 页真机，issue #396 审计小程序
+四问）：
+
+- mprotect 非页对齐起点 → **-1 EINVAL，无任何取整**（mprotect(2)：
+  EINVAL — addr is not a multiple of the system page size）；
+- mprotect 对 **end** 向上取整（尾部整页并入保护范围）——本文 :7-8 关于
+  `ROUND_UP_TO_PAGE` 的第一半陈述方向正确，不在勘误范围；
+- madvise 非页对齐起点同样 EINVAL。
+
+真实故障链：EINVAL 被 `sandstone_thread.cpp` 的
+`IGNORE_RETVAL(mprotect(...))` 吞掉 → 栈滞留 PROT_NONE → pthread_create
+explicit_bzero 无声 SIGSEGV（MADV 路径则是 guard 安装失败被吞、线程间栈
+无 guard 保护）。A/B 实验实证（GuardSize 破坏 hack=10240 非页整倍数）：
+pre-fix 无声 SIGSEGV（SEGV_ACCERR，libc `str q0` 清栈现场）；post-fix
+响亮报错 + abort。
+
+修复之所以正确，靠的是对齐几何算术——`THREAD_STACK_SIZE = 8192*1024`
+（64K 的 128 倍）使 guard = max(8192, page) 时全部 mprotect/madvise 地址
+自然页对齐——而非任何「取整」行为。该静默吞错路径未随 1f06467e 消除，
+已由 issue #396 修复（3fbfecc5，三处吞错改响亮 abort，机制注释同步勘误）。
+
+## 勘误（2026-11-06，issue #495 审计）
+
+本文件 :58-59 声称「运行单测二进制（sandstone_test_utils_tests.cpp 覆盖改动
+头）」——验证声明虚标：1f06467e 当时未向该单测文件添加任何用例，新函数
+sandstone_page_size()（含缓存与 sysconf 失败路径）零覆盖；既有
+ManagedCodeBuffer/WeightedPicker 测试只是碰巧 include 改动头，不构成对新增
+内容的覆盖。这违反了 sandstone_test_utils.h :11-13 的 clean-file 硬规则
+（「Please do not add anything to this file unless it is unit tested」）。
+
+事实补齐（均晚于 issue #495 的 2026-11-03 审计时点）：
+
+- issue #446 修复（PR #455，36ac4f12，2026-11-04）：补
+  sandstone_is_valid_page_size / sandstone_page_size_fatal /
+  sandstone_page_size 并发单测共 43 行；
+- issue #451 修复（PR #470，41c403fa，2026-11-04）：双实现收敛到权威头
+  sandstone_page.h，补 ROUND_UP_TO_PAGE 契约单测 27 行；
+- issue #495 修复：补 ROUND_UP_TO 任意 2 的幂对齐的直接单测，
+  sandstone_page.h 全部五个公开接口至此均有直接单测。

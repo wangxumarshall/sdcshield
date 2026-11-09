@@ -1,7 +1,16 @@
 #!/bin/bash
 # matrix-gen.sh — SVE 全 VL 验证运动 Task 8：从已入库工件机械生成 190×3 证据矩阵。
 #
-# Usage:   ./matrix-gen.sh > matrix.md        （在任意 cwd 执行均可，路径相对本脚本解析）
+# Usage:   ./matrix-gen.sh > matrix.md.new && mv matrix.md.new matrix.md
+#          （输入路径相对本脚本自解析；但示例的重定向目标 matrix.md.new 是
+#          **cwd 相对路径**——非仓库根 cwd 下执行会把矩阵产物写错位置（重跑
+#          即复现 matrix.md 的前提随之落空），调用侧先 cd 仓库根（计划 Task 8
+#          Step 1 有同款 cd 行）或改用绝对路径。勿直接 `> matrix.md`：
+#          shell O_TRUNC 在脚本启动瞬间即截断目标，而全部断言失败点均在
+#          首个 stdout 输出之前——直接重定向的失败路径会把既有 matrix.md
+#          清空为 0 字节；.new+mv 使失败不触碰既有矩阵。失败残留的 .new 由
+#          调用侧清理——脚本无法清理调用者的重定向目标，且 campaign .gitignore
+#          无任何规则命中 *.md.new，目录级 git add 会零提示暂存 0 字节残骸。）
 #
 # 输入（全部为本目录已 commit 的只读工件 + 仓库内源文件）：
 #   sve-test-list.txt                    190 行清单 = 矩阵行定义（Task 1）
@@ -12,16 +21,29 @@
 #   gem5-512-verdicts.txt                512 腿逐用例判定（Task 6）
 #   gem5-overrides.txt                   512 腿额外降容表，16 条（Task 6）
 #   triage-512.md                        §0 头部块（逐字引用进矩阵头部）
-#   tests/cpu/arm64/sve512_fmmla_arm.cpp :193-196（fmmla@128 SKIP 的逐字源码引文，
+#   triage-256.md                        §4 clamp 列（25 个 TIMEOUT 格下限 → 值锁）
+#   tests/cpu/arm64/sve512_fmmla_arm.cpp :209-212（fmmla@128 SKIP 的逐字源码引文，
 #                                        T3 minor fix：triage-128 曾意译丢句，此处补逐字）
 #
 # 纪律（brief Step 1）：每一格的值都由本脚本从上述工件机械推导，**不许手填**。
-# 脚本内嵌的字面量只有四类，均为对已入库文档的引用而非数据编造：
+# 脚本内嵌的字面量只有五类，均为对已入库文档/工件的引用或守护而非数据编造：
 #   (a) triage 分节号引用（triage-256 §1+§5 / triage-128 §1+§2 / triage-512 §0+§5.1+§5.2）；
 #   (b) 9 个 512 边界格的机制性理由短标签（内容归类引自 triage-512 §5.1/§5.2）；
-#   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :193-196）；
+#   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :209-212）；
 #   (d) §4 表体的 † 弱证据行标记集合 = 5 个 PR #316 已修复越界缺陷测试
-#       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）。
+#       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）；
+#   (e) §5 对账行叙述数字的期望值（活锁：128 列 163/26、256 列 25/1、512 列
+#       5+4 分量/25/15/1/16、唯一非超时 baked 身份 acl_gemm_sve=dim=512；
+#       164/181/39/9/190 等和值为代数传递蕴含，派生链见 END 段断言块注释）——
+#       数量与身份均与叙述锁死，工件漂移即 FATAL（见 END 段断言块）。守护边界
+#       （如实声明，检视 #4462912949/#4463822593 后收窄）：值锁 = 25 项非 acl
+#       baked 的 -O 值与 triage-256 §4 clamp 列下限双向锁死（含集合相等；单位
+#       展开 K/M/G/T[B] = 2^10/20/30/40），§4「有界重跑结果」列（pass @ …）与
+#       §5「有界值」列两份手工同值副本亦归一后交叉锁到同一基准——工件漂移、
+#       「下限起步改中间档」的协议漂移、文档副本单方漂移均 FATAL，不再仅靠
+#       人工核数；不锁的剩余面 = §4 clamp 列自身的准确性（真源在测试源码/框架，
+#       如 gmp_bigadd_sve.cpp:31 GMP_SVE_LIMBS=256、cdouble mdim [300,6000]），
+#       该对应仍由人工核数承担。
 #
 # 一致性断言（任一失败 → 非零退出、不产出 matrix.md）：
 #   清单 190 行；4 份 native summary + 1 份 verdicts 各覆盖全部 190 名；
@@ -30,7 +52,10 @@
 #   128 列双 seed skip 仅限钉死集合 {sve512_fmmla_arm}（PR #307 #8——
 #   其余测试双 skip 或单 seed 分歧 skip 均 FATAL，防「合法 SKIP」标签
 #   张冠李戴 / seed 依赖型 skip 被 pass 掩蔽）；512 列 crash/timeout 格
-#   必有机制理由标签；† 标记行恰 5 行（PR #307 #22）。
+#   必有机制理由标签；† 标记行恰 5 行（PR #307 #22）；25 项非 acl baked 的
+#   -O 值 = triage-256 §4 clamp 下限（值锁，双向集合相等，#4462912949），
+#   §4 重跑结果列与 §5 有界值列同值副本交叉锁到同一基准（#4463822593）；
+#   256 seed1 命令行头恰 1 项 -O = acl_gemm_sve.dim=512 标定（#4463651353）。
 #
 # locale：全链 LC_ALL=C（enumeration.md §6 的 comm/sort 教训）。
 
@@ -48,9 +73,10 @@ N256S2="$DIR/native-256-LCG1002.summary.txt"
 G512="$DIR/gem5-512-verdicts.txt"
 GOVR="$DIR/gem5-overrides.txt"
 TRI512="$DIR/triage-512.md"
+TRI256="$DIR/triage-256.md"
 FMMLA_SRC="$REPO/tests/cpu/arm64/sve512_fmmla_arm.cpp"
 
-for f in "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$GOVR" "$TRI512" "$FMMLA_SRC"; do
+for f in "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$GOVR" "$TRI512" "$TRI256" "$FMMLA_SRC"; do
     [ -f "$f" ] || { echo "ERROR: input not found: $f" >&2; exit 2; }
 done
 
@@ -67,6 +93,19 @@ extract_baked "$N256S2" | sort | diff -q - "$TMP/baked26.txt" >/dev/null \
     || { echo "ERROR: baked -O drift between 128 leg and 256 seed2" >&2; exit 2; }
 [ "$(wc -l < "$TMP/baked26.txt")" -eq 26 ] \
     || { echo "ERROR: expected 26 baked -O, got $(wc -l < "$TMP/baked26.txt")" >&2; exit 2; }
+
+# ---- 256 腿 seed1 命令行头值锁（检视 #4463651353 的重要增强）：seed1 侧
+#      「164 默认自适应直绿 + 1 格 acl 标定 baked」叙述的唯一工件依据就是本
+#      命令行头——此前 N256S1 只作结果行输入（awk 输入 4）、命令行头从未解析，
+#      沙箱注入删去 acl -O 实测 rc=0 且产物与入库逐字节一致（叙述静默失实）。
+#      锁 = seed1 baked 集合恰为 {acl_gemm_sve.dim=512}（seed1 腿只烧 acl 标定，
+#      25 项有界重跑在腿外单测——triage-256 §1 命令行实录；多 -O/少 -O/换项均 exit 2）。
+s1_n=$(grep -m1 '^# command-line: ' "$N256S1" | grep -o -- '-O [^ ]*' | wc -l || true)
+s1_v=$(extract_baked "$N256S1" || true)
+if [ "$s1_n" -ne 1 ] || [ "$s1_v" != "acl_gemm_sve.dim=512" ]; then
+    echo "ERROR: 256 seed1 baked -O = '${s1_v}' (count ${s1_n}); expected exactly acl_gemm_sve.dim=512 (Ruling B calibration, triage-256 §1)" >&2
+    exit 2
+fi
 # → <test><TAB><knob>=<value>（在首个 '.' 处切分：测试名不含 '.'）
 awk '{
     dot = index($0, ".")
@@ -90,18 +129,94 @@ awk -F'|' '$0 ~ /^[A-Za-z0-9_]+\|/ {
 # ---- triage-512 §0 头部块（逐字；sed 界定首尾标题，剥标题本身与空行）。
 sed -n '/^## 0\./,/^## 1\./p' "$TRI512" | sed '1d;$d' | sed '/^$/d' > "$TMP/sec0.quote"
 
-# ---- fmmla@128 源码逐字引文（tests/cpu/arm64/sve512_fmmla_arm.cpp:193-196）。
+# ---- fmmla@128 源码逐字引文（tests/cpu/arm64/sve512_fmmla_arm.cpp:209-212）。
 # 内容断言（PR #307 #11）：行号是活源码上的脆弱锚——上游漂移一行即静默
 # 错引；断言引文恰 4 行且含门调用与实测 SIGILL 句，漂移即 FATAL。
-sed -n '193,196p' "$FMMLA_SRC" > "$TMP/fmmla.quote"
+# 树前提（检视 #4439756853，如实声明）：锚点 209-212 按当前 HEAD——main 侧
+# #376（f1560439）向源文件插入 16 行使引文自 193-196 下移；矩阵 §0 钉死的
+# 冻结基线（12ccda540fd4 / e4720831）上引文仍在 193-196、209-212 为 HWCAP2
+# 日志文本——在冻结基线树上跑本脚本必然 quote-drift FATAL（exit 2），
+# 「机械生成、重跑即复现」的前提 = #376 合入后的树（PR #404 检视轮重锚）。
+sed -n '209,212p' "$FMMLA_SRC" > "$TMP/fmmla.quote"
 quote_ok=1
 grep -q 'arm64_require_sve_vl(test, 256, 1024)' "$TMP/fmmla.quote" || quote_ok=0
 grep -q 'raises SIGILL (measured 2026-10-27 on silicon' "$TMP/fmmla.quote" || quote_ok=0
 [ "$(wc -l < "$TMP/fmmla.quote")" -eq 4 ] || quote_ok=0
 [ "$quote_ok" -eq 1 ] \
-    || { echo "ERROR: fmmla quote drift: $FMMLA_SRC:193-196 no longer holds the expected 4 lines (gate call 'arm64_require_sve_vl(test, 256, 1024)' + measured-SIGILL sentence) — re-anchor the sed range" >&2; exit 2; }
+    || { echo "ERROR: fmmla quote drift: $FMMLA_SRC:209-212 no longer holds the expected 4 lines (gate call 'arm64_require_sve_vl(test, 256, 1024)' + measured-SIGILL sentence) — re-anchor the sed range" >&2; exit 2; }
 
-# ---- 主生成：awk 依次加载 8 个输入；END 段产 (a) 表体 (b) §5 汇总算术块。
+# ---- triage-256 §4 clamp 列（25 个 TIMEOUT 格的 knob clamp [lo,hi]）→ 下限值锁
+#      输入（检视 #4462912949 的重要增强）：「有界值 = clamp 下限 = 最小激发强度」
+#      此前仅 acl 有值+身份双锁、其余 25 项只有人工核数——沙箱注入
+#      gmp_bigadd_sve.limbs=256→512（三处命令行头一致漂移）实测 rc=0 静默通过、
+#      产物仍印「clamp 下限」叙述，与 triage-256 §5 表和源码下限
+#      （gmp_bigadd_sve.cpp:31 GMP_SVE_LIMBS=256，clamp [256,1M]）直接矛盾。
+#      本段把 §4 表机器解析为 <test>\t<knob>=<lo>（§4/§5 两节同形表格，故按
+#      节头界定只取 §4；单位展开 K/M/G/T[B] = 2^10/20/30/40），行数非 25 即
+#      exit 2；END 段断言非 acl baked 值 == 此处下限（双向集合相等）。
+sed -n '/^## 4\./,/^## 5\./p' "$TRI256" | awk -F'|' '
+    $2 ~ /^ *[0-9]+ *$/ {
+        test = $3; gsub(/^ +| +$/, "", test)
+        knob = $4; gsub(/^ +| +$/, "", knob)
+        if (knob !~ /^[A-Za-z0-9_]+ \[[0-9]+([KMGT]B?)?,[0-9]+([KMGT]B?)?\]$/) {
+            printf "ERROR: cannot parse §4 clamp cell: [%s] %s\n", test, knob > "/dev/stderr"; exit 2
+        }
+        split(knob, a, " "); name = a[1]
+        split(a[2], b, /[,\[\]]/); lo = b[2]
+        match(lo, /^[0-9]+/); num = substr(lo, 1, RLENGTH); suf = substr(lo, RLENGTH + 1)
+        sub(/B$/, "", suf)   # KB/MB/GB/TB → K/M/G/T——兑现头注「K/M/G/T[B]」契约（#4463651397）
+        mult = 1
+        if (suf == "K") mult = 1024
+        else if (suf == "M") mult = 1048576
+        else if (suf == "G") mult = 1073741824
+        else if (suf == "T") mult = 1099511627776
+        else if (suf != "") { printf "ERROR: bad §4 clamp unit suffix: %s\n", lo > "/dev/stderr"; exit 2 }
+        printf "%s\t%s=%d\n", test, name, num * mult
+    }' > "$TMP/clamp_lo.tsv"
+[ "$(wc -l < "$TMP/clamp_lo.tsv")" -eq 25 ] \
+    || { echo "ERROR: expected 25 §4 timeout rows, got $(wc -l < "$TMP/clamp_lo.tsv")" >&2; exit 2; }
+
+# ---- §4 第 6 列 / §5 第 3 列同值副本交叉锁（检视 #4463822593）：同一证据链内
+#      还有两份手工同值副本——§4 表「有界重跑结果」列（pass @ <knob>=<值>）与
+#      §5 表「有界值（=clamp 下限）」列（<knob>=<值>）——此前不在任何锁内，bot
+#      沙箱实测两处单方漂移（limbs=256→512）均 rc=0 静默通过。本锁把两副本归一
+#      （单位后缀展开，与工件侧裸数字对齐：§4 副本 mesh_upi 写 1M、§5 副本与
+#      工件写 1048576）后与 clamp_lo.tsv 三方比对——任一副本单方漂移即 exit 2。
+norm_val() {  # stdin: <test>\t<knob>=<value>[单位后缀] → stdout: <test>\t<knob>=<展开值>
+    awk -F'\t' '{
+        split($2, kv, "=")
+        if (kv[1] == "" || kv[2] !~ /^[0-9]+([KMGT]B?)?$/) \
+            { printf "ERROR: cannot parse knob=value cell: [%s] %s\n", $1, $2 > "/dev/stderr"; exit 2 }
+        v = kv[2]
+        match(v, /^[0-9]+/); num = substr(v, 1, RLENGTH); suf = substr(v, RLENGTH + 1)
+        sub(/B$/, "", suf)
+        mult = 1
+        if (suf == "K") mult = 1024
+        else if (suf == "M") mult = 1048576
+        else if (suf == "G") mult = 1073741824
+        else if (suf == "T") mult = 1099511627776
+        printf "%s\t%s=%d\n", $1, kv[1], num * mult
+    }'
+}
+sed -n '/^## 4\./,/^## 5\./p' "$TRI256" | awk -F'|' '
+    $2 ~ /^ *[0-9]+ *$/ {
+        test = $3; gsub(/^ +| +$/, "", test)
+        col = $7; gsub(/^ +| +$/, "", col); sub(/^pass @ /, "", col)
+        print test "\t" col
+    }' | norm_val | sort > "$TMP/doc4_val.tsv"
+sed -n '/^## 5\./,/^## 6\./p' "$TRI256" | awk -F'|' '
+    $2 ~ /^ *[0-9]+ *$/ {
+        test = $3; gsub(/^ +| +$/, "", test)
+        col = $4; gsub(/^ +| +$/, "", col)
+        print test "\t" col
+    }' | norm_val | sort > "$TMP/doc5_val.tsv"
+sort "$TMP/clamp_lo.tsv" > "$TMP/clamp_lo_sorted.tsv"
+diff -q "$TMP/doc4_val.tsv" "$TMP/clamp_lo_sorted.tsv" >/dev/null \
+    || { echo "ERROR: triage-256 §4 rerun-result column (pass @ …) drifts from §4 clamp lower bounds (cross-lock #4463822593)" >&2; exit 2; }
+diff -q "$TMP/doc5_val.tsv" "$TMP/clamp_lo_sorted.tsv" >/dev/null \
+    || { echo "ERROR: triage-256 §5 bounded-value column drifts from §4 clamp lower bounds (cross-lock #4463822593)" >&2; exit 2; }
+
+# ---- 主生成：awk 依次加载 9 个输入；END 段产 (a) 表体 (b) §5 汇总算术块。
 #      任一断言失败 → exit 1，不写产物。
 awk -F'\t' -v OUT="$TMP" '
 FNR == 1 { fileno++ }
@@ -132,6 +247,9 @@ fileno == 7 { knob[$1] = $2; knob512[$1] = $2; next }
 # 输入 8: gem5 extras（16 条；键唯一由前置守卫断言 → 512 列取该键唯一值；
 #   extra 单独留档用于 §5 有界格分解统计）
 fileno == 8 { knob512[$1] = $2; extra[$1] = $2; next }
+# 输入 9: triage-256 §4 clamp 下限（25 行 <test>\t<knob>=<lo>，bash 侧解析；
+#   END 段值锁断言非 acl baked 的 -O 值 == 此处下限）
+fileno == 9 { clamplo[$1] = $2; next }
 
 # 格值 → 统计类（在 END 里对每格调用）
 function cls(c, arr) {
@@ -144,7 +262,7 @@ function cls(c, arr) {
 
 END {
     # 128 列合法双 seed SKIP 钉死集合（PR #307 #8）：唯一格 = fmmla（理由
-    # 内容引自 triage-128 §2 + 源码 :193-196）。任何其它测试双 seed skip
+    # 内容引自 triage-128 §2 + 源码 :209-212）。任何其它测试双 seed skip
     # 都不许静默套用该标签——FATAL 交人工分诊。
     legal_skip["sve512_fmmla_arm"] = "F64MM UNDEFINED <VL=256"
 
@@ -212,6 +330,7 @@ END {
             c512 = (t in knob512) ? "pass(bounded: " knob512[t] ")" : "pass"
         else if (v == "crash" || v == "timeout") {
             if (!(t in breason)) { printf "FATAL: 512 %s without boundary reason tag\n", t > "/dev/stderr"; fatal = 1 }
+            if (v == "crash") cr512++; else to512++
             c512 = "BOUNDARY(gem5: " breason[t] ")"
         } else { printf "FATAL: 512 bad verdict [%s] %s\n", v, t > "/dev/stderr"; fatal = 1; c512 = "FAIL" }
 
@@ -251,6 +370,64 @@ END {
     p128 = cnt128["pass"]; q128 = cnt128["bounded"]; s128 = cnt128["skip"]; y128 = cnt128["boundary"]
     p256 = cnt256["pass"]; q256 = cnt256["bounded"]; s256 = cnt256["skip"]; y256 = cnt256["boundary"]
     p512 = cnt512["pass"]; q512 = cnt512["bounded"]; s512 = cnt512["skip"]; y512 = cnt512["boundary"]
+    # 128/256 列对账行叙述数字断言：下行 printf 的手写口径数字与 %d 计算值锁死——
+    # 工件数据漂移时 FATAL，而非静默产出叙述与计算自相矛盾的对账行。190 总数不单列
+    # 断言：p+q+s+y≡190 已由上方 c128n/c256n 断言覆盖，且 256 列格值结构性无
+    # SKIP()/BOUNDARY()（cls() 分类边界），再断言 p256+q256 恒为不可达死代码。
+    # 「另有 1 合法 SKIP」的 1 同理不单列断言（检视 #4441098832 驳回依据）：y128
+    # 结构性≡0（c128 无 BOUNDARY 赋值路径）⇒ s128≡c128n−p128−q128，而 s128≠1
+    # 代数上蕴含 p128≠163 ∨ q128≠26（均已在下方断言）——fmmla 双 pass 漂移注入
+    # 实测触 p128 断言 FATAL（got 164）、exit 1、stdout 0 字节，单列 s128==1
+    # 无独立捕获场景，与 p256+q256 死代码同款（派生断言=虚假覆盖，#4439046566 先例）。
+    # 256 列的 164 同为派生值不单列断言（检视 #4462912942）：s256≡y256≡0（c256 无
+    # SKIP/BOUNDARY 赋值路径）∧ c256n==190 ⟹ p256≡190−q256，而 n_to==25 ∧
+    # q256−n_to==1（下方两条活锁）⟹ q256==26 ⟹ p256==164——其 FATAL 必伴随
+    # c256n/n_to/q256−n_to 三断言之先触发，无独立捕获场景。
+    if (p128 != 163)        { printf "FATAL: 128 narrative expects 163 default-adaptive (got %d)\n", p128 > "/dev/stderr"; fatal = 1 }
+    if (q128 != 26)         { printf "FATAL: 128 narrative expects 26 baked bounded (got %d)\n", q128 > "/dev/stderr"; fatal = 1 }
+    if (n_to != 25)         { printf "FATAL: 256 narrative expects 25 bounded reruns (got %d)\n", n_to > "/dev/stderr"; fatal = 1 }
+    if (q256 - n_to != 1)   { printf "FATAL: 256 narrative expects 1 baked calibration (got %d)\n", q256 - n_to > "/dev/stderr"; fatal = 1 }
+    # 身份断言：唯一非超时 baked 必须是 acl_gemm_sve dim=512（计数断言只锁数量，
+    # 身份漂移——baked 清单里那 1 项换成别的测试——时计数全过而「acl 标定」叙述
+    # 静默失实，恰是本断言块要防住的模式）。
+    if (!("acl_gemm_sve" in knob) || knob["acl_gemm_sve"] != "dim=512") \
+        { printf "FATAL: narrative expects the sole non-timeout baked to be acl_gemm_sve dim=512 (got %s)\n", ("acl_gemm_sve" in knob ? knob["acl_gemm_sve"] : "<absent>") > "/dev/stderr"; fatal = 1 }
+    # 非超时 baked 集合断言（检视 #4439756844 的重要增强）：26 项 baked 中 256 seed1
+    # 非超时的恰为 acl_gemm_sve（其余 25 项全部腿内超时、走 §5 腿外重跑）。单一
+    # 工件对倒（acl 超时 + 它 baked 格转绿）时上方计数/值断言可全过而「baked 标定」
+    # 叙述静默失实——本断言封死该组合（沙箱实证的绕过路径）。
+    non_to = 0
+    for (t2 in knob)
+        if (res[4 "," t2] != "timed out") { non_to++; non_to_last = t2 }
+    if (non_to != 1 || non_to_last != "acl_gemm_sve") \
+        { printf "FATAL: sole non-timeout baked must be acl_gemm_sve (got %d non-timeout baked, last = %s)\n", non_to, (non_to ? non_to_last : "<none>") > "/dev/stderr"; fatal = 1 }
+    # 有界值 = clamp 下限的值锁（检视 #4462912949 的重要增强）：此前该语义仅
+    # acl 有值+身份双锁、其余 25 项只有人工核数——沙箱注入 limbs=256→512（三处
+    # 命令行头一致漂移）实测 rc=0 静默通过、产物仍印「clamp 下限」叙述。本锁
+    # 封死该面：非 acl baked 的值必须等于 triage-256 §4 clamp 列下限（输入 9，
+    # 双向集合相等——§4 多行/少行/换行、工件值漂移、协议改中间档起步均 FATAL）。
+    for (t3 in knob) {
+        if (t3 == "acl_gemm_sve") continue
+        if (!(t3 in clamplo)) { printf "FATAL: baked %s not in triage-256 §4 timeout table\n", t3 > "/dev/stderr"; fatal = 1; continue }
+        if (knob[t3] != clamplo[t3]) { printf "FATAL: bounded value for %s is %s but triage-256 §4 clamp lower bound is %s\n", t3, knob[t3], clamplo[t3] > "/dev/stderr"; fatal = 1 }
+    }
+    for (t3 in clamplo)
+        if (!(t3 in knob)) { printf "FATAL: triage-256 §4 timeout test %s has no baked -O\n", t3 > "/dev/stderr"; fatal = 1 }
+    # 512 列对账行叙述数字断言（检视 #4439756862 活锁面；#4462912942 派生面）：
+    # 活锁 = 9 边界的分量 5 crash + 4 timeout、baked 26 项中绿 25 / overrides
+    # 16 条中绿 15 / 重叠 1、overrides 行数 16。181 pass / 39 有界 / 9 边界三值
+    # 为传递蕴含不单列断言：y512≡cr512+to512（crash/timeout 分支同格同递增）
+    # 被 5+4 蕴含；s512≡0（c512 无 SKIP 赋值路径）∧ c512n==190 ⟹
+    # p512+q512≡190−y512 被 5+4 蕴含；knob512 = baked ∪ extras（输入 7/8 构造）
+    # ⟹ q512≡bg+eg−bo（容斥恒等）被 25/15/1 蕴含——单列均无独立捕获场景
+    # （派生断言=虚假覆盖，#4439046566 先例，与 s128/p256/190 同款处置）。
+    if (cr512 != 5 || to512 != 4) { printf "FATAL: 512 narrative expects 5 crash + 4 timeout boundary (got %d + %d)\n", cr512, to512 > "/dev/stderr"; fatal = 1 }
+    if (bg != 25 || eg != 15 || bo != 1) { printf "FATAL: 512 narrative expects baked-25 green / extras-15 green / overlap-1 (got %d/%d/%d)\n", bg, eg, bo > "/dev/stderr"; fatal = 1 }
+    for (e in extra) n_ovr++
+    if (n_ovr != 16)        { printf "FATAL: 512 narrative expects 16 gem5-overrides lines (got %d)\n", n_ovr > "/dev/stderr"; fatal = 1 }
+    # 叙述数字/身份断言后立即 exit（与上方统计断言块的 fatal 判定同一结构）——
+    # fatal 时 §5 汇总 math.md 零写出，拼装阶段不执行，matrix.md 不会产出半成品对账行。
+    if (fatal) exit 1
     M = OUT "/math.md"
     printf "| 列 | pass（直绿） | pass(bounded) | SKIP(legal) | BOUNDARY(gem5) | 合计 |\n" > M
     printf "|---|---|---|---|---|---|\n" > M
@@ -261,12 +438,12 @@ END {
     printf "| **合计** | **%d** | **%d** | **%d** | **%d** | **%d** |\n", P, Q, S, Y, P + Q + S + Y > M
     printf "\n" > M
     printf "**%d = %d pass（%d 直绿 + %d 有界）+ %d SKIP(legal) + %d BOUNDARY(gem5)**，零 FAIL、零非法 SKIP。\n\n", P + Q + S + Y, P + Q, P, Q, S, Y > M
-    printf "- **128 列 = %d pass + %d SKIP(legal)** —— 对账 triage-128 §5（189 直绿 × 2 seed + 1 合法 SKIP：fmmla@128，两 seed 同格同理）；其中 %d 格为腿内 baked 有界（triage-128 §1 的 26 项 -O 覆盖的测试）。\n", p128 + q128, s128, q128 > M
-    printf "- **256 列 = %d pass** —— 对账 triage-256 §7（seed1 165 腿内直绿 + 25 格 §5 有界重跑 = 190/190；seed2 190 腿内直绿）；%d 个有界格 = %d 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿）+ %d 格 baked 直绿（acl dim=512，Ruling B / triage-256 §1）。\n", p256 + q256, q256, n_to, q256 - n_to > M
+    printf "- **128 列 = %d pass + %d SKIP(legal)** —— 对账 triage-128 §5（两 seed 各 189 腿内绿 = 163 默认自适应直绿 + 26 格腿内 baked 有界（= 25 项 clamp 下限 + 1 项 acl 标定，构成同 §2 legend @128；clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）；189 与 26 计数对账 triage-128 §5（该表收口口径未携带限定语义），163/25/1 拆分与限定语义对账 triage-256 §1/§5/§7），另有 1 合法 SKIP：fmmla@128，两 seed 同格同理。\n", p128 + q128, s128 > M
+    printf "- **256 列 = %d pass** —— 对账 triage-256 §7（seed1 165 腿内绿（164 格默认自适应直绿 + 1 格 acl 标定 baked）+ 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内 clamp 下限有界））；%d 个有界格 = %d 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ %d 格 baked 腿内绿（acl dim=512 标定，Ruling B / triage-256 §1——baked 有界几何、证据强度与有界绿同向受限，非默认自适应直绿等同；按下行有界格计法计入 26 有界格之列、亦计入 165 腿内绿之列，两口径两属）。\n", p256 + q256, q256, n_to, q256 - n_to > M
     printf "- **512 列 = %d pass + %d BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；%d 个有界格 = baked 26 项中绿 %d（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 %d（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 %d（acl：baked 512 被 extras 覆盖为 128）。\n", p512 + q512, y512, q512, bg, eg, bo > M
     printf "- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。\n" > M
 }
-' "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$TMP/knob_baked.tsv" "$TMP/knob_extra.tsv" \
+' "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$TMP/knob_baked.tsv" "$TMP/knob_extra.tsv" "$TMP/clamp_lo.tsv" \
   || { echo "ERROR: matrix generation assertions failed" >&2; exit 1; }
 
 # ---- 头部（引用性文本 + 两段机械提取的逐字引文）+ 表体 + 汇总算术装配输出。
@@ -289,7 +466,10 @@ cat <<'HDR'
   **矩阵证据描述的测试代码与基线完全一致**（Task 7 runbook：三腿 570 格分诊 =
   零测试代码缺陷）。注：2026-10-31 起本分支合入了 main（#302/#316/#317 等，
   §0.1 delta 表为权威差异清单），当前 HEAD 的 tests/ framework/ 已不再等于
-  冻结基线——复核上述 diff 请用 `e4720831`，勿用移动的 HEAD。
+  冻结基线——复核上述 diff 请用 `e4720831`，勿用移动的 HEAD。fmmla 引文锚（§3
+  逐字引文，`sve512_fmmla_arm.cpp:209-212`）按 #376（f1560439）合入后的当前树
+  重锚——冻结基线上该引文仍在 :193-196，在冻结基线树上跑 `matrix-gen.sh` 会因
+  quote drift FATAL（exit 2）；重跑复现的前提 = #376 之后的树（PR #404 检视轮）。
 - 二进制：native 两腿 `sdcshield-12ccda540fd4`（四份 summary 头 `version:` 行一致，实测）；
   512 腿 gem5 `/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt`
   md5 `3f9011f40dbe80ec1df478c62ddb0b06`（Task 5 终版 9-stub 链）+ 同源 sdcshield。
@@ -317,7 +497,7 @@ cat <<'HDR2'
 | 格值 | 含义 | 出处 |
 |---|---|---|
 | `pass` | 腿内默认/自适应几何下直绿（native：全核 `-t 2000` 实测；512：1 轮全量 golden 字节比对成立） | 各 summary / verdicts |
-| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128** = 26 项腿内 baked（triage-128 §1：逐字拷贝自 256 腿 seed2，两 seed 腿内有界实测）；**@256** = 25 格 seed1 有界重跑（triage-256 §5：clamp 下限一次通过、零上调）+ seed2 腿内有界 + `acl_gemm_sve.dim=512` 标定 baked（triage-256 §1，Ruling B）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格） | 对应 triage 分节 |
+| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128** = 26 项腿内 baked（triage-128 §1：逐字拷贝自 256 腿 seed2，构成同 @256——25 项 clamp 下限 + 1 项 `acl_gemm_sve.dim=512` 标定 baked（Ruling B，dim clamp [64,4096]、512 非下限）；两 seed 腿内有界实测）；**@256** = 25 格 seed1 有界重跑（triage-256 §5：clamp 下限一次通过、零上调——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ seed2 腿内有界 + `acl_gemm_sve.dim=512` 标定 baked（triage-256 §1，Ruling B）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格） | 对应 triage 分节 |
 | `SKIP(legal: F64MM UNDEFINED <VL=256)` | 架构性合法 SKIP，唯一格 = (sve512_fmmla_arm, 128)，两 seed 同格同理 | triage-128 §2 + §3 逐字源码引文 |
 | `BOUNDARY(gem5: <标签>)` | gem5 侧限制边界，Ruling I 终局：`PMULL64` = gem5 无该 64-bit PMULL 编码（OpenSSL GHASH `pmull v0.1q`，2 格）；`DC-CIVAC` = SE 模式 `dc civac` 缓存维护路径 raise UndefinedInstruction（3 格）；`SIM-SPEED` = knob 在 clamp 下限或无杠杆，单轮指令量 × ~1400 仿真速超出实用预算（4 格）。native 两腿对应格全绿 | triage-512 §5.1/§5.2 |
 
@@ -340,7 +520,7 @@ cat <<'HDR2'
 ## 3. fmmla@128 合法 SKIP 的逐字源码引文（T3 minor fix）
 
 triage-128 §2 曾意译此注释（丢了 measured-SIGILL 关键句）；按裁定本矩阵补**逐字**引用
-——`tests/cpu/arm64/sve512_fmmla_arm.cpp:193-196`（当前基线）：
+——`tests/cpu/arm64/sve512_fmmla_arm.cpp:209-212`（#376 之后的树——冻结基线上引文仍在 :193-196，树前提见 §0.1）：
 
 ```c
 HDR2

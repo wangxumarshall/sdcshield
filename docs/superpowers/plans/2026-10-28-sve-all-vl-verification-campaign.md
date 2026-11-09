@@ -1,8 +1,15 @@
-# SVE 全 VL 验证运动（188 用例 × 128/256/512）实施计划
+# SVE 全 VL 验证运动（190 用例 × 128/256/512）实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 188 个 SVE1 用例在 VL=128/256/512 三档采集真实通过证据（564 格矩阵），发现即修。
+**Goal:** 为 190 个 SVE 用例在 VL=128/256/512 三档采集真实通过证据（570 格矩阵），发现即修。（计数口径：计划撰写时点预期 188 用例/564 格，清单定稿 190——`wc -l sve-test-list.txt` = 190、matrix.md 实收 190×3=570 格；正文 Task 6/8 与 Goal 按定稿值；Task 1 的 `wc -l` 行已随 2026-11-02 #449 勘误同步为实测口径，同命令块内其余「预期」字样系历史时点原文。）
+
+**范围追记（过程叙事，非目标定义）:** 计数对齐与 Task 6 Step 2 内嵌骨架的执行语义对齐（后经检视裁定收敛：移除代码镜像、单源指向入库脚本）系 PR #418 检视处置轮次追加、超出 issue #403「.log 入库主张消歧」原始边界——因与本同步产出的工件协议注记交织于同一 hunk 邻域不再拆分 PR，处置按轮次独立 commit（git log 逐轮可追溯）+ PR 描述逐轮记录。
+
+> **判据口径（2026-11-02 勘误，issue #449）：** 清单 = Task 1 枚举实测裁决 190 行
+> （union(193) − {neon_add_sve, arm64_sdc_sve, crt_builtins_sve}，见
+> `enumeration.md` §3），非计划期 name-grep 估算的 188×3=564；Task 2/3/6/8
+> 的一切格数以 190 为基（570 = 190×3）。
 
 **Architecture:** native 两腿（128=env 降 spec / 256=原生）在本机全量跑 `--test-list-file`；512 腿走 gem5-fi SE 真二进制，先补 `prctl(PR_SVE_GET_VL/SET_VL)` stub 打通框架 VL 探测（A′），时间盒失败则回退 FS（A）。修复走独立 commit 三档重验。
 
@@ -19,6 +26,23 @@
 - `git commit -s`，最后一行 `Signed-off-by: wangxu <wangxumarshall@qq.com>`，无 Co-Authored-By。提交前 `git branch --show-current`。
 - 构建入口统一 `./scripts/build.sh`（并行度 nproc/2）；**campaign 跑批与构建绝不并行**（gem5-fi 仓纪律，也适用本仓大跑批）。
 - 时间盒纪律（spec §5b/§9）：gem5 stub 链累计 ~5-6 个仍不闭合 → 停止迭代，升级到用户决策切方案 A（FS）。
+- **证据工件协议（控制器裁定 E；本计划工件清单 2026-11-01 同步，issue #403）**：原始
+  运行日志**一律不入库**——campaign 目录 `.gitignore` 屏蔽 `*.log` 与 `/gem5-512/*`
+  （仅豁免 `batch.tsv`/`identity.txt` 两个小体积溯源记录——**identity.txt 历史例外**：
+  write_identity 机制 2026-10-30 后才入库，历史批（2026-10-29 legacy）跑时无此机制，
+  identity.txt 从未产出入库（`git ls-files` 下 gem5-512/ 仅 batch.tsv）；已入库
+  verdicts.txt 的身份头为 extract 时重算，其 :5 头注自述「RECOMPUTED AT EXTRACT
+  TIME … no batch-time identity record exists」；照本计划含 write_identity 的脚本
+  重跑将产出它）。入库证据：native 腿 =
+  `extract-summary.sh` 机械提取的 `<leg>-LCG<seed>.summary.txt`（每用例一行 + 命令行/
+  exit 头，行数=清单校验）+ 腿 stdout 跑完即回拷的 `.stdout.txt`（含 `exit: pass` 行；
+  历史例外：256 腿 seed1 的 stdout 在该回拷步骤写入计划前已随重启丢失，未入库，其
+  `exit: pass` 证据由 summary 头 exit 行承担——triage-256.md §7，入库集以
+  `git ls-files` 为准）；
+  512 腿 = `gem5-512-verdicts.txt`（逐测判定）+ `gem5-512/batch.tsv`。各 Task 的
+  `git add docs/superpowers/inventory/sve-all-vl-campaign/` 对被忽略 `.log` **零警告
+  静默跳过**——不入库是预期行为，勿以 `git add -f` 强塞百 MB 级原始 yaml；裁定 E
+  原文见 triage-256.md §1。
 
 ---
 
@@ -69,7 +93,7 @@ Expected: 无违规输出，exit 0。有违规 → 每个违规是独立修复�
 ```bash
 mkdir -p docs/superpowers/inventory/sve-all-vl-campaign
 cp /tmp/sve-union.txt docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
-wc -l docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt   # 记入 enumeration.md（预期 ≈189：188 + gemm_double_max_arm）
+wc -l docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt   # 记入 enumeration.md（实测 190：188 named + eigen_gemm_double_max_arm + libomp_ctx_arm；union 193 − 3 件不在默认集，enumeration.md §3）
 # 可执行性抽查：清单跑 3 个代表测试
 ./builddir/sdcshield --test-list-file docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt -t 1000 -n 1 2>&1 | tail -3
 ```
@@ -87,11 +111,14 @@ git commit -s -m "docs(campaign): SVE 全 VL 验证清单——tag∪name 枚举
 ### Task 2: native 256 腿全量跑（2 seeds）
 
 **Files:**
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/native-256-<seed>.log`（原始输出归档）
+- Create（留工作区，**不入库**——`.gitignore` `*.log`，裁定 E）: `docs/superpowers/inventory/sve-all-vl-campaign/native-256-<seed>.log`（原始 yaml 输出，Step 3 分诊源）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/native-256-<seed>.summary.txt`（`extract-summary.sh` 机械提取，行数=清单校验）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/native-256-<seed>.stdout.txt`（腿 stdout 跑完即回拷，含 `exit: pass` 行。seed1 历史例外：其 stdout 在 Step 1 回拷行写入计划之前已随重启丢失、未入库，`exit: pass` 由 summary 头 exit 行承担——triage-256.md §7；本计划同步时（issue #403）入库的 native stdout 实为 3 份：256-seed2/128×2，`git ls-files` 可复核）
 - Create: `docs/superpowers/inventory/sve-all-vl-campaign/triage-256.md`（分诊表）
 
 **Interfaces:**
 - Consumes: Task 1 的 `sve-test-list.txt`。
+- Consumes: 仓库既有 `extract-summary.sh`（已在库，`git ls-files` 可复核；Step 1 的机械提取工具——issue #403 同步补行，此前 Step 调用而清单无行，属清单-步骤失配镜像）。
 - Produces: 256 档 seed1/seed2 两个 `exit: pass`（或分诊后的边界格），triage 表驱动 Task 7。
 
 - [ ] **Step 1: seed1 全量跑（过夜预算）**
@@ -100,13 +127,26 @@ git commit -s -m "docs(campaign): SVE 全 VL 验证清单——tag∪name 枚举
 cd /home/sdc/wangxu/sdcshield-main
 LIST=docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
 LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.log
-./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y > /tmp/native-256-LCG1001.stdout 2>&1
+# --ignore-timeout：控制器裁定（triage-256.md「TimedOut 不中止全程」，缺省则首个超时
+# 即全局中止）——四腿实跑全带；seed1 实测 25 用例超时后仍 exit: pass 即赖此旗标。
+# baked -O 注记：本块未示出 baked -O 降容，勿零 -O 照抄重跑。实跑形态：历史 seed1 本跑
+# 带 1 项（-O acl_gemm_sve.dim=512）；Step 2 seed2 为全 26 项（裁定 D：与 512 腿 BAKED
+# 同集——缺之 eigen_svd_bidiag_sve/eigen_svd_cdouble_sve 等全核 TIMEOUT 前科用例收不
+# 了口）。26 项权威清单 = 入库 summary 的 `# command-line:` 头（本块有意不镜像，防同
+# 源分叉——extract_baked 断言三腿一致即机械锚）。零 -O 重跑的暴露面分腿：seed2 summary
+# 被 Task 8 断言以「expected 26 baked -O, got 0」拒收（烧完全量才暴露）；seed1 无 baked
+# 断言（extract_baked 只锚 128 两 seed 与 256 seed2）——超时行落入 matrix-gen 的
+# pass(bounded) 合法分支（实测 25 超时用例恰全在 26 项 knob 集内），劣化证据被静默
+# 接受，比拒收更隐蔽。
+./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y --ignore-timeout > /tmp/native-256-LCG1001.stdout 2>&1
 echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
 tail -5 /tmp/native-256-LCG1001.stdout
+cp /tmp/native-256-LCG1001.stdout docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.stdout.txt   # 裁定 E：stdout 跑完即回拷入库（防 /tmp 随重启丢失）
+docs/superpowers/inventory/sve-all-vl-campaign/extract-summary.sh $LOG $LIST docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.summary.txt   # 裁定 E：机械提取入库 summary（每用例一行 + 命令行/exit 头，行数=清单校验）
 ```
 Expected: `exit: pass`。注意：eigen_svd_cdouble_sve / eigen_svd_bidiag_sve 有全核 TIMEOUT 前科（node0 带宽，见 memory eigen-mdim-memory-measurement）；若这两格 TIMEOUT → 进 Step 3 分诊，不算本步失败。
 
-- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。
+- [ ] **Step 2: seed2 全量跑**：同 Step 1，`-s LCG:1002`，日志 `native-256-LCG1002.log`。**替换范围**：Step 1 命令块中所有 `LCG1001` 字样——共 5 行（`LOG=` 行的日志路径、stdout 捕获重定向、`tail -5` 目检、`cp` 回拷（/tmp 源与入库目标两处字面）、`extract-summary.sh` 目标 summary 文件名——该行源路径是 `$LOG` 变量引用、无 /tmp 字面）——一律相应改为 `LCG1002`，**外加 RNG 种子参数 `-s LCG:1001`→`-s LCG:1002`**（带冒号、非文件名——「LCG1001 字样」按字符串匹配不命中它，须单独改；漏改则 seed2 以 seed1 的 RNG 运行而全部产出标 LCG1002，双 seed 独立性零报警丢失）。否则照字面增量执行会把 seed2 stdout 覆写进 `native-256-LCG1001.stdout.txt`（漏改 `LOG=` 行则 seed2 的 `-o` 先覆写 seed1 的原始 yaml——**seed1 分诊源丢失**；此时 LCG1002 summary 名实仍符（覆写后 `$LOG` 内容已是 seed2 输出），「summary 提取自 seed1 输出」仅在 `-s` 与 `LOG=` 同时漏改时才发生——两种漏改都是证据污染）。
 
 - [ ] **Step 3: 分诊**
 
@@ -128,8 +168,10 @@ git commit -s -m "docs(campaign): native 256 腿全量证据（2 seeds）+ 分�
 ### Task 3: native 128 腿全量跑（2 seeds）
 
 **Files:**
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/native-128-<seed>.log`
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/triage-128.md`
+- Create（留工作区，**不入库**——`.gitignore` `*.log`，裁定 E）: `docs/superpowers/inventory/sve-all-vl-campaign/native-128-<seed>.log`（原始 yaml 输出，分诊源）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/native-128-<seed>.summary.txt`（`extract-summary.sh` 机械提取，行数=清单校验）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/native-128-<seed>.stdout.txt`（腿 stdout 跑完即回拷，含 `exit: pass` 行）
+- Create: `docs/superpowers/inventory/sve-all-vl-campaign/triage-128.md`（分诊表）
 
 **Interfaces:**
 - Consumes: Task 1 清单。
@@ -142,10 +184,26 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --dump-cpu-info 2>&1 | grep
 ```
 Expected: `ARM64 spec: SVE yes (max VL 128 bits) | SVE2 no | SME no | SME2 no`。
 
-- [ ] **Step 2/3/4:** 与 Task 2 Step 1-3 相同，外加 env 前缀：
+- [ ] **Step 2/3/4:** 与 Task 2 Step 1-3 相同（**完整继承**其命令块全部行——cd/`LIST` 等与 Task 2 逐字相同的原样行原封继承，stdout 捕获、`echo` 退出码、`tail -5` 目检、`cp` 回拷、`extract-summary.sh` 提取各行均在下方命令块内按继承形态示出；下方命令块按被继承的完整形态改写，非仅主命令示意），外加 env 前缀；全部 `native-256` 文件名前缀相应改为 `native-128`（替换范围同 Task 2 Step 2 注记）：
 ```bash
-SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o native-128-LCG1001.log -Y
-SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1002 -o native-128-LCG1002.log -Y
+# seed1（seed2 同理：全部 LCG1001 字样改 LCG1002——含 5 个文件名行与 RNG 种子参数
+# -s LCG:1001→-s LCG:1002（带冒号、非文件名，勿漏——漏则 seed2 以 seed1 RNG 运行
+# 而产出全标 LCG1002，零报警）；替换范围详见 Task 2 Step 2 注记）
+cd /home/sdc/wangxu/sdcshield-main
+LIST=docs/superpowers/inventory/sve-all-vl-campaign/sve-test-list.txt
+LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log
+# --ignore-timeout：控制器裁定（triage-256.md「TimedOut 不中止全程」，缺省则首个超时
+# 即全局中止）——四腿实跑全带。
+# baked -O 注记：128 两 seed 实跑各带全 26 项 baked -O 降容（裁定 D：与 512 腿 BAKED
+# 同集——缺之 eigen_svd_bidiag_sve/eigen_svd_cdouble_sve 等全核 TIMEOUT 前科用例收不
+# 了口）。本块有意不镜像该 26 项（权威清单 = 入库 summary 的 `# command-line:` 头，防
+# 同源分叉——extract_baked 断言三腿一致即机械锚）：勿零 -O 照抄重跑——两 seed summary
+# 会被 Task 8 的 matrix-gen.sh 断言以「expected 26 baked -O, got 0」拒收（烧完全量才暴露）。
+SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST -t 2000 -s LCG:1001 -o $LOG -Y --ignore-timeout > /tmp/native-128-LCG1001.stdout 2>&1
+echo "exit=$?"   # 记录退出码（不经管道，$? 即 sdcshield 的）
+tail -5 /tmp/native-128-LCG1001.stdout
+cp /tmp/native-128-LCG1001.stdout docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.stdout.txt   # 裁定 E：stdout 跑完即回拷入库（防 /tmp 随重启丢失）
+docs/superpowers/inventory/sve-all-vl-campaign/extract-summary.sh $LOG $LIST docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.summary.txt   # 裁定 E：机械提取入库 summary
 ```
 **特别关注**：128 档下 `eigen_svd_cdouble_sve` / `eigen_gemm_double_max_arm` 的 per-tier 分发（128 变体必须被选中而非 SKIP/FAIL）；`sleef_sve` 的 128..1024 门。SKIP 类异常全部记录理由并逐条判合法性（本机不应出现 HWCAP 类 SKIP）。
 
@@ -166,7 +224,7 @@ git commit -s -m "docs(campaign): native 128 腿全量证据（2 seeds，env 降
 - Modify: `CHAOS/gem5/src/arch/arm/linux/se_workload.cc`（表项 `{base + 167, "prctl"}` 在第 ~679 行；handler 函数加在同文件表定义之前）
 
 **Interfaces:**
-- Produces: gem5.opt 支持 `prctl(PR_SVE_GET_VL=51)`（返回当前 VL 字节）与 `PR_SVE_SET_VL=50`（请求 ≥ 当前 VL → 返回当前 VL；请求 < 当前 VL → -EINVAL，单档限制如实警告）；其它 option 忽略返回 0。契约对齐 `framework/device/cpu/arm64/arm64_vl.h`：**返回 0 会被框架判为"执行层忽略"→ENOSYS→SKIP，所以成功路径必须返回正的 VL 字节数**。
+- Produces: gem5.opt 支持 `prctl(PR_SVE_GET_VL=51)`（返回当前 VL 字节）与 `PR_SVE_SET_VL=50`——按 Linux v6.6 `arch/arm64/kernel/fpsimd.c` 真实语义（2026-11-08 勘误，issue #500，详见 Step 2 注记）：长度取 `arg2 & PR_SVE_VL_LEN_MASK`，非法长度（0 / 非 16 字节倍数 / > SVE_VL_MAX=8192）→ -EINVAL；合法长度一律**授予单配置档并返回该档字节数**（单档 vq_map 下内核超限 `vl > max_vl → max_vl` 向下钳、低档 `vl < min_vl → min_vl` 向上钳、再 `find_next_bit` 向上取整——三个方向都落在配置档；低于配置档的授予 warn_once：真硬件恒含 128-bit 架构最小档，低档授予在真机不会发生，SE 证据须可见这个 simulator-only 边缘）；其它 option 返回 0 **并 warn_once**（树内 `ignoreFunc` 先例对每个被忽略 syscall 都告警，静默假成功低于树内基准）。契约对齐 `framework/device/cpu/arm64/arm64_vl.h`：**返回 0 会被框架判为"执行层忽略"→ENOSYS→SKIP，所以成功路径必须返回正的 VL 字节数**——该 ENOSYS 判定只作用于 `PR_SVE_SET_VL` 自身的返回值；default 分支对其它 option 返回的 0 是告警后放行的"假成功"，不进入该判定。
 
 - [ ] **Step 1: gem5-fi 仓建分支与 plan**
 
@@ -181,15 +239,64 @@ git switch -c feat/sve-se-prctl-stub-2026-10-28
 
 `se_workload.cc` syscall 表（64-bit 表，`{base + 167, "prctl"}` 处）改为 `{base + 167, "prctl", prctlFunc}`，并在表定义前加：
 
+> **Step 2 设计勘误（2026-11-08，issue #500）：** 下方代码为勘误后设计，
+> 取代本 Task 原设计与 gem5-fi 实际落地形态（commit `ee0ce761`——Task 5
+> 九 stub 构建含它，512 腿证据由其产出；其仓内 plan 文档
+> `2026-10-28-sve-se-prctl-stub.md` 为同款设计，跟进时须一并勘误）。
+> 原设计两处缺陷：
+> **(1) `default` 静默假成功。** 非 SVE option（框架实际会发的
+> `PR_SET_NAME`〔framework/sysdeps/linux/cpu_affinity.cpp:20〕、
+> `PR_SET_TIMERSLACK`〔framework/sandstone.cpp:1027〕，及 debug 路径的
+> `PR_SET_DUMPABLE`/`PR_SET_PTRACER`）一律返回 0 无告警——SE 证据与真实
+> 内核语义无声漂移。树内 `ignoreFunc`（`src/sim/syscall_emul.cc:84-88`）
+> 对每个被忽略 syscall 都 `warn`，静默假成功低于树内基准；勘误后至少
+> warn_once。
+> **(2) 低档请求拒绝 -EINVAL，与 Linux 相反。** Linux v6.6
+> `find_supported_vector_length`（fpsimd.c:533；:546-549 钳制、:551
+> `find_next_bit` 向上取整）：合法长度先钳到 `[min_vl, max_vl]` 再向上
+> 取整到受支持档——单档主机（vq_map 仅配置档，min_vl=max_vl=配置档）上
+> **任何合法请求都授予配置档**。原审计主张「请求高于配置档应按 Linux
+> 拒绝/-EINVAL」不成立：`vec_set_vector_length`（fpsimd.c:848，:866-867
+> 超限钳制到 `VL_ARCH_MAX`）与本仓 arm64_vl.h 2026-10-27 原生实测
+> （256-bit 芯片请求 512/1024/2048/4096 均返回 256）同口径——原设计
+> 「arg2 ≥ vl → 返回 vl」在超限方向本就与 Linux 一致，分歧仅在低档方向
+> （原设计拒绝，Linux 授予）。勘误后：合法请求一律授予配置档；**低于
+> 配置档的授予 warn_once**（真硬件恒含 128-bit 架构最小档，该情形不会
+> 发生——SE 证据须可见）；超限钳制保持静默（内核常规行为，框架探针
+> 每次健康运行都走它，告警即噪声）。
+> **512 腿证据不受两处缺陷影响**（逐路径核实）：框架探针
+> （arm64_vl.h `arm64_vl_probe_max`，请求 2048-bit）走超限路径——新旧
+> 语义同样授予配置档；控制线程/worker pin（arm64_spec_prepare.h）请求
+> 精确探测档——无舍入；唯一低档请求者 `selftest_arm64_vl_require_sve`
+> 不在 sve-test-list.txt（grep 零命中，190 行清单实测）；default 静默 0
+> 只作用于无读回的 write-only option，不动计算结果。tier 主张的残余
+> 薄弱点在 gem5 启动配置管线（`--vl 4` 是否真达 ISA），与 stub 无关，
+> 详见 issue #500 处置报告。gem5-fi 仓的 stub 修正按其自身分支纪律另行
+> 跟进（本仓不携带该仓改动）。
+
 ```cpp
 /// prctl() for SE: SVE vector-length get/pin, mirroring the Linux uapi
 /// semantics SDCShield's framework layer (arm64_vl.h) depends on — a
 /// successful PR_SVE_SET_VL returns the granted VL IN BYTES (returning 0
 /// would be read as "execution layer ignored" -> ENOSYS -> test SKIP).
-/// gem5 SE has exactly one tier (ArmISA::sve_vl_se, in quadwords), so a
-/// request at or above the configured VL is granted at the configured VL;
-/// anything lower is refused with EINVAL (single-tier limitation, warned
-/// once). Other prctl options are ignored, returning success.
+///
+/// Linux v6.6 arch/arm64/kernel/fpsimd.c: sve_set_current_vl() takes the
+/// length from arg2 & PR_SVE_VL_LEN_MASK and fails an invalid one (0, not
+/// a 16-byte multiple, > SVE_VL_MAX) with EINVAL; a valid length is then
+/// clamped to [min_vl, max_vl] and rounded UP to the next supported tier
+/// (find_supported_vector_length: find_next_bit over vq_map). gem5 SE has
+/// exactly one tier — a single-vq host whose min_vl == max_vl == the
+/// configured VL — so every valid request grants that tier: over-limit
+/// clamps down to max_vl (silent, kernel-normal), below-tier clamps up to
+/// min_vl. The below-tier grant warns once: real hardware always
+/// implements the architectural 128-bit minimum tier, so it cannot happen
+/// there — the SE evidence must show this simulator-only edge. Flags
+/// (PR_SVE_VL_INHERIT / PR_SVE_SET_VL_ONEXEC) parse with the LEN_MASK but
+/// are not modeled; the framework layer never passes them.
+///
+/// Other prctl options return success WITH warn_once: the in-tree
+/// ignoreFunc precedent (syscall_emul.cc) warns on every ignored call, so
+/// silent fake success is below the tree's own bar (issue #500).
 static SyscallReturn
 prctlFunc(SyscallDesc *desc, ThreadContext *tc, long option, long arg2)
 {
@@ -198,20 +305,25 @@ prctlFunc(SyscallDesc *desc, ThreadContext *tc, long option, long arg2)
         return SyscallReturn(
             (int64_t)tc->getIsaPtr()->getVectorLengthInBytes());
       case 50 /* PR_SVE_SET_VL */: {
+        const int64_t len = arg2 & 0xffff /* PR_SVE_VL_LEN_MASK */;
         const int64_t vl = tc->getIsaPtr()->getVectorLengthInBytes();
-        if (arg2 >= vl)
-            return SyscallReturn(vl);
-        warn_once("%s: PR_SVE_SET_VL %ld below the single configured SE "
-                  "tier (%ld bytes) refused with EINVAL",
-                  desc->name(), arg2, vl);
-        return SyscallReturn(-EINVAL);
+        if (len < 16 || (len & 0xf) || len > 8192 /* SVE_VL_MAX */)
+            return SyscallReturn(-EINVAL);
+        if (len < vl)
+            warn_once("%s: PR_SVE_SET_VL %ld granted at the single "
+                      "configured SE tier (%ld bytes): Linux clamps a "
+                      "valid request up to min_vl on a single-vq host",
+                      desc->name(), len, vl);
+        return SyscallReturn(vl);
       }
       default:
+        warn_once("%s: prctl option %ld not modeled, returning success",
+                  desc->name(), option);
         return SyscallReturn(0);
     }
 }
 ```
-（若带参 handler 签名编译不匹配，参照同文件 `timesFunc<ArmLinux64>` 与 `syscall_emul.hh` 的 `closeFunc(SyscallDesc*, ThreadContext*, int)` 模式修正参数形式；`getVectorLengthInBytes()` 为 `BaseISA` 公有虚方法，返回 `sveVL*16` 字节，已在 `src/arch/arm/isa.hh` 核实。`SyscallReturn(-EINVAL)` 的负值即 errno 语义，同仓既有 handler 惯例。）
+（若带参 handler 签名编译不匹配，参照同文件 `timesFunc<ArmLinux64>` 与 `syscall_emul.hh` 的 `closeFunc(SyscallDesc*, ThreadContext*, int)` 模式修正参数形式；`getVectorLengthInBytes()` 为 `BaseISA` 公有虚方法，返回 `sveVL*16` 字节，已在 `src/arch/arm/isa.hh` 核实。`SyscallReturn(-EINVAL)` 的负值即 errno 语义，同仓既有 handler 惯例。`warn_once` 已在原落地 `ee0ce761` 的低档分支使用过，编译面无新依赖。）
 
 - [ ] **Step 3: 重建 gem5.opt（campaign 与构建不并行）**
 
@@ -286,16 +398,20 @@ git push -u origin feat/sve-se-prctl-stub-2026-10-28
 
 ---
 
-### Task 6: 仿真速标定 + 512 批量执行（188 用例）
+### Task 6: 仿真速标定 + 512 批量执行（190 用例）
 
 **Files:**
 - Create: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512-batch.sh`（批处理脚本）
 - Create: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-overrides.txt`（重负载用例的 -O 降容表，标定产物）
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/<test>.log` × 188（原始输出）
+- Create（留工作区，**不入库**——`.gitignore` `/gem5-512/*`，裁定 E）: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/<test>.log` × 190（原始输出，连同 `.d`/`.done` 一并被忽略）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/batch.tsv`（batch 脚本逐测追加的溯源记录）
+- Create（重跑产出、入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/identity.txt`（批时二进制身份记录，`write_identity()` 产出，batch.tsv 的姊妹件；`.gitignore` `!` 反选豁免——目录级 `git add` 会真实暂存它（实测复现），属入库工件故须在本清单独立声明：`git add` 静默丢 `.log` 证据与静默收入未声明工件是一对对偶面，两面都显式清单才完备；**历史例外**：identity.txt 从未产出入库，历史批早于 write_identity 机制（见 Global Constraints 注记）；照本 Task 脚本重跑将产出它）
+- Create（入库证据）: `docs/superpowers/inventory/sve-all-vl-campaign/gem5-512-verdicts.txt`（`gem5-512-extract.sh` 从 batch.tsv 机械提取的逐测判定）
 
 **Interfaces:**
 - Consumes: Task 5 的可跑通 SE 二进制路径；Task 1 清单。
-- Produces: 512 档 188 格证据。
+- Consumes: 仓库既有 `gem5-512-extract.sh`（已在库，`git ls-files` 可复核；Step 3 的机械提取工具——issue #403 同步补行，此前 Step 调用而清单无行，属清单-步骤失配镜像）。
+- Produces: 512 档 190 格证据。
 
 - [ ] **Step 1: 标定仿真速（5 个代表用例）**
 
@@ -317,38 +433,18 @@ rm -rf m5out   # spike 标定会在 cwd 产生 gem5 输出目录，清掉防入�
 
 - [ ] **Step 2: 批处理脚本**
 
-`gem5-512-batch.sh`（并行度 64——本机 128 核，gem5 单线程；**与任何构建错峰**）：
+`gem5-512-batch.sh`（并行度 20——控制器修正案 2：标定实测单实例 RSS ≤ ~1.2 GB，20 路典型 ~24 GB，远低于 57 GB 可用；本机 128 核，gem5 单线程；**与任何构建错峰**）。完整实现以本 Task Create 的 `gem5-512-batch.sh` 为**唯一权威源**（已入库）——**执行一律直接用入库脚本，勿据本文档重建代码**；本 Step 不内嵌代码块。
 
-```bash
-#!/bin/bash
-# SVE 全 VL campaign — gem5 SE 512-bit leg. Usage: ./gem5-512-batch.sh
-# 每 gem5 实例独占工作目录（gem5 把 m5out 写进 cwd，64 路并发共用 cwd 会互相覆写）。
-set -u
-HERE="$(cd "$(dirname "$0")" && pwd)"
-LIST="$HERE/sve-test-list.txt"
-OVR="$HERE/gem5-overrides.txt"
-OUT="$HERE/gem5-512"; mkdir -p "$OUT"
-G5=/home/sdc/wangxu/gem5-fi/CHAOS/gem5/build/ARM/gem5.opt
-RUN=/home/sdc/wangxu/sdcshield-main/scripts/eigen-sve-double/gem5/run_sve.sh
-BIN=/home/sdc/wangxu/sdcshield-main/builddir/sdcshield
-run_one() {
-    local t="$1" extra=""
-    extra=$(grep -m1 "^$t|" "$OVR" 2>/dev/null | cut -d'|' -f2-)
-    mkdir -p "$OUT/$t.d"
-    ( cd "$OUT/$t.d" && timeout 3600 env G5="$G5" "$RUN" "$BIN" -e "$t" -t 500 -n 1 $extra --vl 4 ) \
-        > "$OUT/$t.log" 2>&1
-    echo "$t exit=$?"
-}
-export -f run_one; export LIST OVR OUT G5 RUN BIN
-xargs -a "$LIST" -P 64 -I{} bash -c 'run_one "$@"' _ {}
-echo "green cells: $(grep -l 'exit: pass' "$OUT"/*.log | wc -l) / $(wc -l < "$LIST")"
-```
+结构语义速览（**非权威、不可执行**——权威定义见入库脚本头注释）：批时二进制身份记录 `write_identity()`（写 `gem5-512/identity.txt`，extract 以批时记录盖戳 verdicts 头）；断点续跑（`rc=0` 收口格 touch `.done` 跳过、陈旧标记先 stderr 告警再重跑）；`batch.tsv` 逐格六列 O_APPEND 追加（裁定 E 溯源记录）；执行形状 `-f no --ignore-timeout`（Task 5 裁定）；26 项 baked `-O` 降容数组（native-256 腿裁定 D 同集——缺之则 `eigen_svd_bidiag_sve`/`eigen_svd_cdouble_sve` 等全核 TIMEOUT 前科用例收不了口）；重复名/重复键守卫（PR #307 #19/#32）与批间二进制变更告警；绿格收尾统计 = 清单约束内、末行 `exit: pass` 的唯一测试数（幂等、分子≤分母构造保证；权威判定 = `gem5-512-extract.sh`：`rc=0 && exit: pass && tick≥地板`，收尾 echo 仅速览——速览不校验 rc/tick，可高于 verdicts 绿格数）。
 
-- [ ] **Step 3: 执行与分诊**
+（本 Step 曾内嵌约 70 行骨架近拷贝、仅靠注释纪律维系与入库版同步——该纪律已实测失效过一次，分叉面在 PR #418 检视中持续产生意见，处置裁定移除代码镜像、单源指向入库脚本；历史演进与逐轮处置见 git log。）
+
+- [ ] **Step 3: 执行、机械提取与分诊**
 
 ```bash
 chmod +x docs/superpowers/inventory/sve-all-vl-campaign/gem5-512-batch.sh
 docs/superpowers/inventory/sve-all-vl-campaign/gem5-512-batch.sh
+docs/superpowers/inventory/sve-all-vl-campaign/gem5-512-extract.sh docs/superpowers/inventory/sve-all-vl-campaign   # 裁定 E：从 batch.tsv 机械提取 gem5-512-verdicts.txt（逐测判定 + 行数=清单校验，Step 4 入库）
 grep -L "exit: pass" docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/*.log   # 非绿格清单
 ```
 非绿格逐个分诊（crash → 复现定性；timeout → 降容重跑；仿真器屏障 → 记录 syscall 链证据）。代码 bug → Task 7。
@@ -357,7 +453,7 @@ grep -L "exit: pass" docs/superpowers/inventory/sve-all-vl-campaign/gem5-512/*.l
 
 ```bash
 git add docs/superpowers/inventory/sve-all-vl-campaign/
-git commit -s -m "docs(campaign): gem5 512 腿批量证据（188 格）+ 标定与降容表"
+git commit -s -m "docs(campaign): gem5 512 腿批量证据（190 格）+ 标定与降容表"
 ```
 
 ---
@@ -392,19 +488,24 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield -e <test> -t 2000 -n 1   # 
 ### Task 8: 证据矩阵汇总与验收
 
 **Files:**
-- Create: `docs/superpowers/inventory/sve-all-vl-campaign/matrix.md`（564 格总表）
+- Create: `docs/superpowers/inventory/sve-all-vl-campaign/matrix.md`（570 格总表，190×3——matrix.md 已实收入库，标题自述 190×3）
+- Create: `docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh`（矩阵生成脚本——已实收入库，`git ls-files` 可复核；Step 1 的生成器，每一格从入库工件机械推导并内嵌一致性断言）
 
 **Interfaces:**
-- Consumes: Task 2/3/6 全部日志 + Task 7 修复记录。
+- Consumes: Task 2/3/6 的**入库**证据（`<leg>-LCG<seed>.summary.txt`、`gem5-512-verdicts.txt`、`gem5-overrides.txt`；裁定 E——原始 `.log` 不入库，不得作为矩阵输入）+ Task 7 修复记录。
 
-- [ ] **Step 1: 汇总矩阵**——`matrix.md` 表头 `| test | 128 | 256 | 512 | 证据 |`；每格 pass/边界（理由）/FAIL（不允许残留）。生成方式：
+- [ ] **Step 1: 汇总矩阵**——`matrix.md` 表头 `| test | 128 | 256 | 512 | 证据 |`；每格 pass/边界（理由）/FAIL（不允许残留）。生成方式 = 已入库的 `matrix-gen.sh`（Task 8 实际执行的生成器，**不许手填**、勿另写生成器——其内嵌一致性断言：清单 190 行、各列恰 190 格/总 570 格、无 FAIL/MISSING 格、26 项 baked `-O` 三处命令行头逐字一致，任一失败即非零退出、`&&` 不执行 mv、既有 matrix.md 不受触碰）：
 ```bash
-# 以 grep 从归档日志机械生成，不许手填
-for f in docs/superpowers/inventory/sve-all-vl-campaign/native-128-LCG1001.log; do ...; done
+# 原子形态：全部断言失败点均在首个 stdout 输出之前，直接 `> matrix.md` 会在
+# 脚本启动瞬间（shell O_TRUNC）把既有矩阵清空为 0 字节（实测复现）——
+# .new + mv 隔离失败路径。cd 行与 Task 2/3 命令块同款（矩阵脚本内部路径自
+# 解析，但重定向目标 .new/matrix.md 是 cwd 相对路径——非仓库根 cwd 下会写错位置）。
+cd /home/sdc/wangxu/sdcshield-main
+docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh > docs/superpowers/inventory/sve-all-vl-campaign/matrix.md.new && mv docs/superpowers/inventory/sve-all-vl-campaign/matrix.md.new docs/superpowers/inventory/sve-all-vl-campaign/matrix.md
 ```
-（执行者写 10 行以内的 awk/grep 管道从日志提取，脚本一并入库。）
-- [ ] **Step 2: 验收自查**——564 格全绿或有显式机制性理由；抽查 10 格回放原始日志确认引用真实。
-- [ ] **Step 3: Commit**——`docs(campaign): 564 格证据矩阵汇总（128/256/512）`。
+（计划撰写时点的草案指令「执行者写 10 行以内的 awk/grep 管道」系事前形态，实际执行产出即 matrix-gen.sh，以入库脚本为准；本轮同步实测：成功路径重定向输出与入库 matrix.md diff 为空、exit=0；失败路径（断输入副本复现 exit=2）直接重定向把既有 matrix.md 清空为 0 字节、.new+mv 形态下既有文件原样保留仅 .new 残留 0 字节——**该残留不被 campaign `.gitignore` 任何规则命中（仅 `*.log` 与 `/gem5-512/*`），而各 Commit 步骤一律目录级 `git add sve-all-vl-campaign/`，0 字节残骸会被零提示暂存：失败后先 `rm` 掉 .new 再进 Commit**——issue #403 缺陷模型「盲目执行者 + 目录级 add」的对偶面，方向从「静默丢证据」翻转为「静默收残骸」。）
+- [ ] **Step 2: 验收自查**——570 格全绿或有显式机制性理由（190×3，定稿口径见 Goal 注记）；抽查 10 格回放**入库工件**（`.summary.txt` / `gem5-512-verdicts.txt`）确认引用真实（裁定 E：原始 `.log` 留工作区不入库——Step 1 刚声明其不得作为矩阵输入，新 clone 的验收者拿不到，同样不得作为验收输入）。
+- [ ] **Step 3: Commit**——`docs(campaign): 570 格证据矩阵汇总（190×3：128/256/512）`（实际执行 commit e4720831 同款）。
 
 ---
 

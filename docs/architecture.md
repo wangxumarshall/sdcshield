@@ -38,6 +38,22 @@ always appended last regardless of selection.
 `test_run`, which must be non-NULL**), `minimum_cpu` (feature gate),
 `quality_level`, `groups`, `flags`.
 
+## Test knobs (test options)
+
+Test options (`-O <test>.<key>=<value>`, `sdc_stress.conf`, …) are read via
+`get_testspecific_knob_value_{int,uint,double,string}()` and are **init-only**:
+the getters may only run from `test_init` (control thread, `thread_num == -1`).
+`logging_mark_knob_used()` enforces this with a `thread_num != -1` check that
+aborts — since issue #417 the check is **not** NDEBUG-gated (release builds
+included) and sits ahead of the `no_output` short-circuit, so a quiet output
+format cannot mask the bug; `selftest_knob_from_run` locks the negative path
+in `bats/sanity-check/20-selftests.bats` and
+`scripts/gha/verify-params.py`. A payload that needs a knob inside `test_run`
+must query it in `test_init` and cache it (the gather/openssl prewarm pattern).
+The sizing helper `sdc_knob_int_clamped()` is equally fail-loud on a worker
+cache miss — its former silent `def` fallback bypassed the getter check
+entirely and ignored `-O` in every build type (issue #417 gap 3).
+
 ## Quality levels
 
 `TEST_QUALITY_SKIP`(-1) < `BETA`(0) < `PROD`(2, default `--quality=2`). A test
@@ -263,31 +279,55 @@ VmHWM feedback     per-slice MemFeedback slots in shmem (written at
 
 `eigen_svd_cdouble_sve` / `eigen_gemm_double_max_arm` moved sizing from
 preinit into the child `test_init` (also fixing an exec-mode divergence
-where the exec'd image never saw the preinit-computed dim);
-`eigen_svd_bidiag_sve` already sized in child init. Explicit
+where the exec'd image never saw the preinit-computed dim). The other 12
+Eigen SVE cases (2026-11-03 unification — per-tier body + dispatcher
+framework, `tests/cpu/eigen_svd/sandstone_eigen_sve_dispatch.h`)
+likewise size in the child `test_init` via the dispatcher
+(`eigen_svd_bidiag_sve` did too — retired 2026-11-02, historical note).
+Explicit
 `-O <test>.mdim` bypasses sizing; an `[内存越界]`/`[欠压力]`
 expected-memory warning fires only for callers whose knob query routes
 through the joint layer's early-exit (the ten SVD template-family users
-via `calibrated_auto_dim`). The GEMM/sparse/SVE/bidiag callers still
+via `calibrated_auto_dim`). The GEMM/sparse/SVE callers still
 short-circuit the knob in their own init (`if (v > 0) return v;` before
 the arch guard) — their explicit paths carry no warning yet (T11b
-follow-up; 10/21 eigen cases covered).
+follow-up; 10/32 eigen cases covered; the fourth bidiag caller was
+retired with its case).
 
 x86-64 keeps the old sizing behavior via the **callers'** `#else` chains
 (e.g. `calibrated_auto_dim`'s legacy two-step memory+2 s-calibration
 chain, `gemm_mdim`'s `sdc_auto_square_dim` path) — rule 5. The `#else`
-branch inside `sdc_joint_dim_slice` itself is the defensive definition
-of the same legacy semantics; no live x86 caller reaches it today (all
-call sites are `#if defined(__aarch64__) && defined(__linux__)`-gated),
-it exists so a future cross-arch caller gets defined, loudly-logged
-behavior instead of a compile error.
+branch inside `sdc_joint_dim_slice` itself is the global-arch fallback
+(#482): four-source global budget + power-law time cap via
+`sdc_calibrated_dim` (AR=1, no per-node/AR/VmHWM feedback — x86 has no
+`sdc_numa.h`). No live x86 caller reaches it today (all call sites are
+`#if defined(__aarch64__) && defined(__linux__)`-gated); it exists so a
+future cross-arch caller that drops its guard gets the same memory×time
+dual cap as ARM instead of silently losing the single-solve time bound.
+Migrating an x86 caller still changes its sizing numbers (RSS table /
+four-source budget / run_budget_ms semantics), which rule 5 keeps to the
+callers' own `#else` chains.
 
-One rule-5 exception is disclosed here (approved): the `sdc_calibrated_dim`
-probe threshold was raised 1 ms → 100 ms (M3 — a 1 ms probe is dominated by
-fixed setup overhead and pollutes the power-law fit). That helper is
-deliberately global shared code, so the x86-64 eigen family's calibrated
-dims shift with it; the direction is the intended fix (fit de-distortion),
-not behavior drift. The constructive one-solve ≤ max_single_ms guarantee
-(verification probe + shrink loop) holds on x86-64 unchanged; what shifts
-is the calibrated operating point (larger, less fit-distorted dims) and
-init-time probe cost, both bounded.
+The one rule-5 exception formerly disclosed here (the `sdc_calibrated_dim`
+probe threshold raised 1 ms → 100 ms as a global shared constant) is
+retired (issue #351): the threshold is now a parameter, `probe_floor_ms`.
+Its default 1.0 restores the historical noise-floor semantics for every
+existing 7-argument caller — the x86-64 `#else` legacy chains
+(`eigen_sparse`, the SVD template family) and aarch64-non-Linux — so their
+calibration is semantically equivalent to the pre-#302 behavior: identical
+1 ms probe stopping threshold and code path, with calibrated operating
+points and init probe cost reproducing within timing jitter (calibration
+is wall-clock-dependent and thus not byte-reproducible; the PR-measured
+`mdim` 473 vs the 476 pre-#302 baseline is such jitter). The 100 ms M3
+floor (fixed-overhead share < 10%, needed
+by the difference-based `sdc_fit` `a_ms` extraction; bound to the named
+constant `sdc_m3_probe_floor_ms`) is carried explicitly
+by the joint solver on its ARM64-only path; no non-migrated consumer sees
+it. Two runtime `log_warning`s guard the extraction on that path, both
+emitted only for fit-consuming callers (the legacy 7-argument chains pass
+no `fit` and never warn): one when the probe tier's measured duration
+falls short of the floor, and one when the two-point difference itself
+degenerates — tier collision under `hi` truncation, or flat/inverted
+timings — and the b=0 fallback `a = t1/p1^k` leaves the full fixed
+overhead inside `a_ms` (a_ms inflated → n_run undersized → under-excited
+SDC coverage).

@@ -5,6 +5,144 @@
 
 ---
 
+## 2026-11-04（issue #420 重锚定落地：#428 rebase 至 #517 合入/bidiag 退役后的 main）
+
+### 结论
+
+- #428 按重锚定方案落地（sdc_stress_config.h 五位点）：probe lambda
+  非零返回码→-1.0 负哨兵；抬升循环遇哨兵即停；早退守卫置于
+  `t1 <= 0.0` 不可测守卫**之前**（次序约束：双边哨兵若命中
+  both_unmeasurable 会交还 hi、复活 P0-2）；验证分支汇总三元链前置
+  `td_disp < 0.0` 失败披露（与打印值同源，负数不经截断、全域与
+  `td < 0.0` 等价）；联合层 `probe_failed` 包装 + 失败→n=lo、n_mem
+  弃用。gtest 两处 `&fit` 调用补第 9 参 `1.0`（10 参签名下 8 参
+  形态编译错，#377 签名设计使然）。
+- 语义边界如实：#517 fit_only **收窄作用域未吞没本体**（联合层失败
+  检测三档→抬升/mid 两档；fit-only 弃用返回值使模板内早退只落
+  fit={0,0}，联合层 probe_failed→lo 成为该路径的安全机制本体——两者
+  互补，缺一复活半个 P0-2 路径）；bidiag 退役使谓词对现役探针
+  （全为异常上抛式）恒假——从活修复降格为**防御性契约封堵**
+  （issue #420 audit 未闭环、gemm_solve_probe.h 明示未来调用方入口、
+  历史烧过一次 P0-2）。
+
+### 实证
+
+- 构建零新警告；unittests `SdcCalibratedDim.*` 3/3 绿（失败替身→lo+
+  fit={0,0}；抬升档失败→lo；健康替身→hi+退化回退有效）；
+  `-e zstd19` / `-e eigen_sparse` 回归 pass；`-e eigen_svd_cdouble_sve`
+  fit-only 路径冒烟 pass、[时间校准]/[联合求解] 日志口径与改动前一致
+  （现役探针 rc 恒 0 = 零行为变化的直接证据）。
+- gem5-fi 不适用（与原 #428 验证集的实质差异，如实记录）：验证对象
+  bidiag 用例已不存在，框架改动对现役探针零行为变化且与 VL/tier 无关；
+  本机 SVE-256 原生可跑全部联合消费方。
+
+---
+
+## 2026-11-04（会话：audit #395——triage-256 整机重启归因修正，始于 11-01、处置链跨 11-01/02/04 三日，分支 fix/issue-395）
+
+### 结论
+
+- **audit #395 修正落地**：`triage-256.md` 六个 hunk——头部环境事件 2 / §1
+  seed2 行数据来源限定 / §4 超时段（「死亡点」→「中断点」改写 + 尸体比对
+  记录）/ §4 异常子类与另注 / §6 核验范围限定 / §7 结论及观察项①②③；
+  **归因裁定的单一权威版本 = triage-256.md 环境事件 2**，本条仅作摘要
+  （triage-256 内部多处复述的口径漂移在 R2/R4 两轮检视被抓出——意见
+  4438679181/4438949052，故收敛为指针；与下文「两账本失同步」四例
+  R5-2/R6-2/R7-2/R9-2 为不同口径）。摘要：seed2 首跑整机重启
+  （2026-10-29 ~09:01，up 14 min 实证）与首跑腿进程结局**分层处理、双双未决**——
+  进程层 `exit:` 悬空不可区分「收尸迟滞遇重启」与「父进程更早死亡
+  （OOM-kill/崩溃）」，尸体不可复核；机器层重启未取证、候选非穷尽（panic/
+  看门狗/掉电/过热/人为重启）、用户态相关性不能排除（被测进程 SIGQUIT 杀灭
+  机制自身无重启能力、间接可参与）；时间重合不作因果证据（分层论证立论，
+  外推折算锚禁用）。该重启未做
+  取证即按裁定 D 重跑，定性**候选稳定性信号、未决**（§7 观察项②）。「代码
+  bug 候选 = 0」限定 380 矩阵格功能行为（seed2 侧证据全部来自 09:24 重跑腿），
+  不覆盖上述两件未证事件。
+- 2026-10-30 条目 Ruling J 的末句「其时间窗与一次 seed2 中途死亡+主机重启吻合
+  （相关、因果未证）」与首句「超时杀灭迟滞实测 **1280 s**（300 s 预算的
+  4.3 倍……）」（1280 s 系 #15 格**全程**、含 300 s 超时预算，杀灭收敛迟滞本体
+  ≈980 s——见 triage-256.md §4 修正版）均同属被修正叙事——追加式日志不改写
+  历史，以 triage-256.md 修正版为准。
+
+### 实证
+
+- 修正后文档六个 hunk（头部环境事件 2 / §1 seed2 行数据来源限定 / §4 超时
+  段死亡→中断点改写 / §4 异常子类与另注 / §6 核验范围限定 / §7 结论及观察
+  项①②③，与上面「修正落地」清单一致）见
+  fix/issue-395 分支 diff；`mem_disambig_alu_sve` 有界单测
+  回归（`-e mem_disambig_alu_sve -t 2000 -n 1 -O mem_disambig_alu_sve.buffer_bytes=4096`）
+  → `exit: pass`
+  （原条目误脱 test-id 前缀——裸 `buffer_bytes` 键无测试读取，按 test_knobs.cpp
+  TestKeyWrapper 拼键规则是静默 no-op，误脱已补正；处置轮按带前缀命令实测复跑
+  同绿）；纯文档改动（无编译输入变化、no-op 构建，无新警告可产生），x86-64 零触碰。
+- 五~十轮检视处置（2026-11-02/04，local-claude 对抗检视残留项逐轮批判处置）：
+  逐轮内容、意见编号与 commit SHA 的完整账本 = retro plan（`docs/superpowers/
+  plans/2026-11-02-issue395-triage256-reboot-attribution-retro.md`）执行史表
+  ——单一账本，本条目不逐轮复述（含当轮；R11 起轮次记账仅入该表、本条目
+  不再增轮次条目。两账本复写曾实际漂移多次——R5-2/R6-2/R7-2/R9-2 均为
+  失同步后的追平动作）。本条目被各轮触碰的表述以 triage-256.md 修正版为准。
+
+### 下一步
+
+- 若 128 核 / 62 GiB node0-only 那台机器的 BMC / 持久日志仍可及：补 ipmitool
+  SEL / pstore / journalctl 取证（journal 经 `--list-boots` 定位 2026-10-29 目标
+  boot——`-b -1` 仅当其与取证时刻之间无任何重启才指向正确 boot），给
+  2026-10-29 ~09:01 重启定性（triage-256 §7 观察项②；当时未取证，各取证面
+  是否仍可及未经实测——BMC SEL 跨重启持久、journal `--list-boots` 可枚举
+  历史 boot，如实声明边界即可）。
+
+## 2026-11-01（issue #420：校准探针返回码尊重——bidiag 探针失败曾把 mdim 外推到上限的 P0-2 复发路径封堵）
+
+### 结论
+
+- **根因（机制层复现定案）**：`sdc_calibrated_dim` 的 probe lambda 完全
+  丢弃 `solve_once` 返回码。bidiag 探针 `run_bidiag_once` 分配失败返回
+  -1 时，计时层测得的是失败分支的 μs 级**非零**噪声——`t<=0` 守卫进
+  不去，`k=log2(t2/t1)≈0` 被 k_floor=3.0 钳制，fit 走 `a=t1/p1^k` 得
+  ~2.7e-13 的"合法"系数，联合层 n_run 失控（复现实测 333298），
+  `n=min(n_mem,hi)` 落内存上限（本机 n_mem=1900）：瞬态内存压力下
+  （探针期失败、init/run 期分配成功——旧注释"init 降档兜底覆盖"论证
+  被 issue 证伪）全核单次迭代分钟级 → 300s SIGQUIT。复现 harness 直接
+  include 真实 `framework/sdc_stress_config.h` + 真实 `sdc_numa.cpp.o`，
+  非 mock。
+- **修复（8fc4ac0c）**：双位点——(1) `sdc_calibrated_dim`：probe 检查
+  返回码，非零 → **-1.0 负哨兵**计时（区别于"计时恰好为 0"的不可测
+  语义）；抬升循环遇哨兵即停；新守卫任一校准档失败 → 退守 lo（fit
+  保持无效）——失败 ≠ "时间不是约束"，绝不交还 hi；验证档失败：直接
+  调用方保留外推 dim 并披露"未经复核"。(2) `sdc_joint_dim_slice`：
+  包装探针记录失败标志，任一档失败（含验证档）→ n=lo、n_mem 弃用。
+  三种探针失败教义统一为 lo（Eigen 族 bad_alloc 上抛 → catch → lo；
+  返回码 → 框架层 → lo）。契约锁定于新增
+  `framework/unit-tests/sdc_stress_config_tests.cpp`（TDD：修复前两
+  用例确定性红 dim=2048，修复后 3/3 绿）。
+- **验证证据链**：构建零新警告；`-e eigen_sparse -t 2000 -n 1` 与
+  `-e zstd19 -t 2000 -n 1` 均 `exit: pass`（真实二进制 [时间校准]
+  k=3.37/n_run=2302/[反馈] 日志口径不变）；本机（128 核/30GB/无 SVE）
+  bidiag 原生 SKIP（CpuNotSupported, "test compiled with sve"）→ 按
+  规则 2 gem5-fi SE 四档 SVE 仿真（工作负载从本仓真实头文件静态编译，
+  /tmp 运行、gem5-fi 树只读）：`--sve_vl {1,2,4,8}` = 128/256/512/1024
+  -bit 全绿（A1 dim=lo / A2 n=lo / B 健康路径 n∈[lo,hi]，FNV 随档位
+  变化证 SVE 真实执行，`SDCSHIELD_FAILS=0`×4）。诚实边界：gem5 SE 无法
+  优雅制造 aligned_alloc 失败（超限为模拟器 panic 非 NULL），失败路径
+  在 gem5 内以真实产品代码 + 失败契约替身断言验证，机制层原生实证由
+  harness 承担。
+- **x86 非回归**：`sdc_calibrated_dim` 为共享模板，全部既有调用方探针
+  （eigen_sparse lambda / SVD sizing_probe ×10 模板+4 档 body / GEMM
+  ×8 文件）成功一律 `return 0`、失败一律 Eigen 异常上抛——`!= 0` 谓词
+  对其恒假；联合层 x86 分支字节不变。
+- **已知边界（如实）**：unittests 全套件在本机 thermal 用例后 SIGSEGV
+  （exit 139）为**干净 main 同位置先存**问题（本机无 thermal zone，
+  与本改动无关，stash+重建对照实证）。
+
+### 计划与工件
+
+- 计划：`docs/superpowers/plans/2026-11-01-issue420-bidiag-probe-rc-fallback.md`
+  （含完整复现/修复/验证证据链）；spec 增补：
+  `docs/superpowers/specs/2026-10-27-eigen-p0-p3-fix-design.md` §4.5 v3。
+- 分支 `fix/issue-420`，PR 见 issue #420 回帖。
+
+---
+
 ## 2026-10-31（issue #182 根因定案：sve512 chain/special 家族非 512-bit VL golden 失配——f32 NaN/Inf 饱和操作数 × IMP-DEF 载荷，f64 无测试侧缺陷；1024 档首次采集）
 
 ### 结论

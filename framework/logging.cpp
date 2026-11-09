@@ -1473,16 +1473,24 @@ void log_yaml(char levelchar, std::string_view description,
 
 void logging_mark_knob_used(std::string_view key, YamlFormatter::SimpleValue value, KnobOrigin origin)
 {
-    if (current_output_format() == SandstoneApplication::OutputFormat::no_output)
-        return;             // short-circuit
-
-#ifndef NDEBUG
+    // Test options may only be queried from test_init() (thread_num == -1).
+    // A worker-thread query is a test bug, not a logging condition, so the
+    // check must hold in every build type: it used to sit inside #ifndef
+    // NDEBUG, which b_ndebug=if-release compiled away for release builds —
+    // the structural reason #183 was green on release/nightly and aborted
+    // only on debugoptimized CI. Cost on the normal path is one TLS compare;
+    // abort() runs only on misuse. Keep it ahead of the no_output
+    // short-circuit so a quiet output format cannot mask the bug.
     if (thread_num != -1) {
         fprintf(stderr, "### Internal error: get_test_knob_value_xxx() called from outside the main thread!\n"
                         "### Fix this test! Test option values are only allowed in the init() function.\n");
         abort();
     }
 
+    if (current_output_format() == SandstoneApplication::OutputFormat::no_output)
+        return;             // short-circuit
+
+#ifndef NDEBUG
     // ensure the key requires no escaping
     if (key.find_first_not_of(".-_0123456789"
                               "ABCDEFGHIJKLMNOPQRSTUVWXYZ"

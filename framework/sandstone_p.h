@@ -19,6 +19,12 @@
 #include <fcntl.h>
 #include <limits.h>
 
+/* unistd.h: Windows 下经 framework_incdir 解析到仓库自带 sysdeps/windows
+ * shim(getpagesize 声明,#include_next 链到 mingw 的 unistd.h——两者均无
+ * sysconf);其余平台为系统 unistd.h(sysconf)。sandstone_page_size() 的
+ * 两个实现都由它供给,不再引入 windows.h(零宏面注入)。 */
+#include <unistd.h>
+
 #ifdef __cplusplus
 #include <span>
 #include <vector>
@@ -68,32 +74,11 @@ extern "C" {
     } while (ret == -1 && errno == EINTR)
 #endif
 
-/* align to a power of 2 */
-#define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
-#include <unistd.h>
-
-/*
- * Page size used for mmap/mprotect alignment.  MUST match the kernel's actual
- * page size, otherwise mprotect() will round to the kernel's page boundary and
- * may make adjacent data read-only (causing SIGSEGV on kernels with >4 KB
- * pages, e.g. ARM64 16 KB / 64 KB configurations).  Resolve once via
- * sysconf(_SC_PAGESIZE) and cache it.
- */
-#ifdef __cplusplus
-extern "C++"
-{
-#endif
-static inline unsigned sandstone_page_size(void)
-{
-    static long cached = 0;
-    if (!cached)
-        cached = sysconf(_SC_PAGESIZE);
-    return (unsigned)cached;
-}
-#ifdef __cplusplus
-}
-#endif
-#define ROUND_UP_TO_PAGE(value)     ROUND_UP_TO(value, sandstone_page_size())
+/* Page-size helpers (ROUND_UP_TO / sandstone_page_size / ROUND_UP_TO_PAGE):
+ * shared single implementation, see sandstone_page.h.  Included inside the
+ * extern "C" block is safe -- the header is self-contained and gives the
+ * helper C++ linkage via its own extern "C++" wrapper. */
+#include "sandstone_page.h"
 
 extern char *program_invocation_name;       // also in glibc's <errno.h>
 

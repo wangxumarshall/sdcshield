@@ -51,6 +51,9 @@ SKIP_OK_RE = re.compile(
 #     rc 不定,不属确定性负路径。
 NEGATIVE_SELFTESTS = [
     "selftest_fail", "selftest_failinit", "selftest_abort", "selftest_abortinit",
+    # knob getters are init-only: a run()-side query must abort in every build
+    # (issue #417 — the fail-loud check is no longer NDEBUG-gated)
+    "selftest_knob_from_run",
     "selftest_sigill", "selftest_sigsegv", "selftest_sigbus",
     "selftest_sigsegv_init", "selftest_sigsegv_instruction",
     "selftest_sigsegv_kernel", "selftest_sigkill", "selftest_reportfail", "selftest_reportfailmsg",

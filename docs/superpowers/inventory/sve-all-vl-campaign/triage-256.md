@@ -93,16 +93,21 @@ LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.log
   `extract-summary.sh` 机械提取的 `native-256-LCG<seed>.summary.txt`（每用例一行
   `<test>\t<result>\t<iterations>\t<test-runtime-ms>` + 命令行/exit 头，190 行校验）。
 
-| seed | 覆盖 | pass | timeout | fail | crash | skip | 退出 | 时长 |
-|---|---|---|---|---|---|---|---|---|
-| LCG:1001 | 190/190 (+mce_check) | 166 | 25 | 0 | 0 | 0 | `exit: pass`（exit=0） | 03:55-07:06 ≈ 3h11m |
-| LCG:1002（26 项有界重跑） | 190/190 (+mce_check) | 191 | 0 | 0 | 0 | 0 | `exit: pass`（exit=0） | 09:24-10:01 ≈ 37m |
+| seed | 覆盖 | pass | timeout | fail | crash | skip | mce_check | 退出 | 时长 |
+|---|---|---|---|---|---|---|---|---|---|
+| LCG:1001 | 190/190 | 165 | 25 | 0 | 0 | 0 | pass | `exit: pass`（exit=0） | 03:55-07:06 ≈ 3h11m |
+| LCG:1002（26 项有界重跑） | 190/190 | 190 | 0 | 0 | 0 | 0 | pass | `exit: pass`（exit=0） | 09:24-10:01 ≈ 37m |
 
-- 两 seed 的 pass 计数均含 mce_check（seed1：165 清单腿内绿（164 默认自适应直绿 +
-  1 格 acl 标定 baked）+ 25 超时格走 §5 有界重跑 + mce_check = 191 执行 166 绿；
-  seed2：190 清单腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内有界）
-  + mce_check = 191 执行 191 绿）；seed2 行全部数据来自 09:24 起的有界重跑腿——
-  首跑腿尸体已被覆盖、不可核验，其进程层结局未证（见头部环境事件 2 ①），
+- 本表 pass / timeout / fail / crash / skip 五列只计 190 清单用例，行内加总恰等于
+  覆盖列（seed1 165+25=190、seed2 190+0=190）；mce_check 单列、不混入任何计数列
+  ——每 seed 实际执行 191 项（190 清单 + 1 mce_check，两 seed 均 pass）。绿格构成：
+  seed1 清单腿内 165 绿（164 默认自适应直绿 + 1 格 acl 标定 baked），25 超时格经
+  §5 腿外单测有界重跑转绿（clamp 下限，最小激发强度）；seed2 清单腿内 190 绿
+  （164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内有界）。两 seed 实验条件
+  不对称——seed2 腿烧入 26 项 -O 有界覆盖、seed1 腿仅 1 项 acl 标定 baked（其 25
+  格有界绿全来自腿外单测），「190/190 全绿」跨的是两个不同参数空间，引用须携带
+  本绿格构成与 §5「证据强度限定」口径；seed2 行全部数据来自 09:24 起的有界重跑腿
+  ——首跑腿尸体已被覆盖、不可核验，其进程层结局未证（见头部环境事件 2 ①），
   不贡献本表 seed2 侧任何计数。
 - 「有界」的语义与证据强度：本表与 §5/§7 的「有界（重跑）」一律 = knob **clamp 下限**的
   最小激发几何（协议首次通过即止、零上调）——功能正确性证据成立，满强度激发证据不成立，
@@ -112,7 +117,8 @@ LOG=docs/superpowers/inventory/sve-all-vl-campaign/native-256-LCG1001.log
 - seed2 时长对照：seed1 3h11m 中约 2h33m 是 25 格超时的 300 s 预算燃烧（含 #15 的 1280 s）；
   seed2 有界化后同规模全量仅 37 m——超时格的"环境边界"性质再获一侧证。
 
-（+mce_check：框架在每次运行末尾自动追加的 EDAC 检查，两 seed 均 pass，非清单用例。）
+（mce_check 列：框架在每次运行末尾自动追加的 EDAC 检查，非清单用例，两 seed 均
+pass——独立成列，不入 pass 等任何清单计数列。）
 
 ## 2. 非法 SKIP 核查
 
@@ -326,10 +332,12 @@ seed2 有界重跑腿：`result: fail|crash|skip|interrupted|operating system er
 
 ## 7. 结论
 
-**native 256 档两 seed 全绿（165 格腿内绿 = 164 格默认自适应直绿 + 1 格 acl 标定
-baked，另有 25 格 clamp 下限最小强度有界绿；默认自适应直绿与有界绿（1 格 acl
-标定 + 25 格 clamp 下限，几何均远小于自适应档）两者证据强度不等价——
-§5「证据强度限定」），Task 2 收口**：
+**native 256 档两 seed 全绿（绿格构成两 seed 不对称、非同参数复现——seed1：165 格
+腿内绿 = 164 格默认自适应直绿 + 1 格 acl 标定 baked，另 25 格为腿外单测 clamp 下限
+重跑绿；seed2：190 格腿内绿 = 164 格默认自适应直绿 + 1 格 acl 标定 baked + 25 格
+腿内 clamp 下限有界绿——seed2 腿烧入 26 项 -O 有界覆盖、seed1 腿仅 1 项，两 seed
+的「全绿」跨不同参数空间；默认自适应直绿与有界绿（1 格 acl 标定 + 25 格 clamp
+下限，几何均远小于自适应档）两者证据强度不等价——§5「证据强度限定」），Task 2 收口**：
 
 - **绿格（矩阵 190 清单格 × 2 seed = 380 格）**：
   - seed1（LCG:1001）：165 格腿内绿（164 格默认自适应直绿 + 1 格 acl_gemm_sve

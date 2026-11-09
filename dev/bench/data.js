@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794200199532,
+  "lastUpdate": 1794230101989,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -3606,6 +3606,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.105,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "id": "fd2f9bcda3e49c3a198748fc5f72d7f058faef3c",
+          "message": "fix(sdc-stress): VmHWM 反馈写侧扣除 fork 基线 + 读侧 4×锚上钳 (#385) (#578)\n\n问题: 反馈写入点直接用整个 child VmHWM 作分子, 其起点 = fork 继承的\n父进程 RSS。基线项 baseline/(n²·threads) 在 n 小×线程少时压过真实工作\n集(issue 复算 n=16×1 线程 ≈ 32422 B/n²/线程, 对 GEMM_F64 静态锚\n32.256 B ≈ 1000×); 叠加读侧向上修正无死区无上钳全额采纳 + EMA α=0.5,\n一次污染样本即可把 c 锁在膨胀值、n 压向 lo, 压力维度静默塌缩(向下修正\n反而有 15% 死区 + 0.7×锚下限保护膨胀值)。#545 只堵住 init 降档这一条\n直接触发路径, 基线污染与上钳缺失仍在。\n\n修复(同一逻辑单元: 反馈通道防污染):\n- 写侧: run_one_test_inner 入口、任何测试分配之前采样 child 起始 VmHWM\n  作基线, 写入 eff_ratio=(VmHWM−baseline)/(n²·elem·threads); 读取失败\n  退原口径并告警, 无有效增量(hwm ≤ baseline)不发布样本。[反馈] 日志\n  打印基线/净值, 可直接核验算术。\n- 读侧: 向上采纳钳到静态锚 4×(sdc_feedback_up_cap_factor); 上钳生效\n  单独告警并打印原始候选, 不静默截断。4× 依据: 正常路径实测偏差\n  ≤10.5%, 残留探针高水位在小 n 路径可到 ~2-3×, 1000× 污染被压到 ≤4×\n  且随 EMA 衰减; 正常大 n 路径永不触发。\n- x86-64: 全部改动在 __aarch64__ && __linux__ 守卫内, 无行为变化。\n\n验证:\n- 构建 ./scripts/build.sh exit 0, 0 warning。\n- 写侧真实运行: eigen_svd_double -n 1 → VmHWM=322.4 MiB − 基线 0.7 MiB\n  = 净 321.8 MiB, eff_ratio=17.329(修复前 323.1 MiB → 17.357);\n  eigen_sparse -n 1 → 101.6−0.7=100.9 MiB, eff=1.167(修复前 102.1 MiB →\n  1.176); 全核默认档 4 slice eff 17.163~17.167 vs 修复前 17.128~17.175\n  (噪声内一致, 基线占比 <0.05%); GEMM f32 全核 4.35~4.62 pass。\n- 读侧机制级 A/B(仓库头 sdc_feedback_decide_c): 1000× 污染样本\n  138400→553.6(4×锚), inf→553.6; 正常 +0.4%/+10% 与旧逻辑一致; 死区/\n  锚下限路径不变; failures=0。\n- 回归: zstd19 -t 2000 -n 1 → exit: pass。\n- 边界(如实声明): 本机基线实测 0.7~3.0 MiB, 大 n 下修复量 <1%; 本机\n  无法构造 n≈16 的合法自动求解(tiny budget/OOM, 且 -O 显式值本就旁路\n  反馈登记), 1000× 端到端以修复后日志算术 + 机制级 A/B 证明。\n\nSigned-off-by: wangxumarshall <wangxumarshall@qq.com>\nCo-authored-by: wangxumarshall <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-09T04:06:55Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/fd2f9bcda3e49c3a198748fc5f72d7f058faef3c"
+        },
+        "date": 1794230100769,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 83722.129,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 45484.761,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 5.166,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 31.363,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.185,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.223,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.016,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.312,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 22235.202,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.227,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.783,
             "unit": "s"
           }
         ]

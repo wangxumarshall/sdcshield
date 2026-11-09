@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794139670905,
+  "lastUpdate": 1794200199532,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -3529,6 +3529,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 22.261,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "9b378065e036940974f14e038323b69c3cedf526",
+          "message": "fix(framework): sdc_test_id_hash FNV-1a offset basis 补掉落的尾位 7 (#538) (#568)\n\n1469598103934665603 → 规范值 14695981039346656037 (0xcbf29ce484222325)；\n素数 1099511628211 原本正确。注释同步钉上规范值与安全性依据。\n\n安全性判定（修正无 M5「闭环静默死亡」失配窗口）：\n- 写侧 sdc_feedback_write 与读侧 sdc_feedback_eff_median 同 TU 同二进制，\n  修正同时生效于两侧，槽内 hash 相等比较不变；\n- hash 值唯一去处是 MemFeedback 槽，位于 per-invocation memfd 的\n  MAP_SHARED shmem（test_data.h M5：每次运行新建 ⇒ 无跨运行记忆），\n  从不写日志（日志打 test->id 字符串）、从不落盘、无跨版本比对工件；\n- gem5-fi 侧 sme_fmopa kernel 的同名 typo 是另一独立实现（checksum\n  哈希），与本处无共享无互验，不受影响。\n\n验证（真机 no-SVE 鲲鹏 920）：\n- 构建：./scripts/build.sh 全量 781/781，受影响 TU 重编译 0 警告；\n- 哈希质量探针：565 个 test id，新/旧 basis 均 0 个零值（空槽哨兵\n  冲突）与 0 碰撞；\n- 受影响行为：eigen_svd_double -t 30000 -n 4 → 第 2 fracture 读侧\n  [联合求解]「VmHWM 反馈 c=137.9 落入 ±15% 死区」（读侧 hash 匹配到\n  第 1 代写槽的直接证据，失配则 eff_med=-1 无此行）+ [反馈] 样本\n  1→2（同 hash 跨 fracture EMA 累积而非复位），exit: pass；\n- 回归：-e zstd19 -t 2000 -n 1 → exit: pass。\n\nx86-64 非回归：改动位于 #if defined(__aarch64__) && defined(__linux__)\n守卫内（T7 反馈闭环整块），x86 不编译该函数。\n\nSigned-off-by: wangxumarshall <wangxumarshall@qq.com>\nCo-authored-by: wangxumarshall <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-09T03:24:31Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/9b378065e036940974f14e038323b69c3cedf526"
+        },
+        "date": 1794200197778,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 84955.399,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44176.334,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.834,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 56.695,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.962,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.996,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.899,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.808,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 19322.028,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.966,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.105,
             "unit": "s"
           }
         ]

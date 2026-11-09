@@ -488,6 +488,30 @@ n_run200，即 GEMM/dynamic_square 类——它们迭代快、fracture 多）；
   不重开 #352。契约补全：调用方旋钮值域须排除 {0, hi+1} 两个别名
   值；双向哨兵（独立 bool 出参等）属框架级接口变更，超出本 PR
   边界。
+  【2026-11-08 勘误，issue #536】q2 不变式「child 精算 n ≤ preinit n
+  上界」的成立条件再收窄（svd_cdouble_sve / gemm_double_max_arm 两用例
+  注释原文 "n_hi tracks it on every host class" 系过度声明——folding
+  论证只覆盖 worker 尺度）：除 auto 分支外，还需 (a) child 归属节点的
+  **MemFree 份额 ≈ CPU 份额**：child 侧 n_mem = n_hi×√(memshare/
+  cpushare)（节点预算按 MemFree/ΣMemFree 加权、node_threads 按 CPU
+  份额×worker 折算，sdc_numa.cpp / sdc_stress_config.h），单内存节点
+  （折叠拓扑，两份额恒 1）恰等、份额均衡 NUMA 近似等；失衡 NUMA 上
+  MemFree 富节点（75% 空闲内存/50% CPU）n_mem ≈ 1.22×n_hi，dur ∝ n³
+  随之低估 (份额比)^1.5 ≈ 1.8×，5×dur+30s 超时裕度同因子侵蚀——SVD
+  与 AR 表 1.56× 低估（25/39）叠加后残余 4.75/(1.84×1.56) ≈ 1.7×，
+  ≈2.1× 份额失衡单独打穿；GEMM 与 CAVEAT 3× 低估（5/15）叠加后
+  4.75/3 ≈ 1.6×，≈1.4× 份额失衡单独打穿（P0 SIGQUIT 模式）。(b)
+  **VmHWM 反馈未向下采信**：越出 15% 死区采信、下限 0.7× 表锚 ⇒
+  n_mem 至多膨胀 1/√0.7 ≈ 1.2×，即使份额匹配拓扑也破不变式——设计内
+  （OOM 有界），且 preinit 结构上看不见反馈（先于一切 child VmHWM
+  运行、写后不改）。处置：注释如实化（两测试文件 preinit n_hi bullet
+  为各文件账本，本 spec 为单一真源），**不加** child 侧 min(n_mem,
+  n_hi) clamp——其「失衡拓扑外永不生效」前提不成立（反馈采信的参考
+  机类上即生效，静默取消设计内膨胀）、欠压 MemFree 富节点激发、且
+  不修反向失衡（n < n_hi ⇒ dur 高估 ⇒ 未预算多迭代，#421 形态）。
+  残余保护带：n_run（时间侧先绑的主机上 min(n_mem, n_run) 把真实迭代
+  钉在 RUN_BUDGET 校准）、5× 超时因子、300s floor。调 AR 表值/RSS 表
+  c/份额模型时须对照本账重算（与 R4/R7 勘误同一纪律）。
 - **gemm_double_max_arm**：同样迁移 + 接入时间校准（【v2/M8】它同样
   无校准，v1 漏列）。
 

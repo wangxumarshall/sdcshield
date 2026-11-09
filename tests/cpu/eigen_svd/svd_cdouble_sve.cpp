@@ -160,12 +160,54 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  *           0.0290→0.0315) the child's n_mem uses, with workers = the
  *           run's actual whole-machine worker count
  *           (sdc_total_threads(), available in preinit: commit_shmem()
- *           runs before test_preinit). The child's n_mem denominator is
- *           the same worker count scaled to its node
- *           (sdc_joint_dim_slice folds workers/total_cpus into
- *           node_cpus), so n_hi tracks it on every host class — not
- *           just the 127-worker reference the value was historically
- *           hard-coded to.
+ *           runs before test_preinit). That aligns the DENOMINATOR —
+ *           the worker scale, whose misalignment was the old 127
+ *           hardcode bug (child n up to sqrt(127/workers) above n_hi
+ *           on sub-127-worker hosts). The full child-side relation
+ *           (issue #536: the earlier "n_hi tracks it on every host
+ *           class" overclaimed — the folding argument covers the
+ *           worker scale only) is
+ *               n_mem = n_hi × sqrt(memshare / cpushare),
+ *           because the child's node budget is the same budget
+ *           weighted by the node's MemFree/ΣMemFree share while its
+ *           node_threads is the node's CPU share × the same worker
+ *           count (sdc_numa.cpp weights, sdc_joint_dim_slice folds
+ *           workers/total_cpus into node_cpus; zero-memory nodes fold
+ *           their CPUs into the fallback node). n_mem == n_hi only
+ *           where the shares match: single-memory-node hosts (both
+ *           shares 1 — the reference class — exact) and MemFree/CPU-
+ *           balanced NUMA (approximate). Off that domain TWO bounded
+ *           mechanisms push n above n_hi, each eroding the
+ *           5×dur+30 s timeout margin by (n/n_hi)³ on the
+ *           memory-bound exposure region (n_hi < n_mem <= n_run, ar×
+ *           2×t(n_hi) < RUN_BUDGET; wherever time binds first the
+ *           n_run belt below caps the real iteration regardless):
+ *             - MemFree-rich node: 75% of free memory on 50% of the
+ *               CPUs → n ≈ 1.22× n_hi → dur under-estimates the real
+ *               iteration ~1.8×; #506 re-calibrated the mem-family
+ *               table to the measured ceiling (25→40 vs 39), so the
+ *               residual margin is 4.75/(1.84×1.03) ≈ 2.5×, and a
+ *               ≈2.8× share imbalance alone (≈1.9× stacked with the
+ *               1.2× feedback adoption) exhausts it (SIGQUIT
+ *               mid-iteration — the P0 mode this model exists to
+ *               prevent; pre-#506 the same kill needed only ≈2.1×).
+ *             - VmHWM feedback adopting a lower c (outside the 15%
+ *               deadzone, 0.7× table-anchor floor in
+ *               sdc_stress_config.h): n up to 1/sqrt(0.7) ≈ 1.2× even
+ *               on balanced hosts — designed (OOM-bounded) and
+ *               structurally invisible to this preinit, which runs
+ *               before any child VmHWM exists and never rewrites.
+ *           Deliberately NOT clamped (n = min(n_mem, n_hi)): the
+ *           clamp's "never fires on balanced topologies" premise is
+ *           false — it would cancel the designed feedback inflation
+ *           on every host where feedback adopts, under-stress
+ *           MemFree-rich nodes, and still miss the reverse imbalance
+ *           (memshare < cpushare → n < n_hi → dur OVER-estimates →
+ *           un-budgeted extra iterations, issue #421's mode). Belts
+ *           that remain: n_run (min(n_mem, n_run) pins the real
+ *           iteration to the RUN_BUDGET calibration wherever time
+ *           binds first) and the 5× timeout factor absorbing the
+ *           model's own error.
  *   auto:  dur = 0.95 × min(RUN_BUDGET, AR × 2 × t(n_hi)),  t(N) =
  *           243.4s·(N/4400)³ + 1s  (x3b single-solve fit, within ±2% of
  *           the measured points at N>=2400) — the same full-core
@@ -218,9 +260,11 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
  *           MDIM_MAX, so an auto min would stretch the smoke to the
  *           t(6000) minutes scale.
  *
- * Child n <= n_hi holds for the AUTO branch only: the child returns
- * min(n_mem, n_run, hi), n_mem uses
- * the same budget/c/worker-scaled threads, and its most-conservative
+ * Child n <= n_hi holds for the AUTO branch only, and within auto only
+ * on share-matched topologies with VmHWM feedback inside its deadzone
+ * (the n_hi bullet above, issue #536): the child returns
+ * min(n_mem, n_run, hi), n_mem uses the same budget/c/worker-scaled
+ * threads, and its most-conservative
  * AR(40, #506) keeps n_run below the memory ceiling on this host class.
  * An explicit knob/env is applied VERBATIM (dim = knob, no min against
  * n_hi — issue #352), so the duration model must follow the knob too:
@@ -244,7 +288,10 @@ EIGEN_SVE_DEFINE_DISPATCHERS(svd);
 static int size_matrix_preinit(struct test *test)
 {
     /* 最保守 AR(40, #506 重标定) + RSS 表 c 推 n 上界, 再推 duration 上界:
-     * child 精算 n 恒 <= 此上界(spec §4.5)。c 引用表函数而非字面量
+     * child 精算 n 在节点 MemFree/CPU 份额匹配且 VmHWM 反馈未采信的
+     * 拓扑上 <= 此上界(spec §4.5; 两机制可使其有界超出——失衡 NUMA
+     * 至 sqrt(份额比)×、反馈采信至 1.2×——完整口径与失效边界见上方
+     * n_hi bullet, issue #536)。c 引用表函数而非字面量
      * (0.2055)——GEMM_F64 表值已实测重标定过一次(0.0290→0.0315),
      * 字面量会静默陈旧; 分母用实际全机 worker 数而非参考机 127,
      * 子进程 n_mem 的分母是同一 worker 口径(折算到节点), 硬编码 127
@@ -551,8 +598,10 @@ DECLARE_TEST(eigen_svd_cdouble_sve, "Eigen SVD complex<double> (ARM64 SVE vector
    * full-core single-iteration estimate from the memory ceiling (auto
    * mode, AR×2×t(n_hi) capped at the run budget — issue #421) or the
    * explicit knob (which the child applies verbatim — issue #352) (P0-1:
-   * the child sizes the dimension itself via the joint solver, always <=
-   * that ceiling. The run-side do-while — which continues while the
+   * the child sizes the dimension itself via the joint solver, <= that
+   * ceiling wherever the node MemFree/CPU shares match and VmHWM feedback
+   * stays in its deadzone — issue #536, account in the preinit comment.
+   * The run-side do-while — which continues while the
    * deadline has NOT expired — exits after exactly one iteration when dur
    * sits at or below the child's real single-iteration time; at the
    * memory-bound ceiling the real iteration carries the AR factor on top

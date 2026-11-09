@@ -1226,8 +1226,9 @@ struct sdc_joint_args {
     double shared_bytes_per_slice;  /* init 共享矩阵, 0 无 */
     int mem_fraction_permille;
     enum sdc_mem_family ar_fam;
-    long run_budget_ms;             /* 全核单迭代(2解×AR)预算 ms, 调用方传
-                                       200000(spec: 300s 宽限×0.67≈200s);
+    long run_budget_ms;             /* 全核单迭代(2解×AR)预算 ms(AR:
+                                       workers==1 取 1, 见下方闸门; issue #563),
+                                       调用方传 200000(spec: 300s 宽限×0.67≈200s);
                                        0=不限时间 */
 };
 
@@ -1254,9 +1255,11 @@ static inline int64_t sdc_joint_knob_value(struct test *test, const char *key,
  *   n_mem = sqrt((node_budget − node_slices·shared) / (node_threads · c))
  *   n_run = (run_budget_ms / (AR(ar_fam) × 2 × fit.a_ms))^(1/fit.p)
  * 时间侧: run_budget_ms 即全核单迭代预算(×2 = init 填充+一次求解,
- * ×AR = 全核争抢慢化(族×拓扑, spec M2); 调用方传 200000 = 300s 硬宽限
- * ×0.67(spec M1), 本函数不再二次折算——200s 已是折算后的值); fit 来自
- * sdc_calibrated_dim 的两点差分(已扣固定开销, M3), 无效时跳过 n_run。
+ * ×AR = 全核争抢慢化(族×拓扑, spec M2); AR 在 workers==1 时取 1——单
+ * worker 自争抢为 1, 表值是全核口径, issue #563); 调用方传 200000 = 300s
+ * 硬宽限 ×0.67(spec M1), 本函数不再二次折算——200s 已是折算后的值);
+ * fit 来自 sdc_calibrated_dim 的两点差分(已扣固定开销, M3), 无效时跳过
+ * n_run。
  * 内存侧 c 优先级链(T7 起): VmHWM 反馈 median(跨 fracture 的 Main 槽
  * EMA, 详见 sdc_feedback_eff_median; 向上无钳、向下 15% 死区 + 0.7×静态
  * 锚下限) → RSS_RATIO_TABLE(族) → 调用方传统三元组
@@ -1425,8 +1428,8 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
      * 当前 -n 在解析层 Saturate 到亲和集 CPU 数(sandstone_opts.cpp),
      * 合法 CLI 无法超订——超订分支是防御性封堵(模型不变量在超订
      * 输入域的完整性), 非当前可达的行为。 */
+    int workers = sdc_total_threads();
     {
-        int workers = sdc_total_threads();
         int cpus_all = sdc_numa_probe()->total_cpus;
         int sel_total = 0;
         int sel_node = sdc_numa_effective_threads_selected(cpu, &sel_total);
@@ -1455,7 +1458,21 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     int n_mem = (c_bytes > 0.0 && avail > 0.0)
             ? (int)std::sqrt(avail / ((double)node_threads * c_bytes)) : 0;
 
-    double ar = sdc_ar_factor(a->ar_fam, sdc_numa_probe());
+    /* issue #563/#509: AR 表值是全核争抢口径——workers==1 时单 worker 自
+     * 争抢为 1(物理定义), 取 1 而非表值; 不折算则 -n 1 档(CLAUDE.md 标准
+     * 回归档) n_run 被虚缩 AR^(1/fit.p)(mem 族单节点表值 25, p≈3 →
+     * ~2.9×), 确定性单线程档激发面积静默回退。与 preinit 显式档同构
+     * (svd_cdouble_sve f23e2fd9 / gemm 检视意见 4439402781 的
+     * workers > 1 闸门), 亦是 svd_cdouble_sve.cpp 头注对联合求解记载的
+     * 契约(PR#384 引入, "workers == 1 takes ar = 1")——此处实现对齐。
+     * 中间档
+     * (1 < workers < 全核)维持表值不插值: 无标定数据, 与 minimum_duration
+     * 侧二值闸门裁定(意见 4439402800/4440012653)同向(时间预算侧保守);
+     * 全核(workers == 全机 CPU)表达式不变, 行为零变化。per_solve 同用本
+     * ar(模型自洽): fit_only 下 per_solve 只影响被联合层弃用的返回值,
+     * 探针档位由 probe_floor_ms 决定——拟合值与探针成本不随本闸门变化。 */
+    double ar = workers > 1
+            ? sdc_ar_factor(a->ar_fam, sdc_numa_probe()) : 1.0;
     int n_run = 0;
     bool probe_failed = false;     /* issue #420: 任一抬升/mid 档探针自报失败 */
     if (solve_once && a->run_budget_ms > 0 && n_mem > a->lo) {

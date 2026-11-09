@@ -484,7 +484,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `zstd` / `zstd_aaa` | `.level` / `.maxbuffersize` | 1..22 / 4096.. | 按变体 | 压缩级别 / 每迭代缓冲上限 |
 | `zstd1` / `zstd19` | `.maxbuffersize` | 4096.. | 按变体 | 每迭代缓冲上限（level 固定 1 / 19，无 level knob） |
 | `zlib*`（NEON 家族） | `.level` / `.maxbuffersize` | 1..9 / 按变体 | 按变体 | zlib 压缩级别 / 缓冲上限（`zfuzz` 为随机 level 的 fuzz 往返、无 knob） |
-| `eigen_gemm_*`（NEON 家族，含 `_dump` 变体） | `.mdim` | 16..4096（float 变体 8192；clamp） | 内存自适应 | 矩阵维度（覆盖自适应选择） |
+| `eigen_gemm_*`（NEON 家族，含 `_dump` 变体；`eigen_gemm_double_ab_split` 例外——该用例未注册任何 knob，显式 `-O …mdim` 会被静默忽略） | `.mdim` | 16..4096（float 变体 8192；clamp） | 内存自适应 | 矩阵维度（覆盖自适应选择） |
 | `eigen_gemm_double_max_arm` | `.mdim` | 1024..4096（clamp） | **按内存×时间联合自适应** | SVE GEMM 逐档变体的矩阵维度 |
 | `eigen_svd_cdouble_sve` | `.mdim` | 300..6000（clamp） | **按内存×时间联合自适应** | 强制矩阵维度（预期内存警告目前覆盖 SVD 模板族，本用例显式路径暂无警告——T11b 将统一路由） |
 | `eigen_svd{,_double,_double2,_fvectors}_sve` | `.mdim` | 64..2048（clamp） | **按内存×时间联合自适应** | SVE BDCSVD 系方阵维度（镜像各 NEON 原用例联合层参数口径） |
@@ -496,8 +496,8 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `openssl_sha` / `openssl_sha3` | `.arena_bytes` | 1MiB..4GiB（clamp） | 内存自适应 | 哈希数据竞技场字节数（SHA-2 加法链 / Keccak 置换的工作集） |
 | `openssl_sm3sm4` | `.data_size` | 1024..（自适应上限，clamp） | 自适应 | SM3/SM4 载荷尺寸 |
 | `gather*` / `gatherscatter*` | `.data_size` | 按变体 | 自适应 | gather/scatter 工作集 |
-| `random_access_sweep` | `.size_mb` / `.mode` / `.valmode` | 4..512（MiB，钳制）/ 0\|1 / 0\|1\|2 | 内存自适应（60% MemAvailable÷线程，8..512MiB）/ 0 / 0 | 大 mmap 随机扫掠区大小（MiB）/ 地址模式（0=随机偏移，1=顺序）/ 值模式（0=随机，1=固定模式，2=边界特殊值） |
-| `low_load_cache_pressure{,_neon}` | `.duty_us` | 500..3000 | 1000 | 低占空比（5-30%）跨 die 存→远端读扫掠的窗口占空时长（µs） |
+| `random_access_sweep` | `.size_mb` / `.mode` / `.valmode` | 4..512（MiB，钳制）/ 0\|1 / 0\|1\|2（mode/valmode 域外值静默按 0 处理） | 内存自适应（60% MemAvailable÷线程，8..512MiB）/ 0 / 0 | 大 mmap 随机扫掠区大小（MiB）/ 地址模式（0=随机偏移，1=顺序）/ 值模式（0=随机，1=固定模式，2=边界特殊值） |
+| `low_load_cache_pressure{,_neon}` | `.duty_us` | 500..3000（静默钳制） | 1000 | 低占空比（5-30%）跨 die 存→远端读扫掠的窗口占空时长（µs） |
 | `ipsec_*`（46 个 NEON 变体） | `.datasize` | 1024..64MB（16 的倍数） | 1024 | 加密/解密/MAC 载荷尺寸：1024→L1 / 64KB→L2 / 1MB+→L3/DRAM |
 | `ipsec_*_sve*`（24 个 SVE 变体） | `.data_size`（snake_case） | 1024..约 1900（HMAC 组装缓冲上限，clamp） | 内存自适应（流数=运行时 lane 数） | 多流 HMAC 载荷尺寸 |
 | `sve512_{f32,f64}_chain_{arm,svd}` | `.bounded` | 0\|1 | 1 | 有界/无界操作数值域（SEVI Obs.19：SDC 频率差 245×） |
@@ -524,7 +524,7 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 | `mite_sve` | `.count` | 1024..1M（非 16 倍数告警取整） | 1024 | add/eor/sub 常量链 + 谓词分支逻辑探针的缓冲元素数（诊断探针，默认固定设计几何） |
 | `movbe_sve` / `movbe_l1d_sve` / `movbe_l2_sve` | `.count` | 16384..4M（非 16 倍数告警取整） | 16384 | 字节交换往返探针缓冲元素数（l1d/l2 = L1D 命中 / L2 重载足迹变体） |
 | `movbe_slf_sweep_sve` | `.buffer_bytes` | 64KiB..256MiB（非 16 倍数告警取整） | 64KiB | 多宽度（16/32/64-bit）SLF 转发扫掠缓冲字节 |
-| `mrn_{flags,nuke,nuke_2src_alu,nuke_3src_alu,nuke_4src_alu,pairs,pairs_2src_alu,reloaded,reloaded_2src_alu,rmw,rmw_dump,rmw_fwd,rmw_l1d,rmw_diff}_sve` | `.count` | 1024..4M（非 8 倍数告警取整） | 1024（`mrn_reloaded_sve` 256） | 内存重命名/RMW 探针族缓冲元素数（u64，CPU179 触发配方，默认固定设计几何） |
+| `mrn_{flags,nuke,nuke_2src_alu,nuke_3src_alu,nuke_4src_alu,pairs,pairs_2src_alu,reloaded,reloaded_2src_alu,rmw,rmw_dump,rmw_fwd,rmw_l1d,rmw_diff}_sve` | `.count` | 1024..4M（`mrn_reloaded_sve` 为 256..4M；非 8 倍数告警取整） | 1024（`mrn_reloaded_sve` 256） | 内存重命名/RMW 探针族缓冲元素数（u64，CPU179 触发配方，默认固定设计几何） |
 | `mrn_nuke_dense_sve` | `.count` | 16384..4M（非 8 倍数告警取整） | 16384 | MRN 密集变体元素数 |
 | `mrn_rmw_diff_{64k,1m}_sve` | `.base_count` | 8192..4M（非 8 倍数告警取整） | 8192 | RMW 足迹差分基计数（×16 得 64KB/1MB 跨度） |
 | `mrn_rmw_nop{,1,4,8,16,64}_sve` | `.count` | 1024..4M（非 8 倍数告警取整） | 1024 | RMW 时序探针（nop 间隔变体）元素数 |

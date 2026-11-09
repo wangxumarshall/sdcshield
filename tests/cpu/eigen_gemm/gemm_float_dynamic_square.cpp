@@ -52,8 +52,10 @@ static int gemm_solve_once(int n)
  * 自适应)。float 元素 4 字节, 相同内存预算下可容纳更大 N, clamp
  * [16, 8192]。尺寸只在 test_init 求解一次并缓存进 eigen_test_data.dim
  * ——worker 读缓存不重算(T9, 旧链的 run 期重跑自适应路径已删除)。
+ * is_explicit 出参(issue #488): 显式通道(knob/env)来源时置 true,
+ * 供 sdc_gemm_init_shared 的 bad_alloc 分流(显式值不可降档)。
  */
-static int gemm_mdim(struct test *test)
+static int gemm_mdim(struct test *test, bool *is_explicit)
 {
     int64_t v = sdc_knob_int_clamped(test, "mdim", 0, 16, 8192);
     if (v == 0) {
@@ -61,8 +63,10 @@ static int gemm_mdim(struct test *test)
         if (sdc_env_knob_int("eigen_gemm_float_dynamic_square", "mdim", &envv))
             v = (envv < 16) ? 16 : (envv > 8192 ? 8192 : envv);
     }
-    if (v > 0)
+    if (v > 0) {
+        *is_explicit = true;    /* knob(-O/配置文件)/env 显式通道 */
         return (int)v;
+    }
 #if defined(__aarch64__) && defined(__linux__)
     /* 联合求解(T9, 参数依据见 gemm_double_dynamic_square.cpp 同位注释;
      * 本文件差异仅 clamp [16,8192] 与 fam GEMM_F32)。 */

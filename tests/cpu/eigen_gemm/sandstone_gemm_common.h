@@ -37,30 +37,49 @@
 
 /* eigen_gemm 族 init 主体: 调用方 mdim 函数解维度(-O knob > env > 自适应,
  * 只解一次)→ 共享三矩阵(lhs/rhs/prod)分配与 golden 首算; std::bad_alloc
- * 时 T10 降档(m2, 对齐 eigen_sparse 先例)。Data 是各文件匿名命名空间的
+ * 时按维度来源分流(issue #488)。Data 是各文件匿名命名空间的
  * eigen_test_data{Mat lhs, rhs, prod; int dim}(成员名即接口), mdim 是该
- * 文件的尺寸求解函数。与被收敛的 7 份内联拷贝逐行等价:
- *   - init 期分配失败是资源性而非 SDC → 降 mdim 到 16(与联合求解的
- *     lo/clamp 下限同值)重分配一次, 仍失败才资源性 SKIP(不打红);
+ * 文件的尺寸求解函数。mdim 出参契约(explicit_dim): 共享头调用前预置
+ * false, mdim 仅在返回值来自用户显式通道(-O/配置文件 knob 或 env)时置
+ * true; 自适应路径与 mdim 求解期抛异常(探针 bad_alloc 等)均不置位——
+ * 共享头按自适应处理。与被收敛的 7 份内联拷贝的差异仅 catch 分流:
+ *   - init 期分配失败是资源性而非 SDC →
+ *     dim 来自自适应: 降 mdim 到 16(与联合求解的 lo/clamp 下限同值)
+ *     重分配一次, 仍失败才资源性 SKIP(不打红);
+ *     dim 来自用户显式通道: 不降档——T11 契约「显式值用户自担、旁路
+ *     一切自动」, 静默 4096→16 把压力砍到 1/65536 还报 PASS 属假通过
+ *     (rule 6), 资源不足诚实 SKIP(issue #488);
  *   - 降档成功 → sdc_joint_cache_note_dim 同步反馈记账口径(PR#302
  *     检视 #25): 否则反馈按求解 n 折算 eff, c 被压向 0.7× 下限, 后续
  *     n 向 OOM 膨胀;
  *   - 其余异常 → report_fail_msg(打红)。
+ * 触发面边界(实测 2026-11-08): 生产构建链接 framework/sysdeps/linux/
+ * malloc.cpp 的链接级 malloc 覆盖, 分配失败被 null_pointer_consumption
+ * 拦截直接 raise(SIGKILL), bad_alloc 在生产构建不可达——显式 mdim 内存
+ * 不足在生产构建表现为 crash(TestResult::OutOfMemory)而非降档假 PASS;
+ * 本 catch 分流在异常可达构建(ASAN/TSAN, 插桩被 __SANITIZE_* 排除)生效。
  * dump 变体的冻结回放轮读 d->lhs/rhs/prod——降档后三者与 d->dim 同档
- * 一致(降档路径对 dump 同样成立)。 */
+ * 一致(降档路径对 dump 同样成立); 显式 SKIP 路径 run 不执行, 无交互。 */
 template <typename Data>
 static inline int sdc_gemm_init_shared(struct test *test, Data *d,
-                                        int (*mdim)(struct test *))
+                                        int (*mdim)(struct test *, bool *))
 {
     using Mat = decltype(d->lhs);
     int dim = 0;
+    bool explicit_dim = false;   /* mdim 仅在显式通道(knob/env)置 true */
     try {
-        dim = mdim(test);   /* knob > env > 自适应, 只解一次 */
+        dim = mdim(test, &explicit_dim);   /* knob > env > 自适应, 只解一次 */
         d->dim = dim;
         d->lhs = Mat::Random(dim, dim);
         d->rhs = Mat::Random(dim, dim);
         d->prod = d->lhs * d->rhs;
     } catch (const std::bad_alloc &) {
+        if (explicit_dim) {
+            log_skip(RuntimeSkipCategory,
+                     "memory: %s mdim=%d (user-explicit, not downgradable)",
+                     test->id, dim);
+            return EXIT_SKIP;
+        }
         constexpr int kInitRetryLo = 16;
         log_warning("[init 降级] %s: 共享矩阵分配失败 mdim=%d → 降档 mdim=%d 重试一次",
                     test->id, dim, kInitRetryLo);

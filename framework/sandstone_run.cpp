@@ -1220,13 +1220,15 @@ static void finish_test_common(struct test *test)
 #if defined(__aarch64__) && defined(__linux__)
 /* ---- VmHWM 反馈闭环 (T7, spec §4.4) ---------------------------------- */
 
-/* test->id 的 FNV-1a 64 位哈希。写入点与读侧聚合共用同一实现; 0 保留为
- * "空槽"哨兵(fresh memfd 零页)。 */
+/* test->id 的 FNV-1a 64 位哈希(规范 offset basis 14695981039346656037 =
+ * 0xcbf29ce484222325, 曾掉尾位 7——写读同 TU 且槽在 per-invocation
+ * memfd 上无跨运行记忆(test_data.h M5), 故修正无失配窗口, #538)。
+ * 写入点与读侧聚合共用同一实现; 0 保留为 "空槽"哨兵(fresh memfd 零页)。 */
 static uint64_t sdc_test_id_hash(const char *s)
 {
     if (!s)
         return 0;
-    uint64_t h = 1469598103934665603ull;
+    uint64_t h = 14695981039346656037ull;
     while (*s) {
         h ^= (uint8_t)*s++;
         h *= 1099511628211ull;

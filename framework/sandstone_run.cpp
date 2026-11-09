@@ -193,10 +193,19 @@ static void __attribute__((noreturn)) report_fail_common()
     /* does not call the cleanup handlers */
     _endthread();
 #else
-    /* does call the cleanup handalers */
-    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, nullptr);
-    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, nullptr);
-    pthread_cancel(pthread_self());
+    /* glibc's pthread_exit() runs the same forced stack unwind as a
+     * cancellation — pthread cleanup handlers AND C++ scope destructors
+     * (thread_runner's scopeExit cleanup relies on this) — but initiated
+     * from this precisely-defined call site. The old form asked for
+     * PTHREAD_CANCEL_ASYNCHRONOUS + pthread_cancel(self), whose signal can
+     * force the unwind at an ARBITRARY instruction boundary: interrupting
+     * a syscall stub left the unwinder restoring garbage frames/registers
+     * and the cleanup lambda then read sApp->shmem through a bad base,
+     * degrading a clean fail into SIGSEGV (issue #345). No cancellation
+     * state is touched: pthread_exit() terminates the thread regardless of
+     * it (workers run at the POSIX default ENABLE/DEFERRED anyway — glibc
+     * does NOT inherit the creator's DISABLE; verified glibc 2.38 aarch64). */
+    pthread_exit(nullptr);
 #endif
     __builtin_unreachable();
 }
@@ -889,7 +898,7 @@ static void run_threads_in_parallel(const struct test *test)
 static void run_threads_sequentially(const struct test *test)
 {
     // we still start one thread, in case the test uses report_fail_msg()
-    // (which uses pthread_cancel())
+    // (which terminates the thread via pthread_exit())
     SandstoneTestThread thread;
     thread.start([](int t) {
         for ( ; t != sApp->thread_count; thread_num = ++t)

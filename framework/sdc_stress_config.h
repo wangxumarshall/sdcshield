@@ -96,7 +96,9 @@ static inline uint64_t sdc_phys_mem_bytes(void)
 
 /* [可用内存预算] 四源取 min(spec §4.2 + issue #310): 物理×‰ /
  * MemAvailable×0.9 / cgroup 限额−已用 / strict overcommit 承诺余量。
- * 任一来源读失败(前三源返回 0, 承诺源返回 UINT64_MAX)即跳过该来源。
+ * 任一来源读失败或无限即跳过该来源(MemAvailable 源失败返 0、cgroup 源
+ * 与承诺源返 UINT64_MAX 作跳过哨兵); cgroup 限额已耗尽(lim≤usage)与
+ * 承诺已满是【真实 0】, 诚实参与 min 而非跳过(#465)。
  * 动机: 旧口径只读 _SC_PHYS_PAGES, 批处理/容器限额下超分——
  * "job oom" 实测前科(svd_cdouble_sve.cpp:114-120 注释); 承诺源补
  * overcommit_memory=2 内核上"物理可用 ≠ 可承诺"的盲区(#310)。 */
@@ -174,7 +176,14 @@ static inline void sdc_cgroup_self(char *v1base, size_t v1bsz, char *v1rel, size
 
 /* 单级可用量: v2 读 memory.max("max"=无限→该级不约束)/memory.current;
  * v1 读 memory.limit_in_bytes(≥物理内存=无限)/memory.usage_in_bytes。
- * 文件缺失/不可读/limit≤usage → 0(该级不约束)。 */
+ * 哨兵契约(issue #465, 与第四源 sdc_commit_headroom_bytes 同约定):
+ *   UINT64_MAX = 该级不约束/不可知(文件缺失/不可读/"max"/无限/usage
+ *                读失败)——跳过, 不放大也不缩小预算;
+ *   真实值(含 0) = 该级约束本进程, 0 = 限额已耗尽(limit≤usage)——
+ *                诚实参与 min, 把预算压到零。
+ * 旧口径把耗尽也折叠成 0=跳过: 消费侧 `cg > 0` 把耗尽的限额当无限,
+ * 预算退化为 min(物理×‰, MemAvail×0.9) 完全无视 cgroup("job oom"
+ * 前科场景), 随后大维度分配 bad_alloc → std::terminate/SIGABRT。 */
 static inline uint64_t sdc_cgroup_level_avail(const char *dir, bool v2)
 {
     /* 320: dir 最长 255(walk 的 256 缓冲) + 最长文件名 23, 防截断告警 */
@@ -184,43 +193,49 @@ static inline uint64_t sdc_cgroup_level_avail(const char *dir, bool v2)
     if (v2) {
         snprintf(path, sizeof path, "%s/memory.max", dir);
         f = fopen(path, "r");
-        if (!f) return 0;
+        if (!f) return UINT64_MAX;
         char buf[64];
         bool ok = fgets(buf, sizeof buf, f) != nullptr;
         fclose(f);
-        if (!ok || strncmp(buf, "max", 3) == 0) return 0;
-        lim = strtoull(buf, nullptr, 10);
+        if (!ok || strncmp(buf, "max", 3) == 0) return UINT64_MAX;
+        char *end;
+        lim = strtoull(buf, &end, 10);
+        /* 0=耗尽是强判决, 来源必须可信: 垃圾/空内容不得经 strtoull 的
+         * 0 返回伪造"耗尽"(v1 侧 fscanf("%lu")==1 已有同等校验)。 */
+        if (end == buf) return UINT64_MAX;
         snprintf(path, sizeof path, "%s/memory.current", dir);
         f = fopen(path, "r");
     } else {
         snprintf(path, sizeof path, "%s/memory.limit_in_bytes", dir);
         f = fopen(path, "r");
-        if (!f) return 0;
+        if (!f) return UINT64_MAX;
         bool ok = fscanf(f, "%lu", &lim) == 1;
         fclose(f);
-        if (!ok || lim >= sdc_phys_mem_bytes()) return 0;   /* 无限 */
+        if (!ok || lim >= sdc_phys_mem_bytes()) return UINT64_MAX;  /* 无限 */
         snprintf(path, sizeof path, "%s/memory.usage_in_bytes", dir);
         f = fopen(path, "r");
     }
-    if (!f) return 0;
-    bool ok2 = fscanf(f, "%lu", &cur) == 1 && lim > cur;
+    if (!f) return UINT64_MAX;
+    bool ok2 = fscanf(f, "%lu", &cur) == 1;
     fclose(f);
-    return ok2 ? lim - cur : 0;
+    if (!ok2) return UINT64_MAX;      /* usage 不可读: 不可知 ≠ 耗尽 */
+    return lim > cur ? lim - cur : 0; /* 耗尽 = 真实 0, 参与 min (#465) */
 }
 
 /* 自叶子(dir=base+rel)向根(base)逐级取 avail 的最小值——祖先与子孙
  * 的限制都约束本进程, 各级 usage 含下级, limit−usage 是该级对本进程
- * 的可用上界, 取 min 即保守合成。 */
+ * 的可用上界, 取 min 即保守合成。同 level_avail 哨兵契约(#465):
+ * UINT64_MAX = 全程未见任何约束; 耗尽级 0 恰是 min 的胜者, 逐级传播。 */
 static inline uint64_t sdc_cgroup_walk(const char *base, const char *rel, bool v2)
 {
     char dir[256];
     if (snprintf(dir, sizeof dir, "%s%s", base, rel) >= (int)sizeof dir)
-        return 0;
+        return UINT64_MAX;    /* 路径超长: 不可知 ≠ 耗尽 (#465) */
     size_t blen = strlen(base);
-    uint64_t best = 0;
+    uint64_t best = UINT64_MAX;   /* min 恒等元 = "未见任何约束" */
     for (;;) {
         uint64_t av = sdc_cgroup_level_avail(dir, v2);
-        if (av > 0 && (best == 0 || av < best))
+        if (av < best)
             best = av;
         char *slash = strrchr(dir, '/');
         if (!slash || (size_t)(slash - dir) + 1 <= blen)
@@ -232,17 +247,21 @@ static inline uint64_t sdc_cgroup_walk(const char *base, const char *rel, bool v
 
 static inline uint64_t sdc_cgroup_limit_bytes(void)
 {
-    /* v2: memory.max - memory.current ("max" = 无限 → 0)
+    /* v2: memory.max - memory.current ("max" = 无限 → 不约束)
      * v1: memory/memory.limit_in_bytes - memory.usage_in_bytes
-     *      (limit >= 物理内存视为无限 → 0)。本机(openEuler)实测为 v1、
-     *      且位于嵌套 /system.slice/sshd.service(根无限制≠本进程无限)。 */
+     *      (limit >= 物理内存视为无限 → 不约束)。本机(openEuler)实测为 v1、
+     *      且位于嵌套 /system.slice/sshd.service(根无限制≠本进程无限)。
+     * 哨兵(#465): UINT64_MAX = 两侧都读不到约束(未挂载/无限/读失败);
+     * 真实值(含 0 = 耗尽) = 约束生效。UINT64_MAX 是 min 恒等元, 旧
+     * "0=未挂载"特判溶解——memory 控制器只在一侧挂载时另一侧 walk 返回
+     * UINT64_MAX, 直接取 min 即活侧的值。(v2 memory.max 写成 ≥2^64−cur
+     * 的荒谬大数值会与哨兵别名——其语义本就是"实际无限", 别名到跳过
+     * 无害, 与 #384 R8 的哨兵别名记录同型。) */
     char v1base[64], v1rel[192], v2base[48], v2rel[192];
     sdc_cgroup_self(v1base, sizeof v1base, v1rel, sizeof v1rel,
                     v2base, sizeof v2base, v2rel, sizeof v2rel);
     uint64_t a1 = sdc_cgroup_walk(v1base, v1rel, false);
     uint64_t a2 = sdc_cgroup_walk(v2base, v2rel, true);
-    if (a1 == 0 || a2 == 0)
-        return a1 > 0 ? a1 : a2;      /* memory 控制器只在一侧挂载 */
     return a1 < a2 ? a1 : a2;
 }
 
@@ -300,7 +319,24 @@ static inline uint64_t sdc_budget_bytes(int permille)
     uint64_t ma = sdc_memavailable_bytes();
     if (ma > 0 && ma * 9 / 10 < b) b = ma * 9 / 10;
     uint64_t cg = sdc_cgroup_limit_bytes();
-    if (cg > 0 && cg < b) b = cg;
+    /* #465: UINT64_MAX = 不约束(未挂载/无限/读失败)→ 跳过; 真实值(含
+     * 0 = 限额耗尽)参与 min——下游契约早已按此口径写就(mesh_upi 系
+     * "budget==0(限额/承诺耗尽)→ init 诚实 SKIP"; 第四源同约定)。 */
+    if (cg != UINT64_MAX && cg < b) {
+        b = cg;
+        if (cg == 0) {
+            static bool logged = false;   /* 每 TU 一次(static inline 是内部
+                                          * 链接, static local 随 TU 各一份;
+                                          * 每 slice child 是独立进程, 实测
+                                          * 每 child 一条, 与下方承诺源同式) */
+            if (!logged) {
+                logged = true;
+                log_warning("[cgroup 预算] cgroup 内存限额已耗尽 "
+                            "(limit ≤ usage): 预算压至 0 — 自适应规模将"
+                            "退守用例规模下限");
+            }
+        }
+    }
     /* #310 第四源: strict overcommit 下的承诺余量(非 =2 时为
      * UINT64_MAX, 本块无操作)。成为最小来源时打一次诊断——该部署形态
      * 的用户直接看到预算被 CommitLimit 钳制, 而非对着 ENOMEM/降档猜测。 */

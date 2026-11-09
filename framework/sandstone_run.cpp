@@ -202,8 +202,9 @@ static void __attribute__((noreturn)) report_fail_common()
      * a syscall stub left the unwinder restoring garbage frames/registers
      * and the cleanup lambda then read sApp->shmem through a bad base,
      * degrading a clean fail into SIGSEGV (issue #345). No cancellation
-     * state is touched: workers inherit PTHREAD_CANCEL_DISABLE and
-     * pthread_exit() terminates the thread regardless. */
+     * state is touched: pthread_exit() terminates the thread regardless of
+     * it (workers run at the POSIX default ENABLE/DEFERRED anyway — glibc
+     * does NOT inherit the creator's DISABLE; verified glibc 2.38 aarch64). */
     pthread_exit(nullptr);
 #endif
     __builtin_unreachable();

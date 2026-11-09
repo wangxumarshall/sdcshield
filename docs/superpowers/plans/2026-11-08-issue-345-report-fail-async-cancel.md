@@ -50,12 +50,20 @@ pristine 703752ae 上 3/3 run × 11 块 crash）。后果：fail 退化成 crash
   等既有语义全部保持。
 - 危险类按构造消除：不再有取消信号、不再有 ASYNC 类型、不再触碰取消状态——
   不存在「任意指令边界发起展开」的窗口。
-- 附带修正（同一直接触发的行为差异，如实披露）：test_init 在 aux 线程内经
-  report_fail 失败时，旧路径 `pthread_join` 得 `PTHREAD_CANCELED(-1)`，与
-  「负返回值=SKIP/-errno」约定冲突 → 被误分类为 Skip 并误报
-  "Unexpected OS error"；新路径 join 得 nullptr → ret=0 → 落入框架既有的
-  `has_failed()` 检查 → 正确判 Failed（框架自身意图，见 run_one_test_inner
-  1405-1412 行注释 "check if the thread has failed with log_error()"）。
+- 附带修正（同一直触发的行为差异，fleet 复核后按实证改口径——内部语义
+  清理，非用户可见缺陷修复）：test_init 在 aux 线程内经 report_fail 失败时，
+  旧路径 `pthread_join` 得 `PTHREAD_CANCELED(-1)`，与「负返回值=SKIP/-errno」
+  约定冲突 → run_one_test_inner 判 Skip、child 以 255 退出（strace 实证：
+  11 个 child 全部 `exit_group(-1)`）、且确实调用了 log_skip("Unexpected OS
+  error")。**但**该误分类不出现在最终输出：logging_print_results 的
+  AbstractLogger 线程扫描见 main 线程 fail 标记（report_fail_common 首行
+  logging_mark_thread_failed(-1) 所置）把 testResult 救回 Failed（retest
+  循环因此照常重试出 11 块），而 "Unexpected OS error" 消息被
+  `skipInMainThread` 门（logging.cpp SkipMessages 分支）压掉、永不打印。
+  新路径 join 得 nullptr → ret=0 → 直接落 `has_failed()` 判 Failed、child
+  以 1 退出。用户可观察差异仅两处：child exit code 255→1（forkfd 内部，
+  不可见）与 `time-to-fail` 数值→null（旧值来自被救回路径的线程扫描，
+  null 与 init 返回码失败路径 ret>0 的既有行为一致，非回归）。
 - x86-64 非回归（规则 5）：改动点无架构分支（`#ifdef _WIN32` 之外双架构共享同一
   行）；glibc x86-64 的 pthread_exit/cancel 同源同机制；取消语义变化对双架构等价
   ——线程仍终止、展开仍跑析构，仅发起点从任意边界变为定义点。属「真正共享」的
@@ -119,3 +127,36 @@ PR #336 同型（2 页 mmap 凿洞 + re-loop 顶部 MAP_FIXED 回填 + 紧接
 - gem5-fi 不适用：本缺陷是 glibc 信号/强制展开语义，gem5 SE 无同源 pthread 取消
   机制，仿真无意义；受影响行为（report_fail→线程终止→verdict）在本机可完整真机
   运行，无能力缺失。
+
+## Fleet 复核轮（2026-11-09，localhost0102 无 SVE 920 / glibc 2.38 aarch64，独立复验）
+
+PR #582 fleet 检视-验证 agent 的独立复验（不复用原作者工件；自有复现器
+/tmp/repro345/repro2.cpp + 自有毒化形状）：
+
+1. **微实证（2000 线程迭代 × 3 模式 × mmap 扰动开/关）**：async 自取消 /
+   pthread_exit / DEFERRED+testcancel 三模式 cleanup 析构全部 100% 执行、
+   0 崩溃；join retval 语义：取消类=PTHREAD_CANCELED、pthread_exit=nullptr。
+2. **反汇编主张复核**：`objdump -d /usr/lib64/libc.so.6` pthread_exit——
+   存 result → ldxr/stxr 原子置 cancelhandling 位 #0x10 → 调 unwinder 强制
+   展开，与计划文档记载一致。
+3. **评论勘误（本轮 fix）**：实测 glibc 2.38 aarch64 上 DISABLE 创建者的
+   新线程取消状态为 **ENABLE/DEFERRED（POSIX 默认，无继承）**——原注释
+   "workers inherit PTHREAD_CANCEL_DISABLE" 前提为假，已改述为
+   「pthread_exit 与取消状态无关 + glibc 不继承创建者状态」。（不影响修复
+   正确性：旧代码本就显式 ENABLE，新代码 pthread_exit 不看取消状态。）
+4. **框架级毒化负控（fix 后）**：memcpy0 run 路径毒化（2 页 mmap 凿洞 +
+   re-loop 顶 MAP_FIXED 回填 + 紧接 report_fail_msg）——`-t 1000 -n 1` × 5
+   run、全核 `-t 3000` × 2 run：每 run 恰 11 块 `result: fail`、0 crash、
+   消息 11/11 落盘；`-vv` 11×`state: failed`；临时 `test_schedule_sequential`
+   + `-n 2`：11×fail、0 crash、仅 `- thread: 0`（失败跳出循环语义保持）。
+5. **旧代码同型对照（pristine main + 同毒化）**：run 路径 ×3 + 全核 ×1 同为
+   11×fail、0 crash——印证 crash 窗口为 SVE 主机时序特有、本机不可复现；
+   init 路径毒化：strace 实证 11 child 全 `exit_group(-1)`（=EXIT_SKIP 误分类
+   真实存在于 run_one_test_inner 层），但最终 YAML 仍 `result: fail`（被
+   AbstractLogger 线程扫描救回）、无 "Unexpected OS error" 输出（被
+   skipInMainThread 门压掉）——据此改写上方「附带修正」口径。
+6. **回归（干净树重建后）**：`-e zstd19 -t 2000 -n 1`、`-e mce_check -t 2000
+   -n 1`、`-e memcpy0 -t 2000 -n 1` 全部 `exit: pass`；build.sh 零新警告。
+7. **x86-64 非回归**：检视论证同前（无架构分支、glibc 双架构同源 __do_cancel）；
+   本机（localhost0102，非 SVE 主机 0104）无 SVE 载体，SVE 主机毒化对照未做，
+   如实声明。

@@ -189,6 +189,13 @@ n_opt = min(
   Heuristic 默认 slice≡NUMA（build_topology 分组键 numa_id 优先，
   topology.cpp:1755-1759）；`--max-cores-per-slice` 下同节点多 slice 按
   节点合计口径收缩（各 slice 输入相同 → N 一致）。
+  【2026-11-08 #515 勘误】worker 分布域 = 框架选中设备集
+  （shmem->device_info[]，已含启动亲和 taskset 与 --cpuset/--deviceset
+  过滤；sdc_numa_effective_threads_selected），不再按「全机在线 CPU
+  均匀分布」折算——非均匀集下旧折算把 node_cpus 虚折（本机
+  192CPU/8节点：24 worker 全落单节点时 24×24/192=3，足迹超分 8×，非
+  保守方向；`-n<N>` 裁设备表至首 N CPU 落首节点，同型）。全核与跨节点
+  均匀集折算值恒等（零变化）；选中集不可读退全机口径（修复前行为）。
 - 时间预算 240s→**200s**【v2/M1】：300s 硬宽限需容纳 init 探针 + fill +
   AR 方差（SVD 实测带 18-25×，25 时迭代+init ≈296s 刀锋）。
 - `c` 来源优先级：VmHWM 反馈（本 slice 槽有效且命中同 test）→

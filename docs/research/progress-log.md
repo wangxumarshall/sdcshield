@@ -5,6 +5,52 @@
 
 ---
 
+## 2026-11-08（issue #515：联合求解 node_cpus 折算域改选中设备集——非均匀 --cpuset/-n 不再超分节点内存）
+
+### 结论
+
+`node_threads = 该节点全部 worker 数`（spec §4.3 契约）的实现在
+`sdc_joint_dim_slice` 里是 `node_cpus × workers / 全机在线CPU` 均匀分布
+折算（sdc_stress_config.h），与 worker 真实分布域（启动亲和 taskset ∩
+--cpuset/--deviceset 过滤后的设备集）无关——非均匀集下 node_cpus 虚折、
+节点足迹超分（非保守方向，击穿 #423 OOM 不变量）。
+
+- **复现（本机 192 CPU/8 节点×24，eigen_svd，反解 node_threads=预算/(c·n_mem²)）**:
+  `--cpuset=0-23` 折算 24×24/192=**3**（真实 24，n_mem=17621，足迹超分 8×）；
+  `--cpuset=0-47` = **6**（真实 24，n_mem=12856，4×）。**意外发现**：
+  `-n 24`（无 cpuset）同型超分——框架把设备表裁到首 24 CPU（全落
+  node0），旧折算仍按全机 192 均匀（3 vs 真实 24）——即 CLAUDE.md 标准
+  回归档 `-n` 一直在踩此路径，只是 n_run 时侧钳制掩盖了内存超分。
+- **修复**: 折算分子分母同改选中设备集口径——新
+  `sdc_numa_effective_threads_selected(cpu, *total)`（sdc_numa.cpp）遍历
+  `shmem->device_info[]`（child 内 restrict 后的本地指针只余本 slice，
+  必须读 shmem 全量表）按 effective 节点（含 C1 并入）计数；返回 -1 退
+  旧全机口径。**任务书建议的 sched_getaffinity(0) 方案被否**：fork 路径
+  test_init 跑在被 pin 单 CPU 的辅助线程（sandstone_run.cpp:1387），
+  sched_getaffinity 退化为 1 CPU，无法满足默认路径零变化——设备表才是
+  worker 分布单一真源（taskset 经 ambient_logical_processor_set 进设备
+  枚举，--cpuset 经 apply_deviceset_param 过滤）。
+- **验证（基线 ac8648be 前后对照，/tmp/issue515/nb_{before,after}_*.log）**:
+  全核 8 slice n_mem 逐值一致（6241→6255 级，仅 MemFree 漂移）、修正日志
+  0 触发；跨节点均匀 taskset（8 CPU 每节点 1）恒等（node_cpus 折算
+  24×8/192=1 == 选中集口径 1，n_mem 31041→30557）；-n 1 恒等（两侧均 1）；
+  `--cpuset=0-23` n_mem 17621→6230（÷√8）、`0-47` 12856/13077→6207/6432
+  （÷2），反解 node_threads 3/6→24；eigen_svd_double/eigen_sparse 全核
+  零变化（node_threads 24 两侧）；zstd19 `-t 2000 -n 1` pass。构建零新
+  警告（增量 253 TU 0 警告；全量基线唯一警告为既有 mesh_upi_sse_sym）。
+  n_run 波动（2806↔2139 等）为共享主机探针计时噪声（loadavg ~78），
+  n_run 管线不含 node_cpus、语义无涉。
+- **会话事件**: 验证中途 origin/main 前移 10 提交（含 #552 AR 表行1
+  重标定使 SVD 族 n_run +12.6%、#493 cpulist 溢出防护、#560 RSS 表头
+  勘误，三者在 sdc_numa.cpp/sdc_stress_config.h 的 hunk 与本修复无重叠），
+  重定基至 ac8648be 后全部 before/after 重取——上表数字均为新基线值。
+- **边界**: 无单测（联合层不链接 sdc_numa 符号是 sdc_stress_config_tests.cpp
+  头注既定边界）；设备表 c<0/≥4096 表项跳过、shmem 不可读退全机口径为
+  防御路径，仅评审覆盖（真机不可构造）。x86-64 零触碰（改动全在
+  aarch64+linux 守卫内）。
+- **产物**: 分支 fix/issue-515；计划
+  docs/superpowers/plans/2026-11-08-issue515-node-cpus-selected-set.md。
+
 ## 2026-11-04（issue #420 重锚定落地：#428 rebase 至 #517 合入/bidiag 退役后的 main）
 
 ### 结论

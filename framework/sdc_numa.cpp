@@ -3,6 +3,7 @@
 #if defined(__aarch64__) && defined(__linux__)
 
 #include "sdc_stress_config.h"   /* sdc_budget_bytes(四源 min, spec §4.2 + #310) */
+#include "sandstone_p.h"        /* sApp->shmem->device_info: 选中设备表(issue #515) */
 
 #include <dirent.h>
 #include <cerrno>
@@ -288,6 +289,44 @@ int sdc_numa_effective_threads(int cpu)
     }
     return n > 0 ? n : (t->total_cpus > 0 ? t->total_cpus
                                           : sdc_online_cpus_fallback());
+}
+
+int sdc_numa_effective_threads_selected(int cpu, int *total_selected)
+{
+    if (total_selected)
+        *total_selected = 0;
+    const struct sdc_numa_topology *t = sdc_numa_probe();
+    if (t->nodes_with_mem <= 0)
+        return -1;              /* 探测失败: 调用方退全机口径 */
+    /* 选中设备集 = shmem->device_info[0..total_device_count): 启动时由
+     * ambient sched_getaffinity(taskset 生效) ∩ --cpuset/--deviceset
+     * 过滤而来, 即 worker 真实分布域——不用 test_init 线程自身的
+     * sched_getaffinity: fork 路径下 init 跑在被 pin 到单 CPU 的辅助
+     * 线程(sandstone_run.cpp init_thread_runner), 亲和集退化为 1 CPU。
+     * child 内 restrict_topology 只重指本地 device_info 指针, shmem
+     * 全量表不动; commit_shmem() 先于 test_preinit(gemm 头注记载),
+     * preinit(父)/test_init(child)两口径恒可读。 */
+    if (!sApp->shmem || sApp->shmem->total_device_count <= 0)
+        return -1;
+    int anchor = sdc_effective_node(t, cpu);
+    if (anchor < 0)
+        return -1;
+    int total = sApp->shmem->total_device_count;
+    int n = 0;
+    for (int i = 0; i < total; ++i) {
+        int c = sApp->shmem->device_info[i].cpu_number;
+        /* 越界编号(热插残影/异常表项)跳过: 查表得 -1 会被 C1 记到
+         * fallback 节点头上, 虚增该节点 worker 数。 */
+        if (c < 0 || c >= SDC_NUMA_MAX_CPUS)
+            continue;
+        if (sdc_effective_node(t, c) == anchor)
+            ++n;
+    }
+    if (n <= 0)
+        return -1;              /* anchor 节点无任何选中设备: 退全机口径 */
+    if (total_selected)
+        *total_selected = total;
+    return n;
 }
 
 /* T7 (spec §4.4): VmHWM(kB→字节), 读不到 0。行形如 "VmHWM:  123456 kB"。 */

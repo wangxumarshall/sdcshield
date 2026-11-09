@@ -1371,18 +1371,39 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     if (node_cpus < 1)
         node_cpus = 1;                     /* T2 保证 ≥1, 双保险 */
     /* node_threads 用 worker 口径(spec §4.3 "该节点全部 worker 数"):
-     * -n/--cpuset 下 worker 与 CPU 数不等时, 按 全机worker/全机CPU 折算
-     * (全核时恰等)——worker 少于 CPU 时不折算则 -n 1 把节点预算按 127
-     * 线程分摊, mdim 欠压 ~11×(旧全局模型 total_thread_count 补偿的同
-     * 型问题); worker 多于 CPU(超额订阅)时不折算则 node_cpus 停在物理
-     * CPU 数, 节点聚合 RSS = (workers/cpus)×预算, 击穿 OOM 不变量
-     * (issue #423; x86 fallback 与旧全局模型均按真实 worker 数分摊,
-     * 双向正确, 此处与它们对齐)。当前 -n 在解析层 Saturate 到亲和集
-     * CPU 数(sandstone_opts.cpp), 合法 CLI 无法超订——本分支是防御
-     * 性封堵(模型不变量在超订输入域的完整性), 非当前可达的行为。 */
+     * 折算域 = 框架选中设备集(issue #515)——启动亲和(taskset)与
+     * --cpuset/--deviceset 过滤后的 shmem->device_info[], 即 worker 真实
+     * 分布域; 旧「全机在线 CPU 均匀分布」假设在非均匀 --cpuset 下把
+     * node_cpus 虚折(本机 192CPU/8节点: 24 worker 全落 node0 时
+     * 24×24/192=3, 节点足迹超分 8×, 非保守方向)。全核时选中集 ==
+     * 全机集, 折算输入恒等(零变化); 跨节点均匀受限集下两模型同值
+     * (均匀假设仅对非均匀集失真); 选中集不可读(-1)退回全机口径
+     * (修复前行为)。
+     * worker ≠ 域内 CPU 数时仍按 workers/域 折算(全核时恰等)——
+     * worker 少于 CPU 时不折算则 -n 1 把节点预算按全机线程分摊,
+     * mdim 欠压 √(全机/1) 量级(127 CPU 机实测 ~11×; 旧全局模型
+     * total_thread_count 补偿的同型问题); worker 多于 CPU(超额订阅)
+     * 时不折算则 node_cpus 停在物理 CPU 数, 节点聚合 RSS =
+     * (workers/cpus)×预算, 击穿 OOM 不变量(issue #423; x86 fallback
+     * 与旧全局模型均按真实 worker 数分摊, 双向正确, 此处与它们对齐)。
+     * 当前 -n 在解析层 Saturate 到亲和集 CPU 数(sandstone_opts.cpp),
+     * 合法 CLI 无法超订——超订分支是防御性封堵(模型不变量在超订
+     * 输入域的完整性), 非当前可达的行为。 */
     {
         int workers = sdc_total_threads();
         int cpus_all = sdc_numa_probe()->total_cpus;
+        int sel_total = 0;
+        int sel_node = sdc_numa_effective_threads_selected(cpu, &sel_total);
+        if (sel_node > 0 && sel_total > 0) {
+            if (sel_node != node_cpus || sel_total != cpus_all)
+                log_warning("[联合求解] %s.%s: 折算域改选中设备集 "
+                            "node_cpus %d→%d, 域 %d→%d (issue #515)",
+                            test ? test->id : "(global)",
+                            knob ? knob : "?",
+                            node_cpus, sel_node, cpus_all, sel_total);
+            node_cpus = sel_node;
+            cpus_all = sel_total;
+        }
         if (workers > 0 && cpus_all > 0 && workers != cpus_all)
             node_cpus = node_cpus * workers / cpus_all;   /* 向下取整 */
         if (node_cpus < 1)

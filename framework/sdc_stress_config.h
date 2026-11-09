@@ -1193,13 +1193,15 @@ inline std::map<std::string, struct sdc_joint_ctx> &sdc_joint_cache()
  * = VmHWM/(n²·elem·threads)。分子 VmHWM 是本 child 进程的峰值, 包含
  * 降档前部分成功的 O(n²) 分配(d->lhs 已建成、d->rhs 才抛 bad_alloc);
  * 只把分母 ctx.n 改成 retry 值会把 eff 高估 (n_solved/retry)² 倍
- * (n=3500/retry=16 约 48000×)。读侧向上修正本就无死区无上钳, 一次
- * 瞬时 OOM 会被直接采纳为 c, 后续 fracture 的 n 被压向 lo、压力静默
- * 塌缩(EMA α=0.5 下还要 ~18 个 fracture 才衰减回 ±15% 死区)。
- * 分子无法在不对 VmHWM 做基线扣除的前提下按 retry 口径折算(基线
- * 扣除/上钳改造属 #385 范围), 因此降档 child 诚实的选择是不发布
- * 样本: 注销本 child 的联合求解登记, sdc_feedback_write 见无条目即
- * 不写。下一 fracture 重新求解, 不受本次瞬态事件污染。显式 knob/
+ * (n=3500/retry=16 约 48000×)。读侧向上修正无死区, 一次瞬时 OOM 会被
+ * 直接采纳为 c, 后续 fracture 的 n 被压向 lo、压力静默塌缩(EMA α=0.5
+ * 下还要 ~18 个 fracture 才衰减回 ±15% 死区)。
+ * 分子无法按 retry 口径折算: issue #385 的基线扣除只减去 fork 起点
+ * (父进程 RSS), 降档前那次部分成功的 O(n²) 分配发生在基线**之后**,
+ * 仍留在分子里; 4×锚上钳只把污染上限压到 4×(不锁死), 不能恢复真实
+ * 工作集。因此降档 child 诚实的选择是不发布样本: 注销本 child 的联合
+ * 求解登记, sdc_feedback_write 见无条目即不写。下一 fracture 重新求解,
+ * 不受本次瞬态事件污染。显式 knob/
  * 未迁移用例无登记条目时为 no-op。init 双重失败(EXIT_SKIP)不需要:
  * run_one_test_inner 对 init SKIP 提前返回, 到不了反馈写入点。已知
  * 残差不变(如实记录): worker 期 bad_alloc 的线程级 SKIP 仍按求解 n
@@ -1253,6 +1255,62 @@ static inline int64_t sdc_joint_knob_value(struct test *test, const char *key,
     return sdc_knob_int_clamped(test, key, 0, lo, hi);
 }
 
+#if defined(__aarch64__) && defined(__linux__)
+/* issue #385: 反馈向上采纳的上钳倍数(相对静态锚 c_anchor)。
+ *
+ * 背景: 写侧基线扣除(sandstone_run.cpp sdc_feedback_write)已消掉 fork RSS
+ * 这个最大污染源, 但读侧「向上无上钳」仍是一条开放通道——任何残余异常
+ * 样本(seqlock 混合态、探针高水位主导的小 n 记账、未来新增的污染源)都
+ * 会被全额采纳并进入 EMA, 而向下修正受 15% 死区 + 0.7×锚下限保护, 膨胀
+ * 值只能靠后续样本半衰, 期间 n 被压向 lo(与 09c9c4fc「堵反馈通道污染」
+ * 的意图直接矛盾)。
+ *
+ * 阈值选择依据(为何是 4×):
+ *   - 正常路径实测相对静态表的偏差 ≤ ~10.5%(T6/T9 GEMM_F64 重标定: 表
+ *     0.0290→0.0315 KB, 实测隐含 +10.5%); 4× = 400% 留出 ~38× 余量, 正常
+ *     大 n×多线程路径永不触发(基线占比 <1%, 探针占比 <1%)。
+ *   - 扣除基线后分子残余的合法成分是联合求解探针高水位: n_mem 受限路径
+ *     里探针 ≪ 正式工作集; 只有 n_run 受限的小 n 路径可能让探针占比升到
+ *     静态锚的 ~2-3×, 4× 仍不误伤。
+ *   - 上钳要挡的污染量级: #385 复算的 n=16×1 线程基线污染 = 32422 B vs
+ *     GEMM_F64 锚 32.256 B ≈ 1000×; 4× 把单样本放大从 1000× 压到 ≤4×,
+ *     配合 EMA α=0.5(4 个正常样本后残余 4×/16=0.25×)与 15% 死区, 不再
+ *     永久锁死 c。
+ *   - 锚 = 表值时它本身就是「矩阵数×elem」的内存模型上限附近; 反馈要求
+ *     超过 4 倍驻留矩阵只能说明模型或样本之一错了, 应当有声地拒绝而非
+ *     静默采纳(见下方 clamped 告警)。 */
+static constexpr double sdc_feedback_up_cap_factor = 4.0;
+
+struct sdc_feedback_decision {
+    double c;          /* 采纳后的 c; 未采纳时 = 入参 c_bytes */
+    double cand_raw;   /* 死区/0.7×锚下限处理后的候选(上钳前) */
+    bool adopted;
+    bool upward;
+    bool clamped;
+};
+
+/* 反馈采纳决策(纯函数, 便于机制级验证): 与 #385 之前的差异仅在
+ * 「向上采纳前先钳到 up_cap」; 死区/下限/采纳判据逐字保留。 */
+static inline struct sdc_feedback_decision
+sdc_feedback_decide_c(double c_bytes, double c_fb, double anchor)
+{
+    struct sdc_feedback_decision d = { c_bytes, 0.0, false, false, false };
+    double cand = std::max(c_fb, 0.7 * anchor);
+    d.cand_raw = cand;
+    double up_cap = sdc_feedback_up_cap_factor * anchor;
+    if (up_cap > 0.0 && cand > up_cap) {
+        cand = up_cap;
+        d.clamped = true;
+    }
+    d.upward = cand >= c_bytes;
+    bool outside_deadzone = cand < 0.85 * c_bytes;
+    d.adopted = d.upward || outside_deadzone;
+    if (d.adopted)
+        d.c = cand;
+    return d;
+}
+#endif /* __aarch64__ && __linux__ */
+
 /*
  * 联合求解 n_opt = min(n_mem, n_run, hi), lo 兜底:
  *   n_mem = sqrt((node_budget − node_slices·shared) / (node_threads · c))
@@ -1264,8 +1322,8 @@ static inline int64_t sdc_joint_knob_value(struct test *test, const char *key,
  * fit 来自 sdc_calibrated_dim 的两点差分(已扣固定开销, M3), 无效时跳过
  * n_run。
  * 内存侧 c 优先级链(T7 起): VmHWM 反馈 median(跨 fracture 的 Main 槽
- * EMA, 详见 sdc_feedback_eff_median; 向上无钳、向下 15% 死区 + 0.7×静态
- * 锚下限) → RSS_RATIO_TABLE(族) → 调用方传统三元组
+ * EMA, 详见 sdc_feedback_eff_median; 向上无死区但 4×静态锚上钳、向下
+ * 15% 死区 + 0.7×静态锚下限) → RSS_RATIO_TABLE(族) → 调用方传统三元组
  * (bytes_per_elem×matrices_per_thread×rss_ratio)。
  * knob 三层 fallback(T11 起): arm64 分支持有 knob 早退——显式 -O/env 值
  * 在此早退并打预期内存档位警告(见函数内 T11 块); 调用方迁移后
@@ -1366,9 +1424,11 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
      * 写入点在 run_one_test_inner 尾部), ×elem 还原字节口径; 写/读用同一
      * a->bytes_per_elem, 记账口径相消(调用方 elem 前后不一致也不失真)。
      * 采纳规则:
-     *   - 向上修正(c_fb ≥ 模型): 无死区无上钳 —— 表系统性偏小时靠它收敛
-     *     (T6 实测 GEMM_F64 表偏小 ~8%, progress 裁定"反馈无上钳可收敛"),
-     *     压 n 是安全方向;
+     *   - 向上修正(c_fb ≥ 模型): 无死区(表系统性偏小时靠它收敛——T6 实测
+     *     GEMM_F64 表偏小 ~8%; 压 n 是安全方向), 但自 issue #385 起有
+     *     4×静态锚上钳: 单次异常样本不能把 c 永久锁在污染值上(阈值依据见
+     *     sdc_feedback_up_cap_factor 注释)。上钳生效时单独告警, 原始候选
+     *     一并打印, 不静默截断;
      *   - 向下修正: 需越出 15% 死区才采用(反馈噪声/m1 选择偏差——超时
      *     child 到不了写入点, 样本偏乐观——都朝压小 c 的方向, 小幅下压
      *     一律不信), 且下限 = 静态锚 × 0.7(锚 = 表值, 无表用三元组),
@@ -1378,17 +1438,24 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
         if (eff_med > 0.0 && a->bytes_per_elem > 0) {
             double c_fb = eff_med * (double)a->bytes_per_elem;
             double anchor = c_table > 0.0 ? c_table : c_bytes;  /* 静态锚 */
-            double cand = std::max(c_fb, 0.7 * anchor);
-            bool upward = cand >= c_bytes;
-            bool outside_deadzone = cand < 0.85 * c_bytes;
-            if (upward || outside_deadzone) {
+            struct sdc_feedback_decision d =
+                    sdc_feedback_decide_c(c_bytes, c_fb, anchor);
+            if (d.clamped) {
+                log_warning("[联合求解] %s.%s: 反馈样本 c_fb=%.1f 超静态锚 %.1f "
+                            "的 %.0f× → 上钳至 %.1f B/n²/线程 (原始候选 %.1f; "
+                            "issue #385)",
+                            test ? test->id : "(global)", knob ? knob : "?",
+                            c_fb, anchor, sdc_feedback_up_cap_factor, d.c,
+                            d.cand_raw);
+            }
+            if (d.adopted) {
                 log_warning("[联合求解] %s.%s: VmHWM 反馈生效 c=%.1f→%.1f B/n²/线程 "
                             "(eff=%.3f, %s, 下限 %.1f)",
                             test ? test->id : "(global)", knob ? knob : "?",
-                            c_bytes, cand, eff_med,
-                            upward ? "向上修正, 无上钳" : "越出15%死区",
+                            c_bytes, d.c, eff_med,
+                            d.upward ? "向上修正, 4×锚上钳" : "越出15%死区",
                             0.7 * anchor);
-                c_bytes = cand;
+                c_bytes = d.c;
             } else {
                 log_warning("[联合求解] %s.%s: VmHWM 反馈 c=%.1f 落入 ±15%% 死区, "
                             "维持静态值 %.1f",

@@ -25,6 +25,13 @@
  * 两个实现都由它供给,不再引入 windows.h(零宏面注入)。 */
 #include <unistd.h>
 
+/* Page-size helpers (ROUND_UP_TO / sandstone_page_size / ROUND_UP_TO_PAGE):
+ * shared single implementation, see sandstone_page.h.  Keep this include
+ * OUTSIDE the extern "C" block below -- the header's own #include <stdlib.h>
+ * resolves (in C++) to the C++ <stdlib.h> wrapper, whose first inclusion
+ * must not sit inside a linkage specification (issue #590). */
+#include "sandstone_page.h"
+
 #ifdef __cplusplus
 #include <span>
 #include <vector>
@@ -73,12 +80,6 @@ extern "C" {
         ret = stmt;                         \
     } while (ret == -1 && errno == EINTR)
 #endif
-
-/* Page-size helpers (ROUND_UP_TO / sandstone_page_size / ROUND_UP_TO_PAGE):
- * shared single implementation, see sandstone_page.h.  Included inside the
- * extern "C" block is safe -- the header is self-contained and gives the
- * helper C++ linkage via its own extern "C++" wrapper. */
-#include "sandstone_page.h"
 
 extern char *program_invocation_name;       // also in glibc's <errno.h>
 

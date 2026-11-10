@@ -1141,6 +1141,12 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/lockless_cmpxchg_neon_fp64.cpp',
             'fp64/lockless_cmpxchg8b_neon_fp64.cpp',
             'fp64/lockless_cmpxchg16b_neon_fp64.cpp',
+            # arm_add A-class: consumer ALU re-typed to the FP64 pipe
+            'fp64/cachebounce_neon_fp64.cpp',
+            'fp64/llcstress_neon_fp64.cpp',
+            'fp64/l3_execute_neon_fp64.cpp',
+            'fp64/mem_disambig_alu_neon_fp64.cpp',
+            'fp64/store_visibility_cross_class_neon_fp64.cpp',
         )
     )
 endif

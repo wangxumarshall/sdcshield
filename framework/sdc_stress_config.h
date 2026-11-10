@@ -51,6 +51,7 @@
 #include <chrono>
 #include <map>
 #include <string>
+#include <sysexits.h>
 #include <unistd.h>
 
 /* NUMA 探测/AR 与联合求解的 per-node 分支仅 ARM64-Linux(spec §5 rule 5)。
@@ -1341,8 +1342,32 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                                       const struct sdc_joint_args *a,
                                       int solve_once(int))
 {
-    if (!a)
-        return 0;
+    /* issue #607: NULL args 是调用方编程错误, 不得返回静默哨兵 0 ——
+     * 调用方模式 `d->n = sdc_joint_dim_slice(...)` 直通赋值无校验, 0 是
+     * 不可用维度, 产出 0×0 矩阵、0 字节比对的空转 PASS(实测本机 glibc
+     * aligned_alloc(64,0) 返回非 NULL、memcmp 0 字节恒 0), 即 CLAUDE.md
+     * rule 6 定性为 bug 的 no-op-pass 形态; 且 a 非 NULL 时本函数全部出口
+     * 恒 ≥ lo(退化区间/knob clamp/quick/尾部钳底), 0 与任何正常语义
+     * 无法区分, 唯一来源就是本 NULL 分支。NULL 情形取不到安全出口值:
+     * 退化区间 hi<=lo 尚可 return a->lo, a 缺失则 lo 不可得, 契约只剩
+     * fail-loud。处置逐项裁定:
+     *   - 非 assert(): meson b_ndebug=if-release 下 release 构建定义
+     *     NDEBUG, 防线会被编译掉;
+     *   - 非 abort(): 调用点均在 forked child 的 test_init, SIGABRT 被
+     *     parent 分类为 "crash"——与真实测试崩溃混淆; _exit(EX_SOFTWARE)
+     *     → OperatingSystemError 才是「调用方编程错误」的准确分类
+     *     (issue #396 thread_stack_setup_failed 同型裁定);
+     *   - fprintf(stderr) 而非 log_warning: no_output 日志模式下
+     *     log_warning 编译为 (void)0, 致命消息须绕开日志层直达终端。
+     * 单测锁定: unit-tests/sdc_stress_config_tests.cpp
+     * NullArgsFailsLoudInsteadOfSilentZero(NDEBUG 门, 文件头注释记边界)。 */
+    if (!a) {
+        fprintf(stderr, "%s: sdc_joint_dim_slice(\"%s\"): NULL sdc_joint_args "
+                "— 调用方编程错误, 拒绝返回静默哨兵 0 (issue #607)\n",
+                (test && test->id) ? test->id : "(global)",
+                knob ? knob : "?");
+        _exit(EX_SOFTWARE);
+    }
     /* permille/c 提前到 knob/quick 早退之前(T11): knob 早退的预期内存
      * 警告需要 c; 纯计算无副作用, 相对退化区间/quick 检查的顺序提升
      * 零行为差(两条早退路径原本就不读这两个值)。 */

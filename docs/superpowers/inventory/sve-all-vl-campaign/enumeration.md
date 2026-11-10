@@ -59,6 +59,26 @@ spec §3 写作时的基线是"171 个已打标签 vs 188 个 sve 命名"；当�
 - 7 个文件对 `arm_sve.h` / `arm64_vl.h` / `sv*` 内建 / `arm64_requires` 的匹配数为 **0**
   （实测 grep，7 文件全 0 hit）；计算路径全部是 OpenSSL EVP（如
   `tests/cpu/sve/ipsec/ipsec_aes192_gcm_sve.cpp:203-210`：`.test_init = aes_gcm_avx_init` … EVP 调用）。
+- **二进制级复核补证（2026-11-10，issue #594：源码 grep 不构成反汇编证据——7 件 TU 编译于
+  `-O3 -march=armv8.2-a+sve` 的 `tests_sve_avx53_ipsec` 库，GCC 自动向量化可在源码零 `sv`
+  内建命中下生成 SVE 指令，故 grep 结论必须到二进制上复核）**：对
+  `builddir/tests/cpu/sve/libtests_sve_avx53_ipsec.a.p/` 的 7 个 `.o` 全量 objdump——**SVE 指令
+  0 条**。三重判据：z/p 寄存器操作数 7 件全 0（方法学对照：同库 17 件 HMAC 族 `.o` 同 grep
+  各 178–256 行命中，抽查为 `ld1d {z0.d}, p0/z`、`index z1.d` 等真 SVE 指令行，判据有效）；
+  `rdvl/addvl/cntb/cntw/cntd/cntp/ptrue/whilelt/movprfx` 等无 z/p 操作数的 SVE 标量类助记符
+  亦全 0（`mrs` 命中全是 `tpidr_el0` 栈保护）；7 件合计 58 个唯一助记符、无任何 SVE 专用
+  助记符（向量类仅下述 `movi`/`eor`，`eor` 与标量形态共用）。
+  TU 内唯一向量产物：XCBC 三件（`ipsec_3des_docsis_aes_xcbc_sve_wide` /
+  `ipsec_aes192_cbc_xcbc_96_sve` / `ipsec_aes192_ctr_xcbc_sve`）各 7 条
+  `eor v0.16b, v0.16b, v1.16b` + 1 条 `movi v.4s, #0`——`aes_xcbc_96()`（RFC 3566 手工实现，
+  如 `ipsec_aes192_ctr_xcbc_sve.cpp:88-107`）的标量 16 字节 CBC-MAC XOR 循环被编译器自动
+  向量化为**定宽 NEON**（非 SVE；整数 XOR 位精确、定宽 128-bit 与 VL 无关。上条"计算路径
+  全部是 OpenSSL EVP"对这 3 件的精确形态是：MAC 链 XOR 在 TU 内、AES-E 加密本体走 EVP）；
+  其余 4 件仅 `movi d1, #0` FP 寄存器零置惯用法。运行时互证：无 SVE 主机（920）的默认 PROD
+  集含这 7 件，`-t 2000 -n 1` 七件全 `exit: pass`（2026-11-10 实测）——执行路径含任何 SVE
+  指令在此主机必 SIGILL，与静态 0 条互为印证。边界：向量化产物随编译器代际/旗标可漂移（本
+  证据锚定本构建，issue #594 审计所指风险因此不可一劳永逸排除），但"执行路径无 SVE 指令"
+  由无 SVE 主机的例行绿运行持续把守。
 - 唯一的声明级"门"是 `.minimum_cpu = IPSEC_X86_GATE(...)`，而该宏在 AArch64 展开为 **0**
   （`framework/sandstone_ssl.h:19-23`：x86 保留原门，"on AArch64 … OpenSSL's own runtime
   dispatch selects its aarch64 assembler backends regardless"，故门被丢弃）。
@@ -68,8 +88,10 @@ spec §3 写作时的基线是"171 个已打标签 vs 188 个 sve 命名"；当�
   `tests/cpu/sve/ipsec/ipsec_aes128_cbc_hmac_sha1_sve.cpp:36` 含 `arm64_vl.h`、`:94` 调
   `svcntw()`、`:352` 挂 tag——打标签的分界线就是"有无 SVE 数据面"，7 件免检件落在无数据面一侧。
 
-矩阵语义注记：这 7 件因无 SVE 数据面，三档 VL（128/256/512）下行为完全相同（OpenSSL 自行分派），
-它们的格不构成"VL 敏感性"证据，只构成"同一条件下可跑绿"证据。
+矩阵语义注记：这 7 件无 SVE 数据面（源码 grep + 二进制 objdump 双重证实，见上补证；TU 内
+唯一向量化产物为定宽 NEON，与进程 VL 正交），三档 VL（128/256/512）下行为完全相同
+（TU 侧与 VL 无关 + OpenSSL 库内自行分派），它们的格不构成"VL 敏感性"证据，
+只构成"同一条件下可跑绿"证据。
 
 **brief 预期 vs 实测的偏差（如实记录）**：brief/spec 预期 named-but-not-tagged 是
 "5 个 `sve_rot_ldr_*` 走 `compiler_minimum_device` + init 门控"。实测 **sve_rot_ldr 家族 8 件

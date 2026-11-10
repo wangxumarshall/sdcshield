@@ -245,6 +245,10 @@ if host_machine.cpu_family() == 'aarch64'
         # channel detector): pure-move skeleton kept, data routed through
         # the FP multiplier via identity fmul(x,1.0).
         'core179/mrn_nuke_dense_fp64_sve.cpp',
+        # Load/store-instruction-form axis of str3_checkall_fp64: every
+        # vector access replaced by scalar LDP/STP pairs (one instruction,
+        # two 64-bit accesses) — scalar-pair forwarding path probe.
+        'core179/neon_rot_ldr_at_top_str3_checkall_fp64_ldp.cpp',
         # missing_testcases_20261009 ports (batch 7/8): K-cells — the
         # interleaved dual-source layout cell (GPS-tagged + its natural-
         # random control), the 4x-footprint residency cell (byte_off tag

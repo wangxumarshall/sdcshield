@@ -17,7 +17,7 @@ SDCShield 的检测结论必须可信，因此仓库把「质量保障」做成�
 3. **CI 哨兵与发布闸门**——每日 cron 在 15 个 openEuler 版本容器内全量构建 + 全用例 × 全参数验证（`multi-os-verify.yml`）；PR 级 lint / DCO / 随机性门禁 / 多版本构建；发布链 `release-all.sh` 以 15 × `RESULT: PASS` 为硬闸。
 4. **安全与稳定性扫描**——CodeQL / Gitleaks / osv-scanner / zizmor（每周全量 + PR 增量）；ASan+UBSan 夜巡；本地 15 镜像 × 29 条严格选项矩阵（`scripts/lts-stability/`）。
 
-架构设计、PR 状态机与分阶段路线图见 [agent-full-automation.md](docs/build-deploy-pr-ci/agent-full-automation.md)、[PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)、[task-loop 手册](docs/build-deploy-pr-ci/task-loop.md)。
+架构设计、PR 状态机与分阶段路线图见 [agent-full-automation.md](docs/build-deploy-pr-ci/agent-full-automation.md)（[中文版](docs/build-deploy-pr-ci/agent-full-automation_CN.md)）、[PR 检视-修复闭环手册](docs/build-deploy-pr-ci/pr-loop.md)、[task-loop 手册](docs/build-deploy-pr-ci/task-loop.md)。
 
 ## 一行命令检测 CPU SDC
 

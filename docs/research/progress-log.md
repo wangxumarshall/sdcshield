@@ -2404,3 +2404,27 @@ MCE/硬件错误——该故障不产生机器检查，与"纯数据通路瞬态
   （15:28:15 / 07:04:16），无 RCU stall/oops 签名——两次下线成因仍未取证。
 - 远端旧分支 test/neon-fp64-l2-copy-fma-sdc（09-19 老基树）已被本分支
   取代，待删。
+
+## 2026-11-11（5h 全量套件 soak：mesh 45% 尺寸 OOM 定性 + 512MiB 限界重跑全绿）
+
+- **首次点火 80s 即崩（exit: invalid, RC=2）**：`mesh_upi_sse_sym` 默认按物理内存
+  45%（本机 381GB → 171.5GB）分配——2 路专用 mesh 战役尺寸（mesh_target_bytes()
+  源码自注，根治跟踪 #357、空过 PASS 记账 #358）。fracturing 回合 1 子进程未释放
+  （fill 循环无时间检查、父宽限 300s）时回合 2 又 init memset 另一份，叠加打爆
+  物理内存 → 全局 OOM（SIGKILL code 9；dmesg [32599.37] 4 NUMA 节点 ~375GiB
+  active_anon、free 7565 pages、子进程 anon-rss 138GB）。崩溃前 4093 实例全 pass。
+  11-06 cpuset 战役当年即为此显式 --disable 4 个大 FP mesh 测试。
+- **缓解 = SDC_MESH_BUFFER_BYTES=536870912（512MiB 官方 env 限界，恰
+  avx_sym/avx512_sym/avx512_symm_f64/sse_sym 四个 TU 读取）**：预飞（默认 -t
+  同参）pass/无 skip 消息/无 OOM；比禁用更优——保留真实校验覆盖。
+- **重跑全绿**：03:11:04–07:34:03（壁钟 4h23m；非 strict 下 -T 按名义测试时长
+  记账，快速退出型测试使壁钟低于 5h，sandstone_run.cpp:610 的 endtime 硬检查仅
+  --strict-runtime 时生效——11-06 战役即 -T 1h --strict-runtime 搭配），125 核
+  满载（cpu31 隔离），**exit: pass / RC=0，全程 0 fail 0 crash**。03:37 中巡：
+  9255 实例 = 9252 pass / 2 skip / 0 fail；fp64_dump 已 21+ 轮全 pass；名义预算
+  排满 → 默认集全覆盖（含两新测试）。温度峰 ~54°C（风扇 manual 100%）；机器
+  连续 13.5h 无重启。
+- **证据边界**：干净 pass 后框架自清理 yaml（与风扇战役记录一致），逐分片明细
+  与 2 个 skip 的身份不可考；将来留证据需运行中复制 yaml。run-logs/
+  fullsuite_T5h_20261111-{0300,0311}/（CRASH.txt + START.txt + stdout.log）。
+- **操作口径：大内存主机全量跑必须带 SDC_MESH_BUFFER_BYTES 限界，直至 #357 根治。**

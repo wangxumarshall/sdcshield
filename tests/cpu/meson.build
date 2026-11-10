@@ -1156,6 +1156,21 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/ma_barrier_fp64.cpp',
             'fp64/ma_civac_fp64.cpp',
             'fp64/ma_nt_fp64.cpp',
+            # arm_add B-class probes: payload re-typed to the FP-register
+            # datapath (str/ldr %d0 scalar, f64x2 vectors); lock/ver/marker
+            # protocols bit-level untouched.  mem_disambiguation_neon
+            # re-audited to C-class (q-register bit-pattern IO: the f64
+            # retype is a compile-time no-op) — honestly skipped.
+            'fp64/barrier_after_lock_store_fp64.cpp',
+            'fp64/barrier_after_lock_store_neon_fp64.cpp',
+            'fp64/barrier_after_lock_store_neon_2_fp64.cpp',
+            'fp64/low_load_cache_pressure_fp64.cpp',
+            'fp64/low_load_cache_pressure_neon_fp64.cpp',
+            'fp64/store_lost_write_detect_fp64.cpp',
+            'fp64/store_lost_write_detect_neon_fp64.cpp',
+            'fp64/store_visibility_cross_class_fp64.cpp',
+            'fp64/str_instruction_stress_fp64.cpp',
+            'fp64/str_instruction_stress_neon_fp64.cpp',
         )
     )
 endif

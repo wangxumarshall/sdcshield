@@ -123,7 +123,7 @@ run 模式需 root（sudo）、幂等可重入（已安装/活跃服务自动跳
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
-预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（PROD 源码全量上界，随源码演进、现值 499），少的是镜像内未含的 vendored 计算库测试组；用例计数口径见「用例质量分级」。
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（PROD 源码全量上界，随源码演进、现值 569，2026-11-03 机判口径），少的是镜像内未含的 vendored 计算库测试组；用例计数口径见「用例质量分级」。
 
 > **旧二进制判读警示**：2026-09-12 预构建二进制是 eigen 满核假阳修复（2026-10-24）**之前**的构建——其上 `eigen_svd_double`/`eigen_sparse` 的满核 FAIL 按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；"满核挂 = SDC 嫌疑"的判读规则仅适用于含修复的构建。用旧二进制跑 24h 战役脚本须显式恢复旧白名单（含修复的源码构建不需要、也不应设置）：
 >
@@ -179,7 +179,7 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 >
 > 五个 `build.sh` 均可选：任一 `install/` 缺失时 meson 打提示并跳过对应测试组或回退系统库（isa-l 缺失回退系统 `libisal`，两者皆无才剔除 `isal_*`；acl 缺失时 `acl_gemm`/`fisttp_arm` 不构建，SVE 变体不受影响）——不阻断构建。选型依据（向量 FMA GEMM > 哈希/加密 > 压缩 > SVE 超越函数）见 [SDC_RESEARCH_for_SDCShield-负载设计.md](docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md)（31 篇文献综合）。
 >
-> **clang/BiSheng 工具链（HPC 节点）**：BiSheng clang 5.2.0（LLVM 19.1.7，HPCKit）`source <HPCKit>/setvars.sh`、`export TMPDIR=/tmp` 后 meson/ninja 照常；额外启用 SME 测试 `sme_za_tileview_arm`（`-march=armv9-a+sve+sme+sme-f64f64`，gcc 无该支持时探测剔除、不阻断），运行期 HWCAP2_SME + SVL 几何双门控、不满足诚实 SKIP，运行需 HPCKit 环境（libc++ 在 LD_LIBRARY_PATH）。cn23154（HiSilicon 0xd22，608 核）实测 2026-09-28：默认 quality 320 用例，`zstd19 -t 2000 -n 1` 回归 pass。
+> **clang/BiSheng 工具链（HPC 节点）**：BiSheng clang 5.2.0（LLVM 19.1.7，HPCKit）`source <HPCKit>/setvars.sh`、`export TMPDIR=/tmp` 后 meson/ninja 照常；额外启用 SME 测试 `sme_za_tileview_arm`（`-march=armv9-a+sve+sme+sme-f64f64`，gcc 无该支持时探测剔除、不阻断），运行期 HWCAP2_SME + SVL 几何双门控、不满足诚实 SKIP，运行需 HPCKit 环境（libc++ 在 LD_LIBRARY_PATH）。cn23154（HiSilicon 0xd22，608 核）实测 2026-09-28：默认 quality 320 用例，`zstd19 -t 2000 -n 1` 回归 pass（同日「用例质量分级」脚注的复现分支口径为 322，两口径未对账，跟踪于 `docs/research/progress-log.md` #10）。
 
 ## 离线与多版本构建
 
@@ -360,7 +360,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 |---|---|---|
 | 内存 / 拷贝 | `memcpy_l{1d,2,3}_cache_size`、`memcpy_rewr`、`mem_disambiguation`、`mmu_stress_arm`、`random_access_sweep` | 各级缓存带宽、store-to-load 转发、跨行一致性与内存序、TLB 扰动、大 mmap 随机偏移/块长扫掠（NEON RMW 字节精确校验，knob: mode/valmode/size_mb） |
 | 缓存 / 互联 | `cachebounce`、`mesh_upi_*`（46，含 18 个 SVE 变体） | cache line 弹跳、CLFLUSH 压力、MESH/UPI 多核读写协同 |
-| 锁 / 原子 | `lock*`、`lockless_cmpxchg*`、`atomic_simd_*`、`spinlock_*`（31） | 锁指令、无锁 cmpxchg、128/256/512 位原子、自旋锁各类竞争（ARM64 atomic） |
+| 锁 / 原子 | `lock*`、`lockless_cmpxchg*`、`atomic_simd_*`、`spinlock_*`（47 = 31 x86 命名基础 + 14 `_neon` 变体 + 2 `spinlock_stale_read{,_xchg}`） | 锁指令、无锁 cmpxchg、128/256/512 位原子、自旋锁各类竞争（ARM64 atomic） |
 | 向量 / SIMD | `swizzle`、`insert_extract`、`kreg1`–`kreg9`、`gather*` | NEON 排列/插入抽取、掩码寄存器（x86 k-reg 仿真）、gather/scatter |
 | FMA / 浮点 | `fma`、`fma_patterns_*`、`fma_tail*`、`fpu_special_values` | FMA 模式与尾数精度穷举、特殊值逐字节 golden 比对 |
 | 算术 / 大整数 | `adcx`、`adox`、`adcxlong`、`adcx_arm`、`bigint_mulx_arm`、`gmp_big*` | 进位/溢出链、GMP 大整数乘加、高汉明距离操作数压满加法器 |

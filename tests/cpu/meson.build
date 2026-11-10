@@ -1126,6 +1126,21 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/ma_src_overl2_fp64.cpp',
             'fp64/ma_l2evict_rev_fp64.cpp',
             'fp64/ma_alu_fixed_fp64.cpp',
+            # lock_arm pass: lock/CAS protocol bit-level untouched; slot RMW
+            # vaddq_u32 -> vaddq_f64, plain-counter variants double+FADD
+            # (exact domain < 2^53), pack variants keep integer packing.
+            'fp64/spinlock_stress_neon_fp64.cpp',
+            'fp64/spinlock_stress_cmpxchg_neon_fp64.cpp',
+            'fp64/spinlock_stress_cmpxchg_even_odd_neon_fp64.cpp',
+            'fp64/spinlock_stress_bts_neon_fp64.cpp',
+            'fp64/spinlock_stress_cmpxchg16b_neon_fp64.cpp',
+            'fp64/spinlock_rmw_cmpxchg_neon_fp64.cpp',
+            'fp64/spinlock_rmw_cmpxchg_pause_neon_fp64.cpp',
+            'fp64/spinlock_rmw_xchg_neon_fp64.cpp',
+            'fp64/spinlock_rmw_xchg_pause_neon_fp64.cpp',
+            'fp64/lockless_cmpxchg_neon_fp64.cpp',
+            'fp64/lockless_cmpxchg8b_neon_fp64.cpp',
+            'fp64/lockless_cmpxchg16b_neon_fp64.cpp',
         )
     )
 endif

@@ -2109,3 +2109,257 @@ OPEN；l5_dit resolve 不可达 BETA 用例的战役策略议题待定夺。
   多轮判例）：#58 README 内部三处去重、#59 巨句拆分——建议后续文档
   去重 PR 专项（R5 #38/#39 原判）。build-cpu 红 = main 侧舰队级
   （low_load_cache_pressure{,_neon} 云 runner SIGABRT），与本 PR 无关。
+
+## 2026-10-30（node72 本机 SDC 故障复现 + 根因定位——CPU 31 数据通路瞬态损坏）
+
+**结论先行：本机（node72, RCSIT TG225, Kunpeng 920 128 核, 4 NUMA）的 SDC 故障已复现并定位到
+物理核 31（socket 0 / NUMA 0 / logical 31）。这不是软件 bug——内存状态全程干净，损坏只存在于
+CPU 取数/寄存器在途数据。**
+
+### 证据链（全部实测，两轮独立复现）
+
+1. **现象**（2026-10-29 17:59 跑 + 2026-10-30 19:01 定向复现 `-e memcpy0 -e memcpy1 -e
+   memcpy_l1d_size -e memcpy_l2_cache_size`）：`memcpy_l2_cache_size` 共 6 次 SIGSEGV
+   （10-29 三次、10-30 三次），**全部落在 logical CPU 31**，全部同一 RIP
+   `sdcshield+0xf7480` = `aes_engine::generateM128` 首指令 `ldp q0,q1,[x0]`，
+   FAR 各不相同、seed 各不相同、time-to-fail 9~56s 不等；间隔中同路径 RNG 调用成功数万次
+   （10-30 一轮 55107 pass / 3 crash，exit: fail）。core 位于
+   /var/lib/systemd/coredump/core.control.*（"control"=测试子进程 comm，第三段是 boot_id）。
+
+2. **根因路径**（gdb core 分析 + 反汇编 `random128` @ 0xf8130）：
+   `generator = per_thread._M_start + sbfiz((TLS thread_num + 1), 6)`。崩溃时寄存器
+   x3 = `_M_start`（正确，且 core 中向量对象内存一致：_M_finish−_M_start = 0x2040 = 129×64
+   恰为 1 global + 128 线程）；**TLS 内存中 thread_num = 31（正确，两次 core 均经 gdb TLS
+   解析实测）**；但 x0/x1（generator）= `_M_start + 垃圾×64`。反推在途 w1 值四次分别为
+   0xeb09bfff / 0xff625e1f / 0xd6528387 / 0xa05fe14f——**内存中不存在这些值**（TLS 邻域
+   0xfffda05ff4xx 已 dump 核查，全是合法指针/浮点缓存）。即 `ldr w1,[tpidr_el0+off]`
+   （或其后两条运算）在途返回了内存里没有的数据 → 悬空指针 → SEGV。10-30 crash2 的
+   w1=0xa05fe14f ≈ 故障线程 SP 0xfffda05fe140 低 32 位 +0xF，10-29 crash3 的
+   w1=0xff625e1f ≈ _M_start 0xaaabff626980 低 32 位邻域——像读到了相邻指针低半段。
+
+3. **内核态旁证（用户态软件无法制造）**：2026-10-29 18:22 本机内核 panic（kdump：
+   /var/crash/127.0.0.1-2026-10-29-18:22:00/）。先是 18:21:51 内核态 NULL 解引用
+   0x17（Oops 现场丢失），随后 **CPU 31**（systemd-journal printk 路径）连环异常：
+   spurious translation fault + 写只读页 + SP 对齐错（overflow 栈）+ CPU 101 hard
+   lockup → panic。GHES/APEI/EDAC 全程无硬件错误记录（固件未上报）。
+
+4. **机器级不稳**：wtmp 无干净关机记录的重启——10-29 18:24（panic 后）、10-30 16:21、
+   10-30 16:30（两次深挂，无 kdump，疑 sbsa_gwdt 硬件看门狗复位）。另 10-28 16:19~16:38
+   root 跑的 `kunpeng-stl-d01` 崩 4 次、root 跑的 sdcshield 崩 16 次（同 coredump 目录）。
+
+### 定性
+CPU 31 数据通路（寄存器堆/LSU/L1D 在途）瞬态损坏：打在指针上→本例 SEGV；打在数据上→
+静默位错（即本项目要抓的 SDC）。内核态异常提示损坏面可能不止用户态。**判定为硬件故障，
+建议现场处置：隔离/下线 CPU 31（kernel cmdline nohz_full/隔离或换板），RMA 时引用本条 +
+kdump + core 证据。**
+
+### 留存物
+- 复现日志：/tmp/repro.yaml（1.2GB, 55107 pass/3 crash）+ /tmp/repro-console.log
+- 昨天 1.1GB 全量跑：~/sdcshield/sdcshield-20261029T095911.702004Z.yaml
+- core（已解压）：/tmp/core.3308112（10-30 crash1 原始现场）、/tmp/core.yday（10-29）
+- kdump：/var/crash/127.0.0.1-2026-10-29-18:22:00/（vmcore 728MB + vmcore-dmesg.txt）
+
+## 2026-11-06/07 — CPU31 定向激发验证（65-CPU 配置，四轮迭代，exit: pass）
+
+**目的**：第一块 CPU 仅用 31 号核 + 第二块 CPU 全部 64 核（--cpuset=31,64-127），
+跑默认 PROD 有效集，-T 1h --strict-runtime。
+
+**终局（第四轮 try4）**：`exit: pass`，293 测试全部调度、36059 分片 pass / 25 skip
+（vmx_*/HLE/IST 等 x86 专属正常跳过）/ **0 fail 0 crash 0 timeout**；CPU31 有 4908 条
+线程调度记录，全程零异常（含其既往崩过的 memcpy_l2_cache_size）。
+
+**故障未激发 ≠ 康复**：10-29 复现率 3/55110（≈0.005%），36059 分片期望 ~2 次未撞上，
+在概率噪声内；瞬态损坏的定性不变。
+
+**过程中发现并运行时绕过的测试侧 bug（待修清单）**：
+1. `tests/cpu/mesh/mesh_upi_{avx_sym,avx512_sym,avx512_symm_f64,sse_sym}.cpp` 的
+   `mesh_target_bytes()` 直接 sysinfo totalram×90%÷2，**未把并发 slice 数计入分摊**
+   （框架侧 `sdc_stress_config.h:1242` 已有该机制且 SVE mesh 已迁移，旧 4 个漏修）：
+   65-CPU cpuset 触发 2-slice 并行 → 2×171.5GB → cgroup 峰值 373.9GB 撞 381GB 物理顶
+   → OOM killer SIGKILL（cgroup `memory.oom_kill=1` 实证，run 1 存活 2 分钟）。
+   共享服务器上已发生一次 OOM 风险事件。
+2. `tests/cpu/openssl/openssl_sm3sm4.cpp:202` `TEST_LOOP(test, 256)` 迭代下限 ×
+   自适应 data_size（65 线程口径 ~600MB/线程）→ 单轮 1.2s×256≈307s > 300s 框架超时，
+   65 线程与 128 线程全量跑法**均必超时**（平时无人全量跑故未暴露；回归基线仅 zstd19）。
+   data_size=16M 仍超时（307s 缩到贴线），4M（256×0.08s≈20s）通过。
+3. 绕过配置：`--disable` 上述 4 mesh + `-O openssl_sm3sm4.data_size=4194304` +
+   `--timeout 1200s`（给未跑过测试兜底）。
+
+**留存物**：run-logs/cpu31+socket2_{20261106-204658,_rerun_20261106-215802,
+_try3_20261106-230610,_try4_20261107-001248}.{log,stdout}（try4 225MB 完整证据）。
+
+## 2026-11-07 02:59 — 第 2 次内核 panic 定性（CPU 31，kdump 已存）；fp64_dump 修 dump 目录 bug + 30 核定向跑 pass
+
+**02:11:49 "断联"真相 = 整机 panic**：kdump /var/crash/127.0.0.1-2026-11-07-02:11:53/
+（vmcore 634MB + vmcore-dmesg.txt），02:14 重启完成。上一会话发起的
+neon_rot_ldr_at_top_rowmajor_fp64_dump 全核跑起跑 ≤1min 内 panic。现场（vmcore-dmesg 尾）：
+`Unable to handle kernel execution of user memory @0x34f874000e0` → 已在 overflow 栈 →
+`Kernel panic - not syncing: kernel stack overflow`；**CPU: 31，PID 4351 Comm: claude**
+（上一会话进程本体），寄存器全垃圾（pc=mem_serial_in+0x44 / lr=0 / sp=0 / FAR=0x10，
+ESR 0x96000007 DABT current EL）——与 10-29 panic 同模式（CPU 31 内核态不可能异常连环）。
+因果边界：受害任务是 claude 而非 sdcshield worker（CPU 31 当时分时两者），强时间相关但
+不能证明 FP64 测试触发。dmesg 里 20:47 的 global OOM kill control(139GB) 为昨晚 try1
+mesh OOM 旧事件，非新增。
+
+**fp64_dump 测试修复（该文件未提交，随测试一并入库）**：init 原来只
+`mkdir("movbe_log/fp64_rowmajor")` 一层——mkdir(2) 不建中间目录，`movbe_log/` 缺失时
+失败分支 dump **静默丢弃**（上会话 -n 1 pass 后全盘无 movbe_log 实证）。已补
+`mkdir("movbe_log", 0755)`（对齐 sve/case 家族 4 个兄弟的约定）。
+**misc/ 下 k3res / k7pattern / k5inter_rand 三个已入库测试有同样缺陷，待独立单元修复。**
+
+**环境要点（重启清 /tmp 后重建实证）**：/tmp/fixedlibs（修好的 libgcc_s.so ld script
+副本）+ /tmp/bin wrapper（注入 -L/tmp/fixedlibs）；链接还需
+**LIBRARY_PATH=/home/sdc/toolchain/lib**（gcc 链接期搜 -lgmp，仅 LD_LIBRARY_PATH 不够）。
+`--cpuset` 无区间语法，须逗号全列表（`seq -s, 2 31`）。
+
+**30 核定向跑（"CPU1/第一块 socket0 的 2-31 号核"= 逻辑 2-31，含坏核 31，避 0/1 系统核）**：
+`--cpuset=2,…,31 -t 5000` → **exit: pass，0 dump**（movbe_log/fp64_rowmajor/ 已正确
+创建为空——修复生效）。5s×30 核窗口未撞上概率性故障（~0.005%/分片量级，符合预期）；
+抓 dump 需长时 soak。
+
+**fp64_dump 后台 soak 已启动（03:34，运行中）**：脚本 run-logs/fp64_soak.sh（setsid 脱离
+会话，SSH 断开不死；停止 pkill -f fp64_soak.sh），产出目录 run-logs/fp64_soak_20261107-033421/。
+每轮 ~6.3s：30 核（逻辑 2-31，含坏核 31）×256 sweeps，`-s AES:$N` 显式种子保证轮轮输入
+不同；每轮独立 CWD → 独立 movbe_log（跨轮 dump 文件名 cpu/sweep/seq 可碰撞，独立目录杜绝
+覆盖）；soak.log 逐轮 rc/dumps 台账，rc≠0 或 dumps>0 → HITS.log 留痕。预检 `-s` 语法 rc=0。
+会话内 cron 每 20 分钟巡查（7 天自动过期；会话关即失效）。命中攒够后做 dst^expected
+位位置直方图（尾数/指数/符号）+ 字段嫁接核查，反哺检测方法设计。机器若再 panic 重启，
+soak 即死（cron 会发现并提醒重启）。
+
+**战役排程（03:42 用户定，调度器已上线）**：fp64_dump soak 跑满 3h（03:34:21–06:34:21）
+→ 自动切 memcpy_l2_cache_size 同构 soak 2h（06:34:21–08:34:21）→ 战役完成自停。
+调度器 run-logs/campaign_schedule.sh（setsid 脱离会话，PID 150222；控制器日志
+run-logs/campaign_controller.log）：到点 pkill fp64 soak → 起 memcpy 循环（同构：独立
+CWD / `-s AES:$N` / 逐轮台账 / HITS 留痕；memcpy 无 dump 落盘路径，**rc≠0 即 HIT——
+rc=139 SEGV 的证据在 /var/lib/systemd/coredump（comm=control），其它 rc≠0 为 data
+miscompare**）。全停：`pkill -f campaign_schedule.sh; pkill -f fp64_soak.sh`。巡查 cron
+已换战役版（阶段感知、08:34 后总结并自删）。
+
+**战役完成（08:34，5h 定向 soak，0 命中）**：fp64_dump 1783 轮/3h（03:34:21–06:34:36，
+≈53,490 CPU-分片）+ memcpy_l2_cache_size 1180 轮/2h（06:34:54–08:34:23，≈35,400 CPU-分片），
+逻辑核 2-31（含坏核 31）全程 0 fail/0 crash/0 dump，机器未重启、无新 kdump/coredump，
+调度器自停无残留。判读：① memcpy 35.4k 分片 × 实测率 5.4e-5 期望 ~1.9 次崩，0 命中
+p≈15%，噪声内（与昨晚 36k 分片 0 命中一致）；② **fp64 触发路径 miscompare 率首次有
+上界：0/53,490 → 95% 置信 <5.6e-5/分片**，不高于 memcpy 崩溃路径——"FP64 用户态取证面
+偏弱"假设成立；③ 对比：同日 02:11 全核（128 核）FP64 起跑 ~1min 即 panic，本次 30 核
+5h 稳定——内核态暴露或与负载广度相关（未证）。下一步选项：扩容触发面（修 misc 三兄弟
+mkdir 加轮换）/ 全核 soak（追内核侧事件，有 panic 风险）/ crash 挖 02:11 vmcore。
+留存物：fp64_soak_20261107-033421（29MB）、memcpy_soak_20261107-063454（9.2MB）、
+campaign_controller.log。
+
+## 2026-11-07 11:58 — 新测试 memcpy_l2_cache_size_neon_fp64（tests/cpu/arm64，未提交）+ 1h 定向 soak
+
+**新测试**（用户提供源码，框架 API 逐一核实后**原样入库零修改**）：NEON FP64 桥接
+memcpy/L2 轴与 FSU 轴——L2 尺寸（本机实测 sysconf=512KiB）FP64 块先 vld1q/vst1q_f64
+拷贝逐字节校验，再原位 vadd/vmul/vfmaq_f64 变换（y=fma(x,x+1.5,x*0.5)）对 volatile
+标量 libm fma golden 逐字节校验；init 期 IEEE-754 特殊值类别检查 + 尾部自检。核实要点：
+`memcmp_or_fail` 是模板、第三参=**元素数**（非字节，sandstone.h:739-796 三个重载），
+用户代码正确（起先怀疑是字节语义 bug，查证后不成立）。注册 tests/cpu/arm64/meson.build
+（仅 aarch64 编译，x86 零影响）。验证：单文件重编 **0 警告 0 错误**；`-n 1 -t 5000`
+exit: pass；zstd19 回归 pass；cpuset 2-31 + `-s AES:preflight` pass。注意 shell 直跑
+需 LD_LIBRARY_PATH（toolchain rootfs lib64 + /home/sdc/toolchain/lib），漏了会 rc=127。
+
+**1h soak**（11:58:06–12:58:06，run-logs/neonfp64_soak_20261107-115806/）：setsid 脱离
+会话，同构（每轮独立 CWD / -s AES:$N / 逐轮台账 / HITS=rc≠0），**新增温度采样**：
+每 30s 录 z0/z1 温区 + 最低频率到 temps.log（补此前战役无温度记录的疏漏）。停止：
+pkill -f neonfp64_soak.sh。会话 cron 每 20 分钟巡查，12:58 后总结并自删。
+
+**结果（13:11 收官）**：594 轮/1h（11:58:06–12:58:09）全 pass、0 命中、无残留进程；
+温度 z0 44.8–48.5°C（120 采样点，2.6GHz 恒定），机器未重启、无新 kdump。594×30 =
+17,820 CPU-分片，0 命中 → 95% 置信率上界 <1.7e-4/分片（rule of three）——FP64+L2
+组合触发面 1h 内同样未激发用户态 SDC。留存物 4.7MB。
+
+## 2026-11-07 13:14 — 近全核不限时 soak（memcpy_l2_cache_size_neon_fp64，空闲逻辑核 1,2）
+
+用户决策走向近全核激发（验证"事件都发生在全核场景"的分化——30 核定向三个触发面
+共 ~10.7 万分片零命中，而 02:11 全核 FP64 起跑 ~1min 即 panic）。cpuset = 0,3-127
+（126 核含坏核 31；逻辑核 1、2 空闲供系统/会话）。**不限时**，跑到停止/命中/机器
+事件——再 panic 风险已知悉，kdump 兜底，panic 本身即证据。同构（独立 CWD /
+-s AES:$N / 台账 / HITS）+ 双路温度采样。吞吐 ~75k CPU-分片/小时（若按 memcpy
+实测崩溃率折算期望 ~4 次/小时）。NS=run-logs/neonfp64_full_soak_20261107-131426/。
+停止：pkill -f neonfp64_full_soak.sh。机器若重启：soak 死，磁盘证据留存
+（soak.log/HITS.log/temps.log）+ 查 /var/crash 新 kdump。
+
+## 2026-11-08 01:55 — 13:47–17:18 异常下线取证；15 个 NEON 测试各 30min 轮跑 0 命中
+
+**异常下线（新事件，此前无记录）**：13:46:54 full_soak iter=321 rc=0 后机器无声消失，
+17:18:56 重新起机。取证（无 root）：/var/crash 无新 kdump（最新仍 02:11 那次）；
+/var/lib/systemd/coredump 无新件（最新 11-06 23:12）；`last -x` **无 shutdown 行**
+（最近正常关机 10-20 17:33）→ 非正常关机，硬挂看门狗复位/人为断电二选一，
+无 root 不可再分。**起机后 cpu125-127 消失**：/sys/devices/system/cpu/online=0-124，
+三核连 cpuN/online 文件都不存在（热插拔层摘除，非普通 offline）。后果：压测
+cpuset 从此必须从 online 动态展开——写死 3-127 会全量 rc=64
+（Invalid CPU set parameter: 125，曾致 15 个冒烟全 rc=64 假象）。
+
+**15 NEON 测试 × 30min 轮跑**（18:18:28–01:51:50，7h33m，
+NS=run-logs/neon30_all_20261107-181828/）：会话圈定的全部 NEON 用例（arm64/ 6 文件 +
+misc/neon_rot_ldr 族 6 文件 → 实际 15 个：k7pattern 一文件声明 k7p_{zero,one,rand,
+hiham} 四个；neon_test.cpp→neon_add、crypto_test.cpp→arm_crypto 为 BETA 级需
+--quality=-1；fp64_dump 描述引用的基测试 neon_rot_ldr_at_top_rowmajor_fp64 树里
+不存在，只有 dump 孪生）。同构逐测试独立调用（HITS=rc≠0 / -s AES:N / 30s 温度采样），
+memcpy_l2_cache_size_neon_fp64 压轴（01:21:40–01:51:48 风险段）。
+**结果：15/15 rc=0，829,851 条 result 行全 pass、0 fail 0 skip**（fsu_byteexact
+423,629 / power_virus 289,134 / memcpy 40,124 / fp64_dump 34,592 / 其余 390–19,740）；
+温度峰值 70.5°C（power_virus 时段），其余时段 ≤66.6°C；**全程机器未重启**
+（boot 仍 17:17:56）——坏核 31 在 cpuset 内，memcpy 30min 近全核风险段零事件，
+HITS.log 未产生。NEON 全谱 7.5h 近全核零激发，与 0.005%/分片的概率画像一致。
+
+## 2026-11-09 00:25 — 风扇 7 档 × memcpy 各 1h 零命中；17:18 下线定性改写：BMC 电源控制命令
+
+**风扇战役**（11-08 17:08 – 11-09 00:13，NS=run-logs/fan7_soak_20261108-170800/）：
+用户设计的热轴激发实验。BMC（iBMC 3.11，本机 sdc 直连 SSH 到 BMC 管理口（地址与凭证不入库），
+run-logs/bmc_ssh.py=纯 stdlib pty 执行器，代替本机缺失的 sshpass）：
+`ipmcset -d fanmode -v 1 99999` 进手动（**坑：手动模式缺省转速 10%**，进手动必须
+立刻设档），100→40 降序 7 档（用户确认，最险段压轴），每档 `ipmcset -d fanlevel
+-v <N>` 读回验证（Fan1-4 全档吻合）+ memcpy_l2_cache_size 全核 1h（cpuset 0,3-124
+动态、坏核 31 含、AES:N、--retest-on-failure 2；**该 flag 下输出为极简 3 行格式
+"exit: pass"，无 YAML result 行**）。trap + 99999s 定时双保险，00:13 恢复 auto
+读回确认。**结果：7/7 rc=0，HITS.log 未产生，机器未重启（boot 仍 11-07 17:17:56），
+战役期间 SEL 零新事件**。温度曲线（z0 峰值，BMC CPU1 Core Rem 镜像吻合）：
+100%→40% = 50.4/50.8/51.4/52.2/53.9/56.1/59.6°C——**跨度仅 ~9°C**，inlet 峰 35°C，
+PS2 满载 54°C（PS1 仍 AC lost 待机 38°C，单电源扛住 100% 风扇段）。**结论：
+50–60°C 温区内未见故障温度敏感性；但热轴未真正激发**——memcpy 负载在 40% 风扇
+下也远未触及热应力区，欲更强激发须下探 30/20/10% 档（手动缺省即 10%）。
+坑：分档统计 awk 须处理跨午夜（分钟-of-day 映射把 00:0x 误判进早档，曾致
+90% 假离群 59.6°C）。
+
+**17:18 下线定性改写**：SEL 当天 02:13→17:15:58 **零记录**（无 PSU/电压/看门狗/
+热事件），02:12:06 与 17:15:58 两次 "System Boot Initiated #0x63 System Restart"；
+`ipmitool chassis restart_cause` = **"chassis power control command"**——17:15:58
+开机由 **BMC 机箱电源控制命令**触发：人为/远端 BMC 操作实锤，非硬件自毁、非看门狗、
+非 panic 重启。即 13:46:54 soak 停更后，机器要么深挂后被 BMC 复位、要么被直接
+BMC 断电再上电（BMC 硬下电不留 wtmp/SEL 记录，两种均与现有证据吻合；机器为何
+在 13:47 停更本身仍无答案）。**operatelog（可点名操作者/时间/来源 IP）经 CLI exec
+通道取不到**（空返回，需交互式会话或 BMC web 再查——追责线索）。125-127 三核
+消失在 SEL 中同样无痕。
+
+## 2026-11-09 22:50 — 风扇二轮 30/20/10% 补录（10% 热挂死）；鲲鹏 920 TME 实证=无
+
+**风扇二轮**（11-09 01:51–03:56，NS=run-logs/fan7_soak_20261109-015132/，会话补录——
+原会话随 03:56 整机热挂死湮灭）：30%/20% 各 1h 全核 memcpy_l2_cache_size（123 核含
+坏核 31）`rc=0`/`exit: pass` 零 SDC——z0 峰 30%=76.2°C、20%=105.6°C（平台 105.2°C，
+BMC CPU1 Core Rem=105°C 标 unc=超上临界）。**10% 档 03:53:08 起 3 分钟整机热挂死**：
+z0 99.4→116.3°C 失控后所有日志戛然而止（无 shutdown 行、pstore 空、SEL 无 thermal
+trip）；挂死前落盘 3554 分片**逐条验证全 pass**，且 avg-freq 实测 830–1130 MHz vs
+凉态 2.6 GHz=深度降频（20% 档 yaml pass 后被框架清理无逐分片频率，105°C 平台与
+10% 降频段一致，推断同样深度降频）。**结论：50→105°C 温区全核 memcpy 零命中，
+但 20%+ 档降频削弱激发强度；10%+全核压测=整机热死边界（压测态），非 CPU31 SDC**。
+10% 挂死致 fan7_soak trap 未执行，风扇残留 manual 10%（06:50 空载 z0=110°C、PROCHOT
+Asserted）。06:41–06:43 BMC 上电恢复 128 核全在线（125-127 回归）。**当日 15:08 与
+22:11 又两次重启**（last -x 无 shutdown 行=异常下线；无新 kdump/coredump，原因未
+取证），22:41 实测风扇已被人/远端改钉 **manual 100%**（timeout 99998019s≈3.2 年，
+非战役会话），z0=41.9°C。恢复 auto：`run-logs/bmc_ssh.py "ipmcset -d fanmode -v 0"`
+（需用户授权）。
+
+**TME 实证（应答"鲲鹏 920 有无事务内存"）**：**无**。MIDR=0x481fd010（HiSilicon 0xd01
+TaiShan-v110，Armv8.2-A 级），ID_AA64ISAR0=0x0001100010211120、Features 无任何事务
+位。硬证据：工具链 GCC 10.3 `-march=armv8.5-a+tme` 可用（系统 GCC 7.3 只到
+armv8.3-a）、binutils 2.34 可汇编 tstart/tcommit/tcancel/ttest（0xd5233060/
+0xd503307f/0xd46000e0/0xd5233161），探针捕获 SIGILL 后在 cpu 0/31/64 执行
+`TSTART x0` **三次全 SIGILL**——TSTART 在本 CPU 为 UNDEFINED=无硬件 TME。注意与
+SME 的 SIGILL 歧义不同：TME 无内核使能门（无 sysctl/HWCAP/向量长度），EL0 可直接
+执行，故此 SIGILL 是纯硬件判词。规范侧：TME 于 Armv8.5-A 成为 mandatory、后从架构
+撤回（Armv9 起不再定义）；LLVM 已移除支持。已知唯一存活实现是 Apple M1 系（未公开
+声明，Dougall Johnson 2021 逆向发现）。对 sdcshield 的含义：x86 源流有 HLE/RTM
+（tests/cpu/spinlock/spinlock_with_hle.cpp 注明 x86-only），ARM 侧无 TME 测试也不
+必写——无 ARM 服务器芯片可跑，事务回滚语义（SDC 敏感结构）此路已死。

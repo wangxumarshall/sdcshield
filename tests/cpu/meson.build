@@ -1147,6 +1147,15 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/l3_execute_neon_fp64.cpp',
             'fp64/mem_disambig_alu_neon_fp64.cpp',
             'fp64/store_visibility_cross_class_neon_fp64.cpp',
+            # memory-access B-class: tail access pair + load heads on the
+            # FP-register datapath (d-reg ldr/str, ldaxr/fadd/stxr,
+            # stnp d,d), shared ma_tail_probe_fp64.h bit-exact golden
+            'fp64/ma_ldr_stride_fp64.cpp',
+            'fp64/ma_ldr_random_fp64.cpp',
+            'fp64/ma_atomic_fp64.cpp',
+            'fp64/ma_barrier_fp64.cpp',
+            'fp64/ma_civac_fp64.cpp',
+            'fp64/ma_nt_fp64.cpp',
         )
     )
 endif

@@ -929,6 +929,7 @@ if host_machine.cpu_family() == 'aarch64'
             'arm_add/store_visibility_cross_class_neon.cpp',
             'arm_add/store_lost_write_detect_neon.cpp',
             'arm_add/barrier_after_lock_store_neon.cpp',
+            'arm_add/barrier_after_lock_store_neon_2.cpp',
             'arm_add/low_load_cache_pressure_neon.cpp',
             'arm_add/str_instruction_stress_neon.cpp',
             'arm_add/cache_stress_clflush_neon.cpp',
@@ -1096,6 +1097,13 @@ endif
 # str→str / ldr→str→str 背靠背 asm 探针（≤2 周期 store→load 转发窗口）
 # + init 快照 golden + 段轮转防折叠（ma_tail_probe.h）。针对实测故障
 # 签名：负载结束后连续访存对中第二个写回错位。仅 aarch64。
+#
+# 2026-11-04 增补（同一目录、非尾探针族）：L1D 旁路 NEON 化三件套
+# ma_l2evict_{rev,2src,plain}——标量负对照 movbe_l2 / mrn_rmw_l1d /
+# cache_stress_civac 的 128-bit lane 移植（civac+dsb 逐出后 reload 走
+# L2/L3，预注册预期 0 fail：检验"L1D 域 reload"必要性与 lane 宽度无关）；
+# ma_src_overl2——3ldr+ALU+2str 配方源数组 4 MiB/个（8 MiB，8× 每核 L2），
+# 源 load 走 L3/DRAM、scratch/temp/dst 保持 L1D 驻留的 footprint 判别格。
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
@@ -1108,6 +1116,10 @@ if host_machine.cpu_family() == 'aarch64'
             'memory-access/ma_atomic.cpp',
             'memory-access/ma_nt.cpp',
             'memory-access/ma_alu_fixed.cpp',
+            'memory-access/ma_l2evict_rev.cpp',
+            'memory-access/ma_l2evict_2src.cpp',
+            'memory-access/ma_l2evict_plain.cpp',
+            'memory-access/ma_src_overl2.cpp',
         )
     )
 endif
@@ -1176,6 +1188,13 @@ if host_machine.cpu_family() == 'aarch64'
             # no-ops under an f64 re-view — skipped.  Real B-class only:
             'fp64/cache_stress_clflush_fp64.cpp',
             'fp64/sfence_neon_fp64.cpp',
+            # gather family: the s32-lane members re-typed to f64 lanes
+            # (4B->8B element width, LD1/ST1 {Vt.D} lanes; the in-register
+            # multiply moves to the FP unit).  i64 members skipped: LD1/ST1
+            # {Vt.D} is encoding-identical for s64/f64 lanes (no-op); f32
+            # members duplicate the existing f64 members; f64/pd are FP64.
+            'fp64/gather_i32_fp64.cpp',
+            'fp64/gatherscatter_i32_fp64.cpp',
         )
     )
 endif

@@ -144,7 +144,7 @@ static int low_load_cache_pressure_neon_fp64_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(low_load_cache_pressure_neon_fp64, "Low-duty-cycle (duty_us knob, 5%-30%) cross-die NEON epoch-vector store -> remote vector-load sweep: precisely-old vectors at low load fail (ARM64)")
+DECLARE_TEST(low_load_cache_pressure_neon_fp64, "FP64 variant: low-duty-cycle (duty_us knob, 5%-30%) cross-die NEON epoch-vector store -> remote vector-load sweep: precisely-old vectors at low load fail (ARM64)")
     .test_init = low_load_cache_pressure_neon_fp64_init,
     .test_run = low_load_cache_pressure_neon_fp64_run,
     .test_cleanup = low_load_cache_pressure_neon_fp64_cleanup,

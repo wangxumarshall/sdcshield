@@ -1,6 +1,8 @@
 /*  barrier_after_lock_store_neon_2_fp64 — FP64 datapath variant of
  *  tests/cpu/arm_add/barrier_after_lock_store_neon_2.cpp (2026-11-10;
- *  parent untouched): v2 discriminator chassis (bounded try-lock,
+ *  parent UNCOMMITTED co-worker WIP on disk at adaptation time — the frozen
+ *  disk state is the reference, a fresh clone may not carry it yet):
+ *  v2 discriminator chassis (bounded try-lock,
  *  timeout snapshot + flow discrimination, yield) kept verbatim; the
  *  handoff vector is re-typed to f64x2 (integer-valued epoch doubles,
  *  bit-exact veorq_u64 lane verify).  BETA quality follows the parent.
@@ -173,7 +175,7 @@ static int barrier_after_lock_store_neon_2_fp64_run(struct test *test, int cpu) 
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(barrier_after_lock_store_neon_2_fp64, "Write-loss inside the lock+barrier path on the NEON datapath: ldaxr/stxr lock, in-section asm vst epoch vector, dmb ish release — next holder must observe the epoch in all four lanes (ARM64, v2)")
+DECLARE_TEST(barrier_after_lock_store_neon_2_fp64, "FP64 variant: write-loss inside the lock+barrier path on the f64x2 datapath: ldaxr/stxr lock, in-section asm vst epoch vector, dmb ish release — next holder must observe the epoch in both f64x2 lanes (ARM64)")
     .test_init = barrier_after_lock_store_neon_2_fp64_init,
     .test_run = barrier_after_lock_store_neon_2_fp64_run,
     .test_cleanup = barrier_after_lock_store_neon_2_fp64_cleanup,

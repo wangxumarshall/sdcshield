@@ -221,7 +221,7 @@ static int spinlock_stress_cmpxchg_odd_n_finish(struct test *test) {
     return spinlock_stress_cmpxchg_finish_common(test);
 }
 
-DECLARE_TEST(spinlock_stress_cmpxchg_odd_n_fp64, "Stress spinlock with CMPXCHG on odd cores only (ARM64 atomic)")
+DECLARE_TEST(spinlock_stress_cmpxchg_odd_n_fp64, "FP64 variant: stress spinlock with CMPXCHG on odd cores only — slot payload f64x2 (ARM64 atomic)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = spinlock_stress_cmpxchg_odd_n_init,
     .test_run = spinlock_stress_cmpxchg_odd_n_run,

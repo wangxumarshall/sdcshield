@@ -167,7 +167,7 @@ static int spinlock_stress_cmpxchg16b_finish(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(spinlock_stress_cmpxchg16b_neon_fp64, "FP64 variant: Stress test LOCK CMPXCHG16B (ARM64 atomic 128-bit) — data path FP64 (slot vaddq_f64[+double FADD counter]), lock/CAS protocol untouched")
+DECLARE_TEST(spinlock_stress_cmpxchg16b_neon_fp64, "FP64 variant: Stress test LOCK CMPXCHG16B (ARM64 atomic 128-bit) — data path FP64 (slot vaddq_f64; the packed counter/version stays the parent's integer bit-level protocol), lock/CAS protocol untouched")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = spinlock_stress_cmpxchg16b_init,
     .test_run = spinlock_stress_cmpxchg16b_run,

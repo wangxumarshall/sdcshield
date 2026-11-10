@@ -1,7 +1,9 @@
 /*  ma_src_overl2_fp64 — 3-ldr+FP64-ALU+2-str trigger recipe, sources beyond L2.
  *
  *  FP64 variant of ma_src_overl2 (parent: tests/cpu/memory-access/
- *  ma_src_overl2.cpp): the neon_rot_ldr_at_top_rowmajor skeleton (dead
+ *  ma_src_overl2.cpp — UNCOMMITTED co-worker WIP on disk at adaptation
+ *  time; the frozen disk state is the reference, a fresh clone may not
+ *  carry it yet): the neon_rot_ldr_at_top_rowmajor skeleton (dead
  *  scratch ldr at top + 2 source loads + i%4 rotating vALU + back-to-back
  *  double store + cold-branch memcmp) is kept instruction-shaped, the
  *  footprint experiment (4 MiB per source, 8 MiB live, 16 KiB

@@ -168,7 +168,7 @@ static int lockless_cmpxchg16b_finish(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(lockless_cmpxchg16b_neon_fp64, "FP64 variant: Testing lockless cmpxchg16b — data path FP64 (slot vaddq_f64[+double FADD counter]), lock/CAS protocol untouched")
+DECLARE_TEST(lockless_cmpxchg16b_neon_fp64, "FP64 variant: Testing lockless cmpxchg16b — data path FP64 (slot vaddq_f64; the packed counter/version stays the parent's integer bit-level protocol), lock/CAS protocol untouched")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = lockless_cmpxchg16b_init,
     .test_run = lockless_cmpxchg16b_run,

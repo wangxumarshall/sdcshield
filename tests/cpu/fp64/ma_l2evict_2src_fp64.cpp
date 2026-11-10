@@ -1,6 +1,8 @@
 /*  ma_l2evict_2src_fp64 — L1D-evict 2src-ALU reload probe, FP64 data path.
  *  FP64 variant of ma_l2evict_2src (parent: tests/cpu/memory-access/
- *  ma_l2evict_2src.cpp): same hot-loop skeleton, same loads/stores, same
+ *  ma_l2evict_2src.cpp — UNCOMMITTED co-worker WIP on disk at adaptation
+ *  time; the frozen disk state is the reference, a fresh clone may not
+ *  carry it yet): same hot-loop skeleton, same loads/stores, same
  *  dc civac + dsb sy eviction insertion, same cold-branch memcmp — ONLY
  *  the rotating vALU consumer is re-typed from u64 integer ops
  *  (add/eor/and/orr) to FP64 arithmetic (add/sub/mul/swapped-sub), so the

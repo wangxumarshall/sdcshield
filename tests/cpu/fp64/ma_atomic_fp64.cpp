@@ -82,7 +82,7 @@ static int ma_atomic_fp64_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(ma_atomic_fp64, "FP64 variant of ma_atomic: tail access-pair probe after ldaxr/fadd/stxr FP-register exclusive pair stream load: str->str / ldr->str->str back-to-back d-reg asm with bit-exact init-snapshot golden (ARM64)")
+DECLARE_TEST(ma_atomic_fp64, "FP64 variant of ma_atomic: tail access-pair probe after a GPR ldaxr/stxr exclusive pair stream (the architecture has no FP-register exclusive pair — kept bit-level, parent's): str->str / ldr->str->str back-to-back d-reg asm with bit-exact init-snapshot golden (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = ma_atomic_fp64_init,
     .test_run = ma_atomic_fp64_run,

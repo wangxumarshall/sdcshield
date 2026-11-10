@@ -19,7 +19,9 @@
  *
  * Design (movbe_dump / mrn_rmw_dump / eigen_dump / dualcmp family
  * pattern, verified repeatedly not to perturb triggering):
- *   - hot loop BYTE-IDENTICAL to the fp64 parent: same TEST_LOOP count,
+ *   - hot loop BYTE-IDENTICAL to the fp64 parent (research repo:
+ *     arm64-sdc-fuzzing/opendcdiag tests/cpu/misc/neon_rot_ldr_at_top_rowmajor_fp64.cpp —
+ *     the parent is NOT in this repo): same TEST_LOOP count,
  *     same scratch-ldr-at-top + 2-src asm loads, same fp64_rot slot
  *     order, same back-to-back str/str pair, same sweep order;
  *   - dump lives ONLY in the cold post-sweep failure branch;

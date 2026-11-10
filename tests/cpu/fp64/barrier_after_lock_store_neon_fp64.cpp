@@ -126,7 +126,7 @@ static int barrier_after_lock_store_neon_fp64_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(barrier_after_lock_store_neon_fp64, "Write-loss inside the lock+barrier path on the NEON datapath: ldaxr/stxr lock, in-section asm vst epoch vector, dmb ish release — next holder must observe the epoch in all four lanes (ARM64)")
+DECLARE_TEST(barrier_after_lock_store_neon_fp64, "FP64 variant: write-loss inside the lock+barrier path on the f64x2 datapath: ldaxr/stxr lock, in-section asm vst epoch vector, dmb ish release — next holder must observe the epoch in both f64x2 lanes (ARM64)")
     .test_init = barrier_after_lock_store_neon_fp64_init,
     .test_run = barrier_after_lock_store_neon_fp64_run,
     .test_cleanup = barrier_after_lock_store_neon_fp64_cleanup,

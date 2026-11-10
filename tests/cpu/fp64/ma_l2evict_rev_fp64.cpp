@@ -1,6 +1,8 @@
 /*  ma_l2evict_rev_fp64 — L1D-evict reload-path probe, FP64 consumer lane.
  *  FP64 variant of ma_l2evict_rev (parent: tests/cpu/memory-access/
- *  ma_l2evict_rev.cpp): same asm-load round-trip with `dc civac + dsb sy`
+ *  ma_l2evict_rev.cpp — UNCOMMITTED co-worker WIP on disk at adaptation
+ *  time; the frozen disk state is the reference, a fresh clone may not
+ *  carry it yet): same asm-load round-trip with `dc civac + dsb sy`
  *  evicting the input line before the reload, same cold-branch compare
  *  against the independent init-time input snapshot — ONLY the consumer
  *  between the first load and the far store is re-typed: the NEON

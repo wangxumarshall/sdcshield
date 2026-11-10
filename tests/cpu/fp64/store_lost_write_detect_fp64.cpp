@@ -146,7 +146,7 @@ static int store_lost_write_detect_fp64_run(struct test *test, int cpu) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(store_lost_write_detect_fp64, "Lost-write sentinel ladder: str epoch, same-core read-back, cross-core read, then dsb ish re-read — any layer holding the old value is a lost write (ARM64)")
+DECLARE_TEST(store_lost_write_detect_fp64, "FP64 variant: lost-write sentinel ladder: str epoch, same-core read-back, cross-core read, then dsb ish re-read — any layer holding the old value is a lost write (ARM64)")
     .test_init = store_lost_write_detect_fp64_init,
     .test_run = store_lost_write_detect_fp64_run,
     .test_cleanup = store_lost_write_detect_fp64_cleanup,

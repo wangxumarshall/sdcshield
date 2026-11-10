@@ -73,7 +73,7 @@ static int barrier_after_lock_store_neon_fp64_init(struct test *test) {
     auto *d = new BALSNData;
     if (!d) return EXIT_FAILURE;
     d->lock = 0;
-    for (int l = 0; l < 4; ++l) d->protected_val[l] = 0;
+    for (int l = 0; l < 2; ++l) d->protected_val[l] = 0.0;
     d->expected.store(0, std::memory_order_relaxed);
     d->acquisitions.store(0, std::memory_order_relaxed);
     test->data = d;

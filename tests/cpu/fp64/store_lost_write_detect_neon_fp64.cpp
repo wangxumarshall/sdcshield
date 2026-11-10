@@ -47,7 +47,7 @@ static int store_lost_write_detect_neon_fp64_init(struct test *test) {
     auto *d = new SLDNData;
     if (!d) return EXIT_FAILURE;
     for (int i = 0; i < SLDN_MAX_THREADS; ++i) {
-        for (int l = 0; l < 4; ++l) d->sentinel[i][l] = 0.0;
+        for (int l = 0; l < 2; ++l) d->sentinel[i][l] = 0.0;
         d->written[i].store(0, std::memory_order_relaxed);
         d->started[i].store(0, std::memory_order_relaxed);
     }

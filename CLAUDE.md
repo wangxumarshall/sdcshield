@@ -68,9 +68,8 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               main #472 迁移/增量 + feat/eigen-sve-unification
                                                #               +12 SVE eigen cases, − eigen_svd_bidiag_sve;
                                                #               full chain in README)
-                                               #   no-SVE 920 (本机): 439 PROD / 547 q0 / 551 q-1  (2026-11-02 main 实测,
-                                               #               = 迁移 121 + arm_add 7 + _neon 14 + cache 新 9 PROD 后;
-                                               #               eigen SVE 分支 12 新 + 退役 1 全 ARM64_REQUIRES_SVE, 净变化 0)
+                                               #   no-SVE 920 (本机): 459 PROD / 567 q0 / 571 q-1  (2026-11-10 实测,
+                                               #               = 11-02 口径 439 + main 至 fd2f9bcd 增量 18 + feat/neon-fp64 2 新例)
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

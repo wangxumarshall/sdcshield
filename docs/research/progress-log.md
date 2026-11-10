@@ -2363,3 +2363,44 @@ SME 的 SIGILL 歧义不同：TME 无内核使能门（无 sysctl/HWCAP/向量�
 声明，Dougall Johnson 2021 逆向发现）。对 sdcshield 的含义：x86 源流有 HLE/RTM
 （tests/cpu/spinlock/spinlock_with_hle.cpp 注明 x86-only），ARM 侧无 TME 测试也不
 必写——无 ARM 服务器芯片可跑，事务回滚语义（SDC 敏感结构）此路已死。
+
+## 2026-11-10（CPU31 内核级 wedge 实锤 + feat/neon-fp64 分支推送 + 故障核下线）
+
+**11-09 22:11 boot 的终局——CPU31 卡死内核，整机深挂 17 小时**：昨晚会话
+（23:57–02:24）在 fd2f9bcd 基线重建验证两个新 NEON FP64 测试，00:17 构建
+完成（862/862 零新警告）；**00:21:37 内核首发 RCU stall——"Sending NMI from
+CPU 30 to CPUs 31:"，其后 00:24:37（CPU 0）、00:27:37（CPU 104）、00:30:37
+（CPU 124）三次换核再发，CPU31 全程零响应**。级联受害：00:22:17
+systemd-machined watchdog SIGABRT；00:24:25 hung-task 报告 systemd-machine
+卡在 do_coredump→call_usermodehelper_exec（wait_for_completion）、Bun Pool
+0/1 卡在 mmap_sem down_read；**00:30:37 后内核日志全停**，用户态残喘至
+02:24（会话 SSH 断连），17:56 BMC 上电（restart_cause = chassis power
+control command）、17:58 起机。无 kdump（crashkernel 在位但 wedge 非
+oops）、pstore 空、SEL 零事件、wtmp 无 shutdown 行。stall 首发与全核验证
+运行窗口（~00:19-00:21 起跑，worker 覆盖含坏核的全部在线核）重合；结合
+既往画像（6/6 SIGSEGV 全在 CPU31、11-07 02:11 全核 FP64 起跑 ≤1min panic）
+判定：**CPU31 故障本次以内核态 NMI 不可唤醒 wedge 形态发作——比既往
+用户态 SIGSEGV 更重的一档**。EDAC mc0 ce=0/ue=0、四个 boot 分段零
+MCE/硬件错误——该故障不产生机器检查，与"纯数据通路瞬态损坏、内存干净"
+一致；mce_check exit: pass。
+
+**17:58 起机新常态**：possible=0-125（cpu126/127 消失，dmesg "Brought up
+4 nodes, 126 CPUs" 无失败日志——同 11-07 125-127 热插拔层消失现象）；
+风扇仍 manual 100%（Fan1-4 全 100%、z0 41.9°C，热安全；恢复 auto 待授权）。
+
+**处置与产出**：
+- **CPU31 已下线**（echo 0 > cpu31/online；在线集 0-30,32-125、nproc=125；
+  运行态不随重启持久——重启后需重做）。此后全核验证全程稳定。
+- **feat/neon-fp64-tests-20261109 推送完成**（基线 fd2f9bcd=main #578，本地
+  main 原停在 #316 已快进）：①memcpy_l2_cache_size_neon_fp64（5c087ba1）
+  ②neon_rot_ldr_at_top_rowmajor_fp64_dump（8fa7280c）③战役积压台账+
+  run-logs 忽略（9c896b45）④本计数链同步条目。rule 2 全绿：定点重编译
+  2 TU 零警告、--list-tests 459/567/571（两新例在默认 PROD 集）、两新例
+  -n 1 与全核 125 CPU 均 exit: pass、zstd19 -t 2000 -n 1 回归 pass、
+  check-arm64-requires rc=0、x86-64 零触碰（arm64 守卫内注册 + 文件体
+  守卫）。**机器重启后 enter.sh 构建环境直接可用，无需 /tmp/fixedlibs
+  重建**（该配方仅为无 enter.sh 时的应急路径）。
+- 11-09 15:08/06:43 两 boot 分段尾部复核：末条均为 mlx5 NIC 高温告警
+  （15:28:15 / 07:04:16），无 RCU stall/oops 签名——两次下线成因仍未取证。
+- 远端旧分支 test/neon-fp64-l2-copy-fma-sdc（09-19 老基树）已被本分支
+  取代，待删。

@@ -1112,6 +1112,24 @@ if host_machine.cpu_family() == 'aarch64'
     )
 endif
 
+# fp64/ —— 2026-11-10 FP64 数据通路变体家族：arm_add/lock_arm/memory-access
+# 三目录探针的 _fp64 改造版（A 类：ALU 消费端换 FP64 四槽轮转
+# add/sub/mul/rev-sub——整数口→FP 口；B 类：载荷寄存器通路换 FP 寄存器），
+# load/store 骨架与检测语义逐字节保持父测试。golden 遵守 issue #373
+# 标量独立重算纪律（纯 C +,-,* 编译为 FADD/FSUB/FMUL D，与向量形式共享
+# pseudocode 位级一致；弃 fmax——std::fmax 实现自由度可破坏标量 golden 的
+# 双 NaN 位级一致性）。仅 aarch64。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'fp64/ma_l2evict_2src_fp64.cpp',
+            'fp64/ma_src_overl2_fp64.cpp',
+            'fp64/ma_l2evict_rev_fp64.cpp',
+            'fp64/ma_alu_fixed_fp64.cpp',
+        )
+    )
+endif
+
 tests_config_base = tests_set_base.apply(tests_config)
 
 # libatomic provides the __atomic_load_16 / __atomic_store_16 /

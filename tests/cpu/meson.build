@@ -1171,6 +1171,11 @@ if host_machine.cpu_family() == 'aarch64'
             'fp64/store_visibility_cross_class_fp64.cpp',
             'fp64/str_instruction_stress_fp64.cpp',
             'fp64/str_instruction_stress_neon_fp64.cpp',
+            # Task 6 re-audited: the q-pass-through _neon family members
+            # (clflush_neon/_2, flushed×2, llc_load×2, mfence×2) are honest
+            # no-ops under an f64 re-view — skipped.  Real B-class only:
+            'fp64/cache_stress_clflush_fp64.cpp',
+            'fp64/sfence_neon_fp64.cpp',
         )
     )
 endif

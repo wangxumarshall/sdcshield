@@ -93,6 +93,19 @@ TEST(PageSizeTest, RoundUpToPageRoundsUpToNextPage)
     EXPECT_EQ(ROUND_UP_TO_PAGE(ps + 1), 2 * ps); // first byte of page 2
 }
 
+TEST(PageSizeTest, RoundUpToPagePast4GiB)
+{
+    // >=4 GiB values must round up in 64 bits.  With a 32-bit mask the
+    // result silently kept only bits 16..31 (observed 2026-11-11: a
+    // 4.14 GB stderr memfd was mmap'ed as 142 MB and the scan ran off
+    // the mapping -> SIGSEGV); the old macro returned 0 / ps here.
+    const size_t ps = sandstone_page_size();
+    const size_t four_gib = size_t(4) << 30;
+    EXPECT_EQ(ROUND_UP_TO_PAGE(four_gib), four_gib);
+    EXPECT_EQ(ROUND_UP_TO_PAGE(four_gib + 1), four_gib + ps);
+    EXPECT_EQ(ROUND_UP_TO(four_gib + 1, ps), four_gib + ps);
+}
+
 TEST(PageSizeTest, RoundUpToAlignsToAnyPowerOfTwo)
 {
     // ROUND_UP_TO is the general power-of-two alignment macro ROUND_UP_TO_PAGE

@@ -58,7 +58,7 @@ Expected: 4 项失配全 0 → slot 3 用纯 C `fmax`；若 fmax 失配 >0 → s
 
 - [ ] **Step 1: 文件骨架（docstring + 前置）**
 
-按家族格式：SPDX/copyright 头 + `@test @b neon_rot_ldp` @parblock docstring（lineage：ko 形态、verify.log 16/16；pair 替换与小端 lane 映射；骨架五要素；黄金 = issue #373 标量独立重算 + Task 1 探针结论；动机：pair 编码单指令 16B、LSQ/store buffer 单指令占用、FP64 消费端）。`#define NEON_ROT_LDP_COUNT 1024`；struct `NeonRotLdpData{srcA,srcB,scratch,expected}`（家族模式，成员在 `#if __aarch64__` 外——文件仅入 aarch64 构建面）。
+按家族格式：SPDX/copyright 头 + `@test @b neon_rot_ldp` @parblock docstring（lineage：ko 形态、verify.log 16/16；pair 替换与小端 lane 映射；骨架五要素；黄金 = Task 1 裁决的同路径 NEON 重算 + 探针证据；动机：pair 编码单指令 16B、LSQ/store buffer 单指令占用、FP64 消费端）。`#define NEON_ROT_LDP_COUNT 1024`；struct `NeonRotLdpData{srcA,srcB,scratch,expected}`（家族模式，成员在 `#if __aarch64__` 外——文件仅入 aarch64 构建面）。
 
 - [ ] **Step 2: pair 助手 + fp64_rot + 冷路径报告助手**
 

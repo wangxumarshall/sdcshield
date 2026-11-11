@@ -43,12 +43,28 @@
  *     vmaxq_f64 is the NaN-propagating FMAX — an architectural semantics
  *     difference, ~0.05% of random input pairs;
  *   - for both-NaN inputs the scalar FP pipe and the vector pipe disagree
- *     on WHICH NaN payload survives (scalar quiets operand1, vector quiets
- *     operand2 — an implementation-defined corner; pinned-operand-order
- *     inline asm fadd still differs from vaddq). No scalar-side golden can
- *     bit-match the vector pipe there, and both-NaN lanes occur at ~5e-3
- *     per buffer pair, so any scalar golden would be guaranteed fleet
- *     flakiness (false SDC alarms).
+ *     on WHICH NaN payload survives (an implementation-defined corner;
+ *     pinned-operand-order inline asm fadd still differs from vaddq). No
+ *     scalar-side golden can bit-match the vector pipe there, and both-NaN
+ *     lanes occur at ~5e-4 per buffer pair (P(NaN) = 2^-11 per 64-bit word,
+ *     both lanes NaN squared, 2048 lanes), so any scalar golden would be
+ *     guaranteed fleet flakiness (false SDC alarms).
+ *
+ * OPERAND-ORDER PIN. A follow-up probe (review, 2026-11-11, 1e7 both-NaN
+ * pairs) showed the vector FMAX's result for two NaN operands is
+ * operand-POSITION-dependent (vmaxq_f64(a,b) != vmaxq_f64(b,a) on ~50% of
+ * both-NaN pairs; vector fadd/fmul select by VALUE instead), so "golden ==
+ * actual" for both-NaN lanes also relies on the operand order inside the
+ * compiled code. GCC may commute FP operations freely (IEEE does not pin
+ * NaN payload propagation), so fp64_rot pins all four ops with inline asm
+ * (operand 1 = a) — the order invariant then holds by construction in
+ * every loop copy across compilers and rebuilds.
+ *
+ * Homogeneous-core assumption: the golden is computed on the init thread's
+ * core and the results on every worker core of the same SoC. Architecturally
+ * each core may implement the both-NaN selection differently; on a
+ * heterogeneous SoC (big.LITTLE-class) that would surface as deterministic
+ * miscompares. The deployment target is homogeneous fleets (Kunpeng 920).
  * Coverage trade-off, stated honestly: a persistent NEON-datapath fault
  * that computes deterministic wrong bits can corrupt golden and actual
  * identically here and go unnoticed by THIS test; that fault class is
@@ -104,18 +120,21 @@ static inline uint64x2_t load_pair_vec(const void *addr) {
 }
 
 /* FP64 rotation, slot order mirrors the integer parent: 0=fadd 1=fsub
- * 2=fmul 3=fmax. Reinterpretations are compile-time no-ops. (ko-verbatim) */
+ * 2=fmul 3=fmax. All four ops are inline asm with the operand order
+ * PINNED (operand 1 = a): the vector FMAX result for two NaN operands is
+ * operand-position-dependent on this core (probe, review 2026-11-11), so
+ * golden-vs-actual bit-identity for both-NaN lanes must not depend on GCC
+ * commuting the intrinsics between the init and run copies. Reinterpret
+ * casts around the asm are compile-time no-ops. */
 static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b) {
-    const float64x2_t fa = vreinterpretq_f64_u64(a);
-    const float64x2_t fb = vreinterpretq_f64_u64(b);
-    float64x2_t fres;
+    uint64x2_t res;
     switch (slot) {
-        case 0: fres = vaddq_f64(fa, fb); break;
-        case 1: fres = vsubq_f64(fa, fb); break;
-        case 2: fres = vmulq_f64(fa, fb); break;
-        default: fres = vmaxq_f64(fa, fb); break;
+        case 0: __asm__ ("fadd %0.2d, %1.2d, %2.2d" : "=w"(res) : "w"(a), "w"(b)); break;
+        case 1: __asm__ ("fsub %0.2d, %1.2d, %2.2d" : "=w"(res) : "w"(a), "w"(b)); break;
+        case 2: __asm__ ("fmul %0.2d, %1.2d, %2.2d" : "=w"(res) : "w"(a), "w"(b)); break;
+        default: __asm__ ("fmax %0.2d, %1.2d, %2.2d" : "=w"(res) : "w"(a), "w"(b)); break;
     }
-    return vreinterpretq_u64_f64(fres);
+    return res;
 }
 
 #endif

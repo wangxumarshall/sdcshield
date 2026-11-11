@@ -10,7 +10,6 @@ using arm_add_neon::neon_copy;          // 提供 DECLARE_TEST, report_fail_msg,
 #include <cstring>              // memcpy, memcmp
 #include <cstdint>              // uint8_t
 #include <cstddef>              // size_t
-#include <cstdio>               // snprintf, fprintf
 
 static constexpr size_t BLOCK_SIZE = 256;
 
@@ -25,7 +24,6 @@ static int memcpy1_run(struct test *test, int cpu) {
     /* randomization hardening (B3-007): framework RNG (per-thread stream,
      * -s reproducible) replaces std::mt19937; range [0, 255]. */
     auto dist = []() { return (uint8_t)((0) + (int64_t)(random64() % (uint64_t)((255) - (0) + 1))); };
-    unsigned long iteration = 0;
 
     do {
         // 生成随机数据
@@ -36,17 +34,10 @@ static int memcpy1_run(struct test *test, int cpu) {
         // 执行复制
         neon_copy(dst, src, BLOCK_SIZE);
 
-        // 校验
-        bool passed = (memcmp(dst, src, BLOCK_SIZE) == 0);
-
-        // 输出本轮输入（前8字节十六进制）和验证结果
-        char hex_str[32];
-        snprintf(hex_str, sizeof(hex_str), "%02x%02x%02x%02x%02x%02x%02x%02x",
-                 src[0], src[1], src[2], src[3], src[4], src[5], src[6], src[7]);
-        fprintf(stderr, "memcpy1_neon: Iteration %lu, src first 8 bytes = %s, result = %s\n",
-                iteration++, hex_str, passed ? "PASS" : "FAIL");
-
-        if (!passed) {
+        // 校验（失败经 report_fail_msg 正规上报——2026-11-11 战役实证逐迭代
+        // fprintf(stderr) 在 5min×125 线程下产出 GB 级 stderr：既触发框架打印
+        // 路径崩溃，又以 I/O 拖垮激发强度，故删除该调试打印）
+        if (memcmp(dst, src, BLOCK_SIZE) != 0) {
             report_fail_msg("memcpy1_neon: data mismatch after copy");
             return EXIT_FAILURE;
         }

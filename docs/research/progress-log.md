@@ -2439,3 +2439,24 @@ memcpy_l2_cache_size_neon_fp64 与 neon_rot_ldr_at_top_rowmajor_fp64_dump 各
 17,820 分片亦零命中）；5min×2 期望命中数远小于 1，零命中不构成"测试无效"
 证据，有意义激发需小时级长跑。cpu31 现保持在线（用户实验意图），恢复隔离
 随时 `echo 0 > /sys/devices/system/cpu/cpu31/online`。
+
+## 2026-11-11 08:53–22:43（GitHub 266 新测试 × 5min 全核热轴战役：265 pass / 1 软件缺陷崩溃）
+
+- 清单 = q0 list-tests 差集（旧战役二进制 302 → 新 567，剔除本分支已测 2 个与
+  上游退役 arm0102_kreg_mask）。全核 126 CPU（cpu31 在线）+ 80°C 级热轴
+  （风扇 30% 起步，自退避控制器 33→35→37%，z0 峰值 90°C 触发 2 次自动保护后
+  自愈）。历时 13h50m（后半族多为迭代有界快速完成型，快于 22h 线性预估）。
+- **结果：265/266 exit: pass、0 skip、1 崩溃 = memcpy1_neon rc=139（SIGSEGV）**。
+  已定性为软件缺陷链而非 CPU31 硬件故障：memcpy1_neon.cpp:46 逐迭代
+  fprintf(stderr) × 5min × ~125 线程 → GB 级 stderr 捕获 → 框架
+  print_child_stderr_common 的 string_view size≈4GB vs 实际映射 ~64KB →
+  print_content_indented/memchr 扫出界。测试本体 result: pass（崩在结果打印）。
+  coredumpctl 栈已符号化，全证据链见 run-logs/newtests_5min_20261111-0848/
+  FAILURE_memcpy1_neon_ANALYSIS.txt。5h soak 未崩的因果：默认 ~1s 分片轮
+  stderr 量小 300 倍。
+- **cpu31 在线 + 满载 + 80°C 级热轴 ~14h：零硬件事件**（无 panic/RCU stall/
+  OOM/重启）——与 ≈0.005%/分片概率画像一致，未激发属预期内。
+- 遗留：①memcpy1_neon 逐迭代打印删除/降级 + 框架 GB 级 stderr 稳健性 →
+  issue+PR 待做；②run-logs/newtests_5min_20261111-0848/ 全套产物
+  （SUMMARY/FAILURES/temps.log 409 行/HOTPHASE 记录）；③战役后风扇已恢复
+  manual 100%，cpu31 仍在线（用户激发实验意图，下线命令随时可用）。

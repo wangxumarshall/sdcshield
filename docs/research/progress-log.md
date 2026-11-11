@@ -2428,3 +2428,14 @@ MCE/硬件错误——该故障不产生机器检查，与"纯数据通路瞬态
   与 2 个 skip 的身份不可考；将来留证据需运行中复制 yaml。run-logs/
   fullsuite_T5h_20261111-{0300,0311}/（CRASH.txt + START.txt + stdout.log）。
 - **操作口径：大内存主机全量跑必须带 SDC_MESH_BUFFER_BYTES 限界，直至 #357 根治。**
+
+## 2026-11-11 08:06（CPU31 上线定向激发：两新测试各 5min 全核零命中）
+
+用户要求重新上线 cpu31 做激发试验（run-logs/cpu31_excite_newtests_20261111-0806/）：
+memcpy_l2_cache_size_neon_fp64 与 neon_rot_ldr_at_top_rowmajor_fp64_dump 各
+-t 300000 全核（126 CPU 含坏核 31，风扇 manual 100%）。结果：**双双 exit: pass，
+0 fail / 0 crash / 0 dump，dmesg 全程零新异常（无 RCU stall），温度峰 ~52°C，
+机器稳定**。与概率画像一致（≈0.005%/分片——11-07 同一 memcpy 测试 1h 594 轮
+17,820 分片亦零命中）；5min×2 期望命中数远小于 1，零命中不构成"测试无效"
+证据，有意义激发需小时级长跑。cpu31 现保持在线（用户实验意图），恢复隔离
+随时 `echo 0 > /sys/devices/system/cpu/cpu31/online`。

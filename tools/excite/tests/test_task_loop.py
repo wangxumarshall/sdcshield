@@ -550,15 +550,25 @@ def test_dispatch_writes_prompt_file_and_wip_label(tmp_path, monkeypatch):
     labels = []
     monkeypatch.setattr(tl, "gh_label_add",
                         lambda n, lb: labels.append((n, lb)))
+    # Task 4 槽位化派发的引擎缝: 内存闸放行 + worktree 建桩(离线)
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
     captured = {}
     def fake_run_background(cmd, cwd, log):
         captured["cmd"] = cmd
+        captured["cwd"] = cwd
         return 4321
     monkeypatch.setattr(tl, "run_background", fake_run_background)
     e = _task_entry()
     pid = tl.dispatch_agent(e, state)
     assert pid == 4321 and e.status == "DISPATCHED" and e.fix_branch == "fix/issue-33"
     assert labels == [(33, "agent-wip")]
+    # Task 4: cwd 是 per-entry worktree(槽位记账 lane/worktree 同步落条目)
+    assert captured["cwd"] == f"{tmp_path}/cl/.worktrees/issue-33"
+    assert e.lane == "issue_fix" and e.worktree == \
+        f"{tmp_path}/cl/.worktrees/issue-33"
     # stdin 化: 命令里不再出现被引用的超长 prompt,而是 < prompt 文件
     assert "< " in captured["cmd"] and "claude -p" in captured["cmd"]
     prompt_files = list(tmp_path.glob("prompt-*"))
@@ -571,6 +581,10 @@ def test_dispatch_refuses_when_agent_env_missing(tmp_path, monkeypatch, capsys):
     state = {"entries": [], "auth_failure_streak": 0}
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
+    # Task 4: 闸门前移(内存闸在凭据检查之前),桩放行以锚定本用例的
+    # 凭据拒绝路径(满槽/内存不足是各自独立用例的断言面)
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
     spawned = []
     monkeypatch.setattr(tl, "run_background",
                         lambda *a, **k: spawned.append(a) or 1111)
@@ -646,6 +660,11 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
     monkeypatch.setattr(tl.pr_loop, "ensure_local_review",
                         lambda num, sha: None)
     monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    # Task 4 引擎缝: 内存闸放行 + worktree 建桩(离线)
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
     monkeypatch.setattr(tl, "run_background",
                         lambda cmd, cwd, log: os.getpid())
     entry = _task_entry(status="PR_OPEN", pr_number=88, rounds=0,
@@ -656,6 +675,9 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
     assert e["status"] == "BOT_FIX" and e["agent_pid"] == os.getpid(), \
         "车道 B 派发记账未即时落盘"
     assert e["rounds"] == 1 and e["last_dispatched_head"] == "b" * 40
+    # Task 4: pr 泳道记账(pr_repair 槽位账本 + lane/worktree 落条目)
+    assert e["lane"] == "pr_repair" and \
+        e["worktree"] == f"{tmp_path}/cl/.worktrees/pr-88"
 
 
 # ============ PR#317 检视#11: paused 横幅与闸门同口径(双路径) ============
@@ -857,20 +879,17 @@ def test_dry_run_audit_zero_local_writes(tmp_path, monkeypatch):
 
 # ============ Task 8: scan 编排接入 + status ============
 
-def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatch):
-    """两个 QUEUED 任务,单飞 → 只派 FIFO 首个(issue 号小者)。"""
-    state = {"entries": [
-        dict(workflow="", run_id=0, status="QUEUED", issue_number=9,
-             fix_branch="", pr_number=None, attempts=0, rounds=0,
-             agent_pid=None, agent_started_at=None, agent_log=None,
-             last_dispatched_head=None, extra_runs=[], created_at="t",
-             updated_at="t", source="session", kind="bug", audit_hash=None),
-        dict(workflow="", run_id=0, status="QUEUED", issue_number=5,
-             fix_branch="", pr_number=None, attempts=0, rounds=0,
-             agent_pid=None, agent_started_at=None, agent_log=None,
-             last_dispatched_head=None, extra_runs=[], created_at="t",
-             updated_at="t", source="manual", kind="bug", audit_hash=None)],
-        "auth_failure_streak": 0}
+def test_scan_dispatches_task_fifo_respecting_issue_slots(tmp_path, monkeypatch):
+    """三个 QUEUED 任务,issue 泳道 2 槽(Task 4 槽位语义取代全局单飞):
+    只派 FIFO 前两个(issue 号小者),第三个满槽被拒、保持 QUEUED。"""
+    def _q(n, src):
+        return dict(workflow="", run_id=0, status="QUEUED", issue_number=n,
+                    fix_branch="", pr_number=None, attempts=0, rounds=0,
+                    agent_pid=None, agent_started_at=None, agent_log=None,
+                    last_dispatched_head=None, extra_runs=[], created_at="t",
+                    updated_at="t", source=src, kind="bug", audit_hash=None)
+    state = {"entries": [_q(9, "session"), _q(5, "manual"), _q(7, "audit")],
+             "auth_failure_streak": 0}
     # 编排从 StateStore 装 state(brief 的用例只构造了局部 dict,从未注入)
     # ——先落盘进 tmp;env 重定向让 StateStore/scan.lock/落盘全在 tmp,
     # 绝不碰真实默认目录(夹具真设置,非注释括注)。
@@ -881,24 +900,34 @@ def test_scan_dispatches_task_fifo_respecting_single_flight(tmp_path, monkeypatc
     # 自愈/车道 B。
     monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
     monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    import task_loop_pipeline as tp
     dispatched = []
     def fake_dispatch(entry, state, dry_run=False, prompt_override=None,
                       increment_rounds=False):
-        # Ruling 5: fake 自身镜像真实单飞契约(单飞属 dispatch_agent,不属
-        # 编排层),且派成的 agent 用 os.getpid()(确定性真活 PID,探活必真;
-        # 伪 PID 如 99 探活不确定,ci_triage 用例 12 同款手法)。
-        if tl.has_running_agent(state):
+        # Ruling 5: fake 自身镜像真实槽位契约(闸门属 dispatch_agent,不属
+        # 编排层): 满槽拒/同 key 互斥,派成即占槽记账;派成的 agent 用
+        # os.getpid()(确定性真活 PID,探活必真)。
+        kind = "pr_repair" if increment_rounds else "issue_fix"
+        key = (f"issue-{entry.issue_number or entry.run_id}" if kind == "issue_fix"
+               else f"pr-{entry.pr_number}")
+        if tp.free_slot_count(state, kind) <= 0:
+            return None
+        pid = os.getpid()
+        if not tp.slot_acquire(state, kind, key, pid, pid, "/l", "/w", "t", "b"):
             return None
         dispatched.append(entry.issue_number)
-        entry.status = "DISPATCHED"; entry.agent_pid = os.getpid()
-        return os.getpid()
+        entry.status = "DISPATCHED"; entry.agent_pid = pid
+        return pid
     monkeypatch.setattr(tl, "dispatch_agent", fake_dispatch)
     monkeypatch.setattr(tl, "reconcile_issues", lambda s, dry_run: None)
     monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
     monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run: None)
     monkeypatch.setattr(tl, "lane_b_advance", lambda s, dry_run: None)
     rc = tl._run_scan_orchestration(dry_run=False)
-    assert rc == 0 and dispatched == [5]        # FIFO issue 号,单飞拦下第二个
+    assert rc == 0 and dispatched == [5, 7]     # FIFO issue 号,2 槽拦下第三个
+    saved = tl.StateStore(str(tmp_path)).load()
+    by_n = {e["issue_number"]: e["status"] for e in saved["entries"]}
+    assert by_n == {5: "DISPATCHED", 7: "DISPATCHED", 9: "QUEUED"}
 
 
 def test_cmd_status_prints_queue_and_entries(tmp_path, monkeypatch, capsys):
@@ -1456,6 +1485,11 @@ def test_dispatch_command_uses_setsid(tmp_path, monkeypatch):
     (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "clone"))
     monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    # Task 4 引擎缝: 内存闸放行 + worktree 建桩(离线)
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
     captured = {}
     monkeypatch.setattr(tl, "run_background",
                         lambda cmd, cwd, log: captured.update(cmd=cmd) or 99)

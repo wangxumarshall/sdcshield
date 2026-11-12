@@ -1,6 +1,6 @@
 """task_loop_pipeline 测试: 槽位常量 / 窗口判定 / 内存闸 / boot_id /
-槽位账本(租约/janitor/启动对账)。"""
-import sys, os
+槽位账本(租约/janitor/启动对账)/ 槽位化派发 + worktree 隔离(Task 4)。"""
+import sys, os, shutil, subprocess
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "scripts"))
 import task_loop_pipeline as tp
@@ -128,3 +128,214 @@ def test_startup_reconcile_requeues_without_attempt(monkeypatch):
     assert e.status == "QUEUED" and e.agent_pid is None
     assert e.attempts == 3          # 未 +1: 环境性死亡豁免
     assert tp.slot_get(st, "issue_fix", "issue-5") is None
+
+
+# ============ T3 遗留三臂补测(控制器裁定#3,同 commit) ============
+
+
+def _entry(**kw):
+    d = dict(workflow="w", run_id=1, status="DISPATCHED", issue_number=5,
+             fix_branch="fix/issue-5", pr_number=None, attempts=2, rounds=0,
+             agent_pid=111, agent_started_at="t", agent_log="/l",
+             last_dispatched_head=None, extra_runs=[], created_at="t",
+             updated_at="t", source="audit", kind="bug", audit_hash=None)
+    d.update(kw)
+    return d
+
+
+def test_startup_reconcile_bot_fix_to_pr_open(monkeypatch):
+    """臂①: boot 变化的死槽撞 BOT_FIX 条目(issue 键)——status 归
+    PR_OPEN,attempts 不动。"""
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)
+    st = _mkstate()
+    st["entries"] = [_entry(status="BOT_FIX", pr_number=88)]
+    tp.slot_acquire(st, "issue_fix", "issue-5", 111, 0, "/l", "/w",
+                    "t", "old-boot")
+    monkeypatch.setattr(tp, "boot_id", lambda: "new-boot")
+    tp.startup_reconcile(st)
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "PR_OPEN" and e.attempts == 2
+    assert tp.slot_get(st, "issue_fix", "issue-5") is None
+
+
+def test_startup_reconcile_matches_pr_key(monkeypatch):
+    """臂②: 槽 key = f"pr-{pr_number}"(车道 B 派发形态)同样命中条目
+    (非 BOT_FIX → QUEUED)。"""
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)
+    st = _mkstate()
+    st["entries"] = [_entry(pr_number=88)]
+    tp.slot_acquire(st, "pr_repair", "pr-88", 222, 0, "/l", "/w",
+                    "t", "old-boot")
+    monkeypatch.setattr(tp, "boot_id", lambda: "new-boot")
+    tp.startup_reconcile(st)
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "QUEUED" and e.agent_pid is None
+    assert tp.slot_get(st, "pr_repair", "pr-88") is None
+
+
+def test_startup_reconcile_nonenvironmental_frees_slot_only(monkeypatch):
+    """臂③: 非 environmental 死槽(boot 未变)只清槽,条目不动——判档仍归
+    tl.reap_or_advance 正常记账。"""
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)
+    st = _mkstate()
+    st["entries"] = [_entry()]
+    tp.slot_acquire(st, "issue_fix", "issue-5", 111, 0, "/l", "/w",
+                    "t", tp.boot_id())          # 当前 boot: 非 environmental
+    tp.startup_reconcile(st)
+    assert tp.slot_get(st, "issue_fix", "issue-5") is None
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "DISPATCHED" and e.agent_pid == 111
+    assert e.attempts == 2
+
+
+# ============ Task 4: 槽位化派发 + worktree 隔离 ============
+
+
+def _patch_dispatch_offline(monkeypatch, tmp_path):
+    """dispatch_agent 离线夹具: state/clone 目录重定向 + 凭据 + 引擎缝全打桩。
+    探活钉死 True(裁定#2): 槽位一旦占用保持占用;裸真探活不确定,且本机低号
+    PID 是内核线程(EPERM 判活)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "cl"))
+    os.makedirs(tmp_path / "st")
+    (tmp_path / "st" / "agent.env").write_text("PATH=/usr/bin\n")
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"/wt/{key}")
+    monkeypatch.setattr(tl, "gh_label_add", lambda *a: None)
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+
+
+def test_dispatch_two_issue_agents_then_full(monkeypatch, tmp_path):
+    """issue 泳道 2 槽: 第 3 个 QUEUED 条目被拒;内存不足也被拒。"""
+    _patch_dispatch_offline(monkeypatch, tmp_path)
+    # 桩 PID 固定小整数(裁定#2): brief 原文的 time 派生 PID 可能撞本机
+    # 真实活 PID(低号多为内核线程),探活不确定会让账本时占时空。
+    pids = iter((4242, 4243, 4244))
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: next(pids))
+
+    def mk(n):
+        return tl.Entry(workflow="w", run_id=n, status="QUEUED", issue_number=n,
+                        fix_branch="", pr_number=None, attempts=0, rounds=0,
+                        agent_pid=None, agent_started_at=None, agent_log=None,
+                        last_dispatched_head=None, extra_runs=[], created_at="t",
+                        updated_at="t", source="audit", kind="bug",
+                        audit_hash=None, lane="", worktree=None,
+                        merged_at=None, merged_sha=None)
+
+    st = {"entries": [mk(1).to_dict(), mk(2).to_dict(), mk(3).to_dict()],
+          "auth_failure_streak": 0}
+    es = tl.StateStore.entries(st)
+    for e in es:
+        tl.dispatch_agent(e, st)
+    assert sum(e.status == "DISPATCHED" for e in es) == 2   # 2 槽用满
+    assert tp.free_slot_count(st, "issue_fix") == 0
+    assert tp.SLOT_KINDS["issue_fix"] == 2
+    # 派发即记账: lane/worktree 落条目,worktree 进槽位账本
+    assert es[0].lane == "issue_fix" and es[0].worktree == "/wt/issue-1"
+    assert tp.slot_get(st, "issue_fix", "issue-1")["worktree"] == "/wt/issue-1"
+    # 内存闸拒绝
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: False)
+    es[2].status = "QUEUED"; es[2].agent_pid = None
+    assert tl.dispatch_agent(es[2], st) is None
+
+
+def test_dispatch_pr_repair_uses_own_slots(monkeypatch, tmp_path):
+    """pr_repair 与 issue_fix 互不占位: issue 2 槽用满后,pr 泳道照常派,
+    且 rounds 记账在 pr 泳道(lane B 契约)。"""
+    _patch_dispatch_offline(monkeypatch, tmp_path)
+    pids = iter((4242, 4243, 4244))
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: next(pids))
+
+    def mk(n, pr=None):
+        return tl.Entry(workflow="w", run_id=n, status="QUEUED", issue_number=n,
+                        fix_branch="", pr_number=pr, attempts=0, rounds=0,
+                        agent_pid=None, agent_started_at=None, agent_log=None,
+                        last_dispatched_head=None, extra_runs=[], created_at="t",
+                        updated_at="t", source="audit", kind="bug",
+                        audit_hash=None)
+
+    st = {"entries": [mk(1).to_dict(), mk(2).to_dict(),
+                      mk(3, pr=88).to_dict()],
+          "auth_failure_streak": 0}
+    es = tl.StateStore.entries(st)
+    tl.dispatch_agent(es[0], st)
+    tl.dispatch_agent(es[1], st)
+    assert tp.free_slot_count(st, "issue_fix") == 0
+    assert tl.dispatch_agent(es[2], st, increment_rounds=True) == 4244
+    assert es[2].status == "BOT_FIX" and es[2].rounds == 1
+    assert es[2].lane == "pr_repair" and es[2].worktree == "/wt/pr-88"
+    assert tp.free_slot_count(st, "pr_repair") == 1
+    assert tp.free_slot_count(st, "issue_fix") == 0   # pr 占用不影响 issue
+
+
+def test_dispatch_same_key_spawn_then_killed(monkeypatch, tmp_path):
+    """同 key 二次派发: 前置闸放行(有空槽)→ spawn → slot_acquire 同 key
+    拒 → killpg 整组击杀不留孤儿,条目记账保持首派(不重置 PID/状态)。"""
+    _patch_dispatch_offline(monkeypatch, tmp_path)
+    pids = iter((4242, 4243))
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: next(pids))
+    killed = []
+    monkeypatch.setattr(os, "killpg",
+                        lambda pid, sig: killed.append((pid, sig)))
+    st = {"entries": [], "auth_failure_streak": 0}
+    e = tl.StateStore.entries({"entries": [_entry()], "auth_failure_streak": 0})[0]
+    assert tl.dispatch_agent(e, st) == 4242
+    assert tl.dispatch_agent(e, st) is None        # 同 key issue-5
+    assert killed == [(4243, 9)]
+    assert e.agent_pid == 4242 and e.status == "DISPATCHED"
+    assert e.attempts == 3 and e.lane == "issue_fix"
+    assert len(st["slots"]["issue_fix"]) == 1
+
+
+def test_dispatch_worktree_prepare_failure_refuses(monkeypatch, tmp_path):
+    """worktree 准备失败(git 瞬时故障: fetch 网络抖动等)→ 拒派不炸 tick:
+    返回 None、条目原状零记账、零 spawn——与 heal_clone 同款「本条拒绝、
+    下轮重试」错误策略。"""
+    _patch_dispatch_offline(monkeypatch, tmp_path)
+    def boom(clone_dir, key):
+        raise RuntimeError("git fetch origin --prune… 失败(exit 128): 网络抖动")
+    monkeypatch.setattr(tl, "_worktree_prepare", boom)
+    spawned = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawned.append(1) or 4242)
+    e = tl.StateStore.entries({"entries": [_entry()],
+                               "auth_failure_streak": 0})[0]
+    assert tl.dispatch_agent(e, {"entries": [], "auth_failure_streak": 0}) is None
+    assert e.status == "DISPATCHED" and e.attempts == 2
+    assert spawned == []
+
+
+def test_worktree_prepare_cleanup_roundtrip(tmp_path):
+    """真实 git 集成: prepare 建于 origin/main、可重复 prepare(清残留);
+    rmtree 兜底删目录后留 .git/worktrees 注册——cleanup 不 prune 该残留时
+    同 key 重建必炸(exit 128「丢失但已注册」,2026-11-12 /tmp 实测)。"""
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)],
+                   check=True)
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+    (seed / "f.txt").write_text("x")
+    subprocess.run(["git", "-C", str(seed), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(seed), "-c", "user.email=t@t",
+                    "-c", "user.name=t", "commit", "-qm", "init"], check=True)
+    subprocess.run(["git", "-C", str(seed), "push", "-q", str(bare), "main:main"],
+                   check=True)
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(bare), str(clone)], check=True)
+    wt = tl._worktree_prepare(str(clone), "issue-1")
+    assert os.path.isfile(os.path.join(wt, "f.txt"))
+    # 覆盖既有 worktree(重派残留): prepare 幂等
+    assert tl._worktree_prepare(str(clone), "issue-1") == wt
+    # rmtree 兜底现场(目录没了、注册残留): prepare 仍须能重建
+    shutil.rmtree(wt)
+    wt = tl._worktree_prepare(str(clone), "issue-1")
+    assert os.path.isdir(wt)
+    tl.worktree_cleanup(wt)
+    assert not os.path.exists(wt)
+    assert not os.listdir(os.path.join(clone, ".worktrees"))
+    # 注册已 prune: 同 key 可再建
+    assert os.path.isdir(tl._worktree_prepare(str(clone), "issue-1"))

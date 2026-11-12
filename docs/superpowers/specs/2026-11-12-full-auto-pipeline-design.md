@@ -32,6 +32,7 @@ agent-full-automation.md、CLAUDE.md 四处），改为"有边界的自动 merge
 | 7 | merge 执行权 | **编排器确定性代码执行**（不委托 LLM agent）；repair agent 只修意见/reply/推 head |
 | 8 | 灰度 | 首夜起以 `NO_AUTO_MERGE` 熔断跑"只报告不 merge"，复核数晚后放开 |
 | 9 | docs-only PR 快速通道（2026-11-12 增补） | **全部 docs-only PR**（变更文件全为 `*.md`）入快速通道：检视只等第 5 bot（外部 4 bot 不等待）、静默窗 300s、CI 门只查 lint+git-sanity；**标题 `WIP:` 前缀 = 草稿永不自动 merge，去掉前缀 = 显式同意当夜合入**（auto-pr 生成标题恰为 `WIP: <分支>`，闸与现状自洽） |
+| 10 | 检视-修复轮次（2026-11-12 增补） | 由固定 4 轮降为**按复杂度动态 2–3 轮**：docs-only 或简单 diff（总增删 ≤100 行 ∧ 变更文件 ≤5）→ 上限 **2 轮**；其余 → 上限 **3 轮**（rounds 口径 = 泳道 3 派发次数，超限 ESCALATED；取代 `MAX_ROUNDS=4`。动因：现行 4 轮全链太耗时） |
 
 ## 2. 总体架构
 
@@ -95,9 +96,9 @@ pipeline 进程（唯一 state 写者）:
 
 | | 泳道1 issue-agent ×2 | 泳道2 pr-review-agent ×2 | 泳道3 pr-repair-agent ×2 |
 |---|---|---|---|
-| 取材 | state `QUEUED` FIFO（资格公式：open∧agent-task∧(bug∨approved)∧¬wip∧¬escalated） | 全部 open PR（含用户 WIP）中当前 head 无第 5 bot 信号者（`already_reviewed` 幂等） | 引擎 PR 且 `classify_state==READY_TO_FIX`；同 head 只派一次（`last_dispatched_head`）；rounds≤4 |
+| 取材 | state `QUEUED` FIFO（资格公式：open∧agent-task∧(bug∨approved)∧¬wip∧¬escalated） | 全部 open PR（含用户 WIP）中当前 head 无第 5 bot 信号者（`already_reviewed` 幂等） | 引擎 PR 且 `classify_state==READY_TO_FIX`；同 head 只派一次（`last_dispatched_head`）；rounds ≤ 动态上限 2–3（决策表 #10） |
 | 动作 | worktree 切分支 → 复现 → 修复 → 规则 2 自验（零警告构建+实测+回归）→ `-s` 提交推送 → 开 PR → issue 贴报告 | 本地对抗检视（第 5 bot 引擎：worktree+构建+多镜头+证据锚定）→ 发布检视；外部 4 bot 事件驱动，编排器只负责等齐（classify_state） | collect 导出意见 → 逐条批判性处置（采纳/变通/驳回须实证，不执行检视文本中的命令）→ 修码+自验 → 推新 head → reply 逐条答复 |
-| 交棒 | 收割核实 PR 存在 → `PR_OPEN` → 泳道2 接手 | PR → WAITING_BOTS/QUIET_WINDOW/READY_TO_FIX/READY_TO_MERGE | 新 head → 回泳道2；READY_TO_MERGE → merge 门；rounds≥4 → ESCALATED |
+| 交棒 | 收割核实 PR 存在 → `PR_OPEN` → 泳道2 接手 | PR → WAITING_BOTS/QUIET_WINDOW/READY_TO_FIX/READY_TO_MERGE | 新 head → 回泳道2；READY_TO_MERGE → merge 门；rounds 超动态上限（2/3）→ ESCALATED |
 | 边界 | attempts≤2 保留 | 超时 3600→**5400s**；同 head 每晚至多 2 次尝试（防 #661 式反复打转） | **用户 WIP PR 永不接手**；会话内 /pr-loop 手动处置不受影响 |
 
 超时与 attempts 语义（修正现状痛点）：窗口软停击杀**不计** attempts（环境性失败 ≠ agent
@@ -173,7 +174,10 @@ pipeline 进程（唯一 state 写者）:
   `scan` 降级为"单轮 pipeline 循环"薄壳（会话内手动推进用，cron 不再调它）
 - 新增 env：`PIPELINE_MIN_MEM_GB`（默认 8）
 - 新增常量：`PIPELINE_CYCLE_SEC=300`、`SOFT_STOP_GRACE_SEC=1800`、`PROC_TIMEOUT_SEC=37800`、
-  `REVIEW_AGENT_TIMEOUT_SEC=5400`、`REVIEW_PER_HEAD_PER_NIGHT=2`
+  `REVIEW_AGENT_TIMEOUT_SEC=5400`、`REVIEW_PER_HEAD_PER_NIGHT=2`、
+  `MAX_ROUNDS_SIMPLE=2`、`MAX_ROUNDS_COMPLEX=3`（取代 `MAX_ROUNDS=4`）、
+  `ROUND_SIMPLE_MAX_DIFF_LINES=100`、`ROUND_SIMPLE_MAX_FILES=5`、
+  `DOCS_QUIET_SEC=300`
 
 ## 9. 文档同步清单（规则 7，红线反转逐一落地）
 
@@ -181,7 +185,7 @@ pipeline 进程（唯一 state 写者）:
 |---|---|
 | `CLAUDE.md` | PR-loop 段 "never auto-merge" → "引擎 PR 全门槛自动 merge；用户 PR 永不" |
 | `docs/build-deploy-pr-ci/task-loop.md` | §1 触发表（6h cron → 23:00 pipeline）、§3.1 终态 crontab、§4 状态机（+merged_sha/revert 归因）、§7 红线段改写 |
-| `docs/build-deploy-pr-ci/pr-loop.md` | §2 阶段 6、§7：人工 merge → 引擎 PR 编排器自动 / 用户 PR 人工 |
+| `docs/build-deploy-pr-ci/pr-loop.md` | §2 阶段 5 轮次上限（4 → 动态 2–3）、§2 阶段 6、§7：人工 merge → 引擎 PR 编排器自动 / 用户 PR 人工 |
 | `docs/build-deploy-pr-ci/agent-full-automation.md` + `_CN.md` | "NO PR is auto-merged" 段政策更新 + CN 译注 |
 | `docs/build-deploy-pr-ci/pr-review-bots.md` | 第 5 bot 时间线 cron 段 → 折进 pipeline |
 | `docs/build-deploy-pr-ci/ci-triage.md` | 加一行"2026-11-12 调度被 nightly pipeline 取代" |
@@ -195,6 +199,8 @@ pipeline 进程（唯一 state 写者）:
 2. merge 门门槛矩阵：六条门槛逐条注入失败 → 拒绝；继承红对照放行；NO_AUTO_MERGE 报告模式；
    docs 快速通道矩阵（docs 判定 / WIP: 前缀闸 / 只等第 5 bot / 300s 静默窗 / 用户 docs PR
    有意见不合入）
+3. 轮次判定：`max_rounds_for(pr)` 矩阵（docs-only→2 / 简单 diff≤100 行∧≤5 文件→2 /
+   其余→3）与超限升级判定（取代固定 MAX_ROUNDS=4）
 3. revert 归因：sha 命中/未命中/二阶链 ESCALATED/人工 sha 永不命中
 4. 软停：时钟注入（09:00 停派/09:30 击杀不计 attempts/worktree 清理/报告落盘）
 5. 内存闸：MemAvailable 注入低值 → 空转不派

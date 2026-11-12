@@ -7,6 +7,7 @@ cron 0 23 启动: 窗口循环(每 PIPELINE_CYCLE_SEC 一轮) → 三泳道并�
 09:00 软停: 不再派新 → 等在跑 ≤SOFT_STOP_GRACE_SEC → 击杀(不计 attempts,
 条目回队列) → 清 worktree → 写夜间报告。设计细节一律见 spec,本文件不重述。
 """
+# SPDX-License-Identifier: Apache-2.0
 import fcntl
 import os
 import re
@@ -70,7 +71,7 @@ def mem_available_mb() -> int:
     if avail is None:
         return 0
     limit = _cgroup_mem_limit_mb()
-    return min(avail, limit) if limit else avail
+    return min(avail, limit) if limit is not None else avail
 
 
 def mem_gate_ok() -> bool:
@@ -88,3 +89,91 @@ def in_window(now: datetime, start_hour: int = 23, end_hour: int = 9) -> bool:
     """流水线窗口(本地时间): 23:00–09:00,跨午夜区间。"""
     h = now.hour
     return h >= start_hour or h < end_hour
+
+
+def _now_local_iso():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _slots(state, kind):
+    return state.setdefault("slots", {}).setdefault(kind, [])
+
+
+def slot_get(state, kind, key):
+    for s in _slots(state, kind):
+        if s["key"] == key:
+            return s
+    return None
+
+
+def slot_acquire(state, kind, key, pid, pgid, log, worktree,
+                 started_iso, boot):
+    """占用一槽;同 key 互斥(同条目/同 PR 至多 1 agent)、满槽拒绝。"""
+    live = [s for s in _slots(state, kind) if tl.agent_alive(s["pid"])]
+    if slot_get(state, kind, key) is not None:
+        return False
+    if len(live) >= SLOT_KINDS.get(kind, 0):
+        return False
+    _slots(state, kind).append(
+        {"key": key, "pid": pid, "pgid": pgid, "log": log,
+         "worktree": worktree, "started_at": started_iso, "boot": boot})
+    return True
+
+
+def slot_release(state, kind, key):
+    s = _slots(state, kind)
+    state["slots"][kind] = [x for x in s if x["key"] != key]
+
+
+def free_slot_count(state, kind):
+    """空槽数 = 槽上限 − 活 PID 占用数(死槽即时回收)。"""
+    live = sum(1 for s in _slots(state, kind) if tl.agent_alive(s["pid"]))
+    return max(0, SLOT_KINDS.get(kind, 0) - live)
+
+
+def slot_janitor(state, now_iso):
+    """清死槽并回收其 worktree;返回被清清单(boot 变化 → environmental=True,
+    供启动对账做 attempts 豁免;软停/正常退场走 slot_release 不经此)。"""
+    released = []
+    for kind in SLOT_KINDS:
+        alive = []
+        for s in _slots(state, kind):
+            if tl.agent_alive(s["pid"]):
+                alive.append(s)
+                continue
+            released.append({"kind": kind, **s,
+                             "environmental": s.get("boot") != boot_id()})
+            if s.get("worktree"):
+                tl.worktree_cleanup(s["worktree"])
+        state["slots"][kind] = alive
+    return released
+
+
+def startup_reconcile(state):
+    """pipeline 启动对账: 重启(boot_id 变)期间死亡的 agent 条目干净回队、
+    不计 attempts(#611 attempts=4 假性升级教训);其余死槽只清槽,条目判档
+    仍交 tl.reap_or_advance(单飞语义外的正常 dead/timeout 记账)。"""
+    entries = None
+    for info in slot_janitor(state, _now_local_iso()):
+        if not info["environmental"]:
+            continue
+        if entries is None:
+            # StateStore.entries 每次 from_dict 出新副本——只解析一次,
+            # 推进在循环外统一回写,否则下一轮解析即丢。
+            entries = tl.StateStore.entries(state)
+        for e in entries:
+            keys = (f"issue-{e.issue_number or e.run_id}",)
+            if e.pr_number is not None:
+                keys = keys + (f"pr-{e.pr_number}",)
+            if info["key"] in keys and e.status in tl.AGENT_STATES:
+                e.status = "PR_OPEN" if e.status == "BOT_FIX" else "QUEUED"
+                e.agent_pid = None
+                e.agent_started_at = None
+                e.last_dispatched_head = None
+                e.updated_at = _now_local_iso()
+                print(f"[reconcile] {info['key']} 死于重启(boot 变化)——"
+                      f"干净回队 {e.status},不计 attempts")
+    if entries is not None:
+        # Entry 是解析副本,推进须 to_dict 序列化回 state dict(与
+        # tl.reap_or_advance 同款 write-back),否则下次 entries 拿回旧值。
+        state["entries"] = [e.to_dict() for e in entries]

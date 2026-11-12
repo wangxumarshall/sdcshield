@@ -2078,6 +2078,12 @@ def heal_clone(state: dict, dry_run: bool = False) -> None:
         print(f"[heal] 克隆自愈失败(下轮重试,scan 继续): {exc}")
 
 
+def worktree_cleanup(path: str) -> None:
+    """清 agent worktree(Task 4 完成完整实现: git worktree remove --force)。"""
+    if not path:
+        return
+
+
 # ============ 子命令(Task 2/3/4 实现) ============
 
 def _run_scan_orchestration(dry_run: bool) -> int:

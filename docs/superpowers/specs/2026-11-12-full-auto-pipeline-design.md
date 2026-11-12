@@ -31,6 +31,7 @@ agent-full-automation.md、CLAUDE.md 四处），改为"有边界的自动 merge
 | 6 | 架构 | **方案 A：单进程夜间编排器**（`task_loop.py pipeline`），三泳道异步 |
 | 7 | merge 执行权 | **编排器确定性代码执行**（不委托 LLM agent）；repair agent 只修意见/reply/推 head |
 | 8 | 灰度 | 首夜起以 `NO_AUTO_MERGE` 熔断跑"只报告不 merge"，复核数晚后放开 |
+| 9 | docs-only PR 快速通道（2026-11-12 增补） | **全部 docs-only PR**（变更文件全为 `*.md`）入快速通道：检视只等第 5 bot（外部 4 bot 不等待）、静默窗 300s、CI 门只查 lint+git-sanity；**标题 `WIP:` 前缀 = 草稿永不自动 merge，去掉前缀 = 显式同意当夜合入**（auto-pr 生成标题恰为 `WIP: <分支>`，闸与现状自洽） |
 
 ## 2. 总体架构
 
@@ -124,6 +125,18 @@ pipeline 进程（唯一 state 写者）:
 执行：`gh pr merge <N> --squash --delete-branch`（引擎分支用完即删；DCO 由 agent 提交时已带）。
 **无每晚数量上限**（用户参数），门槛本身即护栏。
 
+**docs-only 快速通道（门槛 1/2/3 的 docs 例外，决策表 #9）**：
+
+- 判定：PR 全部变更文件以 `.md` 结尾（`gh pr view --json files`）
+- 门槛 1 放宽：docs-only PR **不要求引擎归属**，适用任意 PR；但 `title.startswith("WIP:")`
+  → 拒绝（草稿闸；去掉前缀即显式同意当夜合入）
+- 门槛 2 放宽：必需 bot 信号 = **第 5 bot 唯一**（外部 4 bot 事件驱动照跑、不等待）；
+  静默窗 900→**300s**
+- 门槛 3 放宽：只查 `lint`+`git-sanity`（快 job）；Build binary / multi-version / zizmor
+  对 docs-only 不设门（docs-only 不触及它们检查的对象）
+- 意见处置：引擎 docs PR 有第 5 bot 可行动意见 → 照走泳道 3；**用户 docs PR 有意见 →
+  不处置、不合入**（意见留人工），无意见且非 WIP → 当夜合入
+
 冲突与竞态：merge 逐个串行执行，每次 merge 后重查剩余 PR 的 mergeable；与 main 冲突的 PR
 保持 PR_OPEN 记入报告，冲突持续 >2 夜 → ESCALATED（不自动 rebase——rebase 决策留给人工或
 后续版本）。
@@ -179,7 +192,9 @@ pipeline 进程（唯一 state 写者）:
 
 新增单测：
 1. 槽位账本：租约/判死回收/同 key 不重派/boot_id 豁免
-2. merge 门门槛矩阵：六条门槛逐条注入失败 → 拒绝；继承红对照放行；NO_AUTO_MERGE 报告模式
+2. merge 门门槛矩阵：六条门槛逐条注入失败 → 拒绝；继承红对照放行；NO_AUTO_MERGE 报告模式；
+   docs 快速通道矩阵（docs 判定 / WIP: 前缀闸 / 只等第 5 bot / 300s 静默窗 / 用户 docs PR
+   有意见不合入）
 3. revert 归因：sha 命中/未命中/二阶链 ESCALATED/人工 sha 永不命中
 4. 软停：时钟注入（09:00 停派/09:30 击杀不计 attempts/worktree 清理/报告落盘）
 5. 内存闸：MemAvailable 注入低值 → 空转不派
@@ -199,7 +214,7 @@ pipeline 进程（唯一 state 写者）:
 
 - 不做 webhook/守护进程/事件即时派发（用户明确要 cron 23:00 语义）
 - 不自动 rebase 冲突 PR、不做二阶 revert、不自动 resolve review threads（保留）
-- 用户 WIP PR：不 review 修复、不 merge（检视信号仍提供）
+- 用户 WIP PR：不 review 修复、不 merge（检视信号仍提供；**docs-only 例外见 §5 快速通道**）
 - ESCALATED 不自动回流（requeue 子命令不做）
 - GitHub 端分支保护/required checks 配置为可选后续项（当前引擎侧门槛已完整；若未来在
   Settings 落地 required checks，引擎门槛与其兼容——`multi-version` 不设 required 的坑

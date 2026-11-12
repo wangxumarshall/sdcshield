@@ -32,8 +32,8 @@
  10 test_prompt_contains_redlines: prompt 含 5 条红线 + issue 号 + fix 分支名;
  11 test_auth_failure_circuit_breaker_counts_across_entries: 3 条目各 auth_fail
     → 熔断(PAUSED 文件写入 tmp STATE_DIR、≥1 条升级评论、streak==3);
- 12 test_single_flight_blocks_second_dispatch: 活 agent(os.getpid() 顶替 PID,
-    真活)占位 → dispatch_agent 返回 None,run_background 不被调用;
+ 12 test_full_slots_block_dispatch(Task 4 槽位语义): issue 泳道 2 槽被活
+    agent 占满 → 第 3 个条目 dispatch_agent 返回 None,run_background 零调用;
  13 test_check_agent_outcome_classes: 五份伪造条目(活 PID+新时间/成功尾行/
     认证失效日志/死 PID/超时起点)→ 分类 running/success/auth_fail/dead/timeout。
 
@@ -62,7 +62,8 @@
     记 head + status→BOT_FIX;agent 在跑(活 PID)第二轮 → 跳过不重派;
     agent 退场 + 同 head → 清 head 锚后允许重派(Critical#1 裁定——原
     「退场后同 head 不重派」即死锁本身,该断言迁移至用例 25);head 变化
-    → 再派(共 3 次);
+    → 再派(共 3 次;Task 4 起重派前先 slot_release 旧槽——同 key 互斥
+    不判活,清死槽是 janitor 的职责,此处内联模拟);
  19 test_lane_b_merge_ready_notifies_and_closes: READY_TO_MERGE → issue
     评论含 @wangxumarshall、FakeGh 记录 issue close 调用(gh issue close
     <n> 分支)、条目 DONE;评论措辞「本跟踪 issue 现已关闭」与当场 close
@@ -104,22 +105,20 @@
     (成功即证明凭据活着;不清零会把「连续 ≥3」退化成「累计 ≥3」,跨周期
     间歇 auth_fail 过早全局 PAUSED)。
 
-用例口径（Task 4 fix round 2,3 例: 生产首跑实证 Critical——dispatch_agent
-  派发成功后从不置 entry.status,车道 A 条目停在 QUEUED,而单飞/收割/heal
-  全以 status ∈ AGENT_STATES={DISPATCHED,BOT_FIX} 为前提 → 同轮连派 4 个
-  agent(生产 issue #246–#249 现存证据)、死 agent 永不收割、活 agent 被
-  heal 踩工作区。全部离线,口径同前):
+用例口径（Task 4 fix round 2,3 例;nightly-pipeline Task 4 起按槽位语义
+  重写——全局单飞退役,issue/pr 泳道各 2 槽、同 key 互斥、spawn 后占位
+  失败 killpg 击杀不留孤儿。全部离线,口径同前）:
  29 test_dispatch_sets_dispatched_and_single_flight_within_round
     (Critical 主证): QUEUED 条目经 dispatch_agent 派发成功 → 立即
-    DISPATCHED(单飞/收割/heal 即刻可见);同轮第二个 QUEUED 条目再派 →
-    None(单飞拒绝,活 PID 用 os.getpid() 顶替);车道 A attempts 记账
-    不变;dry_run 路径零状态变更(预演零变更语义);
- 30 test_cmd_scan_lane_a_sweep_single_flight(端到端锚定生产缺陷):
-    fake gh(run list 返回 2 个不同 workflow 红 run)+ fake run_background
-    → cmd_scan 全编排跑完,run_background 恰 1 次调用,被派条目
-    DISPATCHED,另一条目 QUEUED 且 attempts==0;并入历史 state 兼容
-    (v1 的 ISSUED+死 PID 条目经 from_dict 归一为 QUEUED+PID,reap →
-    attempts+1 待重派);
+    DISPATCHED(收割/heal 即刻可见);issue 泳道 2 槽 → 前两个并发派发,
+    第 3 个满槽被拒;车道 A attempts 记账不变;dry_run 零状态变更
+    (预演零变更语义);
+ 30 test_cmd_scan_lane_a_sweep_same_issue_slot_mutex(端到端): fake gh
+    (run list 返回 2 个红 run,建号恒 77 → 同 key issue-77)+ fake
+    run_background → cmd_scan 全编排跑完,第 1 个条目派成 DISPATCHED,
+    第 2 个 spawn 后被同 key 槽位闸 killpg 击杀(killpg 打桩记录)且
+    条目留在 QUEUED/attempts==0;并入历史 state 兼容(v1 的 ISSUED+死
+    PID 条目经 from_dict 归一为 QUEUED+PID,reap → attempts+1 待重派);
  31 test_lane_b_dispatch_keeps_bot_fix(回归锚): 车道 B(increment_rounds=
     True)派发成功 → 条目 BOT_FIX,rounds+1、attempts 不动——不因
     dispatch 内统一置状态而回归 QUEUED/DISPATCHED。
@@ -560,8 +559,9 @@ def _fake_run_detail(run_id=123456):
 class FakeBg:
     """run_background 的替身: 记录 (cmd, cwd, log),不真实 spawn。
 
-    返回 os.getpid()(测试进程自身)——真活 PID,单飞判定在多轮 scan
-    编排内立即看到「已有 agent 在跑」(伪 PID 会因探活为死而连派)。
+    返回 os.getpid()(测试进程自身)——真活 PID,槽位账本(派发后 slot 持
+    活 PID)与 has_running_agent 观测在多轮编排内立即看到「已有 agent 在
+    跑」(伪 PID 会因探活为死而连派)。
     """
 
     def __init__(self):
@@ -570,6 +570,17 @@ class FakeBg:
     def __call__(self, cmd, cwd, log):
         self.calls.append((cmd, cwd, log))
         return os.getpid()    # 真活 PID(本测试进程)
+
+
+def _patch_task4_seams(monkeypatch, tmp_path):
+    """Task 4 槽位化派发的引擎缝(离线桩): 内存闸放行 + per-entry worktree
+    建桩。dispatch_agent 新增三道前置闸(槽位/内存/PAUSED)与 worktree 隔离,
+    前者依赖 /proc 宿主相关、后者依赖真实 git——各旧用例锚定自己的既有断言
+    面(命令形态/记账/状态机),这两处一律打桩。"""
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(ct, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +593,7 @@ def test_dispatch_sources_agent_env(monkeypatch, tmp_path):
     clone_dir = tmp_path / "clone"
     clone_dir.mkdir()
     monkeypatch.setenv("CITRIAGE_CLONE_DIR", str(clone_dir))
+    _patch_task4_seams(monkeypatch, tmp_path)
 
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
@@ -595,7 +607,9 @@ def test_dispatch_sources_agent_env(monkeypatch, tmp_path):
     assert pid == os.getpid()                  # FakeBg 真活 PID(测试进程)
     assert len(bg.calls) == 1
     cmd, cwd, log = bg.calls[0]
-    assert cwd == str(clone_dir)             # 在克隆目录执行(绝不在用户工作区)
+    # Task 4: cwd = per-entry 隔离 worktree(issue_number=None → run_id 键),
+    # 不再直接在主克隆执行(主克隆恢复可无条件 heal)
+    assert cwd == f"{tmp_path}/cl/.worktrees/issue-123456"
     assert "source" in cmd
     assert "agent.env" in cmd                # 认证环境经 STATE_DIR/agent.env 注入
     assert "--dangerously-skip-permissions" in cmd
@@ -669,22 +683,33 @@ def test_auth_failure_circuit_breaker_counts_across_entries(monkeypatch, tmp_pat
 # ---------------------------------------------------------------------------
 # 用例 12: 单飞——活 agent 占位时拒绝第二次派发
 
-def test_single_flight_blocks_second_dispatch(monkeypatch, tmp_path):
+def test_full_slots_block_dispatch(monkeypatch, tmp_path):
+    """Task 4 槽位语义(取代全局单飞): issue 泳道 2 槽被活 agent 占满 →
+    第 3 个条目在满槽闸被拒,零 spawn、零记账。"""
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
+    _patch_task4_seams(monkeypatch, tmp_path)
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
 
     # 条目 A 持有真实活 PID(本测试进程),状态 DISPATCHED → has_running_agent
+    # 观测为真(观测 API 保留,不再做派发闸门)
     a = _sample_entry(workflow="Sanitizer", run_id=1, status="DISPATCHED",
                       agent_pid=os.getpid(), extra_runs=[])
     b = _sample_entry(workflow="CodeQL", run_id=2, status="QUEUED",
                       agent_pid=None, attempts=0, extra_runs=[])
     state = {"entries": [a.to_dict(), b.to_dict()], "auth_failure_streak": 0}
+    # 槽位账本: issue_fix 两槽均被活 PID 占满(测试进程自身,探活必真)
+    import task_loop_pipeline as tp
+    tp.slot_acquire(state, "issue_fix", "issue-901", os.getpid(), os.getpid(),
+                    "/l", "/w", "t", "b")
+    tp.slot_acquire(state, "issue_fix", "issue-902", os.getpid(), os.getpid(),
+                    "/l", "/w", "t", "b")
 
     assert ct.has_running_agent(state) is True
     pid = ct.dispatch_agent(b, state)
 
-    # 拒绝派发: 返回 None,零 spawn,b 不变
+    # 满槽拒绝: 返回 None,零 spawn,b 不变
     assert pid is None
     assert bg.calls == []
     assert b.agent_pid is None and b.attempts == 0
@@ -935,6 +960,7 @@ def test_lane_b_dispatches_once_per_head(monkeypatch, tmp_path):
     (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    _patch_task4_seams(monkeypatch, tmp_path)
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
 
@@ -972,9 +998,13 @@ def test_lane_b_dispatches_once_per_head(monkeypatch, tmp_path):
     assert e2.last_dispatched_head == "b" * 40
 
     # 第 3 轮: agent 退场(死伪 PID)且 head 变化(新 push)→ 归还 PR_OPEN 后
-    # 允许新一轮派发(共 2 次;head 变化的重派不受同 head 单派规则约束)
+    # 允许新一轮派发(共 2 次;head 变化的重派不受同 head 单派规则约束)。
+    # Task 4 槽位纪律: 同 key 重派前须先释放旧槽(slot_janitor 清死槽的
+    # 职责,T10 编排;此处内联模拟)——slot_acquire 同 key 互斥不判活。
     e2.agent_pid = 999999901
     state["entries"] = [e2.to_dict()]
+    import task_loop_pipeline as tp
+    tp.slot_release(state, "pr_repair", "pr-88")
     pr2 = _fake_pr(head_sha="c" * 40)
     _fake_pr_loop(monkeypatch, pr2, "READY_TO_FIX")
     ct.lane_b_advance(state, dry_run=False)
@@ -1025,6 +1055,9 @@ def test_lane_b_merge_ready_notifies_and_closes(monkeypatch, tmp_path):
 def test_scan_heals_dirty_tree_when_no_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    # clone 目录重定向: Task 4 起 heal 无条件执行并清 <clone>/.worktrees
+    # 孤儿——不重定向会打到真实生产克隆(测试绝不碰真实目录)
+    monkeypatch.setenv("CITRIAGE_CLONE_DIR", str(tmp_path / "cl"))
     fake = FakeGh(runs=[])
     monkeypatch.setattr(ct, "gh_json", fake.gh_json)
 
@@ -1054,13 +1087,26 @@ def test_scan_heals_dirty_tree_when_no_agent(monkeypatch, tmp_path):
     assert git_calls[5][:2] == ["clean", "-fd"]
     assert len(git_calls) == 6
 
-    # 活 agent 在跑时零 git 恢复调用(绝不踩正在干活的 agent 工作区)
+    # Task 4: agent 全在隔离 worktree 里跑,活 agent 在跑也不挡主克隆 heal
+    # (旧 has_running_agent 早退退役;工作区互不踩)——同一完整恢复序列照跑
     git_calls.clear()
     busy = _sample_entry(workflow="Sanitizer", run_id=23, status="DISPATCHED",
                          agent_pid=os.getpid(), extra_runs=[])
     state2 = {"entries": [busy.to_dict()], "auth_failure_streak": 0}
     ct.heal_clone(state2, dry_run=False)
-    assert git_calls == []
+    assert git_calls[0][:3] == ["fetch", "--all", "--prune"]
+    assert len(git_calls) == 6                   # 无条件 heal,活 agent 不挡
+
+    # 孤儿清理: 槽位账本外的 .worktrees/* 残留被清,槽位内的(含死槽)留给
+    # slot_janitor,heal 不越权
+    wt_root = tmp_path / "cl" / ".worktrees"
+    orphan = wt_root / "orphan-x"; slotted = wt_root / "issue-5"
+    orphan.mkdir(parents=True); slotted.mkdir(parents=True)
+    state2["slots"] = {"issue_fix": [
+        {"key": "issue-5", "pid": 1, "pgid": 1, "log": "/l",
+         "worktree": str(slotted), "started_at": "t", "boot": "b"}]}
+    ct.heal_clone(state2, dry_run=False)
+    assert not orphan.exists() and slotted.exists()
 
     # dry-run: 零 git 调用,只打印意图
     git_calls.clear()
@@ -1246,6 +1292,7 @@ def test_bot_fix_dead_agent_returns_pr_open_and_re_dispatches(
     (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
+    _patch_task4_seams(monkeypatch, tmp_path)
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
 
@@ -1316,6 +1363,10 @@ def test_cmd_scan_toplevel_gherror_returns_1_and_saves_state(
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
     (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    # Task 4: heal 无条件执行 + 清 <clone>/.worktrees 孤儿 + 派发闸/ worktree
+    # 缝——clone 重定向到 tmp(绝不碰真实生产克隆),两缝打桩离线
+    monkeypatch.setenv("CITRIAGE_CLONE_DIR", str(tmp_path / "cl"))
+    _patch_task4_seams(monkeypatch, tmp_path)
 
     # lane_b 阶段: classify=READY_TO_MERGE,单条目级 try 内的 fetch_pr 走
     # fake 不抛;抛点选该分支的 gh issue close(lane_b 的真实 gh 写路径,
@@ -1463,13 +1514,15 @@ def test_bot_fix_success_resets_auth_streak(monkeypatch, tmp_path):
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-# 用例 29(Critical 主证): 派发成功即置 DISPATCHED;同轮第二个条目被
-# 单飞拒绝;attempts 记账不变;dry_run 零状态变更。
+# 用例 29(Critical 主证,Task 4 槽位化): 派发成功即置 DISPATCHED;
+# issue 泳道 2 槽 → 前两个并发派发,第 3 个满槽被拒;attempts 记账不变;
+# dry_run 零状态变更。
 
 def test_dispatch_sets_dispatched_and_single_flight_within_round(
         monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
     (tmp_path / "agent.env").write_text("# test env\n")
+    _patch_task4_seams(monkeypatch, tmp_path)
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
     # Task 7: 条目带 issue_number 且本用例未 fake gh_json——派发成功的
@@ -1488,49 +1541,56 @@ def test_dispatch_sets_dispatched_and_single_flight_within_round(
                       extra_runs=[])
     state = {"entries": [a.to_dict(), b.to_dict()], "auth_failure_streak": 0}
 
-    # 第一个派发成功 → 条目立即 DISPATCHED(单飞/收割/heal 即刻可见)
+    # dry_run 先行: 预演零变更——不置状态、零记账、零 spawn
     ea = ct.StateStore.entries(state)[0]
+    assert ct.dispatch_agent(ea, state, dry_run=True) is None
+    assert ea.status == "QUEUED"
+    assert ea.attempts == 0 and ea.agent_pid is None
+    assert len(bg.calls) == 0
+
+    # 2 槽并发(Task 4 取代全局单飞): a、b 两个条目同轮都派得动
     pid = ct.dispatch_agent(ea, state)
     assert pid is not None
     assert ea.status == "DISPATCHED"            # 修复主断言: 派发即置状态
     assert ea.agent_pid == os.getpid()          # FakeBg 真活 PID(测试进程)
     assert ea.attempts == 1                     # 车道 A attempts 记账不变
-
-    # 单飞判定须看到刚派的 agent(FakeBg 返回的 PID 即真活,无需顶替)
-    state["entries"] = [e.to_dict() for e in (ea, b)]
-    assert ct.has_running_agent(state) is True  # 旧缺陷下此处 False
-
-    # 同轮(state 已回写后)第二个条目 → 单飞拒绝
     eb = ct.StateStore.entries(state)[1]
-    assert ct.dispatch_agent(eb, state) is None
-    assert len(bg.calls) == 1                   # 只有第一次 spawn
-    assert eb.agent_pid is None and eb.attempts == 0
+    assert ct.dispatch_agent(eb, state) is not None
+    assert eb.status == "DISPATCHED"
+    assert len(bg.calls) == 2
 
-    # dry_run: 预演零变更——不置状态、零记账、零 spawn
+    # 观测 API(保留,不再是派发闸门)看得到刚派的 agent
+    state["entries"] = [e.to_dict() for e in (ea, eb)]
+    assert ct.has_running_agent(state) is True
+
+    # 第 3 个条目: issue 泳道满槽(2 槽已被活 PID 占满)→ 拒绝
     c = _sample_entry(workflow="Security", run_id=63, status="QUEUED",
                       issue_number=163, agent_pid=None,
                       agent_started_at=None, agent_log=None, attempts=0,
                       extra_runs=[])
-    state["entries"] = [e.to_dict() for e in (ea, c)]
-    assert ct.dispatch_agent(ct.StateStore.entries(state)[1], state,
-                             dry_run=True) is None
-    ec = ct.StateStore.entries(state)[1]
-    assert ec.status == "QUEUED"                # 预演不置状态
-    assert ec.attempts == 0 and ec.agent_pid is None
-    assert len(bg.calls) == 1
+    state["entries"] = [e.to_dict() for e in (ea, eb, c)]
+    ec = ct.StateStore.entries(state)[2]
+    assert ct.dispatch_agent(ec, state) is None
+    assert ec.status == "QUEUED" and ec.agent_pid is None
+    assert ec.attempts == 0
+    assert len(bg.calls) == 2                   # 只有前两次 spawn
 
 
 # ---------------------------------------------------------------------------
-# 用例 30(端到端锚定生产缺陷): scan 车道 A 派发扫单飞——2 个不同
-# workflow 红 run 只派 1 个 agent;被派条目 DISPATCHED,另一个留 QUEUED
-# 且 attempts==0。并入历史 state 兼容: v1「ISSUED+死 PID」条目(生产
-# state.json 现存形态,加载归一为 QUEUED+PID)经 reap 收割 →
-# attempts+1、清引用待重派。
+# 用例 30(端到端锚定生产缺陷,Task 4 槽位语义): scan 车道 A 派发扫——
+# 两个红 run 的条目(FakeGh 建号恒 77 → 同 key issue-77 互斥)只保住 1 个
+# agent;第二个 spawn 后被同 key 槽位闸击杀(killpg 不留孤儿),条目不动。
+# 并入历史 state 兼容: v1「ISSUED+死 PID」条目(生产 state.json 现存形态,
+# 加载归一为 QUEUED+PID)经 reap 收割 → attempts+1、清引用待重派。
 
-def test_cmd_scan_lane_a_sweep_single_flight(monkeypatch, tmp_path):
+def test_cmd_scan_lane_a_sweep_same_issue_slot_mutex(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
     (tmp_path / "agent.env").write_text("# test env\n")
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    # clone 重定向: heal 无条件执行 + 清 <clone>/.worktrees 孤儿(Task 4),
+    # 测试绝不碰真实生产克隆
+    monkeypatch.setenv("CITRIAGE_CLONE_DIR", str(tmp_path / "cl"))
+    _patch_task4_seams(monkeypatch, tmp_path)
     # 两个不同 workflow 的红 run → 两个 QUEUED 条目(同轮派发扫的输入)
     runs = [
         _run(38482214201, "Sanitizer", "schedule", "failure"),
@@ -1538,7 +1598,7 @@ def test_cmd_scan_lane_a_sweep_single_flight(monkeypatch, tmp_path):
     ]
     fake = FakeGh(runs=runs, open_issues=[
         # 检视#12 起派发扫复查资格: 两个条目的 issue(FakeGh 建号恒 77)仍
-        # open 且带资格标签——单飞只派 1 个的原断言口径不变
+        # open 且带资格标签——同 key 互斥只保 1 个 agent 的断言口径不变
         {"number": 77, "title": "t",
          "labels": [{"name": "agent-task"}, {"name": "agent-bug"}]},
     ])
@@ -1546,12 +1606,19 @@ def test_cmd_scan_lane_a_sweep_single_flight(monkeypatch, tmp_path):
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
     monkeypatch.setattr(ct, "_git", lambda args: "")
+    # killpg 记录而非真杀: FakeBg 回显的 PID 是本测试进程(组长),真杀会
+    # 掀翻整个 pytest 进程组;此处锚「同 key 击杀不留孤儿」的可观测语义
+    killed = []
+    monkeypatch.setattr(os, "killpg",
+                        lambda pid, sig: killed.append((pid, sig)))
 
     rc = ct.cmd_scan(argparse.Namespace(dry_run=False))
     assert rc == 0
 
-    # 单飞: 两个 QUEUED 条目只派 1 个 agent(生产实证同轮派了 4 个)
-    assert len(bg.calls) == 1
+    # 同 key 互斥: 第 1 个条目派成并占 slot issue-77;第 2 个 spawn 后被
+    # 槽位闸击杀(FakeBg PID=os.getpid()),条目留在 QUEUED 不记账
+    assert len(bg.calls) == 2
+    assert killed == [(os.getpid(), 9)]
     saved = ct.StateStore().load()
     entries = {e["run_id"]: e for e in saved["entries"]}
     assert len(entries) == 2
@@ -1560,7 +1627,7 @@ def test_cmd_scan_lane_a_sweep_single_flight(monkeypatch, tmp_path):
     assert len(dispatched) == 1 and len(waiting) == 1
     assert dispatched[0]["status"] == "DISPATCHED"   # 派发即置状态
     assert dispatched[0]["attempts"] == 1
-    assert waiting[0]["status"] == "QUEUED"          # 未派条目不动
+    assert waiting[0]["status"] == "QUEUED"          # 被拒条目不动
     assert waiting[0]["attempts"] == 0
     assert waiting[0]["agent_pid"] is None
 
@@ -1599,6 +1666,7 @@ def test_lane_b_dispatch_keeps_bot_fix(monkeypatch, tmp_path):
     # Task 7: 同 test_dispatch_sets_dispatched…——未 fake gh_json 的用例,
     # wip 标签同步打桩,杜绝真实 gh 触网。
     monkeypatch.setattr(ct, "gh_label_add", lambda n, lb: None)
+    _patch_task4_seams(monkeypatch, tmp_path)
 
     entry = _sample_entry(workflow="Sanitizer", run_id=64,
                           status="PR_OPEN", issue_number=77, pr_number=88,
@@ -1835,6 +1903,7 @@ def test_lane_b_triggers_local_review_before_dispatch(monkeypatch, tmp_path):
         review_calls.append((n, s))
 
     monkeypatch.setattr(ct.pr_loop, "ensure_local_review", fake_ensure)
+    _patch_task4_seams(monkeypatch, tmp_path)
 
     bg = FakeBg()
 
@@ -1889,6 +1958,7 @@ def test_lane_b_refetches_pr_after_ensure_local_review(monkeypatch, tmp_path):
     monkeypatch.setattr(ct.pr_loop, "ensure_local_review", lambda n, s: None)
     monkeypatch.setattr(ct.pr_loop, "render_collect",
                         lambda p, slug, quiet: "# collect(fake)\n")
+    _patch_task4_seams(monkeypatch, tmp_path)
     classified = []
 
     def fake_classify(p, quiet, now):

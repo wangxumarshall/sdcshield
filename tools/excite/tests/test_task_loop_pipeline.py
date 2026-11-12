@@ -361,6 +361,10 @@ def test_max_rounds_for_matrix(monkeypatch):
     from types import SimpleNamespace as NS
     monkeypatch.setattr(tl, "pr_files", lambda n: ["docs/a.md"])
     assert tl.max_rounds_for(None, NS(pr_number=1, additions=5, deletions=5)) == 2
+    # Minor B(fix-round 1): docs 臂优先于复杂度——docs-only 即使增删
+    # 250 行(≥100)仍按 docs-only 上限 2
+    assert tl.max_rounds_for(
+        None, NS(pr_number=1, additions=200, deletions=50)) == 2
     monkeypatch.setattr(tl, "pr_files",
                         lambda n: ["a.c", "b.c", "c.c", "d.c", "e.c"])
     assert tl.max_rounds_for(
@@ -370,11 +374,6 @@ def test_max_rounds_for_matrix(monkeypatch):
         None, NS(pr_number=3, additions=60, deletions=30)) == 3   # 6 文件 → 复杂
     assert tl.max_rounds_for(
         None, NS(pr_number=4, additions=200, deletions=50)) == 3
-    # PRData 无 additions/deletions 字段(现行 pr_loop.PRData 即此形态,
-    # 开工前已 grep 核实)→ 按复杂=3 兜底(宁严勿松)
-    monkeypatch.setattr(tl, "pr_files", lambda n: ["a.c"])
-    assert tl.max_rounds_for(
-        None, NS(pr_number=5, additions=None, deletions=None)) == 3
     # files 显式给出时不现拉(pr_files 不被调用也能判)
     monkeypatch.setattr(tl, "pr_files", lambda n: (_ for _ in ()).throw(
         AssertionError("files 已显式给出,不应再拉")))
@@ -383,9 +382,52 @@ def test_max_rounds_for_matrix(monkeypatch):
         files=["docs/x.md"]) == 2
 
 
+def test_max_rounds_for_additions_deletions_gh_fallback(monkeypatch):
+    """Important#1(fix-round 1): PRData 无 additions/deletions 字段(现行
+    pr_loop.PRData 即此形态,开工前已 grep 核实)→ 经 gh pr view --json
+    additions,deletions 兜底(brief Consumes 明文)——不兜底则简单 diff 臂
+    生产不可达。兜底拉取失败(GhError)按复杂=3(宁严勿松)。"""
+    from types import SimpleNamespace as NS
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["a.c"])
+    # 兜底拉到 40+30=70 ≤100 行 ∧ 1 文件 → 简单=2(gh_json_idem 经 gh_json
+    # 的 json.loads 成 dict——桩镜像该契约,非裸 JSON 字符串)
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None:
+                        {"additions": 40, "deletions": 30})
+    assert tl.max_rounds_for(None, NS(pr_number=7)) == 2
+    # 兜底拉取失败 → 复杂=3
+    def boom(args, input_text=None):
+        raise tl.GhError("gh pr view … 失败(exit 1): HTTP 404")
+    monkeypatch.setattr(tl, "gh_json_idem", boom)
+    assert tl.max_rounds_for(None, NS(pr_number=8)) == 3
+    # gh 空输出(gh_json 退出码 0 无输出 → None)→ or {} 防空,0+0 ≤100
+    # ∧ 1 文件 → 简单=2(空 PR 无增删,0 行本就是最小简单 diff)
+    monkeypatch.setattr(tl, "gh_json_idem", lambda args, input_text=None: None)
+    assert tl.max_rounds_for(None, NS(pr_number=9)) == 2
+    # PR 号双形解析: 真实 PRData 字段名是 number(无 pr_number)——审查者
+    # 片段的 pr.pr_number 对它 AttributeError,离线 lane_b 用例当场逮到
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None:
+                        {"additions": 40, "deletions": 30})
+    assert tl.max_rounds_for(None, NS(number=12)) == 2
+
+
+def test_max_rounds_for_empty_files_strict_complex(monkeypatch):
+    """Minor A(fix-round 1): files 拉取失败(空清单)即使增删字段齐全也按
+    复杂=3——空表会冒充「≤5 文件」误走简单臂,与「宁严勿松」相悖。"""
+    from types import SimpleNamespace as NS
+    assert tl.max_rounds_for(
+        None, NS(pr_number=10, additions=60, deletions=30), files=[]) == 3
+    monkeypatch.setattr(tl, "pr_files", lambda n: [])
+    assert tl.max_rounds_for(
+        None, NS(pr_number=11, additions=60, deletions=30)) == 3
+
+
 def test_pr_files_parses_lines_and_degrades_on_gherror(monkeypatch):
     """pr_files: gh_json_idem 输出按行拆(去空行);GhError → [](按复杂
-    处理的诚实降级,绝不炸车道 B)。"""
+    处理的诚实降级,绝不炸车道 B);gh 空输出(gh_json 退出码 0 无输出
+    → None,空 diff PR 的 .files[].path 即此形态)→ [](Important#2,
+    fix-round 1——旧实现 out.splitlines() 裸崩 AttributeError)。"""
     monkeypatch.setattr(tl, "gh_json_idem",
                         lambda args, input_text=None:
                         "docs/a.md\nsrc/b.c\n\n")
@@ -394,6 +436,10 @@ def test_pr_files_parses_lines_and_degrades_on_gherror(monkeypatch):
     def boom(args, input_text=None):
         raise tl.GhError("gh pr view … 失败(exit 1): HTTP 404")
     monkeypatch.setattr(tl, "gh_json_idem", boom)
+    assert tl.pr_files(88) == []
+
+    # Important#2: gh 空输出 → gh_json 返回 None → pr_files 不得裸崩
+    monkeypatch.setattr(tl, "gh_json_idem", lambda args, input_text=None: None)
     assert tl.pr_files(88) == []
 
 

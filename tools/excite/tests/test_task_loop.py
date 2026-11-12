@@ -660,6 +660,9 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
     monkeypatch.setattr(tl.pr_loop, "ensure_local_review",
                         lambda num, sha: None)
     monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    # Task 5 引擎缝: 轮次上限判定的文件清单拉取打桩(非 docs-only →
+    # 复杂=3;PRData 无 additions/deletions 字段 → rounds=0 恒可派),离线
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["src/a.c"])
     # Task 4 引擎缝: 内存闸放行 + worktree 建桩(离线)
     import task_loop_pipeline as tp
     monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)

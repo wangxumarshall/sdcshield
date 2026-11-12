@@ -77,8 +77,14 @@ EVENTS = {"schedule", "push"}
 MONITORED_BRANCH = "main"
 # 单个修复 agent 的最长运行时间(秒)——超时视为失败,计数升级
 AGENT_TIMEOUT_SEC = 3600
-# 车道 B(bot 意见处置)最大轮数——超过 4 轮仍在修,升级人工(spec §6)
-MAX_ROUNDS = 4
+# 车道 B(bot 意见处置)轮次上限按复杂度动态(spec 2026-11-12-full-auto
+# #10,取代固定 4 轮——现行 4 轮全链太耗时): docs-only 或简单 diff →
+# ≤2 轮,其余 → ≤3 轮。rounds 口径不变(泳道 3 派发次数,≥ 上限即
+# ESCALATED);files/增删行数取自 gh pr view,拉不到按复杂(宁严勿松)。
+MAX_ROUNDS_SIMPLE = 2     # docs-only / 简单 diff: 检视-修复 ≤2 轮(spec 决策表 #10)
+MAX_ROUNDS_COMPLEX = 3    # 其余: ≤3 轮
+ROUND_SIMPLE_MAX_DIFF_LINES = 100
+ROUND_SIMPLE_MAX_FILES = 5
 # 第 5 bot(local-claude)连续缺位告警阈值: 连续 N 个 scan tick 车道 B 拉到的
 # PR 都缺 local-claude 信号 → 升级告警(认证失效/配额耗尽时无人值守 fix/ci
 # PR 会永久 WAITING_BOTS 且静默)。只告警不降门槛——硬门槛是用户确认项,
@@ -1306,7 +1312,8 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
                    prompt_override: Optional[str] = None,
                    increment_rounds: bool = False) -> Optional[int]:
     """派修复 agent(nohup 后台,per-entry 隔离 worktree)→ 返回 PID;
-    PAUSED/内存不足/满槽/同 key 占位失败返回 None。
+    PAUSED/内存不足/同 key 已占用/满槽/同 key 占位(spawn 后竞态)失败
+    返回 None。
 
     派发成功即置状态(单一权威,调用方无需再赋值): 车道 A
     (increment_rounds=False)→ DISPATCHED;车道 B(increment_rounds=True)
@@ -1334,13 +1341,17 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
       fix|feat/issue-<N> 按 kind;
     - wip 标签: 派发成功即 gh_label_add(issue, agent-wip)(建议性线索,
       state 为权威;GhError 仅告警不阻断);
-    - 槽位闸门(Task 4,取代全局单飞): 三道前置闸 _paused() →
+    - 槽位闸门(Task 4,取代全局单飞): 四道前置闸 _paused() →
       tp.mem_gate_ok()(MemAvailable 与 cgroup 限额取小,阈值
-      PIPELINE_MIN_MEM_GB 默认 8GB,宁慢勿爆)→ tp.free_slot_count
-      (该泳道满槽早退);spawn 之后 slot_acquire 写槽位账本(kind =
-      pr_repair if increment_rounds else issue_fix,key = issue-<N>/
-      pr-<N>;真 PID 才进账本,防哨兵 PID 被 janitor 误清),同 key 占位
-      失败即 killpg 整组击杀刚派生的 agent 不留孤儿、条目记账不动。
+      PIPELINE_MIN_MEM_GB 默认 8GB,宁慢勿爆)→ 同 key 占位早退(Task 5
+      控制器裁定#2: 槽位账本已有同 key 记录即直接拒派,不判活、零 spawn
+      ——消过渡期「spawn 后 acquire 拒再 killpg」churn;死槽的真正清
+      理归 slot_janitor,此处不破坏「先 janitor 后 acquire」序)→
+      tp.free_slot_count(该泳道满槽早退);spawn 之后 slot_acquire 写
+      槽位账本(kind = pr_repair if increment_rounds else issue_fix,
+      key = issue-<N>/pr-<N>;真 PID 才进账本,防哨兵 PID 被 janitor
+      误清),同 key 占位失败即 killpg 整组击杀刚派生的 agent 不留孤儿、
+      条目记账不动(仅剩同轮并发竞态才会走到——单 key 早退闸已拦常态)。
       死槽的清理由 slot_janitor 负责(T10 编排 janitor→派发扫),本函数
       不自建 janitor;
     - PAUSED 闸门: _paused()(新/旧 state 目录双路径,认证熔断写入)为真
@@ -1361,6 +1372,13 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     if not tp.mem_gate_ok():
         print(f"[mem-gate] MemAvailable 不足({tp.min_mem_gb()}GB 闸),"
               f"本轮不派新 agent")
+        return None
+    # 同 key 占位早退(Task 5 控制器裁定#2): 账本已有同 key 记录(活 agent
+    # 或未清死槽)即直接拒派——不判活(判活就把「先 janitor 后 acquire」
+    # 的清理序变成 dispatch 内自建 janitor)、零 spawn(消过渡期
+    # spawn-then-killpg churn)。幂等清理归 reap/slot_janitor,下轮自然放行。
+    if tp.slot_get(state, kind, key) is not None:
+        print(f"[slots] {kind} 槽 {key} 已占用(含未清死槽),本轮跳过")
         return None
     if tp.free_slot_count(state, kind) <= 0:
         print(f"[slots] {kind} 满槽,拒绝为 {key} 派发")
@@ -1404,8 +1422,10 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
            f">> {shlex.quote(log)} 2>&1 "
            f"& echo $!")
     if dry_run:
+        # 只打 key 不打拼好的 worktree 全路径(控制器裁定#4): 路径公式单一
+        # 真源在 _worktree_prepare,预演打印重复公式会随重构双漂移。
         print(f"[dry-run] 将派 agent 修 run {entry.run_id} → {fix_branch},"
-              f"日志 {log},工作目录 {os.path.join(clone_dir, '.worktrees', key)}"
+              f"日志 {log},worktree key {key}"
               f"(隔离 worktree,detach origin/main),prompt 经 stdin({prompt_path})")
         return None
     try:
@@ -1606,6 +1626,9 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
       escalated_reported 采信升级——与车道 A 同口径,理由达人工。
     - 单飞语义: 处理中的 agent 未退场(PID 活)不影响本函数——只收割
       已结束的结局。
+    - Task 5(控制器裁定#1): agent 退场判档后顺手释放槽位账本(幂等)+
+      清 entry.worktree 引用——不动 attempts/rounds 记账语义;不释放则
+      死槽占 key 会把同 key 重派永久拦在 dispatch 的早退闸上。
     - 历史 state 兼容(Task 4 R2 前): 「QUEUED + agent_pid 非 None」是旧
       缺陷形态(dispatch 成功但不置状态;v1 state.json 现存的 ISSUED+PID
       经 from_dict 的 STATUS_V1_TO_V2 归一后即此形态)——先归一为
@@ -1631,6 +1654,21 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
         if outcome == "running":
             continue
         entry.updated_at = _now_iso()
+        # Task 5(控制器裁定#1)reap 路径槽释放: agent 退场判档后、归还/重派
+        # 之前,顺手释放槽位账本(幂等——找不到 key 即 no-op,Task 4 前旧
+        # state 零炸)并清 entry.worktree 引用(目录交 janitor/下一轮
+        # _worktree_prepare 的 cleanup)。key 公式与 dispatch_agent 一致;
+        # 不动 attempts/rounds 记账语义。不释放则死槽占 key 会把同 key
+        # 重派永久拦在 dispatch 的早退闸上。
+        import task_loop_pipeline as tp    # 懒 import 防循环(同 dispatch_agent)
+        _lane_kind = "pr_repair" if entry.status == "BOT_FIX" else "issue_fix"
+        _slot_key = f"pr-{entry.pr_number}" if _lane_kind == "pr_repair" \
+            else f"issue-{entry.issue_number or entry.run_id}"
+        if tp.slot_get(state, _lane_kind, _slot_key) is not None:
+            tp.slot_release(state, _lane_kind, _slot_key)
+            print(f"[reap] run {entry.run_id}: 释放 {_lane_kind} 槽 "
+                  f"{_slot_key}(agent 退场)")
+        entry.worktree = None
         if entry.status == "BOT_FIX":
             if outcome == "auth_fail":
                 # 裁定 7: auth_fail 熔断跨车道统一——BOT_FIX 条目同样计入
@@ -1839,6 +1877,41 @@ CLAUDE.md/AGENTS.md 为准。)
 """
 
 
+def pr_files(pr_number: int) -> list[str]:
+    """PR 变更文件路径清单(docs-only 判定与轮次复杂度共用)。
+    gh_json_idem 走幂等重试封装(纯读,重试无副作用);失败 → [](按
+    复杂处理,绝不炸车道 B)。"""
+    try:
+        out = gh_json_idem(["pr", "view", str(pr_number), "--json", "files",
+                            "--jq", ".files[].path"])
+        return [l for l in out.splitlines() if l.strip()]
+    except GhError as exc:
+        print(f"[warn] PR #{pr_number} files 拉取失败(按复杂处理): {exc}")
+        return []
+
+
+def _docs_only(files: list[str]) -> bool:
+    return bool(files) and all(f.endswith(".md") for f in files)
+
+
+def max_rounds_for(entry, pr, files=None) -> int:
+    """动态轮次上限(spec 决策表 #10): docs-only → 2;增删 ≤100 行 ∧ ≤5
+    文件 → 2;其余 → 3。files 为 None 时现拉 pr_files(pr_number);PRData
+    无 additions/deletions 字段时按复杂=3(诚实降级,宁严勿松)。
+    entry 保留在签名里(车道 B 调用点的既有口径),判定只看 pr/files。"""
+    files = files if files is not None else pr_files(pr.pr_number)
+    if _docs_only(files):
+        return MAX_ROUNDS_SIMPLE
+    add = getattr(pr, "additions", None)
+    dele = getattr(pr, "deletions", None)
+    if add is None or dele is None:
+        return MAX_ROUNDS_COMPLEX
+    if add + dele <= ROUND_SIMPLE_MAX_DIFF_LINES and \
+            len(files) <= ROUND_SIMPLE_MAX_FILES:
+        return MAX_ROUNDS_SIMPLE
+    return MAX_ROUNDS_COMPLEX
+
+
 def lane_b_advance(state: dict, dry_run: bool = False) -> None:
     """车道 B: 对 PR_OPEN 与(无活 agent 的)BOT_FIX 条目推进 bot 意见循环。
 
@@ -1886,7 +1959,7 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
                 # Critical#1): bot agent 以 dead/timeout 退场时锚若不清,
                 # 同 head 单派规则会拦住重派——条目永不重派、rounds 停住、
                 # 升级阀失效,静默死锁。清锚后同 head 允许重派,失控由
-                # rounds 轮数上限(≤MAX_ROUNDS → ESCALATED)有界兜底。
+                # rounds 动态轮数上限(≥ 上限 → ESCALATED,Task 5)有界兜底。
                 _kill_agent_if_alive(entry)
                 entry.status = "PR_OPEN"
                 entry.last_dispatched_head = None
@@ -1989,12 +2062,16 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             continue
 
         # READY_TO_FIX: 轮数上限 → 升级;同 head 已派 → 不重派;否则派 bot agent
-        # rounds >= MAX_ROUNDS(4)(检视 Important#3,旧 `>` 是 off-by-one:
-        # rounds=4 时还会派第 5 轮,违反「车道 B ≤4 rounds」全局约束)
-        if entry.rounds >= MAX_ROUNDS:
+        # rounds ≥ 动态上限(Task 5,spec 决策表 #10: docs-only/简单 diff →2、
+        # 其余 →3,取代固定 4 轮;检视 Important#3 的 `≥` 口径保持,旧 `>`
+        # 是 off-by-one 多派一轮)。pr_files 是纯 gh 读,与 fetch_pr 同口径,
+        # dry_run 亦允许。
+        files = pr_files(entry.pr_number)
+        max_rounds = max_rounds_for(entry, pr, files)
+        if entry.rounds >= max_rounds:
             _escalate(entry, state,
-                      f"bot 意见处置已 {entry.rounds} 轮"
-                      f"(≥ {MAX_ROUNDS})仍未收敛",
+                      f"bot 意见处置已 {entry.rounds} 轮(≥ 动态上限 "
+                      f"{max_rounds}: docs/简单 2、复杂 3)仍未收敛",
                       "人工接手处置剩余 bot 意见并 merge", dry_run)
             continue
         if entry.last_dispatched_head == pr.head_sha:

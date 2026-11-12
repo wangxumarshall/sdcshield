@@ -46,3 +46,22 @@ def test_boot_id_shape():
     # 真实 /proc 可读；形如 36 字符 hex-uuid
     v = tp.boot_id()
     assert len(v) == 36 and "-" in v
+
+
+def test_entry_new_fields_roundtrip_and_legacy():
+    from task_loop import Entry
+    base = dict(workflow="Sanitizer", run_id=1, status="DONE", issue_number=2,
+                fix_branch="fix/issue-2", pr_number=3, attempts=1, rounds=0,
+                agent_pid=None, agent_started_at=None, agent_log=None,
+                last_dispatched_head=None, extra_runs=[], created_at="t",
+                updated_at="t", source="audit", kind="bug", audit_hash=None)
+    e = Entry(**base, lane="issue_fix", worktree="/w", merged_at="m",
+              merged_sha="ab")
+    d = e.to_dict()
+    assert d["lane"] == "issue_fix" and d["merged_sha"] == "ab"
+    # 旧 state(无 4 新键)加载容错: lane="" 其余 None
+    legacy = Entry.from_dict(base)
+    assert legacy.lane == "" and legacy.worktree is None
+    assert legacy.merged_at is None and legacy.merged_sha is None
+    # 往返
+    assert Entry.from_dict(d).to_dict() == d

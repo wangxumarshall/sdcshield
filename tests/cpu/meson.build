@@ -1195,6 +1195,8 @@ if host_machine.cpu_family() == 'aarch64'
             # members duplicate the existing f64 members; f64/pd are FP64.
             'fp64/gather_i32_fp64.cpp',
             'fp64/gatherscatter_i32_fp64.cpp',
+            # user-recipe excitation probe (2026-11-12): 2 ldr + 4 ext + 1 stp
+            'fp64/fp64_2ldr_4ext_stp.cpp',
         )
     )
 endif

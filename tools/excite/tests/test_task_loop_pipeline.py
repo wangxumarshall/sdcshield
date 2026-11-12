@@ -235,9 +235,9 @@ def test_dispatch_two_issue_agents_then_full(monkeypatch, tmp_path):
     # 派发即记账: lane/worktree 落条目,worktree 进槽位账本
     assert es[0].lane == "issue_fix" and es[0].worktree == "/wt/issue-1"
     assert tp.slot_get(st, "issue_fix", "issue-1")["worktree"] == "/wt/issue-1"
-    # 内存闸拒绝
+    # 内存闸拒绝(第 3 条目在满槽闸已被拒、零记账,无需重置字段——控制器
+    # 裁定#3: 原稿两行赋值是无效死行,已删)
     monkeypatch.setattr(tp, "mem_gate_ok", lambda: False)
-    es[2].status = "QUEUED"; es[2].agent_pid = None
     assert tl.dispatch_agent(es[2], st) is None
 
 
@@ -271,21 +271,25 @@ def test_dispatch_pr_repair_uses_own_slots(monkeypatch, tmp_path):
     assert tp.free_slot_count(st, "issue_fix") == 0   # pr 占用不影响 issue
 
 
-def test_dispatch_same_key_spawn_then_killed(monkeypatch, tmp_path):
-    """同 key 二次派发: 前置闸放行(有空槽)→ spawn → slot_acquire 同 key
-    拒 → killpg 整组击杀不留孤儿,条目记账保持首派(不重置 PID/状态)。"""
+def test_dispatch_same_key_second_refused_zero_spawn(monkeypatch, tmp_path):
+    """同 key 二次派发: Task 5(控制器裁定#2)起前置早退——槽位账本已有
+    同 key 记录(不判活)即直接拒派,零 spawn、零 killpg,条目记账保持
+    首派(不重置 PID/状态/attempts)。旧「spawn 后 acquire 拒再 killpg
+    击杀」的过渡期 churn 已消;slot_acquire 的击杀网仅剩并发竞态兜底。"""
     _patch_dispatch_offline(monkeypatch, tmp_path)
     pids = iter((4242, 4243))
+    spawned = []
     monkeypatch.setattr(tl, "run_background",
-                        lambda cmd, cwd, log: next(pids))
+                        lambda cmd, cwd, log: spawned.append(1) or next(pids))
     killed = []
     monkeypatch.setattr(os, "killpg",
                         lambda pid, sig: killed.append((pid, sig)))
     st = {"entries": [], "auth_failure_streak": 0}
     e = tl.StateStore.entries({"entries": [_entry()], "auth_failure_streak": 0})[0]
     assert tl.dispatch_agent(e, st) == 4242
-    assert tl.dispatch_agent(e, st) is None        # 同 key issue-5
-    assert killed == [(4243, 9)]
+    assert tl.dispatch_agent(e, st) is None        # 同 key issue-5 → 早退
+    assert spawned == [1]                          # 第二次零 spawn
+    assert killed == []                            # 无 killpg(不再 spawn-then-kill)
     assert e.agent_pid == 4242 and e.status == "DISPATCHED"
     assert e.attempts == 3 and e.lane == "issue_fix"
     assert len(st["slots"]["issue_fix"]) == 1
@@ -339,3 +343,124 @@ def test_worktree_prepare_cleanup_roundtrip(tmp_path):
     assert not os.listdir(os.path.join(clone, ".worktrees"))
     # 注册已 prune: 同 key 可再建
     assert os.path.isdir(tl._worktree_prepare(str(clone), "issue-1"))
+
+
+# ============ Task 5: 动态轮次 + reap 释放槽位 + 同 key 占位早退 ============
+
+
+def test_dynamic_rounds_constants():
+    """动态轮次常量锚(spec 决策表 #10,取代固定 MAX_ROUNDS=4):
+    docs-only/简单 diff → 2,其余 → 3;简单 diff 门槛 100 行 ∧ 5 文件。"""
+    assert tl.MAX_ROUNDS_SIMPLE == 2
+    assert tl.MAX_ROUNDS_COMPLEX == 3
+    assert tl.ROUND_SIMPLE_MAX_DIFF_LINES == 100
+    assert tl.ROUND_SIMPLE_MAX_FILES == 5
+
+
+def test_max_rounds_for_matrix(monkeypatch):
+    from types import SimpleNamespace as NS
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["docs/a.md"])
+    assert tl.max_rounds_for(None, NS(pr_number=1, additions=5, deletions=5)) == 2
+    monkeypatch.setattr(tl, "pr_files",
+                        lambda n: ["a.c", "b.c", "c.c", "d.c", "e.c"])
+    assert tl.max_rounds_for(
+        None, NS(pr_number=2, additions=60, deletions=30)) == 2   # ≤100 行 ∧ ≤5 文件
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["a.c"] * 6)
+    assert tl.max_rounds_for(
+        None, NS(pr_number=3, additions=60, deletions=30)) == 3   # 6 文件 → 复杂
+    assert tl.max_rounds_for(
+        None, NS(pr_number=4, additions=200, deletions=50)) == 3
+    # PRData 无 additions/deletions 字段(现行 pr_loop.PRData 即此形态,
+    # 开工前已 grep 核实)→ 按复杂=3 兜底(宁严勿松)
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["a.c"])
+    assert tl.max_rounds_for(
+        None, NS(pr_number=5, additions=None, deletions=None)) == 3
+    # files 显式给出时不现拉(pr_files 不被调用也能判)
+    monkeypatch.setattr(tl, "pr_files", lambda n: (_ for _ in ()).throw(
+        AssertionError("files 已显式给出,不应再拉")))
+    assert tl.max_rounds_for(
+        None, NS(pr_number=6, additions=5, deletions=5),
+        files=["docs/x.md"]) == 2
+
+
+def test_pr_files_parses_lines_and_degrades_on_gherror(monkeypatch):
+    """pr_files: gh_json_idem 输出按行拆(去空行);GhError → [](按复杂
+    处理的诚实降级,绝不炸车道 B)。"""
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None:
+                        "docs/a.md\nsrc/b.c\n\n")
+    assert tl.pr_files(88) == ["docs/a.md", "src/b.c"]
+
+    def boom(args, input_text=None):
+        raise tl.GhError("gh pr view … 失败(exit 1): HTTP 404")
+    monkeypatch.setattr(tl, "gh_json_idem", boom)
+    assert tl.pr_files(88) == []
+
+
+def test_docs_only_requires_all_md_and_nonempty():
+    assert tl._docs_only(["a.md", "docs/b.md"]) is True
+    assert tl._docs_only([]) is False            # 拉不到清单不冒充 docs-only
+    assert tl._docs_only(["a.md", "b.c"]) is False
+
+
+def test_reap_releases_issue_slot_on_exit(monkeypatch):
+    """控制器裁定#1(车道 A 臂): agent 退场判档后、归还/重派之前释放
+    issue_fix 槽位 + entry.worktree 清引用;attempts 记账语义不动。"""
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "dead")
+    monkeypatch.setattr(tl, "gh_label_remove", lambda n, lb: None)
+    st = _mkstate()
+    st["entries"] = [_entry(attempts=0, agent_pid=999999901,   # 必死伪 PID
+                            worktree="/wt/issue-5")]
+    tp.slot_acquire(st, "issue_fix", "issue-5", 999999901, 0, "/l",
+                    "/wt/issue-5", "t", tp.boot_id())
+    tl.reap_or_advance(st, dry_run=False)
+    e = tl.StateStore.entries(st)[0]
+    assert e.attempts == 1 and e.agent_pid is None   # dead → +1 重派语义不动
+    assert e.worktree is None                        # 条目侧清引用
+    assert tp.slot_get(st, "issue_fix", "issue-5") is None   # 槽已释放
+    # 幂等: 无槽 state(过渡期 Task 4 前条目)reap 零炸、照常记账
+    st2 = _mkstate()
+    st2["entries"] = [_entry(attempts=0, agent_pid=999999901)]
+    tl.reap_or_advance(st2, dry_run=False)
+    assert tl.StateStore.entries(st2)[0].attempts == 1
+
+
+def test_reap_releases_pr_repair_slot_on_bot_fix_exit(monkeypatch):
+    """控制器裁定#1(车道 B 臂): BOT_FIX agent auth_fail 退场(未达熔断
+    阈值)→ 归还 PR_OPEN 的同时释放 pr_repair 槽位;rounds 记账不动。"""
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "auth_fail")
+    st = _mkstate()
+    st["entries"] = [_entry(status="BOT_FIX", pr_number=88, rounds=2,
+                            agent_pid=999999902, worktree="/wt/pr-88")]
+    tp.slot_acquire(st, "pr_repair", "pr-88", 999999902, 0, "/l",
+                    "/wt/pr-88", "t", tp.boot_id())
+    tl.reap_or_advance(st, dry_run=False)
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "PR_OPEN" and e.rounds == 2   # 车道 B 记账语义不动
+    assert e.agent_pid is None and e.worktree is None
+    assert tp.slot_get(st, "pr_repair", "pr-88") is None
+
+
+def test_dispatch_same_key_dead_slot_zero_spawn(monkeypatch, tmp_path,
+                                                capsys):
+    """控制器裁定#2 配套: 死槽占 key(未清死槽,过渡期形态)→ dispatch
+    前置早退返回 None、零 spawn(消 spawn-then-killpg churn);早退按 key
+    精确命中,不拦其他条目。"""
+    _patch_dispatch_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)  # 槽内 PID 已死
+    spawned = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawned.append(1) or 4242)
+    st = _mkstate()
+    tp.slot_acquire(st, "issue_fix", "issue-5", 999999901, 0, "/l",
+                    "/wt/issue-5", "t", tp.boot_id())
+    e = tl.StateStore.entries({"entries": [_entry()], "auth_failure_streak": 0})[0]
+    assert tl.dispatch_agent(e, st) is None          # 死槽占 key → 早退
+    assert spawned == []                            # 零 spawn
+    assert "已占用" in capsys.readouterr().out
+    assert e.attempts == 2 and e.status == "DISPATCHED"   # 零记账
+    # key 精确: 其他条目(issue-6)不受死槽影响,照常派发
+    e6 = tl.StateStore.entries({"entries": [_entry(issue_number=6)],
+                                "auth_failure_streak": 0})[0]
+    assert tl.dispatch_agent(e6, st) == 4242
+    assert spawned == [1]

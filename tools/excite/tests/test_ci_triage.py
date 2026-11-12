@@ -91,15 +91,15 @@
  25 test_bot_fix_dead_agent_returns_pr_open_and_re_dispatches
     (Critical#1): bot agent dead/timeout 退场(非 auth_fail)→ lane_b
     归还 PR_OPEN 且清 head 锚 → 同 head 允许重派(rounds+1);rounds
-    达 4(MAX_ROUNDS)后再跑 → 不再派发而是 ESCALATED——钉死「死/超时
+    达动态上限(3)后再跑 → 不再派发而是 ESCALATED——钉死「死/超时
     退场不再永久停滞、重派由轮数上限兜底」;
  26 test_cmd_scan_toplevel_gherror_returns_1_and_saves_state
     (Important#2): lane_b 阶段 fake gh 抛 GhError → cmd_scan 返回 1、
     stderr 有错误信息、GhError 前已推进的 state(reap 记账)落盘——顶层
     捕获不裸 traceback,推进成果不因崩溃丢失;
- 27 test_lane_b_rounds_cap_is_inclusive(Important#3): rounds=4 ==
-    MAX_ROUNDS → lane_b 不派发、ESCALATED(rounds 上限 ≤4 轮,旧
-    `rounds > MAX_ROUNDS` 是 off-by-one 派第 5 轮);
+ 27 test_lane_b_rounds_cap_is_inclusive(Important#3): rounds=4 ≥
+    动态上限(3)→ lane_b 不派发、ESCALATED(rounds 上限 ≥ 判定,
+    旧 `rounds > 上限` 是 off-by-one 多派一轮);
  28 test_bot_fix_success_resets_auth_streak(Important#4): streak=2 的
     BOT_FIX 条目 outcome=success → reap 只记录结局,但 streak 同样归零
     (成功即证明凭据活着;不清零会把「连续 ≥3」退化成「累计 ≥3」,跨周期
@@ -116,9 +116,10 @@
  30 test_cmd_scan_lane_a_sweep_same_issue_slot_mutex(端到端): fake gh
     (run list 返回 2 个红 run,建号恒 77 → 同 key issue-77)+ fake
     run_background → cmd_scan 全编排跑完,第 1 个条目派成 DISPATCHED,
-    第 2 个 spawn 后被同 key 槽位闸 killpg 击杀(killpg 打桩记录)且
-    条目留在 QUEUED/attempts==0;并入历史 state 兼容(v1 的 ISSUED+死
-    PID 条目经 from_dict 归一为 QUEUED+PID,reap → attempts+1 待重派);
+    第 2 个被同 key 槽位闸前置早退(零 spawn,Task 5 起 spawn-then-killpg
+    churn 已消)且条目留在 QUEUED/attempts==0;并入历史 state 兼容(v1 的
+    ISSUED+死 PID 条目经 from_dict 归一为 QUEUED+PID,reap → attempts+1
+    待重派);
  31 test_lane_b_dispatch_keeps_bot_fix(回归锚): 车道 B(increment_rounds=
     True)派发成功 → 条目 BOT_FIX,rounds+1、attempts 不动——不因
     dispatch 内统一置状态而回归 QUEUED/DISPATCHED。
@@ -939,6 +940,8 @@ def _fake_pr_loop(monkeypatch, pr, state="READY_TO_FIX"):
     classify_state 可由后续用例覆写;render_collect 返回固定导出文本。
     ensure_local_review 亦替换为 no-op(Task 5 起 lane_b 在判定前主动触发
     第 5 bot——离线测试不得触网;需锚定触发时序的用例另行覆写)。
+    pr_files 亦打桩(Task 5 动态轮次): 非 docs-only 文件清单 → 复杂上限
+    3(PRData 替身无 additions/deletions 字段,现行真实 PRData 亦无)。
     """
     monkeypatch.setattr(ct.pr_loop, "fetch_pr", lambda slug, num: pr)
     monkeypatch.setattr(ct.pr_loop, "classify_state",
@@ -947,6 +950,7 @@ def _fake_pr_loop(monkeypatch, pr, state="READY_TO_FIX"):
                         lambda p, slug, quiet: "# collect 导出(fake)\n")
     monkeypatch.setattr(ct.pr_loop, "ensure_local_review",
                         lambda num, sha: None)
+    monkeypatch.setattr(ct, "pr_files", lambda n: ["src/a.c", "src/b.c"])
 
 
 # ---------------------------------------------------------------------------
@@ -1253,7 +1257,7 @@ def test_bot_fix_auth_fail_counts_toward_circuit_breaker(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------------------
 # 用例 25(Critical#1): bot agent dead/timeout 退场 → 归还 PR_OPEN 且清
-# head 锚 → 同 head 允许重派(rounds+1);rounds 达 MAX_ROUNDS(4)后再跑
+# head 锚 → 同 head 允许重派(rounds+1);rounds 达动态上限(复杂=3)后再跑
 # → 不再派发而是 ESCALATED——死/超时退场不再永久停滞,重派由轮数上限
 # 有界兜底。对称参照: auth_fail 归还路径的清锚(用例 24 场景 1)。
 
@@ -1330,10 +1334,10 @@ def test_bot_fix_dead_agent_returns_pr_open_and_re_dispatches(
     assert len(bg.calls) == 1                   # 同 head 允许重派(死锁已除)
     assert e2.last_dispatched_head == "b" * 40  # 重派记新锚
 
-    # 场景 2: rounds 已达 MAX_ROUNDS(4)的 BOT_FIX 第三次退场 → 归还清锚
-    # 后不再重派而是升级人工(轮数上限有界兜底;旧 `>` 是 off-by-one——
-    # rounds=4 时还会派第 5 轮)。锚同 head,排除「同 head 单派拦截」对
-    # 「上限拦截」的假阳性掩护——不派发只能因轮数已达上限。
+    # 场景 2: rounds 已达动态上限(复杂=3)的 BOT_FIX 第三次退场 → 归还
+    # 清锚后不再重派而是升级人工(轮数上限有界兜底;旧 `>` 是 off-by-one
+    # ——rounds 达上限时还会多派一轮)。锚同 head,排除「同 head 单派拦截」
+    # 对「上限拦截」的假阳性掩护——不派发只能因轮数已达上限。
     third = _sample_entry(workflow="Sanitizer", run_id=41, status="BOT_FIX",
                           issue_number=77, pr_number=88,
                           agent_pid=999999903,   # 又死了
@@ -1427,9 +1431,9 @@ def test_cmd_scan_toplevel_gherror_returns_1_and_saves_state(
 
 
 # ---------------------------------------------------------------------------
-# 用例 27(Important#3): 轮数上限 ≤4 轮(inclusive)——rounds=4 ==
-# MAX_ROUNDS → 不派发、ESCALATED。旧 `rounds > MAX_ROUNDS` 允许 rounds=4
-# 时派第 5 轮(off-by-one,违反全局约束「车道 B ≤4 rounds」)。
+# 用例 27(Important#3): 轮数上限 ≥ 判定(inclusive)——rounds=4 ≥ 动态
+# 上限(复杂=3)→ 不派发、ESCALATED。旧 `rounds > 上限` 允许 rounds==上限
+# 时再多派一轮(off-by-one,违反「超限即升级」全局约束)。
 
 def test_lane_b_rounds_cap_is_inclusive(monkeypatch, tmp_path):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
@@ -1437,7 +1441,9 @@ def test_lane_b_rounds_cap_is_inclusive(monkeypatch, tmp_path):
     monkeypatch.setattr(ct, "gh_json", FakeGh().gh_json)
     bg = FakeBg()
     monkeypatch.setattr(ct, "run_background", bg)
-    assert ct.MAX_ROUNDS == 4                    # 全局约束锚
+    # 动态轮次常量锚(Task 5,取代固定 MAX_ROUNDS=4;复杂口径=3)
+    assert ct.MAX_ROUNDS_SIMPLE == 2
+    assert ct.MAX_ROUNDS_COMPLEX == 3
 
     _fake_pr_loop(monkeypatch, _fake_pr(head_sha="e" * 40), "READY_TO_FIX")
     entry = _sample_entry(workflow="Sanitizer", run_id=53, status="PR_OPEN",
@@ -1450,8 +1456,8 @@ def test_lane_b_rounds_cap_is_inclusive(monkeypatch, tmp_path):
     ct.lane_b_advance(state, dry_run=False)
 
     e = ct.StateStore.entries(state)[0]
-    assert e.status == "ESCALATED"               # rounds 已达 4 → 升级
-    assert e.rounds == 4                         # 不再消耗第 5 轮
+    assert e.status == "ESCALATED"               # rounds 已达动态上限 → 升级
+    assert e.rounds == 4                         # 不再消耗新轮
     assert len(bg.calls) == 0                    # 零派发
 
 
@@ -1577,9 +1583,10 @@ def test_dispatch_sets_dispatched_and_single_flight_within_round(
 
 
 # ---------------------------------------------------------------------------
-# 用例 30(端到端锚定生产缺陷,Task 4 槽位语义): scan 车道 A 派发扫——
-# 两个红 run 的条目(FakeGh 建号恒 77 → 同 key issue-77 互斥)只保住 1 个
-# agent;第二个 spawn 后被同 key 槽位闸击杀(killpg 不留孤儿),条目不动。
+# 用例 30(端到端锚定生产缺陷,Task 4 槽位语义 + Task 5 同 key 早退): scan
+# 车道 A 派发扫——两个红 run 的条目(FakeGh 建号恒 77 → 同 key issue-77
+# 互斥)只保住 1 个 agent;第二个在 spawn 前被同 key 槽位闸早退(Task 5
+# 控制器裁定#2: 消过渡期 spawn-then-killpg churn),条目不动。
 # 并入历史 state 兼容: v1「ISSUED+死 PID」条目(生产 state.json 现存形态,
 # 加载归一为 QUEUED+PID)经 reap 收割 → attempts+1、清引用待重派。
 
@@ -1607,7 +1614,8 @@ def test_cmd_scan_lane_a_sweep_same_issue_slot_mutex(monkeypatch, tmp_path):
     monkeypatch.setattr(ct, "run_background", bg)
     monkeypatch.setattr(ct, "_git", lambda args: "")
     # killpg 记录而非真杀: FakeBg 回显的 PID 是本测试进程(组长),真杀会
-    # 掀翻整个 pytest 进程组;此处锚「同 key 击杀不留孤儿」的可观测语义
+    # 掀翻整个 pytest 进程组;此处锚「同 key 早退零击杀」的可观测语义
+    # (Task 5 起第二个条目根本不 spawn,killpg 不应被触碰)
     killed = []
     monkeypatch.setattr(os, "killpg",
                         lambda pid, sig: killed.append((pid, sig)))
@@ -1615,10 +1623,10 @@ def test_cmd_scan_lane_a_sweep_same_issue_slot_mutex(monkeypatch, tmp_path):
     rc = ct.cmd_scan(argparse.Namespace(dry_run=False))
     assert rc == 0
 
-    # 同 key 互斥: 第 1 个条目派成并占 slot issue-77;第 2 个 spawn 后被
-    # 槽位闸击杀(FakeBg PID=os.getpid()),条目留在 QUEUED 不记账
-    assert len(bg.calls) == 2
-    assert killed == [(os.getpid(), 9)]
+    # 同 key 互斥: 第 1 个条目派成并占 slot issue-77;第 2 个被同 key 早退
+    # 闸拦在 spawn 之前(零 spawn、零 killpg),条目留在 QUEUED 不记账
+    assert len(bg.calls) == 1
+    assert killed == []
     saved = ct.StateStore().load()
     entries = {e["run_id"]: e for e in saved["entries"]}
     assert len(entries) == 2
@@ -1958,6 +1966,9 @@ def test_lane_b_refetches_pr_after_ensure_local_review(monkeypatch, tmp_path):
     monkeypatch.setattr(ct.pr_loop, "ensure_local_review", lambda n, s: None)
     monkeypatch.setattr(ct.pr_loop, "render_collect",
                         lambda p, slug, quiet: "# collect(fake)\n")
+    # Task 5: 动态轮次判定的文件清单打桩(本用例不走 _fake_pr_loop 三件套,
+    # 须单独打;非 docs-only → 复杂上限 3,rounds=0 恒可派)
+    monkeypatch.setattr(ct, "pr_files", lambda n: ["src/a.c"])
     _patch_task4_seams(monkeypatch, tmp_path)
     classified = []
 
@@ -2060,3 +2071,123 @@ def test_lane_b_missing_streak_resets_when_any_pr_has_local_claude(
     # PR #88 有 local-claude 信号 → 全部缺不成立,streak 归零(不再永久递增)
     assert state["local_claude_missing_ticks"] == 0
     assert len(bg.calls) == 0                 # WAITING_BOTS 零派发
+
+
+# ===========================================================================
+# Task 5(nightly-pipeline): 检视-修复轮次按复杂度动态 2-3(spec 2026-11-12
+# 决策表 #10,取代固定 4 轮)——lane_b 升级判定的端到端口径。全部离线,
+# fake gh / fake pr_loop / fake run_background,pr_files 打桩按用例覆写。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 用例 40: 复杂 PR(现行 PRData 无 additions/deletions 字段 → 复杂兜底
+# 上限 3)——rounds=2 仍派发(3 > 2);rounds=3 达上限 → ESCALATED 且
+# 升级文案含动态上限值。
+
+def test_lane_b_dynamic_rounds_complex_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    _patch_task4_seams(monkeypatch, tmp_path)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+    _fake_pr_loop(monkeypatch, _fake_pr(head_sha="b" * 40), "READY_TO_FIX")
+
+    # rounds=2 < 复杂上限 3 → 仍可派(rounds+1 → 3)
+    e1 = _sample_entry(workflow="Sanitizer", run_id=96, status="PR_OPEN",
+                       issue_number=77, pr_number=88, rounds=2,
+                       agent_pid=None, agent_started_at=None,
+                       agent_log=None, last_dispatched_head=None,
+                       extra_runs=[])
+    state = {"entries": [e1.to_dict()], "auth_failure_streak": 0}
+    ct.lane_b_advance(state, dry_run=False)
+    assert len(bg.calls) == 1
+    assert ct.StateStore.entries(state)[0].rounds == 3
+
+    # rounds=3 ≥ 复杂上限 3 → ESCALATED(文案含动态上限值),零新派发
+    e2 = _sample_entry(workflow="Sanitizer", run_id=97, status="PR_OPEN",
+                       issue_number=77, pr_number=88, rounds=3,
+                       agent_pid=None, agent_started_at=None,
+                       agent_log=None, last_dispatched_head=None,
+                       extra_runs=[])
+    state2 = {"entries": [e2.to_dict()], "auth_failure_streak": 0}
+    ct.lane_b_advance(state2, dry_run=False)
+    e = ct.StateStore.entries(state2)[0]
+    assert e.status == "ESCALATED" and e.rounds == 3
+    assert len(bg.calls) == 1                       # 零新派发
+    assert "动态上限 3" in fake.comments[0][1]       # 文案含上限值
+
+
+# ---------------------------------------------------------------------------
+# 用例 41: docs-only PR(变更文件全 .md)→ 上限 2——rounds=2 即升级
+# (旧固定 4 轮不再适用),文案含「动态上限 2」。
+
+def test_lane_b_dynamic_rounds_docs_only_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    _patch_task4_seams(monkeypatch, tmp_path)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+    _fake_pr_loop(monkeypatch, _fake_pr(head_sha="b" * 40), "READY_TO_FIX")
+    monkeypatch.setattr(ct, "pr_files", lambda n: ["docs/a.md", "docs/b.md"])
+
+    entry = _sample_entry(workflow="Sanitizer", run_id=98, status="PR_OPEN",
+                          issue_number=77, pr_number=88, rounds=2,
+                          agent_pid=None, agent_started_at=None,
+                          agent_log=None, last_dispatched_head=None,
+                          extra_runs=[])
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+    ct.lane_b_advance(state, dry_run=False)
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "ESCALATED" and e.rounds == 2   # 2 即达 docs-only 上限
+    assert len(bg.calls) == 0
+    assert "动态上限 2" in fake.comments[0][1]
+
+
+# ---------------------------------------------------------------------------
+# 用例 42: 简单 diff(增删 ≤100 行 ∧ ≤5 文件,PRData 带字段)→ 上限 2;
+# 同 PR rounds=1 仍可派。与用例 41 合看: 三分支(docs-only/简单/复杂)
+# 的 lane_b 口径全覆盖。
+
+def test_lane_b_dynamic_rounds_simple_diff_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
+    monkeypatch.setenv("CITRIAGE_REPO", REPO)
+    fake = FakeGh()
+    monkeypatch.setattr(ct, "gh_json", fake.gh_json)
+    _patch_task4_seams(monkeypatch, tmp_path)
+    bg = FakeBg()
+    monkeypatch.setattr(ct, "run_background", bg)
+    pr = _fake_pr(head_sha="b" * 40)
+    pr.additions, pr.deletions = 60, 30            # 90 ≤ 100 行
+    _fake_pr_loop(monkeypatch, pr, "READY_TO_FIX")
+    monkeypatch.setattr(ct, "pr_files",
+                        lambda n: ["a.c", "b.c", "c.c", "d.c", "e.c"])  # ≤5
+
+    # rounds=1 < 简单上限 2 → 仍可派(rounds+1 → 2)
+    e1 = _sample_entry(workflow="Sanitizer", run_id=99, status="PR_OPEN",
+                       issue_number=77, pr_number=88, rounds=1,
+                       agent_pid=None, agent_started_at=None,
+                       agent_log=None, last_dispatched_head=None,
+                       extra_runs=[])
+    state = {"entries": [e1.to_dict()], "auth_failure_streak": 0}
+    ct.lane_b_advance(state, dry_run=False)
+    assert len(bg.calls) == 1
+    assert ct.StateStore.entries(state)[0].rounds == 2
+
+    # rounds=2 ≥ 简单上限 2 → ESCALATED,文案含「动态上限 2」
+    e2 = _sample_entry(workflow="Sanitizer", run_id=100, status="PR_OPEN",
+                       issue_number=77, pr_number=88, rounds=2,
+                       agent_pid=None, agent_started_at=None,
+                       agent_log=None, last_dispatched_head=None,
+                       extra_runs=[])
+    state2 = {"entries": [e2.to_dict()], "auth_failure_streak": 0}
+    ct.lane_b_advance(state2, dry_run=False)
+    e = ct.StateStore.entries(state2)[0]
+    assert e.status == "ESCALATED" and e.rounds == 2
+    assert len(bg.calls) == 1
+    assert "动态上限 2" in fake.comments[0][1]

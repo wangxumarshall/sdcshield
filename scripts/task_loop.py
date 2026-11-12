@@ -214,10 +214,16 @@ class Entry:
     source: str                     # 任务来路: ci | audit | session | manual
     kind: str                       # bug | feature(决定 fix/ feat/ 分支前缀)
     audit_hash: Optional[str]       # 查重键(audit/finding marker hash;ci/manual 为 None)
+    lane: str = ""                  # 泳道: issue_fix | pr_repair(空=未入槽/历史条目)
+    worktree: Optional[str] = None  # 该 agent 的 git worktree 路径(派发时建,收割时清)
+    merged_at: Optional[str] = None # 自动 merge 时间(ISO8601;人工 merge 不记)
+    merged_sha: Optional[str] = None # squash merge 产生的新 main commit sha(revert 归因主数据)
 
-    # 注: 全部字段显式必填(含 extra_runs)——不做隐式默认,构造方须给全 19 字段
-    # (source/kind/audit_hash 三个 v2 字段仅 from_dict 容错给默认,直接构造
-    # 仍须显式给全)。
+    # 注: 前 18 字段显式必填(含 extra_runs)——不做隐式默认,构造方须给全。
+    # source/kind/audit_hash 三个 v2 字段仅 from_dict 容错给默认,直接构造
+    # 仍须显式给全;lane/worktree/merged_at/merged_sha 四个 v3 字段带默认
+    # (lane="" 其余 None),旧 state 缺键加载即升格、旧构造方无需改动——
+    # 合计 22 字段。
 
     def to_dict(self) -> dict:
         """state.json 序列化形态。"""
@@ -240,6 +246,10 @@ class Entry:
             "source": self.source,
             "kind": self.kind,
             "audit_hash": self.audit_hash,
+            "lane": self.lane,
+            "worktree": self.worktree,
+            "merged_at": self.merged_at,
+            "merged_sha": self.merged_sha,
         }
 
     @classmethod
@@ -248,7 +258,8 @@ class Entry:
 
         容错加载 v1 条目(旧 ci_triage 状态名经 STATUS_V1_TO_V2 归一;
         source/kind/audit_hash 三键缺省回落 ci/bug/None——v1 state.json
-        现存条目无此三键,加载即升格 v2)。
+        现存条目无此三键,加载即升格 v2;lane/worktree/merged_at/merged_sha
+        四键缺省回落 ""/None/None/None——v2 state.json 加载即升格 v3)。
         """
         return cls(
             workflow=d["workflow"],
@@ -269,6 +280,10 @@ class Entry:
             source=d.get("source", "ci"),
             kind=d.get("kind", "bug"),
             audit_hash=d.get("audit_hash"),
+            lane=d.get("lane", ""),
+            worktree=d.get("worktree"),
+            merged_at=d.get("merged_at"),
+            merged_sha=d.get("merged_sha"),
         )
 
 

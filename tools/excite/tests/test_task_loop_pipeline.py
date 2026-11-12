@@ -510,3 +510,134 @@ def test_dispatch_same_key_dead_slot_zero_spawn(monkeypatch, tmp_path,
                                 "auth_failure_streak": 0})[0]
     assert tl.dispatch_agent(e6, st) == 4242
     assert spawned == [1]
+
+
+# ============ Task 6: 泳道2 检视派发器 + --pr 单 PR CLI ============
+
+
+def _patch_review_offline(monkeypatch, tmp_path, alive=True):
+    """dispatch_review 离线夹具(控制器裁定 R3): 探活一律 monkeypatch
+    tl.agent_alive,勿裸真 PID——本机低号 PID 是内核线程,agent_alive 对
+    EPERM 判活,宿主相关必假活。state 目录重定向(命令串/log 纯字符串
+    构造,零真实落盘);run_background 桩返回固定小整数 PID 序列(4242…)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: alive)
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tp, "boot_id", lambda: "b")
+    pids = iter((4242, 4243, 4244, 4245))
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: next(pids))
+
+
+def test_dispatch_review_per_night_cap_with_self_release(monkeypatch, tmp_path):
+    """R3 死槽自释放语义: agent 全死(探活恒 False)→ 同 (pr,head) 重试先
+    释放自身 key 死槽,第 1、2 次可派(tries=1,2);第 3 次撞每晚上限
+    REVIEW_PER_HEAD_PER_NIGHT=2 拒,且拒绝不增计数。"""
+    _patch_review_offline(monkeypatch, tmp_path, alive=False)
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") == 4242        # tries=1
+    assert st["review_tries"]["640:h1"] == 1                 # 键 f"{pr}:{head}"
+    assert tp.dispatch_review(st, 640, "h1") == 4243        # 死槽自释放, tries=2
+    assert st["review_tries"]["640:h1"] == 2
+    assert tp.dispatch_review(st, 640, "h1") is None        # ≥2 → 每晚拒
+    assert st["review_tries"]["640:h1"] == 2                # 拒绝不增计数
+    # 内存闸拒: 闸在计数/槽位之前,零 spawn、零记账
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: False)
+    assert tp.dispatch_review(st, 640, "h9") is None
+    assert "640:h9" not in st["review_tries"]
+
+
+def test_dispatch_review_live_same_key_and_full_slots(monkeypatch, tmp_path):
+    """agent 全活: 同 key 活占位时重派 → spawn 后 acquire 同 key 互斥拒 →
+    killpg 整组击杀兜底,不烧每晚预算;两槽活满后第 3 个不同 PR 满槽拒
+    (零 spawn、零计数)。"""
+    _patch_review_offline(monkeypatch, tmp_path, alive=True)
+    killed = []
+    monkeypatch.setattr(os, "killpg",
+                        lambda pid, sig: killed.append((pid, sig)))
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") == 4242
+    assert tp.dispatch_review(st, 640, "h1") is None        # 同 key 互斥
+    assert killed == [(4243, 9)]                             # 击杀刚 spawn 的
+    assert st["review_tries"]["640:h1"] == 1                # 击杀不烧预算
+    assert tp.dispatch_review(st, 641, "h2") == 4244
+    assert tp.dispatch_review(st, 642, "h3") is None          # 满槽拒
+    assert "642:h3" not in st["review_tries"]
+
+
+def test_dispatch_review_acquire_fail_killpg_fallback(monkeypatch, tmp_path):
+    """acquire 失败(killpg 兜底): monkeypatch slot_acquire → False,断言
+    os.killpg 被调(打桩记录)且返回 None、tries 不增(击杀不烧预算)。"""
+    _patch_review_offline(monkeypatch, tmp_path, alive=True)
+    monkeypatch.setattr(tp, "slot_acquire", lambda *a, **kw: False)
+    killed = []
+    monkeypatch.setattr(os, "killpg",
+                        lambda pid, sig: killed.append((pid, sig)))
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") is None
+    assert killed == [(4242, 9)]
+    assert st["review_tries"] == {}
+
+
+def test_reset_review_tries_nightly_boundary(monkeypatch, tmp_path):
+    """每晚边界: reset_review_tries(pipeline 启动时清零)后同 (pr,head)
+    立即可再派,计数从 1 起步。"""
+    _patch_review_offline(monkeypatch, tmp_path, alive=False)
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") == 4242
+    assert tp.dispatch_review(st, 640, "h1") == 4243
+    assert tp.dispatch_review(st, 640, "h1") is None          # 每晚上限 2
+    tp.reset_review_tries(st)
+    assert st["review_tries"] == {}
+    assert tp.dispatch_review(st, 640, "h1") == 4244          # 新夜可再派
+    assert st["review_tries"]["640:h1"] == 1
+
+
+def test_dispatch_review_spawn_command_shape(monkeypatch, tmp_path):
+    """派发契约: spawn `--pr <N>`(timeout 5400s / agent.env 凭据 /
+    setsid+`echo $!` 回显形态)、log = <STATE_DIR>/review-pr<N>-<ts>.log、
+    cwd = 克隆目录;常量锚 REVIEW_AGENT_TIMEOUT_SEC=5400 /
+    REVIEW_PER_HEAD_PER_NIGHT=2。"""
+    _patch_review_offline(monkeypatch, tmp_path, alive=True)
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "cl"))
+    seen = {}
+    monkeypatch.setattr(
+        tl, "run_background",
+        lambda cmd, cwd, log: seen.update(cmd=cmd, cwd=cwd, log=log) or 4242)
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") == 4242
+    assert tp.REVIEW_AGENT_TIMEOUT_SEC == 5400
+    assert tp.REVIEW_PER_HEAD_PER_NIGHT == 2
+    assert "--pr 640" in seen["cmd"]
+    assert "timeout 5400 /usr/bin/python3" in seen["cmd"]
+    assert "pr_local_review.py" in seen["cmd"]
+    assert "agent.env" in seen["cmd"]
+    assert "setsid" in seen["cmd"] and "echo $!" in seen["cmd"]
+    assert seen["cwd"] == str(tmp_path / "cl")
+    assert seen["log"].startswith(str(tmp_path / "st"))
+    assert "review-pr640-" in seen["log"]
+
+
+def test_pr_local_review_cli_pr_flag_and_mutex(monkeypatch, capsys):
+    """--pr 单 PR CLI: 与 --all-open 互斥(argparse error → SystemExit 2,
+    任一顺序);--pr 与位置参数 <PR> 共用单 PR 路径 review_one_pr(取 head
+    sha → run_review → publish_review,spec §4 泳道2「发布检视」);无参
+    用法错误 exit 2。"""
+    import pr_local_review as plr
+    for argv in (["--pr", "640", "--all-open"],
+                 ["--all-open", "--pr", "640"]):
+        try:
+            plr.main(argv)
+            code = None
+        except SystemExit as exc:
+            code = exc.code
+        assert code == 2
+    assert "互斥" in capsys.readouterr().err
+    calls = []
+    monkeypatch.setattr(plr, "review_one_pr", lambda n: calls.append(n))
+    assert plr.main(["--pr", "640"]) == 0
+    assert plr.main(["641"]) == 0                    # 位置参数同路径
+    assert calls == [640, 641]
+    assert plr.main([]) == 2                          # 无参用法错误
+    assert calls == [640, 641]
+    assert "需指定" in capsys.readouterr().err

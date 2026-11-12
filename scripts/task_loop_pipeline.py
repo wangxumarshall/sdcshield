@@ -11,6 +11,7 @@ cron 0 23 启动: 窗口循环(每 PIPELINE_CYCLE_SEC 一轮) → 三泳道并�
 import fcntl
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -177,3 +178,54 @@ def startup_reconcile(state):
         # Entry 是解析副本,推进须 to_dict 序列化回 state dict(与
         # tl.reap_or_advance 同款 write-back),否则下次 entries 拿回旧值。
         state["entries"] = [e.to_dict() for e in entries]
+
+
+# ============ 泳道2 检视派发器(Task 6) ============
+
+
+def reset_review_tries(state):
+    """每晚边界: pipeline 启动时清零检视尝试计数——「每晚每 (pr,head) ≤2
+    次」的"夜"以流水线启动对账为界(spec §4 泳道2 边界列)。"""
+    state["review_tries"] = {}
+
+
+def dispatch_review(state, pr_num, head):
+    """泳道2 派发: 每晚每 (pr,head) ≤REVIEW_PER_HEAD_PER_NIGHT 次;满槽/内存
+    不足返回 None。spawn 命令与修复 agent 同形(setsid+timeout),凭据经 agent.env。"""
+    if not mem_gate_ok():
+        return None
+    tries = state.setdefault("review_tries", {})
+    tk = f"{pr_num}:{head}"
+    if tries.get(tk, 0) >= REVIEW_PER_HEAD_PER_NIGHT:
+        print(f"[review] PR #{pr_num} head {head[:8]} 已试 {tries[tk]} 次/晚,"
+              f"留待明晚")
+        return None
+    key = f"pr-{pr_num}"
+    # R3(控制器裁定): 同 PR 重试先释放自身 key 的死槽——janitor 每轮才跑,
+    # 不自清则同 key 互斥把「agent 已死、本可重派」的 PR 卡到下一轮
+    # (释放只看本 key,不破坏「先 janitor 后派发」的全局清理序)。
+    existing = slot_get(state, "pr_review", key)
+    if existing is not None and not tl.agent_alive(existing["pid"]):
+        slot_release(state, "pr_review", key)
+    if free_slot_count(state, "pr_review") <= 0:
+        return None
+    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    log = os.path.join(tl._resolve_state_dir(), f"review-pr{pr_num}-{ts}.log")
+    inner = (f"source {shlex.quote(os.path.join(tl._resolve_state_dir(), 'agent.env'))}"
+             f" && timeout {REVIEW_AGENT_TIMEOUT_SEC} /usr/bin/python3 "
+             f"{shlex.quote(os.path.join(tl._resolve_clone_dir(), 'scripts', 'pr_local_review.py'))}"
+             f" --pr {pr_num}")
+    cmd = f"nohup setsid bash -c {shlex.quote(inner)} >> {shlex.quote(log)} 2>&1 & echo $!"
+    pid = tl.run_background(cmd, cwd=tl._resolve_clone_dir(), log=log)
+    if not slot_acquire(state, "pr_review", key, pid, pid, log, None,
+                        _now_local_iso(), boot_id()):
+        # 占位失败只剩同轮并发竞态(同 key 早闸已拦常态)——killpg 整组击杀
+        # 刚派生的 agent 不留孤儿(setsid 使 $! PID 即 pgid),且不烧每晚
+        # 预算(tries 未增,击杀不是一次检视尝试)。
+        try:
+            os.killpg(pid, 9)
+        except OSError:
+            pass
+        return None
+    tries[tk] = tries.get(tk, 0) + 1
+    return pid

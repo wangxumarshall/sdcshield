@@ -117,6 +117,17 @@ README/CLAUDE.md 文档同步时如实表述,不得写成"SVE2 数据通路覆�
   ummla/usmmla/bmmla/adclb/adclt/aes*/sm4*/sm3*/tbx 等),零命中才
   通过;若有命中,§4 诚实边界表述失效、gem5 SVE2 译码无先例(vl=1 与
   Timing CPU 均未跑过 SVE2 指令),必须停下分诊;
+- **gem5 FS 真二进制腿(用户决策:无真机,仿真验证;2026-11-12)**:
+  dispatcher 自身的执行路径(init 门控链 / tier_select / 命名空间接线
+  / run 分派)在 SE 双 kernel 与本机 SKIP 之外**不被执行**——P1 增加
+  gem5 FS 全系统腿(先例:FS 2-core `eigen_svd_double -n 2` pass,
+  CLAUDE.md 2026-10-24 记载):至少一条 `_sve2` 真测试(首选
+  `eigen_svd_double_sve2`,小 mdim、`-n 2`)在 FS 下全链跑通,内核
+  HWCAP2_SVE2 暴露、init→tier_select→worker pin→run 分派真实执行,
+  gate = `exit: pass`。FS 腿是 dispatcher 路径的唯一真实验证手段;
+  若 FS 环境(内核 HWCAP2_SVE2 / SVE2 CPU 模型)不可通,诚实降级为
+  边界声明(§4 记录"dispatcher 路径未经真实验证,正确性由与 _sve 版
+  逐字同构 + 链接期符号解析论证"),不得静默省略;
 - `zstd19 -t 2000 -n 1` 回归;x86-64 零触碰目检(全 aarch64 guard);
 - **P1 meson 验收口径(勘误)**:全部 40 个 `_sve2` 库编译成功零新
   警告 + 上述 objdump 审计全量 40 库零命中 + 首个用例族的 4+4 库

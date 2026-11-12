@@ -663,6 +663,11 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
     # Task 5 引擎缝: 轮次上限判定的文件清单拉取打桩(非 docs-only →
     # 复杂=3;PRData 无 additions/deletions 字段 → rounds=0 恒可派),离线
     monkeypatch.setattr(tl, "pr_files", lambda n: ["src/a.c"])
+    # fix-round 1: PRData 替身无 additions/deletions → max_rounds_for 的
+    # gh pr view 兜底也会触发,同样打桩(复杂形状 500+200 → 上限 3)
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None:
+                        {"additions": 500, "deletions": 200})
     # Task 4 引擎缝: 内存闸放行 + worktree 建桩(离线)
     import task_loop_pipeline as tp
     monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)

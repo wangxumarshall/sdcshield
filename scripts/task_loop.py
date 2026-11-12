@@ -1879,11 +1879,14 @@ CLAUDE.md/AGENTS.md 为准。)
 
 def pr_files(pr_number: int) -> list[str]:
     """PR 变更文件路径清单(docs-only 判定与轮次复杂度共用)。
-    gh_json_idem 走幂等重试封装(纯读,重试无副作用);失败 → [](按
-    复杂处理,绝不炸车道 B)。"""
+    gh_json_idem 走幂等重试封装(纯读,重试无副作用);失败/gh 空输出 → []
+    (按复杂处理,绝不炸车道 B)。`or ""` 防 gh_json 的空输出 None 路径
+    (task_loop.py gh_json「退出码 0 无输出 → None」——空 diff PR 的
+    `.files[].path` 即此形态,旧实现 out.splitlines() 裸崩 AttributeError,
+    检视 fix-round 1 Important#2)。"""
     try:
         out = gh_json_idem(["pr", "view", str(pr_number), "--json", "files",
-                            "--jq", ".files[].path"])
+                            "--jq", ".files[].path"]) or ""
         return [l for l in out.splitlines() if l.strip()]
     except GhError as exc:
         print(f"[warn] PR #{pr_number} files 拉取失败(按复杂处理): {exc}")
@@ -1894,18 +1897,42 @@ def _docs_only(files: list[str]) -> bool:
     return bool(files) and all(f.endswith(".md") for f in files)
 
 
+def _pr_number(entry, pr):
+    """max_rounds_for 的 PR 号双形解析: 车道 B 调用点带 entry(权威
+    pr_number);entry 缺号/为 None(brief 单测替身 SimpleNamespace)时从
+    pr 上取——真实 PRData 字段名是 `number`,brief 契约替身用
+    `pr_number`,两形都认(检视 fix-round 1: 审查者片段的 pr.pr_number
+    对真实 PRData 是 AttributeError,离线 lane_b 用例当场逮到)。"""
+    if entry is not None and getattr(entry, "pr_number", None) is not None:
+        return entry.pr_number
+    return getattr(pr, "pr_number", None) or getattr(pr, "number", None)
+
+
 def max_rounds_for(entry, pr, files=None) -> int:
     """动态轮次上限(spec 决策表 #10): docs-only → 2;增删 ≤100 行 ∧ ≤5
-    文件 → 2;其余 → 3。files 为 None 时现拉 pr_files(pr_number);PRData
-    无 additions/deletions 字段时按复杂=3(诚实降级,宁严勿松)。
+    文件 → 2;其余 → 3。files 为 None 时现拉 pr_files(PR 号经 _pr_number
+    双形解析);清单拉取失败(空表)按复杂=3(宁严勿松——空表会冒充
+    「≤5 文件」误走简单臂,检视 fix-round 1 Minor A);PRData 无
+    additions/deletions 字段时经 `gh pr view --json additions,deletions`
+    兜底(brief Consumes,现行 PRData 即此字段形态——不兜底则简单 diff
+    臂生产不可达,fix-round 1 Important#1),兜底失败按复杂=3。
     entry 保留在签名里(车道 B 调用点的既有口径),判定只看 pr/files。"""
-    files = files if files is not None else pr_files(pr.pr_number)
+    num = _pr_number(entry, pr)
+    files = files if files is not None else pr_files(num)
+    if not files:
+        return MAX_ROUNDS_COMPLEX
     if _docs_only(files):
         return MAX_ROUNDS_SIMPLE
     add = getattr(pr, "additions", None)
     dele = getattr(pr, "deletions", None)
     if add is None or dele is None:
-        return MAX_ROUNDS_COMPLEX
+        try:
+            d = gh_json_idem(["pr", "view", str(num),
+                              "--json", "additions,deletions"]) or {}
+            add = int(d.get("additions") or 0)
+            dele = int(d.get("deletions") or 0)
+        except GhError:
+            return MAX_ROUNDS_COMPLEX
     if add + dele <= ROUND_SIMPLE_MAX_DIFF_LINES and \
             len(files) <= ROUND_SIMPLE_MAX_FILES:
         return MAX_ROUNDS_SIMPLE

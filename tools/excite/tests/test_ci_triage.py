@@ -326,6 +326,13 @@ class FakeGh:
         if args[:2] == ["run", "view"] and "--log-failed" in args:
             # gh run view <id> --repo <slug> --log-failed(纯文本输出)
             return self.log_failed
+        if args[:2] == ["pr", "view"] and "additions,deletions" in args:
+            # gh pr view <n> --json additions,deletions(Task 5 fix-round 1:
+            # max_rounds_for 的增删行数兜底——PRData 替身与真实 PRData 均
+            # 无此二字段)。默认复杂形状(500+200 行 >100)——各 lane_b 用例
+            # 的 rounds 语义按复杂上限 3 构建;需简单口径的用例在 PR 替身上
+            # 直接给 additions/deletions 属性(不走此兜底)。
+            return {"additions": 500, "deletions": 200}
         if args[:2] == ["issue", "list"]:
             # gh issue list --label agent-task(Task 8: reconcile 的 GitHub
             # 侧队列真源;PR#317 检视#12 起兼作派发资格复查的输入)——默认

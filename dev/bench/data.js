@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794400300591,
+  "lastUpdate": 1794488330884,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -3837,6 +3837,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.331,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "3631a7d46054f9ae67e61cd4b11bc221e046f740",
+          "message": "docs(specs): 全自动夜间流水线设计——23:00 pipeline 三泳道并行 + 引擎 PR 全门槛自动 merge + 精确归因 revert (#662)\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\nCo-authored-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-12T12:17:51Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/3631a7d46054f9ae67e61cd4b11bc221e046f740"
+        },
+        "date": 1794488329299,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 85090.534,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 45002.681,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 87.816,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 31.401,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.009,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.053,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.004,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.708,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21291.623,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.059,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.221,
             "unit": "s"
           }
         ]

@@ -699,6 +699,16 @@ def issue_state(issue_number: int) -> str:
     return (res or {}).get("state", "open")
 
 
+def issue_title_starts(issue_number: int, prefix: str) -> bool:
+    """issue 标题是否以 prefix 开头(幂等读;Task 9 二阶 revert 链闸的
+    探针,task_loop 原无此助手)。gh 空输出 None → False(标题未知不可证
+    前缀);GhError 原样上抛,降级语义归调用方(与 issue_state 同款契约:
+    调用方单条目降级,不掀翻整链)。"""
+    title = gh_json_idem(["issue", "view", str(issue_number), "--repo",
+                          repo_slug(), "--json", "title", "--jq", ".title"])
+    return str(title or "").startswith(prefix)
+
+
 def reconcile_issues(state: dict, dry_run: bool = False) -> dict:
     """scan tick 的队列对账(spec §8.4/§7.2):
     1. GitHub open+agent-task issues ∖ state 已跟踪 → manual QUEUED 条目;

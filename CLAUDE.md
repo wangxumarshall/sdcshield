@@ -223,7 +223,7 @@ END_DECLARE_TEST
 - **Build/deploy/multi-OS**: README (quick start, 15-version build);
   `docs/build-deploy-pr-ci/` (design + usermanual + offline deps).
 - **Agent full-automation design** (PR-loop lifecycle, bots, CI sentinel,
-  auto-repair PRs, human merge gate): `docs/build-deploy-pr-ci/agent-full-automation.md`.
+  auto-repair PRs, deterministic merge gate): `docs/build-deploy-pr-ci/agent-full-automation.md`.
 - **Session recovery** (machine may die anytime; persist conclusions to
   disk): `docs/research/progress-log.md`; fact card in
   `docs/research/README.md`.
@@ -253,11 +253,19 @@ END_DECLARE_TEST
 - **Process artifacts**: `docs/superpowers/` (plans/, specs/, inventory/).
 - **PR review-fix loop** (agent-driven: five bots (four external SaaS + the local
   headless claude adversarial reviewer) → subagent critical triage →
-  fix → loop → human merge; never auto-merge): `docs/build-deploy-pr-ci/pr-loop.md`;
+  fix → loop → merge): `docs/build-deploy-pr-ci/pr-loop.md`;
   engines `scripts/pr_loop.py` + `scripts/pr_local_review.py`（the 5th bot;
-  unattended orchestration is task_loop's); `/pr-loop` and `/dev-loop` commands
-  (`.claude/commands/`) and Trae rules (`.trae/rules/`) are content-twins.
+  unattended orchestration is task_loop's）. Merge 政策（2026-11-13 红线反转，
+  spec 2026-11-12-full-auto-pipeline）：夜间 pipeline 的 merge 门对引擎 PR
+  （`fix/issue-N|fix/ci-N|fix/revert-prN`）六门槛全过自动 squash merge；全
+  docs-only PR 走快道（标题 `WIP:` 前缀 = 草稿闸，去掉 = 当夜可合）；用户非
+  docs PR 永不自动 merge；自动 resolve review threads 仍然禁止。`/pr-loop`
+  and `/dev-loop` commands (`.claude/commands/`) and Trae rules
+  (`.trae/rules/`) are content-twins.
 - **task-loop 无人值守任务闭环**（统一编排引擎: CI 红/main 审查/会话/手建
-  issue → agent → PR 闭环;ci_triage 的泛化后继,含迁移说明）:
-  `docs/build-deploy-pr-ci/task-loop.md`;引擎 `scripts/task_loop.py`;
+  issue → agent → PR 闭环;ci_triage 的泛化后继,含迁移说明。2026-11-13 起
+  调度为 nightly pipeline: cron `0 23 * * *` 拉起 `task_loop.py pipeline`
+  （23:00–09:00 窗口三泳道并行 + merge 门 + 09:00 软停，`@reboot` 落窗
+  自愈）；旧 scan/audit/第5bot 三行 cron 已删，`scan` 降级为会话手动单轮
+  薄壳）: `docs/build-deploy-pr-ci/task-loop.md`;引擎 `scripts/task_loop.py`;
   会话命令 `/dev-loop`。

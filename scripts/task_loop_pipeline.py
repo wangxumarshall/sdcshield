@@ -887,7 +887,7 @@ def _pipeline_night(now: datetime) -> str:
     return now.date().isoformat()
 
 
-def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
+def _merge_one(state, events, num, entry, pr, files, now, no_auto_merge, dry_run, es):
     """单 PR 门评+执行/记录(引擎与 docs 共用): ok → execute_merge(引擎条目
     记账即时回写落盘——merged_sha 是 revert 归因主数据,丢账 = 归因失明);
     NO_AUTO_MERGE 熔断拒 → 复评一次不带熔断(灰度纯报告模式的「本应
@@ -900,7 +900,7 @@ def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
     **逐夜** conflict_nights +1——同夜不重复计数(last_conflict_night 夜锚:
     run_pipeline 整夜持内存 state、每 PIPELINE_CYCLE_SEC 一轮、merge_sweep
     是尾步,冲突条目当夜被评上百次,每评 +1 会在当夜第 2 轮 cycle 即假性
-    2 → 假性 ESCALATED,升级文案还谎称「已持续 2 晚」)。计数在 nam 复评
+    2 → 假性 ESCALATED,升级文案还谎称「已持续 2 晚」)。计数在 no_auto_merge 复评
     之后(熔断夜的真实拒因同样可见);连续第 2 夜(≥2)首次评估 →
     tl._escalate(复用升级路径,文案引用 pipeline 夜口径与 spec §5: 不自动
     rebase,rebase 决策留给人工;升级即终局即时落盘);过门/非冲突拒 →
@@ -908,7 +908,7 @@ def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
     计数不清夜锚,清零后同夜再冲突会被夜锚错误吞掉)。计数写回 state
     dict——reject 路径无既有写回,不写回则每轮从旧 dict 重新解析,永远
     停在 1、升级结构性不可达。"""
-    gr = evaluate_merge_gate(state, entry, pr, files, now, nam)
+    gr = evaluate_merge_gate(state, entry, pr, files, now, no_auto_merge)
     if gr.ok and entry is not None:
         entry.conflict_nights = 0               # 过门清零(只数连续冲突夜)
         entry.last_conflict_night = None
@@ -921,7 +921,7 @@ def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
         _upsert_event(events, {"kind": "merge" if entry is not None
                                else "merge-docs", "pr": num, "sha": sha})
         return
-    if nam and any("NO_AUTO_MERGE" in r for r in gr.reasons):
+    if no_auto_merge and any("NO_AUTO_MERGE" in r for r in gr.reasons):
         gr = evaluate_merge_gate(state, entry, pr, files, now, False)
     if entry is not None:
         if any("冲突" in r for r in gr.reasons):
@@ -954,13 +954,13 @@ def merge_sweep(state, events, dry_run, now=None):
     早段经 lane_b 归还 PR_OPEN;repair 槽活 agent 在跑的 PR 等它退场)+
     用户 open docs PR(引擎条目的 PR 不双扫,防同 PR 双评估/双 merge)。
     NO_AUTO_MERGE 生效 → 门拒后复评不带熔断、只记 would-merge/gate-reject
-    事件,绝不执行(裁定#3: nam 只传参,不用它跳过 docs 循环——纯报告
+    事件,绝不执行(裁定#3: no_auto_merge 只传参,不用它跳过 docs 循环——纯报告
     模式要能看到 would-merge 证据)。单 PR GhError 只跳过该 PR(lane_b
     单条目降级同口径,不炸整扫)。fetch_pr 后、过门前 fill_mergeable
     (T8 载荷: 真实 PRData 无 mergeable 字段)。"""
     if now is None:
         now = datetime.now(timezone.utc)
-    nam = no_auto_merge_active()
+    no_auto_merge = no_auto_merge_active()
     slug = None
     es = tl.StateStore.entries(state)
     for e in es:
@@ -975,7 +975,7 @@ def merge_sweep(state, events, dry_run, now=None):
             pr = tl.pr_loop.fetch_pr(slug, e.pr_number)
             fill_mergeable(pr)
             files = tl.pr_files(e.pr_number)
-            _merge_one(state, events, e.pr_number, e, pr, files, now, nam,
+            _merge_one(state, events, e.pr_number, e, pr, files, now, no_auto_merge,
                        dry_run, es)
         except GhError as exc:
             print(f"[merge-sweep] PR #{e.pr_number} 评估失败: {exc}")
@@ -994,7 +994,7 @@ def merge_sweep(state, events, dry_run, now=None):
             if not docs_only(files):
                 continue
             fill_mergeable(pr)
-            _merge_one(state, events, num, None, pr, files, now, nam,
+            _merge_one(state, events, num, None, pr, files, now, no_auto_merge,
                        dry_run, es)
         except GhError as exc:
             print(f"[merge-sweep] docs PR #{num} 评估失败: {exc}")

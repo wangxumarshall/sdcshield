@@ -404,6 +404,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/neon_rot_ldr_at_top_sub.cpp',
             'misc/neon_rot_ldr_at_top_tlbstress.cpp',
             'misc/neon_rot_ldr_rand_thread.cpp',
+            'misc/neon_rot_ldp.cpp',
             'misc/neon_rot_nop_gap.cpp',
             'misc/neon_rot_stale_reload.cpp',
             'misc/neon_rot_store_only.cpp',

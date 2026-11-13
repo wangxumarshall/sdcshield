@@ -1491,7 +1491,7 @@ def spawn_audit(state, dry_run):
 def merge_sweep(state, events, dry_run):
     """merge 门扫: 引擎条目(PR_OPEN/BOT_FIX 且 agent 已退场) + 用户 docs PR。
     NO_AUTO_MERGE 生效 → 只记录 [would-merge] 事件,不执行。"""
-    nam = no_auto_merge_active()
+    no_auto_merge = no_auto_merge_active()
     now = datetime.now(timezone.utc)
     slug = tl.repo_slug()
     for e in tl.StateStore.entries(state):
@@ -1506,14 +1506,14 @@ def merge_sweep(state, events, dry_run):
             print(f"[merge-sweep] fetch PR #{e.pr_number} 失败: {exc}")
             continue
         gr = evaluate_merge_gate(state, e, pr, tl.pr_files(e.pr_number),
-                                 now, nam)
+                                 now, no_auto_merge)
         if gr.ok:
             sha = execute_merge(state, e, pr, gr, dry_run)
             events.append({"kind": "merge", "pr": e.pr_number, "sha": sha})
         else:
             events.append({"kind": "gate-reject", "pr": e.pr_number,
                            "reasons": gr.reasons})
-    for d in ([] if nam else open_docs_prs()):
+    for d in ([] if no_auto_merge else open_docs_prs()):
         if wip_gated(d["title"]):
             continue
         try:
@@ -1521,7 +1521,7 @@ def merge_sweep(state, events, dry_run):
             files = tl.pr_files(d["pr_number"])
             if not docs_only(files):
                 continue
-            gr = evaluate_merge_gate(state, None, pr, files, now, nam)
+            gr = evaluate_merge_gate(state, None, pr, files, now, no_auto_merge)
             if gr.ok:
                 sha = execute_merge(state, None, pr, gr, dry_run)
                 events.append({"kind": "merge-docs", "pr": d["pr_number"],

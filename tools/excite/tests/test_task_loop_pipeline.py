@@ -2069,7 +2069,7 @@ def test_merge_sweep_engine_wiring_fill_gate_execute(monkeypatch, tmp_path):
     monkeypatch.setattr(tl, "pr_files",
                         lambda n: seq.append("files") or ["a.c"])
     monkeypatch.setattr(tp, "evaluate_merge_gate",
-                        lambda st, e, pr, files, now, nam:
+                        lambda st, e, pr, files, now, no_auto_merge:
                         seq.append("gate") or tp.GateResult(True, False, ["ok"]))
     monkeypatch.setattr(tp, "execute_merge",
                         lambda st, e, pr, gr, dry_run=False:
@@ -2147,7 +2147,7 @@ def test_merge_sweep_gate_reject_upsert(monkeypatch, tmp_path):
 
 
 def test_merge_sweep_no_auto_merge_would_merge_report(monkeypatch, tmp_path):
-    """NO_AUTO_MERGE 灰度纯报告模式(裁定#3): nam 只传参、不用它跳过 docs
+    """NO_AUTO_MERGE 灰度纯报告模式(裁定#3): no_auto_merge 只传参、不用它跳过 docs
     循环——熔断拒后复评一次不带熔断,复评过门记 would-merge 事件
     (spec §11.4「本应 merge+门槛证据」),绝不执行 merge。"""
     _patch_merge_offline(monkeypatch, tmp_path)
@@ -2155,9 +2155,9 @@ def test_merge_sweep_no_auto_merge_would_merge_report(monkeypatch, tmp_path):
     (tmp_path / "st" / tp.NO_AUTO_MERGE_NAME).write_text("")
     calls = []
 
-    def gate(st, e, pr, files, now, nam):
-        calls.append(nam)
-        if nam:
+    def gate(st, e, pr, files, now, no_auto_merge):
+        calls.append(no_auto_merge)
+        if no_auto_merge:
             return tp.GateResult(
                 False, True, ["NO_AUTO_MERGE 熔断(灰度: 只报告)"])
         return tp.GateResult(
@@ -2193,7 +2193,7 @@ def test_merge_sweep_docs_filters_and_engine_pr_no_double(monkeypatch,
     monkeypatch.setattr(tp, "fill_mergeable", lambda pr: None)
     gated = []
 
-    def gate(st, e, pr, files, now, nam):
+    def gate(st, e, pr, files, now, no_auto_merge):
         gated.append((getattr(pr, "number", None), files))
         return tp.GateResult(False, False, ["拒"])
     monkeypatch.setattr(tp, "evaluate_merge_gate", gate)

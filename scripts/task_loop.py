@@ -2459,20 +2459,29 @@ def _run_scan_orchestration(dry_run: bool) -> int:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    """扫描受监控分支的 CI 失败并更新状态(Task 4: 完整编排)。"""
-    return _run_scan_orchestration(
-        dry_run=bool(getattr(args, "dry_run", False)))
+    """扫描受监控分支的 CI 失败并推进状态机。
+
+    2026-11-13(T10,spec 2026-11-12-full-auto-pipeline)降级为「单轮
+    pipeline 循环」薄壳: 夜间编排归 `pipeline` 子命令(23:00–09:00 窗口),
+    scan 只做会话内手动推进——与 pipeline 共用 pipeline.lock 和
+    cycle_once 同一编排,不再走旧 _run_scan_orchestration(该编排保留给
+    dry-run 子命令的只读预演,cron 不再调 scan)。"""
+    import task_loop_pipeline   # 懒 import 防循环(同 cmd_pipeline)
+    return task_loop_pipeline.run_pipeline_single_cycle()
 
 
 def cmd_status(args: argparse.Namespace) -> int:
     """队列与条目总览: streak/PAUSED/槽位占用(has_running_agent 观测)
-    + 全部条目 + 待入队任务。"""
+    + 全部条目 + 待入队任务。T10 起顶部增最近一夜摘要(state["last_report"])。"""
     store = StateStore()
     state = store.load()
     entries = StateStore.entries(state)
     print(f"streak: {state.get('auth_failure_streak', 0)}  "
           f"PAUSED: {'是' if _paused() else '否'}  "
           f"agent 在跑: {'是' if has_running_agent(state) else '否'}")
+    last = state.get("last_report")
+    if last:
+        print(f"最近夜间报告: {last}")
     tracked = {e.issue_number for e in entries}
     for e in sorted(entries, key=lambda x: (x.issue_number is None,
                                              x.issue_number or 0)):
@@ -2986,13 +2995,24 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 # ============ 入口 ============
 
+def cmd_pipeline(args: argparse.Namespace) -> int:
+    """pipeline 子命令入口——懒 import 打破 task_loop↔pipeline 循环依赖
+    (task_loop_pipeline 顶层 import 本模块,此处函数内反向 import)。"""
+    import task_loop_pipeline
+    return task_loop_pipeline.run_pipeline(
+        dry_run=bool(getattr(args, "dry_run", False)),
+        window_start=getattr(args, "window_start", 23),
+        window_end=getattr(args, "window_end", 9))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="task_loop.py",
         description="统一任务编排引擎(cron 驱动): CI 红/main 审查/会话/手建 issue → agent → PR 闭环。")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    ps = sub.add_parser("scan", help="扫描受监控分支 CI 失败并推进双车道状态机")
+    ps = sub.add_parser("scan", help="单轮 pipeline 循环薄壳(会话内手动推进;"
+                                     "夜间编排归 pipeline 子命令)")
     ps.set_defaults(func=cmd_scan)
 
     pt = sub.add_parser("status", help="打印当前状态总览(Task 3)")
@@ -3022,6 +3042,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="只读演练: 展示将审查的提交范围,零 claude 调用,"
                          "state 不落盘")
     pu.set_defaults(func=cmd_audit)
+
+    pp = sub.add_parser(
+        "pipeline", help="夜间全自动流水线: 三泳道并行+merge 门+revert"
+                         "(23:00-09:00 窗口)")
+    pp.add_argument("--dry-run", action="store_true",
+                    help="单轮零副作用预演(零 gh 写/零 spawn/state 不落盘)")
+    pp.add_argument("--window-start", type=int, default=23)
+    pp.add_argument("--window-end", type=int, default=9)
+    pp.set_defaults(func=cmd_pipeline)
     return p
 
 

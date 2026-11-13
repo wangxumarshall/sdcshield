@@ -1,6 +1,7 @@
 """task_loop_pipeline 测试: 槽位常量 / 窗口判定 / 内存闸 / boot_id /
 槽位账本(租约/janitor/启动对账)/ 槽位化派发 + worktree 隔离(Task 4)。"""
-import sys, os, shutil, subprocess
+import sys, os, re, shutil, subprocess
+import fcntl
 import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "scripts"))
@@ -521,8 +522,12 @@ def _patch_review_offline(monkeypatch, tmp_path, alive=True):
     """dispatch_review 离线夹具(控制器裁定 R3): 探活一律 monkeypatch
     tl.agent_alive,勿裸真 PID——本机低号 PID 是内核线程,agent_alive 对
     EPERM 判活,宿主相关必假活。state 目录重定向(命令串/log 纯字符串
-    构造,零真实落盘);run_background 桩返回固定小整数 PID 序列(4242…)。"""
+    构造,零真实落盘);run_background 桩返回固定小整数 PID 序列(4242…)。
+    T10 顺手修①起 dispatch_review 有 agent.env 存在性检查(B44 同款),
+    夹具须就位真凭据文件(缺文件路径的用例自行 unlink)。"""
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    (tmp_path / "st" / "agent.env").write_text("PATH=/usr/bin\n")
     monkeypatch.setattr(tl, "agent_alive", lambda pid: alive)
     monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
     monkeypatch.setattr(tp, "boot_id", lambda: "b")
@@ -531,10 +536,12 @@ def _patch_review_offline(monkeypatch, tmp_path, alive=True):
                         lambda cmd, cwd, log: next(pids))
 
 
-def test_dispatch_review_per_night_cap_with_self_release(monkeypatch, tmp_path):
+def test_dispatch_review_per_night_cap_with_self_release(monkeypatch, tmp_path,
+                                                          capsys):
     """R3 死槽自释放语义: agent 全死(探活恒 False)→ 同 (pr,head) 重试先
     释放自身 key 死槽,第 1、2 次可派(tries=1,2);第 3 次撞每晚上限
-    REVIEW_PER_HEAD_PER_NIGHT=2 拒,且拒绝不增计数。"""
+    REVIEW_PER_HEAD_PER_NIGHT=2 拒,且拒绝不增计数。内存闸拒(T10 顺手修③
+    补 [mem-gate] 打印): 闸在计数/槽位之前,零 spawn、零记账。"""
     _patch_review_offline(monkeypatch, tmp_path, alive=False)
     st = _mkstate()
     assert tp.dispatch_review(st, 640, "h1") == 4242        # tries=1
@@ -547,29 +554,41 @@ def test_dispatch_review_per_night_cap_with_self_release(monkeypatch, tmp_path):
     monkeypatch.setattr(tp, "mem_gate_ok", lambda: False)
     assert tp.dispatch_review(st, 640, "h9") is None
     assert "640:h9" not in st["review_tries"]
+    assert "[mem-gate]" in capsys.readouterr().out          # ③ 静默路补打印
 
 
 def test_dispatch_review_live_same_key_and_full_slots(monkeypatch, tmp_path):
-    """agent 全活: 同 key 活占位时重派 → spawn 后 acquire 同 key 互斥拒 →
-    killpg 整组击杀兜底,不烧每晚预算;两槽活满后第 3 个不同 PR 满槽拒
-    (零 spawn、零计数)。"""
+    """agent 全活(T10 顺手修②重写): 同 key 活占位 → **前置早退**(先于每晚
+    上限计数),零 spawn 零 killpg、不烧预算——旧「spawn 后 acquire 拒再
+    killpg」churn 已消(击杀网仅剩 acquire 竞态兜底,见
+    test_dispatch_review_acquire_fail_killpg_fallback);两槽活满后第 3 个
+    不同 PR 满槽拒(③ 补 [slots] 打印,零 spawn、零计数)。"""
     _patch_review_offline(monkeypatch, tmp_path, alive=True)
+    spawned = []
     killed = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawned.append(1) or
+                        (4242, 4243, 4244, 4245)[len(spawned) - 1])
     monkeypatch.setattr(os, "killpg",
                         lambda pid, sig: killed.append((pid, sig)))
     st = _mkstate()
     assert tp.dispatch_review(st, 640, "h1") == 4242
-    assert tp.dispatch_review(st, 640, "h1") is None        # 同 key 互斥
-    assert killed == [(4243, 9)]                             # 击杀刚 spawn 的
-    assert st["review_tries"]["640:h1"] == 1                # 击杀不烧预算
-    assert tp.dispatch_review(st, 641, "h2") == 4244
-    assert tp.dispatch_review(st, 642, "h3") is None          # 满槽拒
+    assert tp.dispatch_review(st, 640, "h1") is None        # 同 key 活占位早退
+    assert spawned == [1]                                  # 第二次零 spawn
+    assert killed == []                                    # 零 killpg(不再 churn)
+    assert st["review_tries"]["640:h1"] == 1               # 早退不烧每晚预算
+    assert tp.dispatch_review(st, 641, "h2") == 4243
+    assert tp.dispatch_review(st, 642, "h3") is None        # 满槽拒
+    assert spawned == [1, 1]                                # 满槽拒零 spawn
     assert "642:h3" not in st["review_tries"]
 
 
-def test_dispatch_review_acquire_fail_killpg_fallback(monkeypatch, tmp_path):
+def test_dispatch_review_acquire_fail_killpg_fallback(monkeypatch, tmp_path,
+                                                       capsys):
     """acquire 失败(killpg 兜底): monkeypatch slot_acquire → False,断言
-    os.killpg 被调(打桩记录)且返回 None、tries 不增(击杀不烧预算)。"""
+    os.killpg 被调(打桩记录)且返回 None、tries 不增(击杀不烧预算);
+    T10 顺手修③ 补 [review] 占位失败打印(唯一保留的击杀网: 同轮并发
+    竞态,活占位早退已拦常态)。"""
     _patch_review_offline(monkeypatch, tmp_path, alive=True)
     monkeypatch.setattr(tp, "slot_acquire", lambda *a, **kw: False)
     killed = []
@@ -579,6 +598,25 @@ def test_dispatch_review_acquire_fail_killpg_fallback(monkeypatch, tmp_path):
     assert tp.dispatch_review(st, 640, "h1") is None
     assert killed == [(4242, 9)]
     assert st["review_tries"] == {}
+    assert "[review]" in capsys.readouterr().out           # ③ 静默路补打印
+
+
+def test_dispatch_review_agent_env_missing_refuses(monkeypatch, tmp_path,
+                                                   capsys):
+    """T10 顺手修①(B44 同款前置拒绝): agent.env 缺失 → 打印 + 返回 None,
+    零 spawn、不烧每晚预算(tries 不增)、不占槽——不拦则第 5 bot 从未
+    启动却烧满 2 次/晚,还把满槽让给假占位。"""
+    _patch_review_offline(monkeypatch, tmp_path, alive=True)
+    os.unlink(tmp_path / "st" / "agent.env")
+    spawned = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawned.append(1) or 4242)
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") is None
+    assert spawned == []                          # 缺凭据零 spawn
+    assert st["review_tries"] == {}               # 不烧每晚预算
+    assert st.get("slots", {}).get("pr_review", []) == []
+    assert "agent.env" in capsys.readouterr().out
 
 
 def test_reset_review_tries_nightly_boundary(monkeypatch, tmp_path):
@@ -599,7 +637,9 @@ def test_dispatch_review_spawn_command_shape(monkeypatch, tmp_path):
     """派发契约: spawn `--pr <N>`(timeout 5400s / agent.env 凭据 /
     setsid+`echo $!` 回显形态)、log = <STATE_DIR>/review-pr<N>-<ts>.log、
     cwd = 克隆目录;常量锚 REVIEW_AGENT_TIMEOUT_SEC=5400 /
-    REVIEW_PER_HEAD_PER_NIGHT=2。"""
+    REVIEW_PER_HEAD_PER_NIGHT=2;ts 为 UTC 带 Z 后缀(T10 顺手修④: naive
+    本地时间戳 → 与 tl.dispatch_agent 的 _now_iso UTC 口径对齐,文件名
+    模板 review-pr<N>-<ts>.log 不变)。"""
     _patch_review_offline(monkeypatch, tmp_path, alive=True)
     monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "cl"))
     seen = {}
@@ -617,7 +657,7 @@ def test_dispatch_review_spawn_command_shape(monkeypatch, tmp_path):
     assert "setsid" in seen["cmd"] and "echo $!" in seen["cmd"]
     assert seen["cwd"] == str(tmp_path / "cl")
     assert seen["log"].startswith(str(tmp_path / "st"))
-    assert "review-pr640-" in seen["log"]
+    assert re.fullmatch(r".*review-pr640-\d{8}T\d{6}Z\.log", seen["log"])
 
 
 def test_pr_local_review_cli_pr_flag_and_mutex(monkeypatch, capsys):
@@ -1638,3 +1678,626 @@ def test_issue_title_starts_probe(monkeypatch):
     monkeypatch.setattr(tl, "gh_json_idem", boom)
     with pytest.raises(tl.GhError):
         tl.issue_title_starts(7, "[revert]")
+
+
+# ============ Task 10: 编排器主循环 + 软停 + 报告 + CLI 接线 ============
+
+
+def _patch_cycle_offline(monkeypatch, tmp_path):
+    """cycle_once/run_pipeline 离线夹具(裁定#9 探活纪律): 全 tl/tp 进程与
+    gh 接缝打桩,零触网零 spawn;state 目录重定向 tmp。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "triage_new_red_runs",
+                        lambda s, r, dry_run=False: [])
+    monkeypatch.setattr(tl, "reap_or_advance",
+                        lambda s, dry_run=False: None)
+    monkeypatch.setattr(tl, "reconcile_issues",
+                        lambda s, dry_run=False: {})
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run=False: None)
+    monkeypatch.setattr(tl, "lane_b_advance", lambda s, dry_run=False: None)
+    monkeypatch.setattr(tp, "needs_review_list", lambda: [])
+    monkeypatch.setattr(tp, "open_docs_prs", lambda: [])
+    monkeypatch.setattr(tp, "audit_line_running", lambda st: True)
+
+
+def test_cycle_once_orchestration_order(monkeypatch, tmp_path):
+    """全接缝打桩,断言 cycle_once 调齐 8 步且互不炸(brief 步骤1主测:
+    intake→janitor→reap→reconcile→heal→泳道1→泳道2→lane_b→audit→
+    merge_sweep 的顺序载荷,裁定#2 不可破坏)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    order = []
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "triage_new_red_runs",
+                        lambda s, r, dry_run=False: order.append("intake"))
+    monkeypatch.setattr(tl, "reap_or_advance",
+                        lambda s, dry_run=False: order.append("reap"))
+    monkeypatch.setattr(tl, "reconcile_issues",
+                        lambda s, dry_run=False: order.append("reconcile") or set())
+    monkeypatch.setattr(tl, "heal_clone",
+                        lambda s, dry_run=False: order.append("heal"))
+    monkeypatch.setattr(tl, "lane_b_advance",
+                        lambda s, dry_run=False: order.append("laneb"))
+    monkeypatch.setattr(tp, "needs_review_list", lambda: [])
+    monkeypatch.setattr(tp, "open_docs_prs", lambda: [])
+    monkeypatch.setattr(tp, "audit_line_running", lambda st: True)
+    st = _mkstate()
+    tp.cycle_once(st, False, [], datetime.now())
+    assert order == ["intake", "reap", "reconcile", "heal", "laneb"]
+    assert tp.SLOT_KINDS["issue_fix"] == 2
+
+
+def test_cycle_once_lane1_dispatch_writeback_and_save(monkeypatch, tmp_path):
+    """泳道1 派发记账必须回写 state["entries"] 再落盘——Entry 是解析副本,
+    不回写则 save 落的是旧 dict,DISPATCHED/PID/attempts 全丢 = 每轮重派
+    (scan 检视#6 / Task 4 R2 同款根因,brief 的 cycle_once 漏了回写)。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "_dispatch_gate_ok", lambda e, ol: True)
+    dispatched = []
+
+    def fake_dispatch(e, s, dry_run=False, **kw):
+        e.status = "DISPATCHED"
+        e.agent_pid = 4242
+        e.attempts += 1
+        tp.slot_acquire(s, "issue_fix",
+                        f"issue-{e.issue_number or e.run_id}",
+                        4242, 4242, "/l", None, "t", "b")
+        dispatched.append(e.issue_number)
+        return 4242
+    monkeypatch.setattr(tl, "dispatch_agent", fake_dispatch)
+    st = _mkstate()
+    st["entries"] = [_entry(status="QUEUED", agent_pid=None)]
+    tp.cycle_once(st, False, [], datetime.now())
+    assert dispatched == [5]
+    disk = tl.StateStore().load()          # 派发记账即时落盘且是新 dict
+    assert disk["entries"][0]["status"] == "DISPATCHED"
+    assert disk["entries"][0]["agent_pid"] == 4242
+    assert disk["entries"][0]["attempts"] == 3
+
+
+def test_cycle_once_lane1_includes_requeued_dispatched(monkeypatch, tmp_path):
+    """泳道1 取材必须含「DISPATCHED 且无 PID」(dead/timeout 经
+    _requeue_or_escalate 保持 DISPATCHED 待下一轮重派)——brief 只扫 QUEUED
+    会让重派条目永久滞留(scan 旧编排的重派扫消化这一群,薄壳等价性要求
+    cycle_once 覆盖同一取材)。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "_dispatch_gate_ok", lambda e, ol: True)
+    seen = []
+
+    def fake_dispatch(e, s, dry_run=False, **kw):
+        seen.append(e.status)
+        return 4242
+    monkeypatch.setattr(tl, "dispatch_agent", fake_dispatch)
+    st = _mkstate()
+    st["entries"] = [_entry(status="DISPATCHED", agent_pid=None, attempts=1)]
+    tp.cycle_once(st, False, [], datetime.now())
+    assert seen == ["DISPATCHED"]          # 重派条目被取材
+
+
+def test_cycle_once_lane2_paused_blocks_and_dry_run_no_spawn(monkeypatch,
+                                                             tmp_path):
+    """泳道2 接线: dry-run 只打印意图零派发(dry-run 零 spawn 契约);
+    PAUSED 熔断拦检视派发(紧急停机覆盖全部派发,spec §1 人工保留点——
+    dispatch_agent/run_audit 自带闸,检视线在编排层拦);正常路径真派。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tp, "needs_review_list", lambda: [(640, "h1")])
+    calls = []
+    monkeypatch.setattr(tp, "dispatch_review",
+                        lambda st, num, head: calls.append(num) or 4242)
+    st = _mkstate()
+    tp.cycle_once(st, True, [], datetime.now())          # dry: 零派发
+    assert calls == []
+    monkeypatch.setattr(tl, "_paused", lambda: True)
+    tp.cycle_once(st, False, [], datetime.now())          # PAUSED: 拦派
+    assert calls == []
+    monkeypatch.setattr(tl, "_paused", lambda: False)
+    tp.cycle_once(st, False, [], datetime.now())          # 正常: 泳道2 派发
+    assert calls == [640]
+
+
+def test_cycle_once_collects_revert_and_slot_events(monkeypatch, tmp_path):
+    """事件收集(裁定#4): revert_attribution 返回的 issue 清单记
+    {"kind":"revert-issue"};janitor 回收清单记 {"kind":"slot-released"}
+    ——夜间报告的数据源(revert 转人工信号本身在 pipeline.log/stdout,
+    正文只引路径)。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tp, "revert_attribution",
+                        lambda st, runs, dry_run=False: [99])
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)
+    monkeypatch.setattr(tl, "worktree_cleanup", lambda p: None)
+    monkeypatch.setattr(tp, "boot_id", lambda: "new-boot")
+    st = _mkstate()
+    tp.slot_acquire(st, "issue_fix", "issue-1", 999999901, 0, "/l", "/w",
+                    "t", "old-boot")
+    events = []
+    tp.cycle_once(st, False, events, datetime.now())
+    assert {"kind": "revert-issue", "issues": [99]} in events
+    assert any(ev["kind"] == "slot-released" for ev in events)
+
+
+def test_write_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    st = _mkstate()
+    p = tp.write_report(st, [{"kind": "merge", "pr": 42}], False)
+    assert os.path.exists(p) and st["last_report"] == os.path.basename(p)
+    # 裁定#4: 正文引 pipeline.log 路径(人工介入信号见 stdout 归档)
+    with open(p, encoding="utf-8") as f:
+        body = f.read()
+    assert "pipeline.log" in body and "人工介入信号" in body
+    assert "- {'kind': 'merge', 'pr': 42}" in body
+
+
+def test_write_report_dry_run_zero_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    st = _mkstate()
+    p = tp.write_report(st, [{"kind": "merge", "pr": 42}], True)
+    assert not os.path.exists(p)          # dry: 报告不写
+    assert "last_report" not in st        # state 不记账
+
+
+def test_pipeline_lock_second_instance(tmp_path, monkeypatch):
+    """R4(锁的意义测试,brief 原形态作废): 非 dry run_pipeline + 外部先持
+    pipeline.lock → 退出码 0,且锁检查先于一切副作用(state 未读未写、
+    零 gh、零迁移);dry-run 保持零本地写契约不碰锁。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    fd = os.open(os.path.join(tmp_path / "st", tp.PIPELINE_LOCK_NAME),
+                 os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        assert tp.run_pipeline() == 0    # 拿不到锁 → 退出码 0
+        assert not os.path.exists(os.path.join(tmp_path / "st", "state.json"))
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_run_pipeline_dry_run_zero_local_writes(monkeypatch, tmp_path,
+                                                capsys):
+    """dry-run 三处零写(裁定自查清单): 不建目录/不碰锁/state 不落盘/
+    报告不写;单轮预演退出 0。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    assert tp.run_pipeline(dry_run=True) == 0
+    assert not os.path.exists(tmp_path / "st")     # 连状态目录都没建
+    assert "[dry-run] pipeline 全流程预演完成,零副作用" \
+        in capsys.readouterr().out
+
+
+def test_run_pipeline_window_loop_soft_stop_report(monkeypatch, tmp_path):
+    """非 dry 全流程: 前奏(迁移/标签/清检视每晚计数/启动对账)→ 窗口循环
+    (每轮 cycle+落盘)→ 出窗软停 → 报告落盘 + last_report + status 摘要
+    数据。in_window 桩两态: 一次 True(单轮)一次 False(出窗)。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "_migrate_legacy_state_dir", lambda: None)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tp.time, "sleep", lambda s: None)
+    flags = iter([True, False])
+    monkeypatch.setattr(tp, "in_window",
+                        lambda now, s=23, e=9: next(flags))
+    soft = []
+    monkeypatch.setattr(tp, "soft_stop",
+                        lambda st, grace_sec=None: soft.append(st))
+    os.makedirs(tmp_path / "st")
+    tl.StateStore().save({"entries": [], "auth_failure_streak": 0,
+                          "review_tries": {"640:h1": 2}})
+    assert tp.run_pipeline() == 0
+    assert len(soft) == 1                          # 出窗软停恰一次
+    assert soft[0]["review_tries"] == {}           # 启动清零每晚检视计数
+    disk = tl.StateStore().load()
+    report = os.path.join(tmp_path / "st", disk["last_report"])
+    assert os.path.exists(report)                  # 报告落盘
+    assert disk["last_report"] == os.path.basename(report)
+
+
+def test_run_pipeline_cycle_gherror_digested(monkeypatch, tmp_path):
+    """窗口循环 GhError 单轮消化不炸整窗: scan_red_runs 持续 GhError →
+    仍写报告/落盘/软停,退出 0。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "_migrate_legacy_state_dir", lambda: None)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tp.time, "sleep", lambda s: None)
+
+    def boom():
+        raise tl.GhError("gh run list … 失败(exit 1): HTTP 502")
+    monkeypatch.setattr(tl, "scan_red_runs", boom)
+    flags = iter([True, True, False])
+    monkeypatch.setattr(tp, "in_window",
+                        lambda now, s=23, e=9: next(flags))
+    monkeypatch.setattr(tp, "soft_stop",
+                        lambda st, grace_sec=None: None)
+    assert tp.run_pipeline() == 0
+    disk = tl.StateStore().load()
+    assert os.path.exists(os.path.join(tmp_path / "st", disk["last_report"]))
+
+
+def test_soft_stop_grace_then_kill_no_attempt(monkeypatch, tmp_path):
+    """软停: 超窗活 agent 击杀(SIGTERM→SIGKILL 补刀两段);条目干净回队
+    不计 attempts/rounds(PR #611 假性升级教训);worktree 清、槽清;
+    审计线同收;记账回写 state dict(解析副本→to_dict,不回写则落旧 dict)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tp.time, "sleep", lambda s: None)
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: True)
+    killed = []
+    monkeypatch.setattr(os, "killpg",
+                        lambda pid, sig: killed.append((pid, sig)))
+    cleaned = []
+    monkeypatch.setattr(tl, "worktree_cleanup", lambda p: cleaned.append(p))
+    st = _mkstate()
+    st["entries"] = [
+        _entry(status="BOT_FIX", pr_number=88, rounds=2, attempts=1,
+               agent_pid=4242, worktree="/wt/pr-88"),
+        _entry(status="DISPATCHED", attempts=1, agent_pid=4243,
+               worktree="/wt/issue-5")]
+    tp.slot_acquire(st, "pr_repair", "pr-88", 4242, 4242, "/l", "/wt/pr-88",
+                    "t", "b")
+    tp.slot_acquire(st, "issue_fix", "issue-5", 4243, 4243, "/l",
+                    "/wt/issue-5", "t", "b")
+    tp.slot_acquire(st, "audit", "audit-nightly", 4244, 4244, "/l", None,
+                    "t", "b")
+    tp.soft_stop(st, grace_sec=0)
+    es = tl.StateStore.entries(st)
+    assert es[0].status == "PR_OPEN" and es[0].attempts == 1 \
+        and es[0].rounds == 2 and es[0].agent_pid is None
+    assert es[1].status == "QUEUED" and es[1].attempts == 1 \
+        and es[1].agent_pid is None
+    assert (4242, 15) in killed and (4243, 15) in killed \
+        and (4244, 15) in killed          # SIGTERM 三槽(含 audit 线)
+    assert (4242, 9) in killed            # 仍活者 SIGKILL 补刀
+    assert sorted(cleaned) == ["/wt/issue-5", "/wt/pr-88"]
+    assert not st.get("slots", {}).get("pr_repair")
+    assert not st.get("slots", {}).get("issue_fix")
+    assert not st.get("slots", {}).get("audit")
+    assert st["entries"][0]["status"] == "PR_OPEN"   # 回写后的 dict
+
+
+def test_soft_stop_all_exited_no_kill(monkeypatch, tmp_path):
+    """自然退场臂: 全部 agent 已退 → 零击杀;槽/worktree 仍清(易耗品),
+    条目不动(attempts 不变、状态不冒充软停语义——真实结局归下一轮/次夜
+    reap 记账)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)
+    killed = []
+    monkeypatch.setattr(os, "killpg",
+                        lambda pid, sig: killed.append((pid, sig)))
+    cleaned = []
+    monkeypatch.setattr(tl, "worktree_cleanup", lambda p: cleaned.append(p))
+    st = _mkstate()
+    st["entries"] = [_entry(status="DISPATCHED", agent_pid=4243,
+                           worktree="/wt/issue-5")]
+    tp.slot_acquire(st, "issue_fix", "issue-5", 4243, 4243, "/l",
+                    "/wt/issue-5", "t", "b")
+    tp.soft_stop(st, grace_sec=1800)
+    assert killed == []                   # 自然退场不击杀
+    assert cleaned == ["/wt/issue-5"]      # worktree 照清
+    assert tp.slot_get(st, "issue_fix", "issue-5") is None
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "DISPATCHED" and e.attempts == 2 \
+        and e.agent_pid == 4243           # 条目零动,归 reap 记账
+
+
+# ============ Task 10: merge 门扫接线 ============
+
+
+def _patch_merge_offline(monkeypatch, tmp_path):
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tl, "repo_slug", lambda: "o/r")
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)
+    monkeypatch.setattr(tp, "open_docs_prs", lambda: [])
+
+
+def test_merge_sweep_engine_wiring_fill_gate_execute(monkeypatch, tmp_path):
+    """引擎条目接线序(裁定#3): fetch_pr → fill_mergeable → pr_files →
+    evaluate_merge_gate → execute_merge;merge 事件入 events;记账即时
+    回写落盘(merged_sha 是 revert 归因主数据)。"""
+    _patch_merge_offline(monkeypatch, tmp_path)
+    seq = []
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr",
+                        lambda slug, n: seq.append(("fetch", n))
+                        or NS(number=n, mergeable=None))
+    monkeypatch.setattr(tp, "fill_mergeable",
+                        lambda pr: seq.append("fill") or
+                        setattr(pr, "mergeable", True))
+    monkeypatch.setattr(tl, "pr_files",
+                        lambda n: seq.append("files") or ["a.c"])
+    monkeypatch.setattr(tp, "evaluate_merge_gate",
+                        lambda st, e, pr, files, now, nam:
+                        seq.append("gate") or tp.GateResult(True, False, ["ok"]))
+    monkeypatch.setattr(tp, "execute_merge",
+                        lambda st, e, pr, gr, dry_run=False:
+                        seq.append("exec") or "sha42")
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                           fix_branch="fix/issue-7")]
+    events = []
+    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    assert seq == [("fetch", 88), "fill", "files", "gate", "exec"]
+    assert events == [{"kind": "merge", "pr": 88, "sha": "sha42"}]
+
+
+def test_merge_sweep_skips_pr_with_live_repair_agent(monkeypatch, tmp_path):
+    """repair 槽活 agent 在跑的 PR 跳过(brief 原文): fetch 都不发生,
+    等修复 agent 退场(同轮 lane_b 已把它保持 BOT_FIX/PR_OPEN)。"""
+    _patch_merge_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: True)
+    fetched = []
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr",
+                        lambda slug, n: fetched.append(n) or NS(number=n))
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                           fix_branch="fix/issue-7")]
+    tp.slot_acquire(st, "pr_repair", "pr-88", 4242, 4242, "/l", None,
+                    "t", "b")
+    events = []
+    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    assert fetched == [] and events == []
+
+
+def test_merge_sweep_fetch_gherror_digested(monkeypatch, tmp_path):
+    """单 PR fetch GhError 只跳过该 PR 不炸整扫(与 lane_b 单条目降级同口径;
+    brief 只给 docs 循环 try,引擎循环同样需要)。"""
+    _patch_merge_offline(monkeypatch, tmp_path)
+
+    def boom(slug, n):
+        raise tl.GhError("gh pr view … 失败(exit 1): HTTP 502")
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr", boom)
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["a.c"])
+    monkeypatch.setattr(tp, "fill_mergeable", lambda pr: None)
+    monkeypatch.setattr(tp, "evaluate_merge_gate",
+                        lambda *a: (_ for _ in ()).throw(
+                            AssertionError("fetch 失败不应过门")))
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                           fix_branch="fix/issue-7")]
+    events = []
+    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))   # 不炸
+    assert events == []
+
+
+def test_merge_sweep_gate_reject_upsert(monkeypatch, tmp_path):
+    """门拒事件同 (kind,pr) 去重-更新: merge 门每 PIPELINE_CYCLE_SEC 轮询,
+    夜报数据源不做重复账——二扫同 PR 拒因演化时报告反映最新判据。"""
+    _patch_merge_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr",
+                        lambda slug, n: NS(number=n))
+    monkeypatch.setattr(tp, "fill_mergeable", lambda pr: None)
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["a.c"])
+    verdicts = iter([tp.GateResult(False, False, ["classify=READY_TO_FIX"]),
+                     tp.GateResult(False, False,
+                                   ["required check 缺席: ['zizmor']"])])
+    monkeypatch.setattr(tp, "evaluate_merge_gate", lambda *a: next(verdicts))
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                           fix_branch="fix/issue-7")]
+    events = []
+    now = datetime.now(timezone.utc)
+    tp.merge_sweep(st, events, False, now)
+    tp.merge_sweep(st, events, False, now)
+    assert len(events) == 1
+    assert events[0] == {"kind": "gate-reject", "pr": 88,
+                         "reasons": ["required check 缺席: ['zizmor']"]}
+
+
+def test_merge_sweep_no_auto_merge_would_merge_report(monkeypatch, tmp_path):
+    """NO_AUTO_MERGE 灰度纯报告模式(裁定#3): nam 只传参、不用它跳过 docs
+    循环——熔断拒后复评一次不带熔断,复评过门记 would-merge 事件
+    (spec §11.4「本应 merge+门槛证据」),绝不执行 merge。"""
+    _patch_merge_offline(monkeypatch, tmp_path)
+    (tmp_path / "st").mkdir(parents=True)
+    (tmp_path / "st" / tp.NO_AUTO_MERGE_NAME).write_text("")
+    calls = []
+
+    def gate(st, e, pr, files, now, nam):
+        calls.append(nam)
+        if nam:
+            return tp.GateResult(
+                False, True, ["NO_AUTO_MERGE 熔断(灰度: 只报告)"])
+        return tp.GateResult(
+            True, True, ["docs 快道: 第5bot 唯一 + 300s 静默窗过"])
+    monkeypatch.setattr(tp, "evaluate_merge_gate", gate)
+    monkeypatch.setattr(tp, "execute_merge",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            AssertionError("熔断期不得执行 merge")))
+    monkeypatch.setattr(tp, "fill_mergeable", lambda pr: None)
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr",
+                        lambda slug, n: NS(number=n))
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["docs/a.md"])
+    monkeypatch.setattr(tp, "open_docs_prs",
+                        lambda: [{"pr_number": 700, "title": "docs: x",
+                                  "head": "h"}])
+    st = _mkstate()
+    events = []
+    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    assert calls == [True, False]          # 先带熔断评,拒后复评不带
+    assert events == [{"kind": "would-merge", "pr": 700,
+                       "reasons": ["docs 快道: 第5bot 唯一 + 300s 静默窗过"]}]
+
+
+def test_merge_sweep_docs_filters_and_engine_pr_no_double(monkeypatch,
+                                                           tmp_path):
+    """docs 循环三滤: 引擎条目 PR 不双扫(引擎循环已评恰一次,防双重评估/
+    双 merge)、WIP: 标题在 fetch 前拒(用户显式不同意当夜合入)、非
+    docs-only 在门评前拒;docs 引擎 PR 不因 docs-only 双进 docs 循环。"""
+    _patch_merge_offline(monkeypatch, tmp_path)
+    fetched = []
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr",
+                        lambda slug, n: fetched.append(n) or NS(number=n))
+    monkeypatch.setattr(tp, "fill_mergeable", lambda pr: None)
+    gated = []
+
+    def gate(st, e, pr, files, now, nam):
+        gated.append((getattr(pr, "number", None), files))
+        return tp.GateResult(False, False, ["拒"])
+    monkeypatch.setattr(tp, "evaluate_merge_gate", gate)
+    monkeypatch.setattr(tl, "pr_files",
+                        lambda n: ["a.c"] if n == 702 else ["docs/a.md"])
+    monkeypatch.setattr(tp, "open_docs_prs",
+                        lambda: [{"pr_number": 88, "title": "docs 引擎 PR",
+                                  "head": "h"},        # 引擎条目 → 不双扫
+                                 {"pr_number": 701, "title": "WIP: 草稿",
+                                  "head": "h"},        # WIP → fetch 前拒
+                                 {"pr_number": 702, "title": "代码 PR",
+                                  "head": "h"}])      # 非 docs-only → 门评前拒
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                           fix_branch="fix/issue-7")]
+    events = []
+    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    # 引擎 88 仅引擎循环评估一次;701 WIP 零 fetch;702 fetch 后被 docs-only 拒
+    assert fetched == [88, 702]
+    assert gated == [(88, ["docs/a.md"])]
+    assert events == [{"kind": "gate-reject", "pr": 88, "reasons": ["拒"]}]
+
+
+def test_spawn_audit_dry_gates_and_shape(monkeypatch, tmp_path, capsys):
+    """audit 后台线: dry-run 零 spawn 只打印;非 dry spawn(timeout 7500 +
+    scripts/task_loop.py audit + cwd=克隆)并占 audit 槽;已占位/内存闸/
+    克隆缺失三路早退。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "cl")
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "cl"))
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    calls = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: calls.append((cmd, cwd, log))
+                        or 4242)
+    st = _mkstate()
+    tp.spawn_audit(st, True)               # dry: 意图打印,零 spawn
+    assert calls == []
+    assert "将 spawn audit" in capsys.readouterr().out
+    tp.spawn_audit(st, False)              # 真 spawn + 占槽
+    assert len(calls) == 1
+    assert "task_loop.py audit" in calls[0][0]
+    assert "timeout 7500" in calls[0][0]
+    assert calls[0][1] == str(tmp_path / "cl")
+    assert tp.slot_get(st, "audit", "audit-nightly") is not None
+    monkeypatch.setattr(tp, "audit_line_running", lambda s: True)
+    tp.spawn_audit(st, False)              # 已在跑 → 早退
+    assert len(calls) == 1
+    monkeypatch.setattr(tp, "audit_line_running", lambda s: False)
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: False)
+    tp.spawn_audit(st, False)              # 内存闸 → 早退
+    assert len(calls) == 1
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "nope"))
+    tp.spawn_audit(st, False)              # 克隆缺失 → 早退
+    assert len(calls) == 1
+
+
+def test_needs_review_list_parses_tsv(monkeypatch):
+    """泳道2 取材: gh pr list TSV 解析,already_reviewed(第 5 bot 信号
+    commit 锚定幂等)命中者剔除;畸形行/无 headRefOid 行宁跳过不炸扫。"""
+    import pr_local_review as plr
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None: "640\tabc\n641\tdef\n\n")
+    monkeypatch.setattr(plr, "already_reviewed",
+                        lambda num, head: num == 640)
+    assert tp.needs_review_list() == [(641, "def")]
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None: "junk\n642\tx\n")
+    monkeypatch.setattr(plr, "already_reviewed", lambda num, head: False)
+    assert tp.needs_review_list() == [(642, "x")]
+    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: None)
+    assert tp.needs_review_list() == []     # gh 空输出(gh_json None 契约)
+
+
+def test_open_docs_prs_parses_tsv(monkeypatch):
+    """docs 取材: 三元组(号/标题/head);WIP/docs-only 过滤在门扫
+    (wip_gated/docs_only),本函数只取材。"""
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None:
+                        "700\tdocs: title\th1\n701\tWIP: x\th2\nbad\n")
+    assert tp.open_docs_prs() == [
+        {"pr_number": 700, "title": "docs: title", "head": "h1"},
+        {"pr_number": 701, "title": "WIP: x", "head": "h2"}]
+    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: None)
+    assert tp.open_docs_prs() == []
+
+
+# ============ Task 10: CLI 接线 + scan 薄壳 ============
+
+
+def test_cmd_scan_is_pipeline_single_cycle_shell(monkeypatch, tmp_path):
+    """scan 薄壳(裁定#7): cmd_scan → task_loop_pipeline 单轮非 dry 循环,
+   非复制粘贴另一套编排。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    # RED 安全垫: 旧 cmd_scan 走 _run_scan_orchestration——stub 其重接缝,
+    # 使 RED 失败落在断言而非真实 gh/git 副作用。
+    monkeypatch.setattr(tl, "_migrate_legacy_state_dir", lambda: None)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "list_open_agent_issues", lambda: [])
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run=False: None)
+    called = []
+    monkeypatch.setattr(tp, "run_pipeline_single_cycle",
+                        lambda: called.append(1) or 0)
+    assert tl.cmd_scan(NS()) == 0
+    assert called == [1]
+
+
+def test_run_pipeline_single_cycle_flow(monkeypatch, tmp_path):
+    """单轮循环: 共 pipeline.lock、前奏幂等子集(迁移/标签/启动对账)、
+    不 reset_review_tries(手动 scan 不清检视每晚预算——夜边界是流水线
+    启动对账,spec §4)、GhError → 退出 1 且已推进 state 落盘。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "_migrate_legacy_state_dir", lambda: None)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    os.makedirs(tmp_path / "st")
+    tl.StateStore().save({"entries": [], "auth_failure_streak": 0,
+                          "review_tries": {"640:h1": 1}})
+    cycles = []
+    monkeypatch.setattr(tp, "cycle_once",
+                        lambda st, dr, ev, now: cycles.append(dr))
+    assert tp.run_pipeline_single_cycle() == 0
+    assert cycles == [False]                # 单轮非 dry
+    disk = tl.StateStore().load()
+    assert disk["review_tries"] == {"640:h1": 1}   # 不清每晚预算
+    assert "last_report" not in disk               # 单轮不写夜报
+
+
+def test_run_pipeline_single_cycle_lock_conflict(tmp_path, monkeypatch):
+    """单轮薄壳与 run_pipeline 共 pipeline.lock: 外部持有 → 打印 + 退出 0。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    fd = os.open(os.path.join(tmp_path / "st", tp.PIPELINE_LOCK_NAME),
+                 os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        assert tp.run_pipeline_single_cycle() == 0
+        assert not os.path.exists(os.path.join(tmp_path / "st", "state.json"))
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_pipeline_cli_args_and_lazy_import(monkeypatch):
+    """pipeline 子命令 argparse + cmd_pipeline 懒 import 接线(防
+    task_loop↔pipeline 循环依赖);--dry-run/--window-start/--window-end
+    透传。"""
+    parser = tl.build_parser()
+    args = parser.parse_args(["pipeline", "--dry-run",
+                              "--window-start", "22", "--window-end", "8"])
+    assert args.dry_run is True and args.window_start == 22 \
+        and args.window_end == 8
+    args = parser.parse_args(["pipeline"])
+    assert args.dry_run is False and args.window_start == 23 \
+        and args.window_end == 9
+    seen = {}
+    monkeypatch.setattr(tp, "run_pipeline",
+                        lambda dry_run=False, window_start=23, window_end=9:
+                        seen.update(dry_run=dry_run, ws=window_start,
+                                    we=window_end) or 0)
+    assert tl.main(["pipeline", "--dry-run", "--window-start", "22",
+                    "--window-end", "8"]) == 0
+    assert seen == {"dry_run": True, "ws": 22, "we": 8}
+
+
+def test_cmd_status_shows_last_report(tmp_path, monkeypatch, capsys):
+    """status 顶部最近一夜摘要: state["last_report"] 存在 → 打一行
+    (报告文件在 state 目录,status 只报名字)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    tl.StateStore().save({"entries": [], "auth_failure_streak": 0,
+                          "last_report": "report-20261113.md"})
+    monkeypatch.setattr(tl, "list_open_agent_issues", lambda: [])
+    assert tl.cmd_status(NS()) == 0
+    assert "最近夜间报告: report-20261113.md" in capsys.readouterr().out

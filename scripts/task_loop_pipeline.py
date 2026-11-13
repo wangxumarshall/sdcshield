@@ -16,7 +16,7 @@ import shlex
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import task_loop as tl  # noqa: E402  (与 tl.pr_loop 同款命名空间引用,测试可 monkeypatch)
@@ -27,10 +27,19 @@ NO_AUTO_MERGE_NAME = "NO_AUTO_MERGE"
 SLOT_KINDS = {"issue_fix": 2, "pr_review": 2, "pr_repair": 2, "audit": 1}
 PIPELINE_CYCLE_SEC = 300
 SOFT_STOP_GRACE_SEC = 1800
+SOFT_STOP_KILL_GRACE_SEC = 10     # SIGTERM 后给仍活者的收尾窗,再 SIGKILL 补刀
 REVIEW_AGENT_TIMEOUT_SEC = 5400
 REVIEW_PER_HEAD_PER_NIGHT = 2
 DOCS_QUIET_SEC = 300
 MEMINFO_PATH = "/proc/meminfo"
+
+# audit 自有 state 键(task_loop 裁定 11: audit 子进程只经 _audit_state_merge_write
+# 在 scan.lock 内读-合-写这四个键)。pipeline 是长驻进程、整份 state 存内存,
+# 若裸 save 整份覆盖落盘,会把 audit 线同窗写入的 cursor/seen/streak 写回旧值
+# (生产事故 9d6ba452 同类丢记账)——pipeline 的一切落盘走 _pipeline_save:
+# scan.lock 内以磁盘为权威回填这四键,其余键 pipeline 为唯一写者。
+AUDIT_OWNED_KEYS = ("audit_cursor", "audit_seen", "auth_failure_streak",
+                    "auth_failure_at")
 
 
 def min_mem_gb() -> int:
@@ -192,25 +201,49 @@ def reset_review_tries(state):
 
 def dispatch_review(state, pr_num, head):
     """泳道2 派发: 每晚每 (pr,head) ≤REVIEW_PER_HEAD_PER_NIGHT 次;满槽/内存
-    不足返回 None。spawn 命令与修复 agent 同形(setsid+timeout),凭据经 agent.env。"""
+    不足返回 None。spawn 命令与修复 agent 同形(setsid+timeout),凭据经 agent.env。
+
+    派发序(T10 顺手修①②③④,R3 语义保持): 内存闸 → 同 key **活占位**前置
+    早退(先于每晚上限计数——活 agent 在跑不是一次检视尝试,零 spawn 零
+    killpg;死槽自释放仍按 R3 只清本 key,不破坏「先 janitor 后派发」序)
+    → 每晚上限 → 满槽 → agent.env 存在性(B44 同款: 缺凭据拒绝且不烧预算,
+    不拦则第 5 bot 从未启动却烧满 2 次/晚)→ spawn;acquire 失败(仅剩同轮
+    并发竞态)killpg 整组击杀不留孤儿。"""
     if not mem_gate_ok():
+        print(f"[mem-gate] MemAvailable 不足({min_mem_gb()}GB 闸),"
+              f"本轮不派检视 agent")
         return None
+    key = f"pr-{pr_num}"
+    existing = slot_get(state, "pr_review", key)
+    if existing is not None and tl.agent_alive(existing["pid"]):
+        # 顺手修②: 活占位早退——旧形态 spawn 后 acquire 同 key 互斥拒再
+        # killpg,白白起落一次进程;击杀网只保留给 acquire 竞态兜底。
+        print(f"[review] pr_review 槽 {key} 活 agent 在跑,本轮跳过")
+        return None
+    # R3(控制器裁定): 同 PR 重试先释放自身 key 的死槽——janitor 每轮才跑,
+    # 不自清则同 key 互斥把「agent 已死、本可重派」的 PR 卡到下一轮
+    # (释放只看本 key,不破坏「先 janitor 后派发」的全局清理序)。
+    if existing is not None:
+        slot_release(state, "pr_review", key)
     tries = state.setdefault("review_tries", {})
     tk = f"{pr_num}:{head}"
     if tries.get(tk, 0) >= REVIEW_PER_HEAD_PER_NIGHT:
         print(f"[review] PR #{pr_num} head {head[:8]} 已试 {tries[tk]} 次/晚,"
               f"留待明晚")
         return None
-    key = f"pr-{pr_num}"
-    # R3(控制器裁定): 同 PR 重试先释放自身 key 的死槽——janitor 每轮才跑,
-    # 不自清则同 key 互斥把「agent 已死、本可重派」的 PR 卡到下一轮
-    # (释放只看本 key,不破坏「先 janitor 后派发」的全局清理序)。
-    existing = slot_get(state, "pr_review", key)
-    if existing is not None and not tl.agent_alive(existing["pid"]):
-        slot_release(state, "pr_review", key)
     if free_slot_count(state, "pr_review") <= 0:
+        print(f"[slots] pr_review 满槽,拒绝为 {key} 派检视")
         return None
-    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    env_file = os.path.join(tl._resolve_state_dir(), tl.AGENT_ENV_NAME)
+    if not os.path.exists(env_file):
+        # 顺手修①(B44 同款前置拒绝): 缺凭据是部署问题——真实派发拒绝且
+        # 不烧每晚预算/不占槽,按 task-loop.md §3.3 放置凭据后自动恢复。
+        print(f"[review] agent.env 缺失({env_file})——按 task-loop.md §3.3 "
+              f"放置凭据(权限 600)后恢复;本轮不派检视、不烧每晚预算")
+        return None
+    # 顺手修④: 时间戳 naive 本地 → UTC 带 Z(与 tl.dispatch_agent 的
+    # _now_iso UTC 口径对齐;文件名模板 review-pr<N>-<ts>.log 不变)。
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log = os.path.join(tl._resolve_state_dir(), f"review-pr{pr_num}-{ts}.log")
     inner = (f"source {shlex.quote(os.path.join(tl._resolve_state_dir(), 'agent.env'))}"
              f" && timeout {REVIEW_AGENT_TIMEOUT_SEC} /usr/bin/python3 "
@@ -220,9 +253,11 @@ def dispatch_review(state, pr_num, head):
     pid = tl.run_background(cmd, cwd=tl._resolve_clone_dir(), log=log)
     if not slot_acquire(state, "pr_review", key, pid, pid, log, None,
                         _now_local_iso(), boot_id()):
-        # 占位失败只剩同轮并发竞态(同 key 早闸已拦常态)——killpg 整组击杀
+        # 占位失败只剩同轮并发竞态(活占位早闸已拦常态)——killpg 整组击杀
         # 刚派生的 agent 不留孤儿(setsid 使 $! PID 即 pgid),且不烧每晚
         # 预算(tries 未增,击杀不是一次检视尝试)。
+        print(f"[review] pr_review 槽 {key} 占位失败(同 key 竞态),"
+              f"已击杀 PID {pid}")
         try:
             os.killpg(pid, 9)
         except OSError:
@@ -624,3 +659,460 @@ def revert_attribution(state, red_runs, dry_run=False):
         # 临时观察键: T10 落盘 state 时无害但留意(非契约字段,测试断言用)
         state["_last_revert_body"] = body
     return issues
+
+
+# ============ 编排器主循环 + 软停 + 夜报 + CLI(Task 10) ============
+
+
+def _pipeline_save(store, state):
+    """pipeline 的 state 落盘唯一通道: scan.lock 内 merge-save——audit
+    自有键(AUDIT_OWNED_KEYS)以磁盘为权威回填,其余键 pipeline 为唯一写者。
+    audit 子进程(spawn_audit 拉起的 task_loop.py audit)在运行数分钟至
+    数小时后经 _audit_state_merge_write 把 cursor/seen/streak 合并落盘;
+    pipeline 整夜持有内存 state,裸 store.save 会把 audit 同窗推进写回旧值
+    (生产事故 9d6ba452 同类丢记账)——每次落盘前重读磁盘把 audit 键抬新。
+    阻塞 flock 的临界区只有 load+save(亚秒级);常态下 scan.lock 唯一的
+    生产持有者就是 audit 合并写(亚秒级)。过渡期注意(crontab 3 删 2 增
+    部署前): 旧 cron 的 scan tick 仍整段持有 scan.lock(分钟级),pipeline
+    的落盘会与之串行(阻塞等待 tick 结束,自愈不超时)——这是迁移窗口的
+    有界代价,不构成死锁(旧 tick 必然终结)。"""
+    def _merge():
+        disk = store.load()
+        for k in AUDIT_OWNED_KEYS:
+            if k in disk:
+                state[k] = disk[k]
+        store.save(state)
+    tl._with_scan_lock(_merge)
+
+
+def needs_review_list():
+    """全部 open PR 中当前 head 无第 5 bot 信号者(spec §4 泳道2 取材)。
+    already_reviewed 是 REST reviews 的 commit 锚定幂等判据(T6 报告已核);
+    畸形行/空 headRefOid 宁跳过不炸扫(gh_json 非输出 JSON 的子命令原样
+    返回文本,gh 空输出 None 契约 → (out or "") 防裸崩,pr_files 先例)。"""
+    import pr_local_review
+    out = tl.gh_json_idem(["pr", "list", "--state", "open", "--json",
+                           "number,headRefOid", "--jq",
+                           ".[] | [.number, .headRefOid] | @tsv"])
+    prs = []
+    for line in (out or "").splitlines():
+        if not line.strip():
+            continue
+        num_s, sep, head = line.partition("\t")
+        head = head.strip()
+        if not sep or not head:
+            continue
+        try:
+            num = int(num_s.strip())
+        except ValueError:
+            continue
+        if not pr_local_review.already_reviewed(num, head):
+            prs.append((num, head))
+    return prs
+
+
+def open_docs_prs():
+    """open PR 三元组(号/标题/head)取材: WIP 过滤(wip_gated)与 docs-only
+    过滤(docs_only)都在 merge_sweep 的门评前做——本函数只取材,spec §5
+    docs 快道是门的事不是取材的事。"""
+    out = tl.gh_json_idem(["pr", "list", "--state", "open", "--json",
+                           "number,title,headRefOid", "--jq",
+                           ".[] | [.number, .title, .headRefOid] | @tsv"])
+    prs = []
+    for line in (out or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        try:
+            num = int(parts[0].strip())
+        except ValueError:
+            continue
+        prs.append({"pr_number": num, "title": parts[1],
+                    "head": parts[2].strip()})
+    return prs
+
+
+def audit_line_running(state):
+    """audit 后台子进程是否在跑(槽 kind=audit,满 1 即在跑)。"""
+    return free_slot_count(state, "audit") == 0
+
+
+def spawn_audit(state, dry_run):
+    """audit 后台线(spec §2): 槽空则 spawn 一发 `task_loop.py audit`
+    (timeout 7500s ≈ 2h;切块审查 3000 行/轮,余量由后续轮次续审接力)。
+    run_audit 自带 PAUSED/audit.lock/内存外的全部闸,编排层只补内存闸
+    (spec §7「audit 同过闸」)与克隆目录存在性(cmd_audit 同款前置,
+    缺目录时 run_background 的 Popen 直接 FileNotFoundError 炸整轮)。
+    dry_run 只打印意图零 spawn。"""
+    if audit_line_running(state):
+        return
+    if tl._paused():
+        print("[audit] PAUSED 熔断生效,本轮不 spawn audit 线")
+        return
+    if not mem_gate_ok():
+        print(f"[audit] 内存闸不足({min_mem_gb()}GB),本轮不 spawn audit 线")
+        return
+    clone_dir = tl._resolve_clone_dir()
+    if not os.path.isdir(clone_dir):
+        print(f"[audit] 克隆目录不存在: {clone_dir}——本轮不 spawn audit 线")
+        return
+    if dry_run:
+        print("[dry-run] 将 spawn audit 后台线(audit-nightly,timeout 7500s)")
+        return
+    log = os.path.join(tl._resolve_state_dir(), "audit.log")
+    inner = "timeout 7500 /usr/bin/python3 scripts/task_loop.py audit"
+    cmd = f"nohup setsid bash -c {shlex.quote(inner)} >> {shlex.quote(log)} 2>&1 & echo $!"
+    pid = tl.run_background(cmd, cwd=clone_dir, log=log)
+    if not slot_acquire(state, "audit", "audit-nightly", pid, pid, log, None,
+                        _now_local_iso(), boot_id()):
+        # 与 dispatch_agent/dispatch_review 同款击杀网: 只剩同轮竞态,
+        # killpg 整组击杀刚派生的 audit 线不留孤儿(setsid 使 PID 即 pgid)。
+        try:
+            os.killpg(pid, 9)
+        except OSError:
+            pass
+        print(f"[audit] audit 槽占位失败(同 key 竞态),已击杀 PID {pid}")
+        return
+    print(f"[audit] audit 后台线已 spawn(PID {pid},日志 {log})")
+
+
+def _upsert_event(events, ev):
+    """同 (kind,pr) 事件去重-更新: events 是夜报数据源,merge 门每
+    PIPELINE_CYCLE_SEC 轮询(一夜最多 ~120 轮),不做重复账——同键再判据
+    时原位更新为最新门槛证据(CI 红→绿的演化在报告里反映为最新一次)。"""
+    for i, old in enumerate(events):
+        if old.get("kind") == ev["kind"] and old.get("pr") == ev.get("pr"):
+            events[i] = ev
+            return
+    events.append(ev)
+
+
+def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
+    """单 PR 门评+执行/记录(引擎与 docs 共用): ok → execute_merge(引擎条目
+    记账即时回写落盘——merged_sha 是 revert 归因主数据,丢账 = 归因失明);
+    NO_AUTO_MERGE 熔断拒 → 复评一次不带熔断(灰度纯报告模式的「本应
+    merge+门槛证据」,spec §11.4;T7 把熔断前置到门入口省后续 gh,这里
+    的复评 gh 成本是灰度夜报证据的代价,只读幂等);复评过门记 would-merge
+    绝不执行,不过记 gate-reject 携真实 reasons。"""
+    gr = evaluate_merge_gate(state, entry, pr, files, now, nam)
+    if gr.ok:
+        sha = execute_merge(state, entry, pr, gr, dry_run)
+        if entry is not None:
+            state["entries"] = [x.to_dict() for x in es]
+            if not dry_run:
+                _pipeline_save(StateStore(), state)
+        _upsert_event(events, {"kind": "merge" if entry is not None
+                               else "merge-docs", "pr": num, "sha": sha})
+        return
+    if nam and any("NO_AUTO_MERGE" in r for r in gr.reasons):
+        gr = evaluate_merge_gate(state, entry, pr, files, now, False)
+    _upsert_event(events, {"kind": "would-merge" if gr.ok else "gate-reject",
+                           "pr": num, "reasons": gr.reasons})
+
+
+def merge_sweep(state, events, dry_run, now=None):
+    """merge 门扫: 引擎条目(PR_OPEN ∧ 有 PR——BOT_FIX 已退场者在同轮
+    早段经 lane_b 归还 PR_OPEN;repair 槽活 agent 在跑的 PR 等它退场)+
+    用户 open docs PR(引擎条目的 PR 不双扫,防同 PR 双评估/双 merge)。
+    NO_AUTO_MERGE 生效 → 门拒后复评不带熔断、只记 would-merge/gate-reject
+    事件,绝不执行(裁定#3: nam 只传参,不用它跳过 docs 循环——纯报告
+    模式要能看到 would-merge 证据)。单 PR GhError 只跳过该 PR(lane_b
+    单条目降级同口径,不炸整扫)。fetch_pr 后、过门前 fill_mergeable
+    (T8 载荷: 真实 PRData 无 mergeable 字段)。"""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    nam = no_auto_merge_active()
+    slug = None
+    es = tl.StateStore.entries(state)
+    for e in es:
+        if e.status != "PR_OPEN" or e.pr_number is None:
+            continue
+        if any(s["key"] == f"pr-{e.pr_number}" and tl.agent_alive(s["pid"])
+               for s in state.get("slots", {}).get("pr_repair", [])):
+            continue                      # 修复 agent 在跑,等它退场
+        if slug is None:
+            slug = tl.repo_slug()
+        try:
+            pr = tl.pr_loop.fetch_pr(slug, e.pr_number)
+            fill_mergeable(pr)
+            files = tl.pr_files(e.pr_number)
+            _merge_one(state, events, e.pr_number, e, pr, files, now, nam,
+                       dry_run, es)
+        except GhError as exc:
+            print(f"[merge-sweep] PR #{e.pr_number} 评估失败: {exc}")
+    engine_prs = {x.pr_number for x in es if x.pr_number is not None}
+    for d in open_docs_prs():
+        num = d["pr_number"]
+        if num in engine_prs:
+            continue      # 引擎条目(含 docs-only 引擎 PR)已走上方循环
+        if wip_gated(d["title"]):
+            continue                      # WIP: = 用户显式不同意当夜合入
+        if slug is None:
+            slug = tl.repo_slug()
+        try:
+            pr = tl.pr_loop.fetch_pr(slug, num)
+            files = tl.pr_files(num)
+            if not docs_only(files):
+                continue
+            fill_mergeable(pr)
+            _merge_one(state, events, num, None, pr, files, now, nam,
+                       dry_run, es)
+        except GhError as exc:
+            print(f"[merge-sweep] docs PR #{num} 评估失败: {exc}")
+
+
+def cycle_once(state, dry_run, events, now):
+    """单轮循环(裁定#2 顺序载荷,不可破坏——同 key 死槽依赖 janitor 先清,
+    janitor 先于一切派发): intake(scan_red_runs → revert 归因 → triage)
+    → janitor → 收割 → 对账 → 自愈 → 泳道1 派发 → 泳道2 派发 → 泳道3
+    (lane_b) → audit 后台线 → merge 门扫。revert 转人工/去重信号在
+    revert_attribution 的 stdout(经 cron 重定向归档 pipeline.log,夜报
+    正文引路径),本函数只收其返回的 issue 清单(裁定#4)。"""
+    if now.tzinfo is None:
+        now = now.astimezone()   # brief 调用形态 naive → 感知(docs_ready 减法需感知时)
+    runs = tl.scan_red_runs()
+    issues = revert_attribution(state, runs, dry_run)
+    if issues:
+        events.append({"kind": "revert-issue", "issues": issues})
+    tl.triage_new_red_runs(state, runs, dry_run=dry_run)
+    released = slot_janitor(state, _now_local_iso())
+    if released:
+        events.append({"kind": "slot-released", "released": released})
+    tl.reap_or_advance(state, dry_run=dry_run)
+    open_labels = tl.reconcile_issues(state, dry_run=dry_run)
+    tl.heal_clone(state, dry_run=dry_run)
+    # 泳道1: state 队列 FIFO × 空槽——取材含 QUEUED 与「DISPATCHED 且无
+    # agent」(dead/timeout 经 _requeue_or_escalate 保持 DISPATCHED 待下一
+    # 轮重派;只扫 QUEUED 会让这一群永久滞留,scan 旧编排由重派扫消化)。
+    es = tl.StateStore.entries(state)
+    lane1 = sorted(
+        (e for e in es
+         if e.status == "QUEUED"
+         or (e.status == "DISPATCHED" and e.agent_pid is None)),
+        key=lambda e: (e.issue_number is None, e.issue_number or 0))
+    for e in lane1:
+        if free_slot_count(state, "issue_fix") <= 0:
+            break
+        if not tl._dispatch_gate_ok(e, open_labels):
+            continue
+        pid = tl.dispatch_agent(e, state, dry_run=dry_run)
+        # 回写+即时落盘(scan 检视#6/Task 4 R2 纪律): Entry 是解析副本,
+        # 不回写则 save 落旧 dict,派发记账全丢 = 每轮重派。
+        state["entries"] = [x.to_dict() for x in es]
+        if pid is not None and not dry_run:
+            _pipeline_save(StateStore(), state)
+    # 泳道2: 检视 × 空槽——PAUSED 熔断同闸(紧急停机覆盖全部派发,spec §1
+    # 人工保留点;dispatch_agent/run_audit 自带闸,检视线在编排层拦);
+    # dry_run 只打印意图零派发(dry-run 零 spawn 契约)。
+    if tl._paused():
+        print("[paused] 泳道2 检视派发被 PAUSED 闸门拦下")
+    else:
+        for num, head in needs_review_list():
+            if free_slot_count(state, "pr_review") <= 0:
+                break
+            if dry_run:
+                print(f"[dry-run] 将派第 5 bot 检视 PR #{num}"
+                      f"(head {head[:8]})")
+                continue
+            dispatch_review(state, num, head)
+    # 泳道3: 车道 B(其派发已槽位化为 pr_repair)
+    tl.lane_b_advance(state, dry_run=dry_run)
+    # audit 后台线
+    spawn_audit(state, dry_run)
+    # merge 门
+    merge_sweep(state, events, dry_run, now)
+
+
+def write_report(state, events, dry_run):
+    """夜报 report-YYYYMMDD.md + state["last_report"](窗口结束由
+    run_pipeline 调,status 顶部摘要读 last_report)。revert 转人工/升级/
+    去重留痕只在 stdout(经 cron 重定向归档 pipeline.log),正文引其路径
+    (裁定#4)。dry_run 只返回路径零写。"""
+    day = datetime.now().strftime("%Y%m%d")
+    path = os.path.join(tl._resolve_state_dir(), f"report-{day}.md")
+    body = [f"# pipeline 夜间报告 {day}", "",
+            f"- 事件数: {len(events)}"]
+    for ev in events:
+        body.append(f"- {ev}")
+    log_path = os.path.join(tl._resolve_state_dir(), "pipeline.log")
+    body += ["",
+             f"- 人工介入信号(转人工/升级/查重/去重留痕)见 {log_path}"]
+    if not dry_run:
+        os.makedirs(tl._resolve_state_dir(), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(body) + "\n")
+        state["last_report"] = os.path.basename(path)
+    return path
+
+
+def soft_stop(state, grace_sec=SOFT_STOP_GRACE_SEC):
+    """09:00 软停(spec §4): 在跑 agent 先给 ≤grace_sec 自然退出,超时击杀;
+    条目干净回队不计 attempts(#611 attempts=4 假性升级教训);清 worktree。
+    击杀两段: SIGTERM 让其收尾,SOFT_STOP_KILL_GRACE_SEC 后对仍活者 SIGKILL
+    补刀(_kill_agent_if_alive 同款纪律——宁可补刀不留无主活进程)。自然
+    退场的槽只清槽/worktree,条目不动(真实结局归下一轮/次夜 reap 记账,
+    软停不冒充收割)。报告由调用方写(run_pipeline)。"""
+    deadline = time.time() + grace_sec
+    while time.time() < deadline:
+        live = [s for lst in (state.get("slots") or {}).values()
+                for s in lst if tl.agent_alive(s["pid"])]
+        if not live:
+            break
+        print(f"[soft-stop] 等待 {len(live)} 个 agent 自然退出"
+              f"(剩余 {int(deadline - time.time())}s)")
+        time.sleep(60)
+    entries = tl.StateStore.entries(state)
+    killed = []
+    # 第一段: SIGTERM + 条目干净回队(只动 status/引用,不动 attempts/rounds;
+    # 仅 AGENT_STATES 条目——终态条目不复活。清 head 锚与 lane_b 退场归还
+    # 路径对称,否则同 head 单派规则把重派拦到死)。
+    for kind, lst in list((state.get("slots") or {}).items()):
+        for s in lst:
+            if not tl.agent_alive(s["pid"]):
+                continue
+            try:
+                os.killpg(s.get("pgid") or s["pid"], 15)
+            except OSError:
+                pass
+            killed.append(s["key"])
+            for e in entries:
+                if e.status not in tl.AGENT_STATES:
+                    continue
+                if s["key"] in (f"issue-{e.issue_number or e.run_id}",
+                                f"pr-{e.pr_number}"):
+                    e.status = "PR_OPEN" if kind == "pr_repair" else "QUEUED"
+                    e.agent_pid = None
+                    e.agent_started_at = None
+                    e.last_dispatched_head = None
+                    e.updated_at = _now_local_iso()
+    # 第二段: SIGKILL 补刀(仍活者)
+    if killed:
+        time.sleep(SOFT_STOP_KILL_GRACE_SEC)
+        for kind, lst in list((state.get("slots") or {}).items()):
+            for s in lst:
+                if tl.agent_alive(s["pid"]):
+                    try:
+                        os.killpg(s.get("pgid") or s["pid"], 9)
+                    except OSError:
+                        pass
+    # 槽清 + worktree 清(自然退场者同样清: worktree 是易耗品,软停是
+    # 确定性收尾点;槽不清则明晚启动对账前 janitor 还得替软停收尾)。
+    for kind in list((state.get("slots") or {}).keys()):
+        for s in state["slots"][kind]:
+            if s.get("worktree"):
+                tl.worktree_cleanup(s["worktree"])
+        state["slots"][kind] = []
+    # 记账回写: Entry 是解析副本,不回写则调用方 save 落旧 dict(软停推进全丢)。
+    state["entries"] = [e.to_dict() for e in entries]
+    print(f"[soft-stop] 击杀 {len(killed)} 个超时 agent(不计 attempts): "
+          f"{killed}")
+
+
+def run_pipeline(dry_run=False, window_start=23, window_end=9) -> int:
+    """夜间窗口循环(spec §2): cron `0 23` 拉起,pipeline.lock flock
+    LOCK_EX|LOCK_NB(占用 → 打印+退出 0,锁检查先于一切副作用,R4);
+    前奏(迁移/标签/清检视每晚计数/启动对账)→ 窗口内每 PIPELINE_CYCLE_SEC
+    一轮 cycle_once(GhError 单轮消化不炸整窗;其余异常同样消化续跑——
+    10h 窗口内一次意外不该弃守整夜)→ 出窗软停 → 报告+落盘。
+    dry_run: 单轮全流程预演,零本地写(不建目录/不碰锁/state 不落盘/报告
+    不写,scan dry-run 检视#14 同口径);gh 读照跑(真实只读预演)。"""
+    if dry_run:
+        events = []
+        st = {"entries": [], "auth_failure_streak": 0}
+        try:
+            cycle_once(st, True, events, datetime.now())
+        except GhError as exc:
+            print(f"[dry-run] 单轮预演因 gh 失败中断(如实记录): {exc}",
+                  file=sys.stderr)
+            return 1
+        write_report(st, events, True)
+        print("[dry-run] pipeline 全流程预演完成,零副作用")
+        return 0
+    state_dir = tl._resolve_state_dir()
+    os.makedirs(state_dir, exist_ok=True)
+    lock_fd = os.open(os.path.join(state_dir, PIPELINE_LOCK_NAME),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("[lock] pipeline 已在跑(锁占用),本实例退出")
+            return 0
+        tl._migrate_legacy_state_dir()
+        try:
+            tl.ensure_agent_labels()
+        except GhError as exc:
+            print(f"[warn] 标签确保失败: {exc}")
+        store = StateStore()
+        state = store.load()
+        reset_review_tries(state)
+        startup_reconcile(state)
+        _pipeline_save(store, state)
+        events = []
+        while in_window(datetime.now(), window_start, window_end):
+            try:
+                cycle_once(state, False, events, datetime.now())
+            except GhError as exc:
+                print(f"[cycle] 本轮失败(下轮重试): {exc}", file=sys.stderr)
+            except Exception as exc:
+                import traceback
+                print(f"[cycle] 本轮意外异常(消化续跑): "
+                      f"{type(exc).__name__}: {exc}", file=sys.stderr)
+                traceback.print_exc()
+            _pipeline_save(store, state)
+            time.sleep(PIPELINE_CYCLE_SEC)
+        soft_stop(state)
+        # 先写报告(记 last_report)再落盘——brief 原序 last_report 只进内存
+        # 永不落盘,status 摘要永远读不到,此为修正。
+        report = write_report(state, events, False)
+        _pipeline_save(store, state)
+        print(f"[pipeline] 窗口结束,报告: {report}")
+        return 0
+    finally:
+        os.close(lock_fd)
+
+
+def run_pipeline_single_cycle() -> int:
+    """scan 薄壳(裁定#7): 单轮非 dry pipeline 循环——会话内手动推进用,
+    cron 不再调 scan。与 run_pipeline 共 pipeline.lock(夜间流水线在跑时
+    锁占用 → 打印+退出 0)。前奏取 run_pipeline 的幂等子集(迁移/标签/
+    启动对账),但**不做** reset_review_tries: 检视「每晚 (pr,head) ≤2」
+    的夜边界是流水线启动对账(spec §4 泳道2 边界列),手动 scan 不得清零
+    每晚预算。GhError 消化为退出码 1(已推进的 state 仍落盘,旧 scan 先例
+    语义);单轮不写夜报(夜报是整夜账,归 run_pipeline),事件末尾打印
+    给会话操作者。"""
+    state_dir = tl._resolve_state_dir()
+    os.makedirs(state_dir, exist_ok=True)
+    lock_fd = os.open(os.path.join(state_dir, PIPELINE_LOCK_NAME),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("[lock] pipeline 已在跑(锁占用),本实例退出")
+            return 0
+        tl._migrate_legacy_state_dir()
+        try:
+            tl.ensure_agent_labels()
+        except GhError as exc:
+            print(f"[warn] 标签确保失败: {exc}")
+        store = StateStore()
+        state = store.load()
+        startup_reconcile(state)
+        _pipeline_save(store, state)
+        events = []
+        exit_code = 0
+        try:
+            cycle_once(state, False, events, datetime.now())
+        except GhError as exc:
+            print(f"scan(pipeline 单轮)失败(GhError,已推进的 state 仍落盘):"
+                  f" {exc}", file=sys.stderr)
+            exit_code = 1
+        _pipeline_save(store, state)
+        for ev in events:
+            print(f"[event] {ev}")
+        return exit_code
+    finally:
+        os.close(lock_fd)

@@ -1186,18 +1186,23 @@ def test_state_loss_recovers_from_github_markers(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 用例 23: scan 互斥锁(A4)——锁被占时立即返回、零 gh 调用
+# 用例 23: scan 互斥锁(A4)——锁被占时立即返回、零 gh 调用。
+# T10(2026-11-13)起 cmd_scan = 单轮 pipeline 薄壳,互斥锁随迁 pipeline.lock
+# (与 run_pipeline 同锁: 夜间流水线在跑时手动 scan 直接让位;scan.lock 退为
+# audit 合并写的短临界区锁)——本用例同步改持 pipeline.lock,锁语义不变:
+# 占用即打印+退出 0、零 gh(锁检查先于迁移/标签/循环一切副作用)。
 
 def test_scan_lock_excludes_concurrent(monkeypatch, tmp_path):
     import fcntl
+    import task_loop_pipeline as tp
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     fake = FakeGh(runs=[])
     monkeypatch.setattr(ct, "gh_json", fake.gh_json)
     monkeypatch.setattr(ct, "_git", lambda args: "")
 
-    # 测试内先占住 scan.lock(与 cmd_scan 相同的 LOCK_EX|LOCK_NB 语义)
-    lock_path = tmp_path / "scan.lock"
+    # 测试内先占住 pipeline.lock(与 cmd_scan 相同的 LOCK_EX|LOCK_NB 语义)
+    lock_path = tmp_path / tp.PIPELINE_LOCK_NAME
     held = open(lock_path, "w")
     fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:

@@ -104,6 +104,7 @@ def test_probe_local_reads_proc(monkeypatch, tmp_path):
 
 def test_pick_node_prefers_richest_and_filters(monkeypatch):
     import task_loop_pipeline as tp
+    monkeypatch.delenv("PIPELINE_MIN_MEM_GB", raising=False)
     probes = {"local": {"reachable": True, "mem_avail_mb": 26000,
                         "load15": 0.1, "cores": 0, "excite_active": False,
                         "boot_time": None},
@@ -130,7 +131,59 @@ def test_pick_node_prefers_richest_and_filters(monkeypatch):
     assert np.pick_node("issue_fix", st) is None                # 全空 → None
 
 
+def test_spawn_remote_pid_contract(monkeypatch):
+    sent = []
+    monkeypatch.setattr(np, "run_ssh",
+                        lambda h, cmd, t=45: sent.append((h, cmd)) or "4242")
+    pid = np.spawn_remote(np.node_by_host("0102"), "source env && claude -p",
+                          "~/sdcshield-autoci-state/agent-x.log")
+    assert pid == 4242
+    h, cmd = sent[0]
+    assert h == "0102"
+    assert "nohup setsid bash -c" in cmd and "echo $!" in cmd
+    assert "sdcshield-autoci-state/agent-x.log" in cmd
+
+
+def test_alive_and_logtail_and_kill_forms(monkeypatch):
+    sent = []
+    monkeypatch.setattr(np, "run_ssh",
+                        lambda h, cmd, t=45: sent.append((h, cmd))
+                        or ("0" if "kill -0" in cmd else "TAIL"))
+    assert np.alive_remote("0102", 4242) is True
+    assert sent[-1][1].strip() == "kill -0 4242 || echo 1; kill -0 4242 2>/dev/null || exit 1" \
+        or "kill -0 4242" in sent[-1][1]
+    assert np.read_log_tail("0102", "~/a.log") == "TAIL"
+    assert "tail -c 4000" in sent[-1][1] and "a.log" in sent[-1][1]
+    np.kill_remote("0102", 4242, 15)
+    assert "kill -15 -- -4242" in sent[-1][1]
+
+
+def test_alive_remote_dead_pid(monkeypatch):
+    monkeypatch.setattr(np, "run_ssh",
+                        lambda h, cmd, t=45: (_ for _ in ()).throw(
+                            np.NodeError("rc=1")))
+    assert np.alive_remote("0101", 999) is False        # 命令失败=进程死
+
+
+def test_worktree_heal_refresh_forms(monkeypatch):
+    sent = []
+    monkeypatch.setattr(np, "run_ssh",
+                        lambda h, cmd, t=45: sent.append((h, cmd)) or "")
+    monkeypatch.setattr(np, "put_file",
+                        lambda h, l, r: sent.append((h, f"PUT {l}->{r}")))
+    wt = np.prepare_worktree_remote(np.node_by_host("0102"), "issue-7")
+    assert wt == "/home/sdc/wangxu/sdcshield-autoci/.worktrees/issue-7"
+    assert any("worktree add --detach" in c and "issue-7" in c
+               for _, c in sent)
+    np.heal_remote(np.node_by_host("0102"))
+    assert any("reset --hard origin/main" in c for _, c in sent)
+    np.refresh_env_remote(np.node_by_host("0102"), "/local/agent.env")
+    assert any("mkdir -p ~/sdcshield-autoci-state" in c for _, c in sent)
+    assert any("PUT /local/agent.env" in str(s) for s in sent)
+
+
 def test_pick_node_env_valves(monkeypatch):
+    monkeypatch.delenv("PIPELINE_MIN_MEM_GB", raising=False)
     monkeypatch.setenv("PIPELINE_NODEPOOL", "0")
     assert np.pick_node("pr_review", {}) is np.LOCAL_NODE
     monkeypatch.setenv("PIPELINE_NODEPOOL", "1")

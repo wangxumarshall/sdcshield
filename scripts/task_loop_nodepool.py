@@ -15,6 +15,7 @@ import 它们(锁死依赖方向: tl → tp → np)。
 PIPELINE_FORCE_NODE=<host_id> → 强制单节点(冒烟/测试用)。
 """
 import os
+import re
 import subprocess
 
 # 板注册表(spec §3.1; 凭据不入库——连接经 setup 分发的 ~/.ssh/authorized_keys)
@@ -174,3 +175,76 @@ def pick_node(kind, state):
         if probe["mem_avail_mb"] > best_mem:
             best, best_mem = node, probe["mem_avail_mb"]
     return best
+
+
+# ---------------------------------------------------------------------------
+# 远程五操作(spawn/探活/日志尾/击杀/worktree+heal+refresh)
+# 契约同本机对应实现; 失败一律经 run_ssh/put_file 归一为 NodeError。
+# ---------------------------------------------------------------------------
+
+def spawn_remote(node, inner_cmd, log_path):
+    """远程派生,与本机 run_background 同契约(PID 回显唯一行)。"""
+    cmd = (f"nohup setsid bash -c {inner_cmd!r} >> {log_path} 2>&1 & echo $!")
+    out = run_ssh(node["host_id"], cmd)
+    try:
+        return int(out)
+    except ValueError:
+        raise NodeError(f"{node['host_id']} 未回显后台 PID(实际 {out!r})")
+
+
+def alive_remote(host_id, pid):
+    """探活: kill -0。rc=1(kill 的「无此进程」)= 死 → False;
+    SSH 断/超时(rc=255 或超时无 rc)上抛 NodeError——调用方按 unreachable
+    保留槽,绝不把「连不上」当「进程死」(spec §5)。
+
+    run_ssh 把退出码嵌进 NodeError 文本, 故按其中的 rc 区分两种失败:
+    kill -0 对已死/无权限进程返回 1, ssh 连接失败固定 255, subprocess
+    超时则无 rc 字段。"""
+    try:
+        run_ssh(host_id, f"kill -0 {pid}")
+    except NodeError as exc:
+        m = re.search(r"\(?rc=(\d+)\)?", str(exc))
+        if m and m.group(1) == "1":     # 进程不存在
+            return False
+        raise
+    return True          # 走到这里=活着
+
+
+def read_log_tail(host_id, path, nbytes=4000):
+    return run_ssh(host_id, f"tail -c {nbytes} {path}")
+
+
+def kill_remote(host_id, pgid, sig):
+    """杀整个进程组(负 pgid), 本机/远端同语义; 失败上抛留次夜。"""
+    run_ssh(host_id, f"kill -{sig} -- -{pgid}")
+
+
+def prepare_worktree_remote(node, key):
+    path = f"{node['clone_dir']}/.worktrees/{key}"
+    cleanup_worktree_remote(node["host_id"], path)
+    run_ssh(node["host_id"],
+            f"cd {node['clone_dir']} && git fetch origin --prune && "
+            f"git worktree add --detach {path} origin/main")
+    return path
+
+
+def cleanup_worktree_remote(host_id, path):
+    run_ssh(host_id,
+            f"git -C {node_by_host(host_id)['clone_dir']} worktree remove "
+            f"--force {path} 2>/dev/null; git -C "
+            f"{node_by_host(host_id)['clone_dir']} worktree prune; "
+            f"rm -rf {path}")
+
+
+def heal_remote(node):
+    run_ssh(node["host_id"],
+            f"cd {node['clone_dir']} && git fetch origin --prune && "
+            f"git reset --hard origin/main")
+
+
+def refresh_env_remote(node, local_agent_env_path):
+    """上传 agent.env 到板上状态目录(600, 含 token, 仅属主可读)。"""
+    run_ssh(node["host_id"], f"mkdir -p {REMOTE_STATE_DIR}")
+    put_file(node["host_id"], local_agent_env_path,
+             f"{REMOTE_STATE_DIR}/agent.env")
+    run_ssh(node["host_id"], f"chmod 600 {REMOTE_STATE_DIR}/agent.env")

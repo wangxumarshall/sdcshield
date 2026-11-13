@@ -2152,8 +2152,15 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         # 派发记账即时落盘(PR#317 检视#6): 本函数返回后编排层还要跑完其余
         # 条目才到 finally save——期间进程死亡(机器随时可能死)则磁盘无 PID,
         # 孤儿 agent 仍在克隆里干活而下一 tick 单飞失明 + heal 踩活工作区。
-        # dry_run 在上方已 continue,此处必为非 dry。
-        StateStore().save(state)
+        # T13 归位: 落盘走 tp._pipeline_save(scan.lock 内 merge-save)而非裸
+        # save——cycle_once 整夜持内存 state,audit 子进程同窗在锁下推进
+        # cursor/streak,裸 save 会把它们写回旧值(竞态窗口)。T10 推迟理由
+        # 「scan 整段持 scan.lock 时同进程二次 flock 自死锁」已随 cmd_scan
+        # 薄壳化(pipeline.lock)消解;注意本调用方不得已持 scan.lock(唯一
+        # 仍持整段 scan.lock 的 _run_scan_orchestration 非 dry 路径现为测试
+        # 专用,且测试均桩本函数)。dry_run 在上方已 continue,此处必为非 dry。
+        import task_loop_pipeline as tp    # 懒 import 防循环(同 dispatch_agent)
+        tp._pipeline_save(StateStore(), state)
     # 与 reap_or_advance 同模式: 序列化回 state(持有同一批 Entry 对象)
     state["entries"] = [e.to_dict() for e in entries]
 
@@ -2725,8 +2732,12 @@ def _audit_state_merge_write(keys: dict) -> None:
     一切持久化都经本函数: 拿 scan.lock(阻塞式 flock——本函数的临界区只有
     一次 load+save,亚秒级;scan 从不碰 audit.lock,锁序单向无死锁,最坏
     只是与一个 scan tick 串行)后 load 磁盘最新 state,只 update audit
-    自有键(audit_cursor/audit_seen/auth_failure_streak),再原子 save。
-    entries 的权威属于 scan,audit 永不写它。
+    独占键(audit_cursor/audit_seen),再原子 save。entries 的权威属于
+    scan,audit 永不写它。streak 两键(auth_failure_streak/auth_failure_at)
+    非本函数所写、亦非 audit 独占——它们是双写者键(pipeline 的 reap 在
+    内存写 + audit 在锁下经 _audit_streak_add/_audit_streak_reset_if_fresh
+    写),落盘合并语义(streak=max、at=取两侧较新)见
+    task_loop_pipeline._pipeline_save。
 
     锁获取经 _with_scan_lock(轮5 R1): 此前本函数与 _audit_streak_add
     各自内联同一段 makedirs+open+flock+close 样板——锁纪律(阻塞 LOCK_EX、

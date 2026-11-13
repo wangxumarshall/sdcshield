@@ -2148,6 +2148,95 @@ def test_merge_sweep_docs_filters_and_engine_pr_no_double(monkeypatch,
     assert events == [{"kind": "gate-reject", "pr": 88, "reasons": ["拒"]}]
 
 
+def test_cycle_once_ready_to_merge_reaches_merge_gate_end_to_end(
+        monkeypatch, tmp_path, capsys):
+    """C1 跨模块集成(终审旗舰缝: lane_b ↔ merge_sweep 的任务级盲区)——
+    lane_b **不打桩**、merge_sweep **真走 evaluate_merge_gate→execute_merge**
+    (不打 gate/checks_ok/execute 桩,只打 gh 层): READY_TO_MERGE 的引擎条目
+    (五 bot 信号齐 + 静默窗过 + 零意见 + required checks 绿)经 cycle_once
+    后由 merge 门自动合入——execute_merge 真执行(gh pr merge --squash)、
+    条目 DONE + merged_sha 记账、issue 由 merge 路径收尾;非 lane_b 的
+    @人工路径(零 @wangxumarshall 评论)。旧缺陷形态(lane_b 当轮置 DONE)
+    下本测红: merge 门永远看不到条目、无 merge 调用、merged_sha=None。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "triage_new_red_runs",
+                        lambda s, r, dry_run=False: [])
+    monkeypatch.setattr(tl, "reap_or_advance",
+                        lambda s, dry_run=False: None)
+    monkeypatch.setattr(tl, "reconcile_issues",
+                        lambda s, dry_run=False: {})
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run=False: None)
+    monkeypatch.setattr(tp, "needs_review_list", lambda: [])
+    monkeypatch.setattr(tp, "open_docs_prs", lambda: [])
+    monkeypatch.setattr(tp, "audit_line_running", lambda st: True)
+    monkeypatch.setattr(tl, "_paused", lambda: False)
+    monkeypatch.setattr(tl, "repo_slug", lambda: "o/r")
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["src/a.c"])
+    monkeypatch.setattr(tl.pr_loop, "ensure_local_review",
+                        lambda num, sha: None)
+    pr = _pr(latest=100000)          # 五 bot 齐 + 静默窗过 + 零意见(真实 classify)
+    pr.number = 88
+    pr.pr_number = 88
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr", lambda slug, n: pr)
+    gh_calls = []
+
+    def gh_fake(args, input_text=None):
+        gh_calls.append(list(args))
+        if "statusCheckRollup" in args:      # required checks 全绿(真实 checks_ok)
+            return "".join(f"{nm}\t{c}\tPull Request\n" for nm, c in (
+                ("lint", "SUCCESS"), ("git-sanity", "SUCCESS"),
+                ("Build binary for CPU (Linux)", "SUCCESS"),
+                ("zizmor (workflow security)", "SUCCESS")))
+        if args[:2] == ["pr", "view"] and "mergeCommit" in args:
+            return "mainsha123456"
+        return "{}"
+    monkeypatch.setattr(tl, "gh_json_idem", gh_fake)
+
+    # 场景①(熔断放开): cycle_once 全流程 → lane_b 只移交、merge 门真合入
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                            fix_branch="fix/issue-7")]
+    events = []
+    tp.cycle_once(st, False, events, datetime.now())
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "DONE" and e.merged_sha == "mainsha123456" \
+        and e.merged_at                       # merge 门记账(非 lane_b 路径)
+    assert any(c[:2] == ["pr", "merge"] and "--squash" in c
+               for c in gh_calls)             # execute_merge 真执行
+    assert {"kind": "merge", "pr": 88, "sha": "mainsha123456"} in events
+    # 非 lane_b @人工路径: 全部评论(gh 写)不含 @wangxumarshall
+    for c in gh_calls:
+        assert "wangxumarshall" not in " ".join(c)
+    # lane_b 真跑过(未打桩)且只移交: stdout 有移交提示、无 @人工收尾
+    out = capsys.readouterr().out
+    assert "READY_TO_MERGE" in out and "merge 门" in out
+    # issue 收尾走 merge 路径(execute_merge 的闭环评论 + close)
+    assert any(c[:2] == ["issue", "close"] and c[2] == "5"
+               for c in gh_calls)
+    assert any(c[:2] == ["issue", "comment"]
+               and "自动 squash merge" in c[c.index("--body") + 1]
+               for c in gh_calls)
+
+    # 场景②(NO_AUTO_MERGE 灰度): 同场景条目保持 PR_OPEN、零 merge 执行,
+    # 夜报记 would-merge 事件(只报告不执行)
+    (tmp_path / "st").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "st" / tp.NO_AUTO_MERGE_NAME).write_text("")
+    gh_calls.clear()
+    st2 = _mkstate()
+    st2["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                             fix_branch="fix/issue-7")]
+    events2 = []
+    tp.cycle_once(st2, False, events2, datetime.now())
+    e2 = tl.StateStore.entries(st2)[0]
+    assert e2.status == "PR_OPEN" and e2.merged_sha is None  # 条目不动
+    assert not any(c[:2] == ["pr", "merge"] for c in gh_calls)  # 零执行
+    assert {"kind": "would-merge", "pr": 88, "reasons": []} in events2
+    report = tp.write_report(st2, events2, False)
+    with open(report, encoding="utf-8") as f:
+        assert "would-merge" in f.read()      # 夜报含 would-merge 事件
+
+
 def test_spawn_audit_dry_gates_and_shape(monkeypatch, tmp_path, capsys):
     """audit 后台线: dry-run 零 spawn 只打印;非 dry spawn(timeout 7500 +
     scripts/task_loop.py audit + cwd=克隆)并占 audit 槽;已占位/内存闸/

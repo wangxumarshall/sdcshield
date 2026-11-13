@@ -61,13 +61,15 @@ def test_entry_new_fields_roundtrip_and_legacy():
                 last_dispatched_head=None, extra_runs=[], created_at="t",
                 updated_at="t", source="audit", kind="bug", audit_hash=None)
     e = Entry(**base, lane="issue_fix", worktree="/w", merged_at="m",
-              merged_sha="ab")
+              merged_sha="ab", conflict_nights=2)
     d = e.to_dict()
     assert d["lane"] == "issue_fix" and d["merged_sha"] == "ab"
+    assert d["conflict_nights"] == 2          # I6 第 23 字段: 连续冲突夜计数
     # 旧 state(无 4 新键)加载容错: lane="" 其余 None
     legacy = Entry.from_dict(base)
     assert legacy.lane == "" and legacy.worktree is None
     assert legacy.merged_at is None and legacy.merged_sha is None
+    assert legacy.conflict_nights == 0        # I6 缺省容错
     # 往返
     assert Entry.from_dict(d).to_dict() == d
 
@@ -634,9 +636,11 @@ def test_reset_review_tries_nightly_boundary(monkeypatch, tmp_path):
 
 
 def test_dispatch_review_spawn_command_shape(monkeypatch, tmp_path):
-    """派发契约: spawn `--pr <N>`(timeout 5400s / agent.env 凭据 /
+    """派发契约: spawn `--pr <N>`(timeout 7500s / agent.env 凭据 /
     setsid+`echo $!` 回显形态)、log = <STATE_DIR>/review-pr<N>-<ts>.log、
-    cwd = 克隆目录;常量锚 REVIEW_AGENT_TIMEOUT_SEC=5400 /
+    cwd = 克隆目录;常量锚 REVIEW_AGENT_TIMEOUT_SEC=7500(M13,2026-11-13
+    终审: 外层 5400 < 内层最坏 claude 3600 + 解析失败重试 3600 = 7200+,
+    必被内层反超——检视 agent 全部死于外层,审查白跑) /
     REVIEW_PER_HEAD_PER_NIGHT=2;ts 为 UTC 带 Z 后缀(T10 顺手修④: naive
     本地时间戳 → 与 tl.dispatch_agent 的 _now_iso UTC 口径对齐,文件名
     模板 review-pr<N>-<ts>.log 不变)。"""
@@ -648,10 +652,10 @@ def test_dispatch_review_spawn_command_shape(monkeypatch, tmp_path):
         lambda cmd, cwd, log: seen.update(cmd=cmd, cwd=cwd, log=log) or 4242)
     st = _mkstate()
     assert tp.dispatch_review(st, 640, "h1") == 4242
-    assert tp.REVIEW_AGENT_TIMEOUT_SEC == 5400
+    assert tp.REVIEW_AGENT_TIMEOUT_SEC == 7500
     assert tp.REVIEW_PER_HEAD_PER_NIGHT == 2
     assert "--pr 640" in seen["cmd"]
-    assert "timeout 5400 /usr/bin/python3" in seen["cmd"]
+    assert "timeout 7500 /usr/bin/python3" in seen["cmd"]
     assert "pr_local_review.py" in seen["cmd"]
     assert "agent.env" in seen["cmd"]
     assert "setsid" in seen["cmd"] and "echo $!" in seen["cmd"]
@@ -2210,6 +2214,86 @@ def test_merge_sweep_docs_filters_and_engine_pr_no_double(monkeypatch,
     assert events == [{"kind": "gate-reject", "pr": 88, "reasons": ["拒"]}]
 
 
+def _patch_conflict_offline(monkeypatch, tmp_path):
+    """I6 冲突计数用例的共通离线桩: merge_sweep 真走 evaluate_merge_gate
+    (classify/checks 打桩,门本体不打)——被测对象是 conflict_nights 计数
+    与升级,不是门槛矩阵。"""
+    _patch_merge_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["src/a.c"])
+    monkeypatch.setattr(tp, "fill_mergeable", lambda pr: None)
+    monkeypatch.setattr(tl, "comment_on_issue", lambda n, b: None)
+    monkeypatch.setattr(tl, "gh_label_remove", lambda n, l: None)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, l: None)
+
+
+def test_merge_sweep_conflict_two_nights_escalates(monkeypatch, tmp_path,
+                                                   capsys):
+    """I6(spec §5 承诺补全,2026-11-13 终审): 与 main 冲突(mergeable=
+    false,gate-reject 拒因含「冲突」)的引擎条目每夜 conflict_nights +1、
+    连续第 2 夜(≥2)→ _escalate(复用 tl 侧升级,理由文案引用 spec §5:
+    冲突不自动 rebase——rebase 决策留给人工);计数经 state 写回跨夜存续
+    (不写回则每轮从 dict 旧值重新解析,永远停在 1)。"""
+    _patch_conflict_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl.pr_loop, "classify_state",
+                        lambda pr, q, now: "READY_TO_MERGE")
+    monkeypatch.setattr(tp, "checks_ok", lambda pr, req, slug: (True, []))
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr",
+                        lambda slug, n: NS(number=n, state="open", draft=False,
+                                          fork=False, mergeable=False))
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                            fix_branch="fix/issue-7", agent_pid=None,
+                            agent_log=None, conflict_nights=0)]
+    events = []
+    # 第 1 夜: 冲突拒 → conflict_nights 0→1,条目保持 PR_OPEN(记 gate-reject)
+    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "PR_OPEN" and e.conflict_nights == 1
+    assert events[-1]["kind"] == "gate-reject"
+    # 第 2 夜(计数已写回 state): 1→2 → ESCALATED
+    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    e2 = tl.StateStore.entries(st)[0]
+    assert e2.status == "ESCALATED" and e2.conflict_nights == 2
+    out = capsys.readouterr().out
+    assert "ESCALATED" in out and "spec §5" in out
+
+
+def test_merge_sweep_conflict_counter_resets(monkeypatch, tmp_path):
+    """I6 清零两臂: 非冲突 gate-reject(classify≠READY_TO_MERGE,无冲突
+    拒因)→ conflict_nights 清零;过门 → 清零(随 merge 终态无意义,但
+    「只数连续冲突夜」语义保持——冲突与过门交替时不再升级)。"""
+    _patch_conflict_offline(monkeypatch, tmp_path)
+    # 非冲突拒因臂: classify=READY_TO_FIX(拒因无「冲突」)
+    monkeypatch.setattr(tl.pr_loop, "classify_state",
+                        lambda pr, q, now: "READY_TO_FIX")
+    monkeypatch.setattr(tp, "checks_ok", lambda pr, req, slug: (True, []))
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr",
+                        lambda slug, n: NS(number=n, state="open", draft=False,
+                                          fork=False, mergeable=True))
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                            fix_branch="fix/issue-7", agent_pid=None,
+                            agent_log=None, conflict_nights=1)]
+    tp.merge_sweep(st, [], False, datetime.now(timezone.utc))
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "PR_OPEN" and e.conflict_nights == 0   # 非冲突拒 → 清零
+
+    # 过门臂: classify=READY_TO_MERGE + checks 绿 + mergeable=True → 门过
+    # → 计数清零(execute_merge 打桩记录,门本体真实)
+    monkeypatch.setattr(tl.pr_loop, "classify_state",
+                        lambda pr, q, now: "READY_TO_MERGE")
+    merged = []
+    monkeypatch.setattr(tp, "execute_merge",
+                        lambda st, e, pr, gr, dry_run=False:
+                        merged.append(1) or "sha9")
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                            fix_branch="fix/issue-7", agent_pid=None,
+                            agent_log=None, conflict_nights=1)]
+    tp.merge_sweep(st, [], False, datetime.now(timezone.utc))
+    assert merged == [1]                       # 门过,merge 执行被调
+    assert tl.StateStore.entries(st)[0].conflict_nights == 0   # 过门清零
+
+
 def test_cycle_once_ready_to_merge_reaches_merge_gate_end_to_end(
         monkeypatch, tmp_path, capsys):
     """C1 跨模块集成(终审旗舰缝: lane_b ↔ merge_sweep 的任务级盲区)——
@@ -2514,7 +2598,7 @@ def test_pipeline_save_co_managed_streak_keys_max_merge(monkeypatch, tmp_path):
 
 def test_soft_stop_pr_review_slot_does_not_demote_entry(monkeypatch, tmp_path):
     """Important#2(fix-round 1): pr_review 与 pr_repair 槽对同一 PR 用同 key
-    f"pr-<N>"(泳道2+3 并行是 spec 设计流,reviewer 5400s 超时 > 300s 轮询,
+    f"pr-<N>"(泳道2+3 并行是 spec 设计流,reviewer 7500s 超时 > 300s 轮询,
     碰撞不罕见)。回队循环只认 issue_fix/pr_repair 槽——pr_review/audit 槽只
     击杀清槽不动条目;旧形态按 key 匹配任意活槽,pr_review 槽命中 BOT_FIX
     条目时 kind≠pr_repair 把它误降 QUEUED,同 key 双槽时还会把 pr_repair 臂

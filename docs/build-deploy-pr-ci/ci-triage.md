@@ -4,7 +4,8 @@
 > 统一任务引擎 `scripts/task_loop.py`（经模块别名薄壳过渡）。本文保留为历史
 > 手册；现行运维见 [task-loop.md](task-loop.md)。cron 部署行以 task-loop.md 为准。
 > **2026-11-13 起调度被 nightly pipeline 取代**（`task_loop.py pipeline`，
-> 23:00–09:00 三泳道 + merge 门；scan/audit/第 5 bot 三条 cron 行已删），
+> 23:00–09:00 三泳道 + merge 门；scan/audit/第 5 bot 三条 cron 行将随
+> [task-loop.md](task-loop.md) §3.1 runbook 部署删除），
 > 本文全部 cron 表述均为历史语义；「merge 由人执行」旧红线同步被引擎 PR
 > 六门槛自动 squash merge 政策取代（[task-loop.md](task-loop.md) §7）。
 

@@ -266,6 +266,7 @@ END_DECLARE_TEST
   issue → agent → PR 闭环;ci_triage 的泛化后继,含迁移说明。2026-11-13 起
   调度为 nightly pipeline: cron `0 23 * * *` 拉起 `task_loop.py pipeline`
   （23:00–09:00 窗口三泳道并行 + merge 门 + 09:00 软停，`@reboot` 落窗
-  自愈）；旧 scan/audit/第5bot 三行 cron 已删，`scan` 降级为会话手动单轮
+  自愈）；旧 scan/audit/第5bot 三行旧 cron 将随 task-loop.md §3.1 runbook
+  部署删除，`scan` 降级为会话手动单轮
   薄壳）: `docs/build-deploy-pr-ci/task-loop.md`;引擎 `scripts/task_loop.py`;
   会话命令 `/dev-loop`。

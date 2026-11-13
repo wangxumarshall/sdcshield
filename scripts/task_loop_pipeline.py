@@ -508,6 +508,29 @@ def execute_merge(state, entry, pr, gate, dry_run=False) -> "str | None":
 # ============ 精确归因自动 revert(Task 9) ============
 
 REVERT_FOR_FMT = "revert-for: PR #{pr} @ {sha}"
+REVERT_MARKER_FMT = "<!-- task-loop:revert:{sha} -->"
+
+
+def _revert_issue_exists(slug, merged_sha):
+    """双态 marker 幂等搜索(fix-round 1 Important#1,先例直接移植
+    tl._search_audit_issue/_search_finding_issue 的 gh search issues 形态,
+    检视#35 同一缺陷类): open 与 closed 各查一次,body 含完整
+    REVERT_MARKER_FMT marker 即命中——搜索宽松命中但正文无完整 marker 的
+    干扰项被 Python 侧复核滤掉(与 audit 先例同款双保险)。closed 命中兑现
+    「人工关闭的 revert issue 不重建」的人工接管语义。LOOKBACK_DAYS 窗内
+    坏 merge 未修时红 run 每轮重见,引擎自书不变量「幂等由 marker 查重
+    保证」(ci 源 _search_marker_issues / audit 源 _search_audit_issue
+    同款)在此兑现。"""
+    marker = REVERT_MARKER_FMT.format(sha=merged_sha)
+    for st in ("open", "closed"):
+        res = tl.gh_json(["search", "issues", "--repo", slug,
+                          "--state", st, "--json", "number,body",
+                          "--limit", "20",
+                          f"task-loop:revert:{merged_sha}"])
+        for it in (res if isinstance(res, list) else []):
+            if marker in (it.get("body") or ""):
+                return True
+    return False
 
 
 def revert_attribution(state, red_runs, dry_run=False):
@@ -529,9 +552,13 @@ def revert_attribution(state, red_runs, dry_run=False):
     标题探针拉取失败同样转人工([warn] 留痕,宁严勿松——红 run 仍由 intake
     前向修复,零丢失)。同批内同一 merge 的多个红 run(多 workflow 同 sha
     皆红是常态)只建一个 revert issue——revert 的对象是坏 merge 不是红
-    run,不去重则双 agent 同 revert 竞态;跨批查重不在本函数(T10 控调用
-    频次,正文 <!-- task-loop:revert:sha --> marker 备查重)。dry_run 在
-    闸后判: 拟建输出已经过闸过滤,零写零记账(探针只读照跑)。"""
+    run,不去重则双 agent 同 revert 竞态;批内去重打印前缀 [revert-dedup],
+    与二阶链升级提示 [revert] 分离(T10 夜报 grep "revert" 时去重噪声不得
+    混入人工升级信号)。跨调用幂等经 _revert_issue_exists 双态(open+closed)
+    marker 搜索内建(fix-round 1 Important#1,先例移植 _search_audit_issue
+    ——人工关闭的 revert issue 不重建;搜索失败幂等不可证 → 宁严勿松
+    转人工)。dry_run 在查重与闸后判: 拟建输出已经是真实将建集,零写零
+    记账(查重/探针皆只读照跑)。"""
     merged = {}
     for e in tl.StateStore.entries(state):
         if e.merged_sha and e.pr_number:
@@ -543,10 +570,24 @@ def revert_attribution(state, red_runs, dry_run=False):
         if hit is None:
             continue
         if hit.merged_sha in seen_merges:
-            print(f"[revert] merge {hit.merged_sha[:12]} 本批已处理——"
-                  f"红 run {run.get('url')} 同 merge 去重跳过")
+            print(f"[revert-dedup] merge {hit.merged_sha[:12]} 本批已处理"
+                  f"——红 run {run.get('url')} 同 merge 去重跳过")
             continue
         seen_merges.add(hit.merged_sha)
+        # 跨调用幂等(fix-round 1 Important#1): 建 issue(含 dry-run 打印)
+        # 之前双态 marker 搜索——红 run 在 LOOKBACK_DAYS 窗内每轮重见,
+        # 不查重则同一坏 merge 反复建 revert issue(双 agent 同 revert 竞态/
+        # attempts 燃烧/假性 ESCALATED 唤醒人工)。搜索失败幂等不可证 →
+        # 宁严勿松转人工(误建代价 > 漏建,漏建仍有 T10 intake 前向修复兜底)。
+        try:
+            if _revert_issue_exists(tl.repo_slug(), hit.merged_sha):
+                print(f"[revert-dedup] merge {hit.merged_sha[:12]} 已有 "
+                      f"revert issue(双态查重命中,人工关闭亦不重建)——跳过")
+                continue
+        except GhError as exc:
+            print(f"[warn] revert 查重搜索失败——幂等不可证,转人工"
+                  f"(宁严勿松,夜间报告可见): {exc}")
+            continue
         # 二阶链闸: revert PR 也是引擎 PR,其 merge 再红且归因命中时不
         # 自动建「revert 的 revert」。正文不可得,链深按命中条目 issue
         # 标题的 [revert] 前缀判定(标题约定由本函数建 issue 处保证);
@@ -569,7 +610,7 @@ def revert_attribution(state, red_runs, dry_run=False):
             f")——精确归因命中,请 revert:\n\n"
             f"```\ngit revert -m 1 {hit.merged_sha}\n```\n\n"
             f"{REVERT_FOR_FMT.format(pr=hit.pr_number, sha=hit.merged_sha)}\n"
-            f"<!-- task-loop:revert:{hit.merged_sha} -->\n\n"
+            f"{REVERT_MARKER_FMT.format(sha=hit.merged_sha)}\n\n"
             f"完成后以结束语 `task-loop: done <fix_branch>` 收尾。")
         if dry_run:
             print(f"[dry-run] 将建 revert issue: {body[:100]}…")
@@ -580,5 +621,6 @@ def revert_attribution(state, red_runs, dry_run=False):
             body=body,
             labels=[tl.AGENT_LABEL_TASK, tl.AGENT_LABEL_BUG])
         issues.append(num)
+        # 临时观察键: T10 落盘 state 时无害但留意(非契约字段,测试断言用)
         state["_last_revert_body"] = body
     return issues

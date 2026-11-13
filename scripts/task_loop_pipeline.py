@@ -27,7 +27,10 @@ SLOT_KINDS = {"issue_fix": 2, "pr_review": 2, "pr_repair": 2, "audit": 1}
 PIPELINE_CYCLE_SEC = 300
 SOFT_STOP_GRACE_SEC = 1800
 SOFT_STOP_KILL_GRACE_SEC = 10     # SIGTERM 后给仍活者的收尾窗,再 SIGKILL 补刀
-REVIEW_AGENT_TIMEOUT_SEC = 5400
+REVIEW_AGENT_TIMEOUT_SEC = 7500     # M13(2026-11-13 终审): 内层最坏 = claude
+                                    # 3600 + 解析失败重试 3600 = 7200+,外层
+                                    # 旧值 5400 必被内层反超——检视全部死于
+                                    # 外层 timeout,审查白跑;7500 留 ~5min 余量
 REVIEW_PER_HEAD_PER_NIGHT = 2
 DOCS_QUIET_SEC = 300
 AUDIT_LINE_TIMEOUT_SEC = 7500      # audit 后台线自身 timeout 预算(≈2h/轮)
@@ -874,8 +877,18 @@ def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
     NO_AUTO_MERGE 熔断拒 → 复评一次不带熔断(灰度纯报告模式的「本应
     merge+门槛证据」,spec §11.4;T7 把熔断前置到门入口省后续 gh,这里
     的复评 gh 成本是灰度夜报证据的代价,只读幂等);复评过门记 would-merge
-    绝不执行,不过记 gate-reject 携真实 reasons。"""
+    绝不执行,不过记 gate-reject 携真实 reasons。
+
+    I6(spec §5 承诺补全,引擎条目): 与 main 冲突的拒因(mergeable=false
+    →「与 main 冲突」)每夜 conflict_nights +1——计数在 nam 复评之后(熔断
+    夜的真实拒因同样可见),连续第 2 夜(≥2)→ tl._escalate(复用升级路径,
+    理由引用 spec §5: 不自动 rebase,rebase 决策留给人工;升级即终局即时
+    落盘);过门/非冲突拒 → 清零(只数**连续**冲突夜)。计数写回 state
+    dict——reject 路径无既有写回,不写回则每轮从旧 dict 重新解析,永远
+    停在 1、升级结构性不可达。"""
     gr = evaluate_merge_gate(state, entry, pr, files, now, nam)
+    if gr.ok and entry is not None:
+        entry.conflict_nights = 0               # 过门清零(只数连续冲突夜)
     if gr.ok:
         sha = execute_merge(state, entry, pr, gr, dry_run)
         if entry is not None:
@@ -887,6 +900,24 @@ def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
         return
     if nam and any("NO_AUTO_MERGE" in r for r in gr.reasons):
         gr = evaluate_merge_gate(state, entry, pr, files, now, False)
+    if entry is not None:
+        if any("冲突" in r for r in gr.reasons):
+            entry.conflict_nights += 1
+            if entry.conflict_nights >= 2:
+                tl._escalate(
+                    entry, state,
+                    f"与 main 冲突已持续 {entry.conflict_nights} 晚"
+                    f"(spec §5: 冲突持续 >2 夜 → ESCALATED,不自动 "
+                    f"rebase——rebase 决策留给人工)",
+                    "人工 rebase/merge 该 PR,或人工关闭之", dry_run)
+                # 升级即终局: 计数写回 + 即时落盘(与 lane_b 派发记账同纪律
+                # ——进程随时可能死,终态转换不能只活在内存)
+                state["entries"] = [x.to_dict() for x in es]
+                if not dry_run:
+                    _pipeline_save(StateStore(), state)
+        else:
+            entry.conflict_nights = 0           # 非冲突拒因清零
+        state["entries"] = [x.to_dict() for x in es]
     _upsert_event(events, {"kind": "would-merge" if gr.ok else "gate-reject",
                            "pr": num, "reasons": gr.reasons})
 
@@ -1043,7 +1074,7 @@ def soft_stop(state, grace_sec=SOFT_STOP_GRACE_SEC):
     补刀(_kill_agent_if_alive 同款纪律——宁可补刀不留无主活进程)。回队
     循环只认 issue_fix/pr_repair 槽(fix-round 1 Important#2): pr_review 与
     pr_repair 槽对同一 PR 共用 key f"pr-<N>"(泳道2+3 并行是 spec 设计流,
-    reviewer 5400s 超时 > 300s 轮询,碰撞不罕见),按 key 匹配任意活槽会把
+    reviewer 7500s 超时 > 300s 轮询,碰撞不罕见),按 key 匹配任意活槽会把
     BOT_FIX 条目误降 QUEUED、或把 pr_repair 臂刚写的 PR_OPEN 再抹掉——
     pr_review/audit 槽只击杀清槽,条目归其所属泳道的槽处置。自然退场的槽
     只清槽/worktree,条目不动(真实结局归下一轮/次夜 reap 记账,软停不冒充

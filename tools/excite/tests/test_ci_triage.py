@@ -1097,14 +1097,16 @@ def test_scan_heals_dirty_tree_when_no_agent(monkeypatch, tmp_path):
     ct.heal_clone(state, dry_run=False)
 
     # 完整恢复序列: fetch --all --prune → 查 HEAD → 查 dirty →
-    # checkout main → reset --hard origin/main → clean -fd
+    # checkout main → reset --hard origin/main → clean -fd →
+    # worktree prune(I5: 注册残项清理)
     assert git_calls[0][:3] == ["fetch", "--all", "--prune"]
     assert git_calls[1][:3] == ["rev-parse", "--abbrev-ref", "HEAD"]
     assert git_calls[2][:2] == ["status", "--porcelain"]
     assert git_calls[3][:2] == ["checkout", "main"]
     assert git_calls[4][:3] == ["reset", "--hard", "origin/main"]
     assert git_calls[5][:2] == ["clean", "-fd"]
-    assert len(git_calls) == 6
+    assert git_calls[6][:2] == ["worktree", "prune"]
+    assert len(git_calls) == 7
 
     # Task 4: agent 全在隔离 worktree 里跑,活 agent 在跑也不挡主克隆 heal
     # (旧 has_running_agent 早退退役;工作区互不踩)——同一完整恢复序列照跑
@@ -1114,7 +1116,7 @@ def test_scan_heals_dirty_tree_when_no_agent(monkeypatch, tmp_path):
     state2 = {"entries": [busy.to_dict()], "auth_failure_streak": 0}
     ct.heal_clone(state2, dry_run=False)
     assert git_calls[0][:3] == ["fetch", "--all", "--prune"]
-    assert len(git_calls) == 6                   # 无条件 heal,活 agent 不挡
+    assert len(git_calls) == 7                   # 无条件 heal,活 agent 不挡
 
     # 孤儿清理: 槽位账本外的 .worktrees/* 残留被清,槽位内的(含死槽)留给
     # slot_janitor,heal 不越权
@@ -1124,8 +1126,24 @@ def test_scan_heals_dirty_tree_when_no_agent(monkeypatch, tmp_path):
     state2["slots"] = {"issue_fix": [
         {"key": "issue-5", "pid": 1, "pgid": 1, "log": "/l",
          "worktree": str(slotted), "started_at": "t", "boot": "b"}]}
+    # I5: 检视临时 checkout 残留——软停 SIGKILL 检视 agent 后 /tmp 留下
+    # local-claude-review-* 整棵临时 checkout(pr_local_review._worktree_add
+    # 建、_worktree_remove 正常清);heal 清超龄(>1 天,mtime)的,新鲜的
+    # (在跑检视,timeout 7500s ≪ 1 天)不动
+    import tempfile as _tf
+    fake_tmp = tmp_path / "faketmp"; fake_tmp.mkdir()
+    stale = fake_tmp / "local-claude-review-stale"
+    fresh = fake_tmp / "local-claude-review-fresh"
+    stale.mkdir(); fresh.mkdir()
+    stale_age = time.time() - 2 * 86400          # 2 天前 > 1 天
+    os.utime(stale, (stale_age, stale_age))
+    monkeypatch.setattr(_tf, "gettempdir", lambda: str(fake_tmp))
     ct.heal_clone(state2, dry_run=False)
     assert not orphan.exists() and slotted.exists()
+    assert not stale.exists() and fresh.exists()  # 超龄清掉,新鲜保留
+    # prune 每轮都在恢复序列尾部(I5 注册残项: rmtree 兜底删目录不注销,
+    # 同 key 下次 git worktree add 会以 exit 128 炸派发)
+    assert git_calls[-1][:2] == ["worktree", "prune"]
 
     # dry-run: 零 git 调用,只打印意图
     git_calls.clear()

@@ -40,7 +40,7 @@ feature 类需求确认（`agent-approved`）、紧急停机（`PAUSED` /
 ## 1. 架构一览（nightly pipeline，2026-11-13 起）
 
 ```
-cron 0 23(timeout 37800)                    @reboot scripts/pipeline_selfheal.sh
+cron 0 23(timeout 39600)                    @reboot scripts/pipeline_selfheal.sh
   └─ task_loop.py pipeline                     （重启落在 23:00–09:00 窗口内
        ├─ flock pipeline.lock(单实例;            则重新拉起 pipeline,锁双保险)
        │  拿不到锁本轮退出)
@@ -57,7 +57,7 @@ cron 0 23(timeout 37800)                    @reboot scripts/pipeline_selfheal.sh
             ├ 泳道1 issue-agent ×2 空槽: QUEUED FIFO(资格公式 §2)
             │    → worktree 切分支 → 修复 → 推分支 → 开 PR → PR_OPEN
             ├ 泳道2 pr-review-agent ×2 空槽: 无第 5 bot 信号的 open PR head
-            │    → 本地对抗检视发布(每晚每 head ≤2 次,timeout 5400s)
+            │    → 本地对抗检视发布(每晚每 head ≤2 次,timeout 7500s)
             ├ 泳道3 pr-repair-agent ×2 空槽: READY_TO_FIX 的引擎 PR
             │    → collect 导出 → 意见批判处置 → 新 head
             │      (rounds ≤ 动态上限 2–3,§4)
@@ -68,7 +68,7 @@ cron 0 23(timeout 37800)                    @reboot scripts/pipeline_selfheal.sh
        09:00 软停: 停新派 → 在跑 agent ≤30min(SOFT_STOP_GRACE_SEC)缓冲,
        超时击杀**不计 attempts**、条目回队次夜续 → worktree 全清
        → 夜报 report-YYYYMMDD.md + state["last_report"] → 退出
-       (timeout 37800s 外层兜底)
+       (timeout 39600s 外层兜底)
 ```
 
 三泳道全部异步、互不阻塞；intake 是循环步而非前置阶段。每次派发前过
@@ -201,7 +201,7 @@ rounds≤4）、认证连续 ≥3 → PAUSED 熔断；merge 门独立双熔断�
 不动，与本体系无关）：
 
 ```cron
-0 23 * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && timeout 37800 /usr/bin/python3 scripts/task_loop.py pipeline >> ~/.local/state/sdcshield-task-loop/pipeline.log 2>&1
+0 23 * * * mkdir -p ~/.local/state/sdcshield-task-loop && cd /home/sdc/wangxu/operator/sdcshield-autoci && timeout 39600 /usr/bin/python3 scripts/task_loop.py pipeline >> ~/.local/state/sdcshield-task-loop/pipeline.log 2>&1
 @reboot /home/sdc/wangxu/operator/sdcshield/scripts/pipeline_selfheal.sh
 ```
 
@@ -209,7 +209,9 @@ rounds≤4）、认证连续 ≥3 → PAUSED 熔断；merge 门独立双熔断�
   与收割对账是循环步，audit 是 pipeline 内 spawn 的后台线（§1），第 5
   bot 检视是泳道 2（`pr_local_review.py --pr N` / `--all-open` CLI 保留
   供会话手动）。
-- `0 23` 启动 + `timeout 37800`（10.5h）外层兜底；pipeline 自身按
+- `0 23` 启动 + `timeout 39600`（11h，I4：软停等待窗最长 3600s+1800s
+  grace，外层与窗口**零裕量**咬合时软停等待段必被外层 timeout 杀——夜报/
+  记账丢失；11h 留 30min 裕量）外层兜底；pipeline 自身按
   `--window-start/--window-end`（默认 23/9）窗口循环、09:00 软停。
 - `@reboot` 自愈：机器重启落在 23:00–09:00 窗口内则重新拉起同一命令
   （`scripts/pipeline_selfheal.sh`，锁语义双保险——已在跑则秒退）。

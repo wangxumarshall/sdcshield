@@ -37,6 +37,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -225,12 +226,13 @@ class Entry:
     worktree: Optional[str] = None  # 该 agent 的 git worktree 路径(派发时建,收割时清)
     merged_at: Optional[str] = None # 自动 merge 时间(ISO8601;人工 merge 不记)
     merged_sha: Optional[str] = None # squash merge 产生的新 main commit sha(revert 归因主数据)
+    conflict_nights: int = 0        # 与 main 冲突的连续夜数(I6,spec §5: ≥2 → ESCALATED;过门/非冲突拒清零)
 
     # 注: 前 18 字段显式必填(含 extra_runs)——不做隐式默认,构造方须给全。
     # source/kind/audit_hash 三个 v2 字段仅 from_dict 容错给默认,直接构造
     # 仍须显式给全;lane/worktree/merged_at/merged_sha 四个 v3 字段带默认
-    # (lane="" 其余 None),旧 state 缺键加载即升格、旧构造方无需改动——
-    # 合计 22 字段。
+    # (lane="" 其余 None),旧 state 缺键加载即升格、旧构造方无需改动;
+    # conflict_nights(v4,I6)带默认 0 同理——合计 23 字段。
 
     def to_dict(self) -> dict:
         """state.json 序列化形态。"""
@@ -257,6 +259,7 @@ class Entry:
             "worktree": self.worktree,
             "merged_at": self.merged_at,
             "merged_sha": self.merged_sha,
+            "conflict_nights": self.conflict_nights,
         }
 
     @classmethod
@@ -266,7 +269,8 @@ class Entry:
         容错加载 v1 条目(旧 ci_triage 状态名经 STATUS_V1_TO_V2 归一;
         source/kind/audit_hash 三键缺省回落 ci/bug/None——v1 state.json
         现存条目无此三键,加载即升格 v2;lane/worktree/merged_at/merged_sha
-        四键缺省回落 ""/None/None/None——v2 state.json 加载即升格 v3)。
+        四键缺省回落 ""/None/None/None——v2 state.json 加载即升格 v3;
+        conflict_nights 缺省回落 0——v3 加载即升格 v4,I6)。
         """
         return cls(
             workflow=d["workflow"],
@@ -291,6 +295,7 @@ class Entry:
             worktree=d.get("worktree"),
             merged_at=d.get("merged_at"),
             merged_sha=d.get("merged_sha"),
+            conflict_nights=d.get("conflict_nights", 0),
         )
 
 
@@ -2226,6 +2231,41 @@ def worktree_cleanup(path: str) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+REVIEW_TMP_PREFIX = "local-claude-review-"
+REVIEW_TMP_MAX_AGE_SEC = 86400     # >1 天视为孤儿(检视 agent timeout 7500s ≪ 1 天)
+
+
+def _cleanup_stale_review_checkouts(
+        max_age_sec: int = REVIEW_TMP_MAX_AGE_SEC) -> None:
+    """清超龄的检视临时 checkout 残留(I5,2026-11-13 终审)。
+
+    第 5 bot(pr_local_review._worktree_add)在 tempfile.mkdtemp(prefix=
+    "local-claude-review-") 建整棵隔离 checkout(树内再 git worktree add),
+    正常路径 _worktree_remove 收尾;软停 SIGKILL 检视 agent 后残留整棵
+    checkout(数 GB 级,每撞一次检视留一棵)。在跑检视的 checkout 必新
+    (timeout 7500s ≪ 1 天),mtime 超过 1 天的只能是孤儿;逐个防御性
+    rmtree,任何失败仅打印、绝不炸 heal/scan(清残局不为清残局崩)。
+    """
+    root = tempfile.gettempdir()
+    try:
+        names = os.listdir(root)
+    except OSError as exc:
+        print(f"[heal] 检视 checkout 清理: 列举 {root} 失败(跳过): {exc}")
+        return
+    cutoff = time.time() - max_age_sec
+    for name in names:
+        if not name.startswith(REVIEW_TMP_PREFIX):
+            continue
+        p = os.path.join(root, name)
+        try:
+            if not os.path.isdir(p) or os.path.getmtime(p) > cutoff:
+                continue
+            shutil.rmtree(p, ignore_errors=True)
+            print(f"[heal] 清超龄检视 checkout 残留: {p}")
+        except OSError as exc:
+            print(f"[heal] 清 {p} 失败(跳过,下轮重试): {exc}")
+
+
 def heal_clone(state: dict, dry_run: bool = False) -> None:
     """单树纪律自愈(spec §9): 每轮无条件把主克隆恢复到干净的 main。
 
@@ -2239,7 +2279,11 @@ def heal_clone(state: dict, dry_run: bool = False) -> None:
          非 main 或脏 → 打印现场 + checkout main → reset --hard
          origin/main → clean -fd(丢弃游离改动,恢复可派发基线)。
     heal 后无条件清孤儿 worktree: 不在槽位账本里的 .worktrees/* 残留
-    (槽位内的——含死槽——由 slot_janitor 按 key 清,heal 不越权竞争)。
+    (槽位内的——含死槽——由 slot_janitor 按 key 清,heal 不越权竞争);
+    随后 `git worktree prune` 清 .git/worktrees 注册残项(I5①:rmtree 兜底
+    删目录不注销,同 key 下次 add 以 exit 128 炸派发),并清超龄(>1 天)
+    的 /tmp 检视临时 checkout 残留(I5②: 软停 SIGKILL 检视 agent 的整棵
+    checkout 残局,防御性、失败仅打印)。
 
     dry_run 只打印意图、零 git 调用。异常(git 失败/非零退出)→ 打印错误,
     不炸 scan——自愈失败留给下一轮重试,观测/派发照常。
@@ -2248,7 +2292,8 @@ def heal_clone(state: dict, dry_run: bool = False) -> None:
     if dry_run:
         print(f"[dry-run] 将自愈克隆 {clone_dir}: fetch --all --prune 后"
               f"恢复干净的 main(reset --hard origin/main,必要时 "
-              f"checkout main + clean -fd),并清槽外孤儿 worktree")
+              f"checkout main + clean -fd),并清槽外孤儿 worktree + "
+              f"worktree 注册残项(prune) + 超龄检视 checkout 残留")
         return
     try:
         _git(["fetch", "--all", "--prune"])
@@ -2285,6 +2330,16 @@ def heal_clone(state: dict, dry_run: bool = False) -> None:
             p = os.path.join(wt_root, name)
             if p not in live_wts:
                 worktree_cleanup(p)
+    # I5(2026-11-13 终审)①: 注册残项清零——worktree_cleanup 的 rmtree 兜底
+    # 路线删目录不注销 .git/worktrees/<key>,同 key 的下一次 `git worktree
+    # add` 会以 exit 128「丢失但已注册」炸派发;主仓内 prune 一发清掉全部
+    # 悬挂注册。失败仅打印(下轮重试),绝不炸 heal。
+    try:
+        _git(["worktree", "prune"])
+    except RuntimeError as exc:
+        print(f"[heal] git worktree prune 失败(下轮重试): {exc}")
+    # I5 ②: 超龄检视临时 checkout 残留清理(软停 SIGKILL 检视 agent 的残局)。
+    _cleanup_stale_review_checkouts()
 
 
 # ============ 子命令(Task 2/3/4 实现) ============

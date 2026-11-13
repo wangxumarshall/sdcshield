@@ -503,3 +503,82 @@ def execute_merge(state, entry, pr, gate, dry_run=False) -> "str | None":
                 print(f"[warn] issue 关闭失败(state 为权威): {exc}")
     print(f"[merge] PR #{num} 已自动合入 → {(merged_sha or '?')[:12]}")
     return merged_sha
+
+
+# ============ 精确归因自动 revert(Task 9) ============
+
+REVERT_FOR_FMT = "revert-for: PR #{pr} @ {sha}"
+
+
+def revert_attribution(state, red_runs, dry_run=False):
+    """精确归因才回滚(spec §6): 红 run headSha(scan_red_runs 真实键——
+    gh run list --json 的 camelCase 原始 dict;brief 假设的 head_sha/
+    html_url 蛇形键以实码对齐)命中本流水线自动 merge 的 merged_sha 集 →
+    建 revert issue(走 issue 队列→泳道1,分支随 issue 约定 fix/issue-<N>;
+    spec 的 fix/revert-pr<N> 降级为标题约定,不为命名改 dispatch)。人工
+    merge 的 sha 永不在集(merged_sha 只由 execute_merge 写;失败/回读空
+    → None 自然不命中)。归因不到 → 空清单(前向修复语义不变,intake 照常
+    建普通红 issue——语义在 T10 接线)。source=manual/kind=bug 按真实签名
+    create_task_issue(title, body, labels) 编码(grep 实核,brief 的
+    source/kind 参数不存在): 正文无 source marker → reconcile 归 manual
+    (task-loop:revert marker 不入 _SOURCE_MARKER_RES),agent-task+
+    agent-bug 标签 → kind=bug(ci 红路径同款协议);labels 由编排层
+    ensure_agent_labels 幂等就位。二阶链闸(防 revert 打乒乓球,链深 ≤1):
+    命中条目的 issue 标题以 [revert] 开头 = 该 PR 本身是 revert 产物 →
+    打印 escalation 转人工(夜间报告可见),不自动建「revert 的 revert」;
+    标题探针拉取失败同样转人工([warn] 留痕,宁严勿松——红 run 仍由 intake
+    前向修复,零丢失)。同批内同一 merge 的多个红 run(多 workflow 同 sha
+    皆红是常态)只建一个 revert issue——revert 的对象是坏 merge 不是红
+    run,不去重则双 agent 同 revert 竞态;跨批查重不在本函数(T10 控调用
+    频次,正文 <!-- task-loop:revert:sha --> marker 备查重)。dry_run 在
+    闸后判: 拟建输出已经过闸过滤,零写零记账(探针只读照跑)。"""
+    merged = {}
+    for e in tl.StateStore.entries(state):
+        if e.merged_sha and e.pr_number:
+            merged[e.merged_sha] = e
+    issues = []
+    seen_merges = set()
+    for run in red_runs:
+        hit = merged.get(run.get("headSha"))
+        if hit is None:
+            continue
+        if hit.merged_sha in seen_merges:
+            print(f"[revert] merge {hit.merged_sha[:12]} 本批已处理——"
+                  f"红 run {run.get('url')} 同 merge 去重跳过")
+            continue
+        seen_merges.add(hit.merged_sha)
+        # 二阶链闸: revert PR 也是引擎 PR,其 merge 再红且归因命中时不
+        # 自动建「revert 的 revert」。正文不可得,链深按命中条目 issue
+        # 标题的 [revert] 前缀判定(标题约定由本函数建 issue 处保证);
+        # 无 issue 条目不可能是 revert 产物(revert 必由 issue 派生)。
+        if hit.issue_number:
+            try:
+                is_revert_product = tl.issue_title_starts(
+                    hit.issue_number, "[revert]")
+            except GhError as exc:
+                print(f"[warn] issue #{hit.issue_number} 标题拉取失败"
+                      f"——二阶链不可判,转人工(宁严勿松,夜间报告可见): "
+                      f"{exc}")
+                continue
+            if is_revert_product:
+                print(f"[revert] PR #{hit.pr_number} 本身是 revert 产物"
+                      f"——二阶链不自动回滚,转人工(夜间报告可见)")
+                continue
+        body = (f"自动 merge 的 PR #{hit.pr_number}({hit.merged_sha[:12]})后,"
+            f"main 红 run [{run.get('workflowName')}]({run.get('url')}"
+            f")——精确归因命中,请 revert:\n\n"
+            f"```\ngit revert -m 1 {hit.merged_sha}\n```\n\n"
+            f"{REVERT_FOR_FMT.format(pr=hit.pr_number, sha=hit.merged_sha)}\n"
+            f"<!-- task-loop:revert:{hit.merged_sha} -->\n\n"
+            f"完成后以结束语 `task-loop: done <fix_branch>` 收尾。")
+        if dry_run:
+            print(f"[dry-run] 将建 revert issue: {body[:100]}…")
+            continue
+        num = tl.create_task_issue(
+            title=f"[revert] PR #{hit.pr_number} 自动 merge 后 main 红"
+                  f"({run.get('workflowName')})",
+            body=body,
+            labels=[tl.AGENT_LABEL_TASK, tl.AGENT_LABEL_BUG])
+        issues.append(num)
+        state["_last_revert_body"] = body
+    return issues

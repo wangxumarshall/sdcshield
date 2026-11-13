@@ -1358,3 +1358,200 @@ def test_fill_mergeable_seam(monkeypatch, tmp_path, capsys):
     pr5 = NS(pr_number=8, mergeable=None)
     tp.fill_mergeable(pr5)
     assert calls[-1][:3] == ["pr", "view", "8"] and pr5.mergeable is True
+
+
+# ============ Task 9: 精确归因自动 revert ============
+
+
+def _red(head_sha, run_id=555, workflow="Sanitizer", url="u"):
+    """scan_red_runs 真实键形: gh run list --json 的 camelCase 原始 dict
+    (grep 实核: databaseId/workflowName/event/conclusion/headBranch/headSha/
+    createdAt/url——brief 假设的 head_sha/html_url/title 蛇形键不存在,
+    控制器裁定#2 以实码为准对齐,不得造键)。"""
+    return {"databaseId": run_id, "workflowName": workflow, "event": "push",
+            "conclusion": "failure", "headBranch": "main",
+            "headSha": head_sha, "createdAt": "2026-11-13T00:00:00Z",
+            "url": url}
+
+
+def _merged_entry(merged_sha="deadbeef1234", pr_number=42, issue_number=7):
+    """execute_merge 记账后的引擎条目(merged_sha 非空 = revert 归因主数据,
+    人工 merge 永不写)。"""
+    return _entry(status="DONE", issue_number=issue_number,
+                  fix_branch="fix/issue-7", pr_number=pr_number,
+                  merged_at="t", merged_sha=merged_sha)
+
+
+def _no_gh(monkeypatch):
+    """防意外触网哨: 本用例预期零 gh 调用——任何 gh_json_idem 调用当场炸。"""
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None: (_ for _ in ()).throw(
+                            AssertionError(f"本用例不应触 gh: {a}")))
+
+
+def test_revert_attribution_creates_issue_for_merged_sha(monkeypatch, tmp_path):
+    """命中臂(brief 步骤1主测): 红 run headSha ∈ 条目 merged_sha 集 → 建
+    revert issue,返回号清单;正文含 revert-for 标记 + git revert -m 1
+    指令 + 结束语契约,state 记 _last_revert_body(brief 原文键,裁定#4)。
+    create_task_issue 真实签名 (title, body, labels)(裁定#1 grep 实核——
+    brief 的 source/kind 参数不存在): source=manual 经无 source-marker
+    正文由 reconcile 归类、kind=bug 经 agent-task+agent-bug 标签编码
+    (task-loop:revert marker 不入 _SOURCE_MARKER_RES,来路自然是 manual)。
+    二阶链探针经 gh_json_idem 桩返回普通标题(裁定#3 零触网)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    st = _mkstate()
+    st["entries"] = [_merged_entry()]
+    gh_calls = []
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None: gh_calls.append(list(a))
+                        or "普通修复后的标题")
+    made = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels:
+                        made.append((title, body, labels)) or 99)
+    got = tp.revert_attribution(st, [_red("deadbeef1234")])
+    assert got == [99] and len(made) == 1
+    title, body, labels = made[0]
+    assert "revert" in title.lower()
+    assert title == "[revert] PR #42 自动 merge 后 main 红(Sanitizer)"
+    assert labels == [tl.AGENT_LABEL_TASK, tl.AGENT_LABEL_BUG]
+    assert tp.REVERT_FOR_FMT == "revert-for: PR #{pr} @ {sha}"
+    assert "revert-for: PR #42 @ deadbeef1234" in body
+    assert "git revert -m 1 deadbeef1234" in body
+    assert "[Sanitizer](u)" in body
+    assert "<!-- task-loop:revert:deadbeef1234 -->" in body
+    assert "task-loop: done <fix_branch>" in body
+    assert "revert-for: PR #42 @ deadbeef1234" in st["_last_revert_body"]
+    # 二阶链探针的 gh 形锚: issue view <N> --json title --jq .title
+    assert any(a[:3] == ["issue", "view", "7"]
+               and a[a.index("--json") + 1] == "title"
+               and a[a.index("--jq") + 1] == ".title" for a in gh_calls)
+
+
+def test_revert_attribution_ignores_unrelated_red(monkeypatch):
+    """归因不到 → 空清单(intake 照常建普通红 issue 的语义在 T10,不在本
+    函数);miss 臂零 gh——无探针调用(防意外触网哨锁定)。"""
+    _no_gh(monkeypatch)
+    st = _mkstate()
+    st["entries"] = []
+    assert tp.revert_attribution(st, [_red("other")]) == []
+
+
+def test_revert_attribution_set_requires_sha_and_pr(monkeypatch):
+    """归因集只收 merged_sha ∧ pr_number 双非空条目: execute_merge 失败/
+    sha 回读空(merged_sha=None)与无 PR 条目永不命中(裁决语境: None 自然
+    不命中——revert-for 正文需要 PR 号,缺任一即不可归因)。"""
+    _no_gh(monkeypatch)
+    st = _mkstate()
+    st["entries"] = [_merged_entry(merged_sha=None),
+                     _merged_entry(pr_number=None, issue_number=None)]
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+
+
+def test_revert_attribution_second_order_chain_escalates(monkeypatch, capsys):
+    """二阶链闸(防 revert 打乒乓球,spec §6 链深 ≤1): 命中条目的 issue
+    标题以 [revert] 开头 = 该 PR 本身是 revert 产物 → 打印 escalation
+    转人工(夜间报告可见),不建 issue、不记 _last_revert_body。探针走
+    tl.issue_title_starts(经 gh_json_idem 桩,裁定#3)。"""
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    st = _mkstate()
+    st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None:
+                        "[revert] PR #40 自动 merge 后 main 红(Sanitizer)")
+    made = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels: made.append(title) or 99)
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+    assert made == [] and "_last_revert_body" not in st
+    out = capsys.readouterr().out
+    assert "本身是 revert 产物" in out and "转人工" in out
+
+
+def test_revert_attribution_title_probe_failure_escalates(monkeypatch, capsys):
+    """二阶链不可判(探针 GhError)→ 宁严勿松转人工: [warn] 留痕、不建
+    issue——红 run 仍由 intake(T10)建普通红 issue 前向修复,零丢失;
+    brief 的「本身是 revert 产物」提示只在确认命中时打印,不可判臂用
+    诚实的 [warn],不冒充命中(placeholder honesty)。"""
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    st = _mkstate()
+    st["entries"] = [_merged_entry()]
+
+    def boom(a, input_text=None):
+        raise tl.GhError("gh issue view … 失败(exit 1): HTTP 502")
+    monkeypatch.setattr(tl, "gh_json_idem", boom)
+    made = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels: made.append(title) or 99)
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+    assert made == []
+    out = capsys.readouterr().out
+    assert "[warn]" in out and "二阶链不可判" in out
+    assert "本身是 revert 产物" not in out
+
+
+def test_revert_attribution_dry_run_only_prints(monkeypatch, capsys):
+    """dry_run: 只打印拟建动作——零建 issue、零 _last_revert_body 记账;
+    拟建输出在二阶链闸之后(闸是只读探针,零写),打印即真实将建集。"""
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    st = _mkstate()
+    st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: "普通")
+    made = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels: made.append(title) or 99)
+    assert tp.revert_attribution(st, [_red("deadbeef1234")],
+                                 dry_run=True) == []
+    assert made == [] and "_last_revert_body" not in st
+    out = capsys.readouterr().out
+    assert "[dry-run] 将建 revert issue" in out
+    assert "deadbeef1234" in out
+
+
+def test_revert_attribution_dedups_same_merge_within_call(monkeypatch, capsys):
+    """同批内同一 merge 只建一个 revert issue: 多 workflow 同 sha 皆红是
+    常态(同一坏 main commit 的 Sanitizer/Multi-OS 同时红),revert 的对象
+    是坏 merge 不是红 run——不去重则双 agent 同 revert 竞态。第二个红 run
+    打印去重留痕(brief 未列的补墙,报告注明);跨批查重不在本函数。"""
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    st = _mkstate()
+    st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: "普通")
+    made = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels: made.append(title) or 99)
+    got = tp.revert_attribution(st, [
+        _red("deadbeef1234", run_id=555),
+        _red("deadbeef1234", run_id=556, workflow="Multi-OS Verify",
+             url="u2")])
+    assert got == [99] and len(made) == 1
+    assert "去重" in capsys.readouterr().out
+
+
+def test_issue_title_starts_probe(monkeypatch):
+    """issue_title_starts 助手(brief: task_loop 无现成助手,令补的小函数;
+    裁定#3 经 tl.gh_json_idem 桩测试): gh issue view <N> --repo <slug>
+    --json title --jq .title 幂等读,str 前缀判定;gh 空输出 None(gh_json
+    契约)→ False(标题未知不可证前缀);GhError 原样上抛——降级语义归调用方
+    (与 issue_state 同款契约,不掀翻整链)。"""
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    calls = []
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None: calls.append(list(a))
+                        or "[revert] PR #40 自动 merge 后 main 红(Sanitizer)")
+    assert tl.issue_title_starts(7, "[revert]") is True
+    a = calls[0]
+    assert a[:3] == ["issue", "view", "7"]
+    assert a[a.index("--repo") + 1] == "o/r"
+    assert a[a.index("--json") + 1] == "title"
+    assert a[a.index("--jq") + 1] == ".title"
+    assert tl.issue_title_starts(7, "[REVERT]") is False   # 前缀精确,不归一
+    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: None)
+    assert tl.issue_title_starts(7, "[revert]") is False
+
+    def boom(a, input_text=None):
+        raise tl.GhError("gh issue view … 失败(exit 1): HTTP 502")
+    monkeypatch.setattr(tl, "gh_json_idem", boom)
+    with pytest.raises(tl.GhError):
+        tl.issue_title_starts(7, "[revert]")

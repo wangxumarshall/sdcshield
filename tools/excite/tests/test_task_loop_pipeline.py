@@ -1224,14 +1224,80 @@ def test_execute_merge_failure_keeps_entry_open(monkeypatch, tmp_path):
         tp.execute_merge({"entries": [e], "auth_failure_streak": 0}, e,
                          _pr(), tp.GateResult(True, False, []))
     assert any(c[:2] == ["pr", "comment"] for c in calls)   # 评论已贴
-    assert not any(c[:2] == ["comment"] for c in calls)     # issue 未收尾
+    # issue 未收尾——c[0] 判形(fix-round 1 Important #2: 原 c[:2]==["comment"]
+    # 切片恒 ≠ 单元素列表,是恒真空锁)
+    assert not any(c[0] == "comment" for c in calls)
+    assert ["comment", 7] not in calls
     assert e.status == "PR_OPEN" and e.merged_sha is None \
         and e.merged_at is None
 
 
+def _merge_flow_stub(view_ret, calls):
+    """execute_merge 全流程桩(回读降级两臂共用,fix-round 1 Important #1):
+    pr comment/merge 与 issue close 回 "{}";pr view mergeCommit 按
+    view_ret 回放——None=gh 空输出,Exception=抛出;comment_on_issue 不在
+    此(测试自行记录以断言 issue 收尾)。"""
+    def fake(args, input_text=None):
+        calls.append(list(args))
+        if args[:2] == ["pr", "view"] and "mergeCommit" in " ".join(args):
+            if isinstance(view_ret, Exception):
+                raise view_ret
+            return view_ret
+        return "{}"
+    return fake
+
+
+def _degraded_assert(e, sha, calls, capsys):
+    """回读降级两臂的共同断言: 不可逆点(merge 已执行)之后宁记账勿崩——
+    DONE + merged_sha=None + [warn] 留痕,issue 仍收尾。"""
+    assert sha is None and e.status == "DONE" and e.merged_sha is None \
+        and e.merged_at
+    assert ["comment", 7] in calls                      # issue 收尾仍走
+    assert any(c[:2] == ["issue", "close"] for c in calls)
+    out = capsys.readouterr().out
+    assert "[warn]" in out and "merged_sha" in out
+
+
+def test_execute_merge_sha_readback_none_still_done(monkeypatch, tmp_path,
+                                                     capsys):
+    """回读降级臂①(Important #1): squash merge 已执行后 sha 回读得 None
+    (gh 空输出/字面 null)——不崩不丢账: 已合入是事实,记账反映现实
+    (DONE + merged_sha=None + [warn],revert 归因缺主数据须留痕)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    calls = []
+    monkeypatch.setattr(tl, "gh_json_idem", _merge_flow_stub(None, calls))
+    monkeypatch.setattr(tl, "comment_on_issue",
+                        lambda n, b: calls.append(["comment", n]))
+    e = NS(pr_number=42, issue_number=7, fix_branch="fix/issue-7",
+           status="PR_OPEN", merged_at=None, merged_sha=None,
+           updated_at="t")
+    sha = tp.execute_merge({"entries": [e], "auth_failure_streak": 0}, e,
+                           _pr(), tp.GateResult(True, False, []))
+    _degraded_assert(e, sha, calls, capsys)
+
+
+def test_execute_merge_sha_readback_gherror_still_done(monkeypatch, tmp_path,
+                                                        capsys):
+    """回读降级臂②(Important #1): merge 已执行后回读步 GhError——同样
+    降级记账,GhError 不再穿透(不可逆点后崩溃不撤销 merge,只丢账;
+    AttributeError/GhError 还会穿透上层按 GhError 分类的处置)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    calls = []
+    monkeypatch.setattr(tl, "gh_json_idem", _merge_flow_stub(
+        tl.GhError("gh pr view … 失败(exit 1): HTTP 502"), calls))
+    monkeypatch.setattr(tl, "comment_on_issue",
+                        lambda n, b: calls.append(["comment", n]))
+    e = NS(pr_number=42, issue_number=7, fix_branch="fix/issue-7",
+           status="PR_OPEN", merged_at=None, merged_sha=None,
+           updated_at="t")
+    sha = tp.execute_merge({"entries": [e], "auth_failure_streak": 0}, e,
+                           _pr(), tp.GateResult(True, False, []))
+    _degraded_assert(e, sha, calls, capsys)
+
+
 def test_no_auto_merge_active_probe(monkeypatch, tmp_path):
     """NO_AUTO_MERGE 熔断探测: STATE_DIR 下同名文件存在 → True,缺失 →
-    False;纯存在性掺查幂等(重复调用同结果,零 gh/零变更)。"""
+    False;纯存在性探查幂等(重复调用同结果,零 gh/零变更)。"""
     st = tmp_path / "st"
     st.mkdir()
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(st))
@@ -1260,7 +1326,7 @@ def test_fill_mergeable_seam(monkeypatch, tmp_path, capsys):
     assert pr.mergeable is False        # 拉到即写回
     assert len(calls) == 1
     a = calls[0]
-    assert a[:3] == ["pr", "view", "1"]            # str(pr.number)
+    assert a[:3] == ["pr", "view", "1"]            # 取号双形 pr_number|number
     assert a[a.index("--repo") + 1] == "o/r"
     assert a[a.index("--json") + 1] == "mergeable"
     assert a[a.index("--jq") + 1] == ".mergeable"
@@ -1280,3 +1346,15 @@ def test_fill_mergeable_seam(monkeypatch, tmp_path, capsys):
     pr3 = _pr(mergeable=None)
     tp.fill_mergeable(pr3)
     assert getattr(pr3, "mergeable", None) is None
+    # 取号双形统一(fix-round 1 Minor#1,与 execute_merge 同款): number-only
+    # (真实 PRData 形态)与 pr_number-only(brief 替身形态)都不得踩
+    # AttributeError——同文件同一对象不得两种取号形态
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None: calls.append(list(a))
+                        or True)
+    pr4 = NS(number=5, mergeable=None)
+    tp.fill_mergeable(pr4)
+    assert calls[-1][:3] == ["pr", "view", "5"] and pr4.mergeable is True
+    pr5 = NS(pr_number=8, mergeable=None)
+    tp.fill_mergeable(pr5)
+    assert calls[-1][:3] == ["pr", "view", "8"] and pr5.mergeable is True

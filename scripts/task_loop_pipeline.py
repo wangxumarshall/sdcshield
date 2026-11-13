@@ -421,15 +421,18 @@ def fill_mergeable(pr) -> None:
     无该字段,调用方(T10 merge_sweep)过门前先过本函数,门的 mergeable
     False 拒臂才有数据。缺/None 才拉(有值不重复拉);GhError → 保持
     None 并 [warn];gh 空输出 None → 保持 None——门按 T7 过渡语义
-    (None 不拒)放行,接线遗漏由 gate 测试锁形。"""
+    (None 不拒)放行,接线遗漏由 gate 测试锁形。PR 号经双形解析
+    pr_number|number(与 execute_merge 同款,fix-round 1 Minor#1——
+    同文件同一对象不得两种取号形态)。"""
     if getattr(pr, "mergeable", None) is not None:
         return
     slug = tl.repo_slug()
+    num = getattr(pr, "pr_number", None) or getattr(pr, "number", None)
     try:
-        v = tl.gh_json_idem(["pr", "view", str(pr.number), "--repo", slug,
+        v = tl.gh_json_idem(["pr", "view", str(num), "--repo", slug,
                               "--json", "mergeable", "--jq", ".mergeable"])
     except GhError as exc:
-        print(f"[warn] PR #{pr.number} mergeable 拉取失败"
+        print(f"[warn] PR #{num} mergeable 拉取失败"
               f"(保持 None,门按过渡语义不拒): {exc}")
         return
     if v is None:
@@ -439,7 +442,7 @@ def fill_mergeable(pr) -> None:
 
 def no_auto_merge_active() -> bool:
     """NO_AUTO_MERGE 熔断探测(STATE_DIR/NO_AUTO_MERGE 存在即 True): 纯
-    存在性掺查——幂等、零 gh、零状态变更。门只收 no_auto_merge: bool,
+    存在性探查——幂等、零 gh、零状态变更。门只收 no_auto_merge: bool,
     由编排器调本函数传入(裁定#4: 熔断存在 → 门转纯报告模式=灰度)。"""
     return os.path.exists(
         os.path.join(tl._resolve_state_dir(), NO_AUTO_MERGE_NAME))
@@ -450,10 +453,13 @@ def execute_merge(state, entry, pr, gate, dry_run=False) -> "str | None":
     --delete-branch` → 回读新 main sha 记 entry.merged_at/merged_sha
     (revert 归因主数据,人工 merge 永不写)→ 引擎条目 DONE + issue 收尾
     评论/关闭(entry 为 None 的用户 docs PR 只 merge+评论)。merge 执行权
-    在编排器代码,绝不在 LLM(spec §1 决策 7)。三步序评论→merge→回读,
-    任一步 GhError 原样上抛——条目不置 DONE,下轮门复评;PR 号经双形
-    解析 pr_number|number(真实 PRData 字段名是 number,与 checks_ok/
-    T5 _pr_number 同款契约)。"""
+    在编排器代码,绝不在 LLM(spec §1 决策 7)。失败语义按不可逆点(merge
+    本身)分界(fix-round 1 Important #1/3): 前侧评论/merge 步 GhError
+    原样上抛——条目不置 DONE,下轮门复评;后侧两类例外都不上抛——sha
+    回读失败/空降级为 merged_sha=None + [warn](已合入是事实,记账反映
+    现实,崩溃不撤销 merge 只丢账),issue close 失败被 [warn] 吞(state
+    为权威)。PR 号经双形解析 pr_number|number(真实 PRData 字段名是
+    number,与 checks_ok/T5 _pr_number 同款契约)。"""
     slug = tl.repo_slug()
     num = getattr(pr, "pr_number", None) or getattr(pr, "number", None)
     evidence = "\n".join(f"- {r}" for r in gate.reasons) or "- 全门槛通过"
@@ -468,9 +474,18 @@ def execute_merge(state, entry, pr, gate, dry_run=False) -> "str | None":
                      "--body", body])
     tl.gh_json_idem(["pr", "merge", str(num), "--repo", slug,
                      "--squash", "--delete-branch"])
-    merged_sha = tl.gh_json_idem(
-        ["pr", "view", str(num), "--repo", slug, "--json",
-         "mergeCommit", "--jq", ".mergeCommit.oid"]).strip()
+    raw = None
+    try:
+        raw = tl.gh_json_idem(
+            ["pr", "view", str(num), "--repo", slug, "--json",
+             "mergeCommit", "--jq", ".mergeCommit.oid"])
+    except GhError as exc:
+        print(f"[warn] PR #{num} mergeCommit 回读失败"
+              f"——已合入但 merged_sha 缺: {exc}")
+    merged_sha = (raw or "").strip() or None
+    if merged_sha is None:
+        print(f"[warn] PR #{num} 已 squash merge 但 sha 回读为空"
+              f"——merged_sha=None(revert 归因不可见该 PR)")
     if entry is not None:
         entry.merged_at = _now_local_iso()
         entry.merged_sha = merged_sha
@@ -480,11 +495,11 @@ def execute_merge(state, entry, pr, gate, dry_run=False) -> "str | None":
             tl.comment_on_issue(
                 entry.issue_number,
                 f"修复 PR #{num} 已由 pipeline 自动 squash merge"
-                f"(main {merged_sha[:12]})。本 issue 闭环。")
+                f"(main {(merged_sha or '?')[:12]})。本 issue 闭环。")
             try:
                 tl.gh_json_idem(["issue", "close", str(entry.issue_number),
                                  "--repo", slug])
             except GhError as exc:
                 print(f"[warn] issue 关闭失败(state 为权威): {exc}")
-    print(f"[merge] PR #{num} 已自动合入 → {merged_sha[:12]}")
+    print(f"[merge] PR #{num} 已自动合入 → {(merged_sha or '?')[:12]}")
     return merged_sha

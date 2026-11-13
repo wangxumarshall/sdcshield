@@ -1383,10 +1383,14 @@ def _merged_entry(merged_sha="deadbeef1234", pr_number=42, issue_number=7):
 
 
 def _no_gh(monkeypatch):
-    """防意外触网哨: 本用例预期零 gh 调用——任何 gh_json_idem 调用当场炸。"""
-    monkeypatch.setattr(tl, "gh_json_idem",
-                        lambda a, input_text=None: (_ for _ in ()).throw(
-                            AssertionError(f"本用例不应触 gh: {a}")))
+    """防意外触网哨: 本用例预期零 gh 调用——任何 gh 调用当场炸(fix-round 1
+    起 creation path 新增 gh_json 双态查重搜索,两个入口一并钉死)。"""
+    def boom(fn):
+        def f(a, input_text=None):
+            raise AssertionError(f"本用例不应触 {fn}: {a}")
+        return f
+    monkeypatch.setattr(tl, "gh_json", boom("gh_json"))
+    monkeypatch.setattr(tl, "gh_json_idem", boom("gh_json_idem"))
 
 
 def test_revert_attribution_creates_issue_for_merged_sha(monkeypatch, tmp_path):
@@ -1397,11 +1401,13 @@ def test_revert_attribution_creates_issue_for_merged_sha(monkeypatch, tmp_path):
     brief 的 source/kind 参数不存在): source=manual 经无 source-marker
     正文由 reconcile 归类、kind=bug 经 agent-task+agent-bug 标签编码
     (task-loop:revert marker 不入 _SOURCE_MARKER_RES,来路自然是 manual)。
-    二阶链探针经 gh_json_idem 桩返回普通标题(裁定#3 零触网)。"""
+    双态 marker 查重(fix-round 1 Important#1)经 gh_json 桩返回空;二阶链
+    探针经 gh_json_idem 桩返回普通标题(裁定#3 零触网)。"""
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
     monkeypatch.setenv("TASKLOOP_REPO", "o/r")
     st = _mkstate()
     st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json", lambda a, input_text=None: [])
     gh_calls = []
     monkeypatch.setattr(tl, "gh_json_idem",
                         lambda a, input_text=None: gh_calls.append(list(a))
@@ -1452,11 +1458,13 @@ def test_revert_attribution_set_requires_sha_and_pr(monkeypatch):
 def test_revert_attribution_second_order_chain_escalates(monkeypatch, capsys):
     """二阶链闸(防 revert 打乒乓球,spec §6 链深 ≤1): 命中条目的 issue
     标题以 [revert] 开头 = 该 PR 本身是 revert 产物 → 打印 escalation
-    转人工(夜间报告可见),不建 issue、不记 _last_revert_body。探针走
+    转人工(夜间报告可见),不建 issue、不记 _last_revert_body。查重搜索
+    (gh_json 桩空)在闸前,先证「本 merge 无既有 revert issue」;探针走
     tl.issue_title_starts(经 gh_json_idem 桩,裁定#3)。"""
     monkeypatch.setenv("TASKLOOP_REPO", "o/r")
     st = _mkstate()
     st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json", lambda a, input_text=None: [])
     monkeypatch.setattr(tl, "gh_json_idem",
                         lambda a, input_text=None:
                         "[revert] PR #40 自动 merge 后 main 红(Sanitizer)")
@@ -1477,6 +1485,7 @@ def test_revert_attribution_title_probe_failure_escalates(monkeypatch, capsys):
     monkeypatch.setenv("TASKLOOP_REPO", "o/r")
     st = _mkstate()
     st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json", lambda a, input_text=None: [])
 
     def boom(a, input_text=None):
         raise tl.GhError("gh issue view … 失败(exit 1): HTTP 502")
@@ -1493,10 +1502,11 @@ def test_revert_attribution_title_probe_failure_escalates(monkeypatch, capsys):
 
 def test_revert_attribution_dry_run_only_prints(monkeypatch, capsys):
     """dry_run: 只打印拟建动作——零建 issue、零 _last_revert_body 记账;
-    拟建输出在二阶链闸之后(闸是只读探针,零写),打印即真实将建集。"""
+    拟建输出在查重搜索与二阶链闸之后(两者皆只读,零写),打印即真实将建集。"""
     monkeypatch.setenv("TASKLOOP_REPO", "o/r")
     st = _mkstate()
     st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json", lambda a, input_text=None: [])
     monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: "普通")
     made = []
     monkeypatch.setattr(tl, "create_task_issue",
@@ -1513,10 +1523,13 @@ def test_revert_attribution_dedups_same_merge_within_call(monkeypatch, capsys):
     """同批内同一 merge 只建一个 revert issue: 多 workflow 同 sha 皆红是
     常态(同一坏 main commit 的 Sanitizer/Multi-OS 同时红),revert 的对象
     是坏 merge 不是红 run——不去重则双 agent 同 revert 竞态。第二个红 run
-    打印去重留痕(brief 未列的补墙,报告注明);跨批查重不在本函数。"""
+    打印去重留痕(brief 未列的补墙,报告注明),前缀 [revert-dedup] 与
+    二阶链升级提示 [revert] 分离(顺手修#1——T10 夜报 grep "revert" 时
+    去重噪声不得混入人工升级信号);跨调用查重见双态 marker 幂等测。"""
     monkeypatch.setenv("TASKLOOP_REPO", "o/r")
     st = _mkstate()
     st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json", lambda a, input_text=None: [])
     monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: "普通")
     made = []
     monkeypatch.setattr(tl, "create_task_issue",
@@ -1526,7 +1539,77 @@ def test_revert_attribution_dedups_same_merge_within_call(monkeypatch, capsys):
         _red("deadbeef1234", run_id=556, workflow="Multi-OS Verify",
              url="u2")])
     assert got == [99] and len(made) == 1
-    assert "去重" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "[revert-dedup]" in out and "去重" in out
+
+
+def test_revert_attribution_cross_call_marker_idempotent(monkeypatch, capsys):
+    """跨调用 marker 幂等(fix-round 1 Important#1,先例直接移植
+    _search_audit_issue 双态形态): LOOKBACK_DAYS=3 窗内坏 merge 未修时
+    红 run 每轮重见,第二次调用必对同一 merged_sha 重复建 issue → 双
+    agent 同 revert 竞态/attempts 燃烧/假性 ESCALATED——引擎自书不变量
+    「幂等由 marker 查重保证」(ci 源 _search_marker_issues/audit 源
+    _search_audit_issue 同款)在此兑现。建 issue(含 dry-run 打印)之前
+    open+closed 双态 gh search;closed 命中兑现「人工关闭的 revert issue
+    不重建」的人工接管语义(检视#35 同一缺陷类);宽松命中但正文无完整
+    marker 的干扰项必须被 marker 复核滤掉。"""
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    st = _mkstate()
+    st["entries"] = [_merged_entry()]
+    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: "普通")
+    searches = []
+    hit_closed = []          # 测试在两次调用之间翻转: closed 态命中
+
+    def fake_search(args, input_text=None):
+        searches.append(list(args))
+        if args[args.index("--state") + 1] == "closed" and hit_closed:
+            return [{"number": 101, "body": "宽松命中但正文无完整 marker"},
+                    {"number": 100,
+                     "body": "x\n<!-- task-loop:revert:deadbeef1234 -->\n"}]
+        return []
+    monkeypatch.setattr(tl, "gh_json", fake_search)
+    made = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels: made.append(title) or 99)
+    # 第一次调用: 双态皆空 → 建 issue
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == [99]
+    assert len(made) == 1
+    # 第二次调用(同一 state,红 run 重见): open 空、closed 命中 → 零新建
+    hit_closed.append(1)
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+    assert len(made) == 1                          # create 桩零新增调用
+    out = capsys.readouterr().out
+    assert "[revert-dedup]" in out and "不重建" in out
+    # gh search 形锚(先例移植): 双态逐查 + --repo + --json number,body +
+    # marker 查询词(完整 marker 复核在 Python 侧)
+    states = [a[a.index("--state") + 1] for a in searches]
+    assert states[:2] == ["open", "closed"]        # 第一轮即双态
+    for a in searches:
+        assert a[:2] == ["search", "issues"]
+        assert a[a.index("--repo") + 1] == "o/r"
+        assert a[a.index("--json") + 1] == "number,body"
+        assert "task-loop:revert:deadbeef1234" in a
+
+
+def test_revert_attribution_marker_search_failure_escalates(monkeypatch, capsys):
+    """查重搜索 GhError → 幂等不可证,宁严勿松转人工: [warn] 留痕、不建
+    issue、不记 _last_revert_body——误建的代价(双 agent 同 revert 竞态/
+    attempts 燃烧)大于漏建(红 run 仍有 T10 intake 普通红 issue 前向修复
+    兜底),与二阶链不可判臂同向。"""
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    st = _mkstate()
+    st["entries"] = [_merged_entry()]
+
+    def boom(a, input_text=None):
+        raise tl.GhError("gh search issues … 失败(exit 1): HTTP 502")
+    monkeypatch.setattr(tl, "gh_json", boom)
+    made = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels: made.append(title) or 99)
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+    assert made == [] and "_last_revert_body" not in st
+    out = capsys.readouterr().out
+    assert "[warn]" in out and "幂等不可证" in out
 
 
 def test_issue_title_starts_probe(monkeypatch):

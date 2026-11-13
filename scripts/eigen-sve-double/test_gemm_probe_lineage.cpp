@@ -10,12 +10,30 @@
 // forwarding fix relies on.
 //
 // Channels (issue #410 dual-kernel protocol):
-//   A — old vs new byte-identical a/b/c per (variant, n): old fill == verbatim
-//       loop, new fill == gemm_probe::fill_pair, then the SAME `c = a * b`;
-//       every element finite (catches NaN-payload divergence);
+//   A — old vs new byte-identical a/b/c per (variant, n): ONE buffer pair per
+//       (variant, n), old fill (verbatim loop) → checksums + `c_old = a*b`;
+//       then the SAME buffers refilled with gemm_probe::fill_pair (checksums
+//       must match — that is the collapsed unit) → `c_new = a*b` at the SAME
+//       addresses; every element finite (catches NaN-payload divergence);
 //   B — FNV-1a 64-bit checksums printed per matrix for log quoting;
 //   C — VL identity echo: prints the runtime SVE vector length so every
 //       tier run self-certifies its tier.
+//
+// Why same-buffer (same-address) comparison — the two-separate-buffers form
+// of channel A is CONFOUNDED, measured at gem5 VL-512 c128 n∈{17,33} on
+// 2026-11-13: with byte-identical inputs, the products differed exactly when
+// the OLD leg's destination buffer was 64B-aligned and the new leg's was not
+// (co@%64=0 vs cn@%64=32; stride 272/528 ≡ 16 mod 64) — Eigen GEBM selects
+// scalar vs vector peeling by DESTINATION alignment class, and the complex
+// paths round differently. Exact-replica probe /tmp evidence chain:
+// addr_sensitivity (byte-identical inputs, differing INPUT alignment →
+// identical products — input alignment refuted), discriminator test B
+// (same buffers old-vs-template fill → identical fills AND identical
+// products — the real equivalence), lineage_replica (reproduced the red and
+// pinned the destination-alignment trigger). Refilling the SAME buffers
+// keeps every address constant, so any byte difference can only come from
+// the fill — the unit this harness exists to verify. The product bytes
+// remain covered as a belt-and-braces end-to-end check at fixed addresses.
 //
 // Build & run (native non-SVE host → NEON/scalar packets; from repo root —
 // the shared-header include is repo-root-relative, hence -I.):
@@ -67,14 +85,14 @@ static std::uint64_t fnv1a(const void *p, std::size_t bytes)
 
 /* ---- channel A "old" leg: VERBATIM fill loops (loop bodies kept
  * character-identical to origin/main 3631a7d4; only the enclosing signature
- * adapted to expose the matrices for comparison):
+ * adapted to expose the matrices — the multiply lived in solve_once and is
+ * now performed by compare() so both legs share one buffer triple):
  *   f64 : gemm_f64_sve_body.cpp:115-124 (scalar double stream)
  *   f32 : gemm_f32_sve_body.cpp:115-124 (scalar double stream, f32 store
  *         via double intermediate — 原用例同款转型)
  *   c128: gemm_c128_sve_body.cpp:123-139 (complex re/im 四流) */
-static void old_solve_f64(int dim, MatD &a, MatD &b, MatD &c)
+static void old_fill_f64(int dim, MatD &a, MatD &b)
 {
-    a.resize(dim, dim); b.resize(dim, dim);
     for (int r = 0; r < dim; ++r)
         for (int col = 0; col < dim; ++col) {
             std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
@@ -88,12 +106,10 @@ static void old_solve_f64(int dim, MatD &a, MatD &b, MatD &c)
             a(r, col) = (double)(h % 2000u) / 1000.0 - 1.0;
             b(r, col) = (double)(h2 % 2000u) / 1000.0 - 1.0;
         }
-    c = a * b;
 }
 
-static void old_solve_f32(int dim, MatF &a, MatF &b, MatF &c)
+static void old_fill_f32(int dim, MatF &a, MatF &b)
 {
-    a.resize(dim, dim); b.resize(dim, dim);
     for (int r = 0; r < dim; ++r)
         for (int col = 0; col < dim; ++col) {
             std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
@@ -107,12 +123,10 @@ static void old_solve_f32(int dim, MatF &a, MatF &b, MatF &c)
             a(r, col) = (float)((double)(h % 2000u) / 1000.0 - 1.0);
             b(r, col) = (float)((double)(h2 % 2000u) / 1000.0 - 1.0);
         }
-    c = a * b;
 }
 
-static void old_solve_c128(int dim, MatC &a, MatC &b, MatC &c)
+static void old_fill_c128(int dim, MatC &a, MatC &b)
 {
-    a.resize(dim, dim); b.resize(dim, dim);
     for (int r = 0; r < dim; ++r)
         for (int col = 0; col < dim; ++col) {
             std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
@@ -136,7 +150,6 @@ static void old_solve_c128(int dim, MatC &a, MatC &b, MatC &c)
                 (double)(h3 % 2000u) / 1000.0 - 1.0,
                 (double)(h4 % 2000u) / 1000.0 - 1.0);
         }
-    c = a * b;
 }
 
 template <typename Mat>
@@ -180,29 +193,36 @@ static bool all_finite(const MatC &m)
     return true;
 }
 
-/* One (variant, n) comparison. The "new" leg reproduces the exact 3-line
- * body of gemm_probe::solve_once<Mat> (the template builds its matrices
- * internally and discards them; its body is literally construct →
- * fill_pair → multiply). */
+/* One (variant, n) comparison, SAME-BUFFER form (see header): ONE buffer
+ * triple (a, b, c). old fill (verbatim) → first `c = a * b` (in-place into
+ * c's own buffer C) → byte-proof shadows; template fill into the SAME a/b
+ * buffers → second `c = a * b` INTO THE SAME C buffer (same-destination,
+ * same-address — the destination-alignment confound cannot appear); then
+ * shadow-vs-buffer memcmps: fill byte-equality (the collapsed unit) and
+ * product byte-equality (end-to-end belt-and-braces, deterministic at
+ * fixed addresses). */
 template <typename Mat, typename OldFn>
-static void compare(const char *name, OldFn old_solve, int n)
+static void compare(const char *name, OldFn old_fill, int n)
 {
-    Mat ao, bo, co, an(n, n), bn(n, n), cn;
-    old_solve(n, ao, bo, co);
-    gemm_probe::fill_pair(an, bn);
-    cn = an * bn;
+    Mat a(n, n), b(n, n), c;
+    old_fill(n, a, b);
+    c = a * b;                          /* first product, into buffer C */
+    Mat a_shadow(a), b_shadow(b), c_shadow(c);
+
+    gemm_probe::fill_pair(a, b);        /* template fill, SAME a/b buffers */
+    const bool ok_ab = bytes_equal(a_shadow, a) && bytes_equal(b_shadow, b);
+    c = a * b;                          /* second product, INTO SAME C */
 
     triplets++;
-    const bool ok_ab = bytes_equal(ao, an) && bytes_equal(bo, bn);
-    const bool ok_c = bytes_equal(co, cn);
-    const bool ok_fin = all_finite(co) && all_finite(cn);
+    const bool ok_c = bytes_equal(c_shadow, c);
+    const bool ok_fin = all_finite(c_shadow) && all_finite(c);
     const bool ok = ok_ab && ok_c && ok_fin;
     if (!ok) failures++;
     std::printf("%s %-5s n=%-3d a=%016llx b=%016llx c=%016llx %s%s%s\n",
                 ok ? "ok" : "FAIL", name, n,
-                (unsigned long long)matrix_fnv(an),
-                (unsigned long long)matrix_fnv(bn),
-                (unsigned long long)matrix_fnv(cn),
+                (unsigned long long)matrix_fnv(a),
+                (unsigned long long)matrix_fnv(b),
+                (unsigned long long)matrix_fnv(c),
                 ok_ab ? "" : " [a/b MISMATCH]",
                 ok_c ? "" : " [c MISMATCH]",
                 ok_fin ? "" : " [NON-FINITE]");
@@ -218,9 +238,9 @@ int main(void)
     std::printf("VL identity: non-SVE build (NEON/scalar packets) — host leg\n");
 #endif
     for (int n : {1, 2, 3, 5, 16, 17, 33}) {
-        compare<MatD>("f64", old_solve_f64, n);
-        compare<MatF>("f32", old_solve_f32, n);
-        compare<MatC>("c128", old_solve_c128, n);
+        compare<MatD>("f64", old_fill_f64, n);
+        compare<MatF>("f32", old_fill_f32, n);
+        compare<MatC>("c128", old_fill_c128, n);
     }
     std::printf("RESULT: %s (%d/%d (variant,n) triplets byte-identical)\n",
                 failures == 0 ? "ALL PASS" : "MISMATCH", triplets - failures,

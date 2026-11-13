@@ -391,6 +391,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/neon_rot_ldr_at_top_robfill.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_dualcmp.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_dump.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_fp64_dump.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_gps.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k2pureload.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k4bgap.cpp',

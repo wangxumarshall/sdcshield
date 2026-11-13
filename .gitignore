@@ -43,3 +43,6 @@ __pycache__/
 # agent 会话工具目录（.entire=运行时状态, .planning=planning-with-files 计划草稿）
 /.entire/
 /.planning/
+# node72 战役原始日志目录（bmc_ssh.py/fan7_soak.sh 等配方脚本已入 progress-log
+# 记述；目录内含数百 MB .log/.yaml 原始产物，本地留存不入库）
+/run-logs/

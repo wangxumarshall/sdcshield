@@ -247,6 +247,7 @@ REQUIRED_CHECKS_FULL = ["lint", "git-sanity",
                         "Build binary for CPU (Linux)", "zizmor"]
 REQUIRED_CHECKS_DOCS = ["lint", "git-sanity"]
 ENGINE_BRANCH_RE = re.compile(r"^fix/(issue-\d+|ci-\d+|revert-pr\d+)")
+BASELINE_MERGED_DEPTH = 3
 
 
 def docs_only(files):
@@ -262,37 +263,49 @@ def wip_gated(title):
 
 
 def baseline_reds(slug, workflow):
-    """main 最近一次同 workflow schedule/push run 的失败 job 名集合(继承红
-    基线,PR #426/#343 先例,spec §5 门槛 3);拉不到/workflow 为空 → 空集
-    (空集不放行任何红,诚实从严——rollup 状态上下文无 workflowName,
-    无从对照即不放行)。run id 经 str() 归一: gh --jq '.[0].databaseId'
-    输出裸数字,gh_json 的 json.loads 得 int(空清单输出 null → None),
-    裸 .strip() 对 int 是 AttributeError。"""
-    if not workflow:
-        return set()
+    """继承红基线(controller 裁定 2026-11-13,fix-round 1 Important#2 重写):
+    最近 BASELINE_MERGED_DEPTH 个已合入 PR 的 rollup 中,同 workflowName 的
+    红 job 名并集——贴 PR #426/#343「同基底已合入 PR 对照」先例的实操化。
+    原 main-run 形态(--event schedule,push)对 PR CI workflow("Pull
+    Request",lint/build 所在)结构性为空: 该 workflow 仅 pull_request 事件
+    跑在 PR head,main 上无对应 run,继承红永不放行、特性死亡。拉不到/
+    空 → 空集(不放行任何红,宁严勿松);单个基线 PR 拉取失败跳过不炸整链。
+    PR 号经 str().split() 归一: gh --jq '.[].number' 多值输出多行裸串,
+    单值经 gh_json 的 json.loads 得 int。"""
     try:
-        run_id = str(tl.gh_json_idem(
-            ["run", "list", "--repo", slug, "--workflow", workflow,
-             "--branch", tl.MONITORED_BRANCH,
-             "--event", "schedule,push", "--limit", "1",
-             "--json", "databaseId", "--jq", ".[0].databaseId"]) or "").strip()
-        if not run_id:
-            return set()
-        jobs = tl.gh_json_idem(
-            ["run", "view", run_id, "--repo", slug, "--json", "jobs", "--jq",
-             '.jobs[] | select(.conclusion=="failure") | .name']) or ""
-        return {l.strip() for l in jobs.splitlines() if l.strip()}
+        nums = tl.gh_json_idem(["pr", "list", "--repo", slug, "--state",
+                                "merged", "--limit", str(BASELINE_MERGED_DEPTH),
+                                "--json", "number", "--jq", ".[].number"])
     except GhError:
         return set()
+    jobs = set()
+    for n in [x.strip() for x in str(nums or "").split() if x.strip()]:
+        try:
+            rollup = tl.gh_json_idem(
+                ["pr", "view", n, "--repo", slug, "--json",
+                 "statusCheckRollup", "--jq",
+                 '.statusCheckRollup[] | [.workflowName, .name, .conclusion] | @tsv'])
+        except GhError:
+            continue
+        for line in str(rollup or "").splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            if parts[0].strip() == workflow and \
+                    parts[2].strip().lower() == "failure":
+                jobs.add(parts[1].strip())
+    return jobs
 
 
 def checks_ok(pr, required, slug):
     """PR 的 check rollup: required 集(按名字前缀匹配,主干覆盖矩阵后缀)
-    全绿 → True;红 job 按 rollup 行自带的 workflowName 分组对照 main
-    基线(裁定#2 数据流: PRData 无 workflow_name 字段,红 job 自证所属
-    workflow,evaluate_merge_gate 不传 pr.workflow_name),全组 ⊆ 基线 →
-    继承红放行(spec §5 门槛 3)。结论按小写归一——实测 rollup 结论是大写
-    SUCCESS/SKIPPED/FAILURE;SKIPPED 不算红(docs-only PR 的重 job 常见)。
+    全绿 → True;红 job 按 rollup 行自带的 workflowName 分组对照已合入
+    PR 基线(裁定#2 数据流: PRData 无 workflow_name 字段,红 job 自证所属
+    workflow,evaluate_merge_gate 不传 pr.workflow_name;基线 = baseline_reds
+    最近 BASELINE_MERGED_DEPTH 个已合入 PR 同 workflowName 的红 job 并集),
+    全组 ⊆ 基线 → 继承红放行(spec §5 门槛 3)。结论按小写归一——实测
+    rollup 结论是大写 SUCCESS/SKIPPED/FAILURE;SKIPPED 不算红(docs-only PR
+    的重 job 常见)。
     """
     try:
         rollup = tl.gh_json_idem(
@@ -352,12 +365,19 @@ def docs_ready(pr, now):
 
 def evaluate_merge_gate(state, entry, pr, files, now, no_auto_merge):
     """六门槛全查(spec §5),只判不执行(执行是 execute_merge,T8)。任一
-    拒即 return,reasons 携带证据(审计评论/夜间报告用);entry=None 时仅
-    docs 快道可过(用户 docs PR,用户非 docs PR 结构性排除);no_auto_merge
-    由 T8 的 no_auto_merge_active() 检测后传入(裁定#4,熔断存在 → 纯报告
-    模式=灰度)。mergeable 经 getattr 容错(真实 PRData 无该字段,T8 接线
-    时经 gh pr view 补,缺字段视为未报冲突不炸门)。"""
+    拒即 return,reasons 携带证据(审计评论/夜间报告用);熔断(PAUSED/
+    NO_AUTO_MERGE)前置到入口——零 gh 成本,夜间熔断时省全部后续 gh
+    (fix-round 1 Minor #4);entry=None 时仅 docs 快道可过(用户 docs PR,
+    用户非 docs PR 结构性排除);no_auto_merge 由 T8 的 no_auto_merge_active()
+    检测后传入(裁定#4,熔断存在 → 纯报告模式=灰度)。mergeable 经 getattr
+    容错(真实 PRData 无该字段,T8 接线时经 gh pr view 补,缺字段视为未报
+    冲突不炸门);fork 是 PRData 既有字段(fix-round 1 Critical #1 补拒)。"""
     fast = docs_only(files)
+    # 门槛 5(前置): 熔断(PAUSED / NO_AUTO_MERGE——任一存在即转纯报告模式)
+    if tl._paused():
+        return GateResult(False, fast, ["PAUSED 生效"])
+    if no_auto_merge:
+        return GateResult(False, fast, ["NO_AUTO_MERGE 熔断(灰度: 只报告)"])
     # 门槛 1: 归属(引擎条目 ∧ fix/issue-N|fix/ci-N|fix/revert-prN 分支;
     # docs-only 例外: 不要求引擎归属,适用任意 PR)
     if entry is None:
@@ -366,11 +386,14 @@ def evaluate_merge_gate(state, entry, pr, files, now, no_auto_merge):
     else:
         if not ENGINE_BRANCH_RE.match(entry.fix_branch or ""):
             return GateResult(False, False, [f"非引擎分支: {entry.fix_branch}"])
-    # 门槛 4: 状态(open ∧ 非 DRAFT ∧ 无冲突;WIP 草稿闸只对 docs 快道)
+    # 门槛 4: 状态(open ∧ 非 DRAFT ∧ 非 fork ∧ 无冲突;WIP 草稿闸只对
+    # docs 快道——fork PR 不自动 merge,docs 快道亦不放行)
     if pr.state != "open" or pr.draft:
         return GateResult(False, fast, ["非 open/DRAFT"])
     if fast and wip_gated(pr.title):
         return GateResult(False, True, [f"WIP: 草稿闸({pr.title!r})"])
+    if getattr(pr, "fork", False):
+        return GateResult(False, fast, ["fork PR——不自动 merge"])
     if getattr(pr, "mergeable", None) is False:
         return GateResult(False, fast, ["与 main 冲突(mergeable=false)"])
     # 门槛 2: 检视(docs 快道 = 第5bot 唯一+300s;全门槛 = classify_state
@@ -387,9 +410,4 @@ def evaluate_merge_gate(state, entry, pr, files, now, no_auto_merge):
                         else REQUIRED_CHECKS_FULL, tl.repo_slug())
     if not ok:
         return GateResult(False, fast, why)
-    # 门槛 5: 熔断(PAUSED / NO_AUTO_MERGE——任一存在即转纯报告模式)
-    if tl._paused():
-        return GateResult(False, fast, ["PAUSED 生效"])
-    if no_auto_merge:
-        return GateResult(False, fast, ["NO_AUTO_MERGE 熔断(灰度: 只报告)"])
     return GateResult(True, fast, why)      # why=继承红放行的证据,审计用

@@ -648,15 +648,16 @@ def test_pr_local_review_cli_pr_flag_and_mutex(monkeypatch, capsys):
 
 
 def _pr(state_="open", draft=False, mergeable=True, title="T",
-        local=True, latest=100000, opinions=0):
+        local=True, latest=100000, opinions=0, fork=False):
     """merge 门 PR 替身(控制器裁定#3): SimpleNamespace 形状与真实 PRData
     关键字段吻合(bot_done/latest_signal/opinion_count/pending_skew_opinions/
-    annotations_fetch_failed/draft/mergeable/state/title/head_sha);PR 号
-    双形 pr_number+number(真实 PRData 字段名是 number,T5 _pr_number 同款
-    双形契约);latest=最新信号距 now 秒数(默认远超静默窗),None →
+    annotations_fetch_failed/draft/mergeable/fork/state/title/head_sha;
+    PR 号双形 pr_number+number(真实 PRData 字段名是 number,T5 _pr_number
+    同款双形契约);latest=最新信号距 now 秒数(默认远超静默窗),None →
     latest_signal=None(静默窗未起步臂)。"""
     return NS(state=state_, draft=draft, mergeable=mergeable, title=title,
-              head_sha="abc1234", url="u", pr_number=1, number=1, bot_done={
+              head_sha="abc1234", url="u", pr_number=1, number=1, fork=fork,
+              bot_done={
                   "codex": "x", "coderabbit": "x", "pr-agent": "x",
                   "greptile": "x",
                   "local-claude": "x" if local else None},
@@ -671,27 +672,29 @@ def _gate_entry(fix_branch="fix/issue-1", pr_number=1, issue_number=1):
               fix_branch=fix_branch, status="PR_OPEN")
 
 
-def _gh_stub(rollup_rows, baselines=None):
-    """tl.gh_json_idem 离线桩(零触网): pr view statusCheckRollup → 三列
-    TSV(name\tconclusion\tworkflowName——rollup 实测形态,裁定#2 数据流);
-    run list → 基线 run id(真 gh `--jq '.[0].databaseId]'` 输出裸数字,
-    gh_json json.loads 得 int;空清单真 gh 输出 null → None 契约);
-    run view → 该基线 run 的红 job 行。baselines: {workflowName:
-    (run_id, "红 job 名多行串")}。"""
-    baselines = baselines or {}
-
+def _gh_stub(rollups, merged=None):
+    """tl.gh_json_idem 离线桩(零触网,fix-round 1 基线新形态):
+    - `pr view <N> --json statusCheckRollup` → rollups[N](统一存
+      (name, conclusion, workflowName) 规范形),列序按 args 的 --jq 过滤器
+      忠实回放——两个生产通道列序不同(候选 checks_ok
+      [.name, .conclusion, .workflowName];基线 baseline_reds
+      [.workflowName, .name, .conclusion]),真 gh 正是按过滤器定列序;
+      候选 PR(_pr 默认 1 号)与已合入基线 PR 按 args[2] 分派。
+    - `pr list --state merged --json number` → merged 原样回放: 多行裸串
+      (gh_json JSONDecodeError → 原样)/ int 单值(gh --jq 单号输出裸数字,
+      json.loads 得 int)/ None(gh 空输出契约)/ Exception(抛 GhError)。"""
     def fake(args, input_text=None):
-        if "statusCheckRollup" in args:
-            return "".join(f"{n}\t{c}\t{w}\n" for n, c, w in rollup_rows)
-        if args[:2] == ["run", "list"]:
-            wf = args[args.index("--workflow") + 1]
-            return baselines[wf][0] if wf in baselines else None
-        if args[:2] == ["run", "view"]:
-            rid = str(args[2])
-            for wf, (run_id, jobs) in baselines.items():
-                if str(run_id) == rid:
-                    return jobs
-            raise tl.GhError(f"gh run view {rid}… 失败(exit 1)")
+        if args[:2] == ["pr", "list"]:
+            if isinstance(merged, Exception):
+                raise merged
+            return merged
+        if args[:2] == ["pr", "view"] and "statusCheckRollup" in args:
+            n = str(args[2])
+            jq = args[args.index("--jq") + 1]
+            wf_first = ".workflowName, .name" in jq
+            return "".join((f"{w}\t{nm}\t{c}\n" if wf_first
+                            else f"{nm}\t{c}\t{w}\n")
+                           for nm, c, w in rollups[n])
         raise AssertionError(f"意外 gh 调用: {args}")
     return fake
 
@@ -749,51 +752,53 @@ def test_docs_ready_matrix():
     assert tp.docs_ready(pr, now) is False                    # annotations 不完整
 
 
-def test_baseline_reds_gh_shapes_and_degradation(monkeypatch):
-    """baseline_reds(裁定#2: gh 调用形态保持 brief 原文): run list
-    --workflow X --branch main --event schedule,push --limit 1 → run view
-    取失败 job 名;空 workflow → 空集零 gh;GhError/gh 空输出 → 空集
-    (空集=不放行任何红,诚实从严);run id 真实形态是 int(gh_json 对裸数字
-    json.loads)——str() 归一防 int.strip() 崩。"""
-    rec = {}
-
-    def fake(args, input_text=None):
-        if args[:2] == ["run", "list"]:
-            rec["list"] = args
-            return 77
-        rec.setdefault("view", []).append(args)
-        return "lint\nbuild-arm\n"
-    monkeypatch.setattr(tl, "gh_json_idem", fake)
-    assert tp.baseline_reds("o/r", "Pull Request") == {"lint", "build-arm"}
-    assert rec["list"][rec["list"].index("--workflow") + 1] == "Pull Request"
-    assert rec["list"][rec["list"].index("--branch") + 1] == tl.MONITORED_BRANCH
-    assert rec["list"][rec["list"].index("--event") + 1] == "schedule,push"
-    assert rec["list"][rec["list"].index("--limit") + 1] == "1"
-    assert "77" in rec["view"][0]
-    # 空 workflow → 空集且零 gh 调用(rollup 状态上下文无从对照即不放行)
-    called = []
+def test_baseline_reds_merged_pr_union_and_degradation(monkeypatch):
+    """baseline_reds(controller 裁定 2026-11-13,fix-round 1 Important#2 重写):
+    最近 BASELINE_MERGED_DEPTH=3 个已合入 PR 的 rollup 中,同 workflowName 的
+    红 job 名并集——原 main-run 形态对 PR-CI workflow("Pull Request",
+    lint/build 所在)结构性为空(仅 pull_request 事件跑在 PR head,main 上
+    无此 workflow 的 schedule/push run),继承红永不放行、特性死亡。
+    多 PR 取并集;拉不到/空 → 空集(不放行任何红,宁严勿松)。"""
+    assert tp.BASELINE_MERGED_DEPTH == 3
+    rollups = {
+        "901": [("lint", "FAILURE", "Pull Request"),
+                ("git-sanity", "SUCCESS", "Pull Request"),
+                ("spell-check", "FAILURE", "Docs Lint")],
+        "902": [("lint", "SUCCESS", "Pull Request"),
+                ("build-arm", "FAILURE", "Pull Request")],   # 同组增并集
+        "903": [("zizmor (workflow security)", "FAILURE", "Security")],
+    }
     monkeypatch.setattr(tl, "gh_json_idem",
-                        lambda a, input_text=None: called.append(1) or 77)
-    assert tp.baseline_reds("o/r", "") == set()
-    assert tp.baseline_reds("o/r", None) == set()
-    assert called == []
-    # run list 失败 / run view 失败 → 空集
-    def boom_list(args, input_text=None):
-        if args[:2] == ["run", "list"]:
-            raise tl.GhError("gh run list … 失败(exit 1): HTTP 502")
-        return "x"
-    monkeypatch.setattr(tl, "gh_json_idem", boom_list)
+                        _gh_stub(rollups, merged="901\n902\n903\n"))
+    # Pull Request 组: 901 lint + 902 build-arm 并集;异 workflow 组不混入
+    assert tp.baseline_reds("o/r", "Pull Request") == {"lint", "build-arm"}
+    assert tp.baseline_reds("o/r", "Security") == {"zizmor (workflow security)"}
+    assert tp.baseline_reds("o/r", "Docs Lint") == {"spell-check"}
+    assert tp.baseline_reds("o/r", "不存在的工作流") == set()
+    # 单个已合入 PR: gh --jq '.[].number' 输出裸数字 → gh_json json.loads
+    # 得 int → str().split() 整链可用
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        _gh_stub({"901": rollups["901"]}, merged=901))
+    assert tp.baseline_reds("o/r", "Pull Request") == {"lint"}
+    # merged 清单为空(gh 空输出 None)/pr list GhError → 空集(宁严勿松)
+    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub({}, merged=None))
     assert tp.baseline_reds("o/r", "Pull Request") == set()
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        _gh_stub({}, merged=tl.GhError(
+                            "gh pr list … 失败(exit 1): HTTP 502")))
+    assert tp.baseline_reds("o/r", "Pull Request") == set()
+    # 单个基线 PR 的 rollup 拉取失败(GhError) → 跳过该 PR 不炸整链
 
-    def boom_view(args, input_text=None):
-        if args[:2] == ["run", "view"]:
-            raise tl.GhError("gh run view … 失败(exit 1): HTTP 502")
-        return 77
-    monkeypatch.setattr(tl, "gh_json_idem", boom_view)
-    assert tp.baseline_reds("o/r", "Pull Request") == set()
-    # gh 空输出(run list 无匹配 → null → None)不炸 → 空集
-    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: None)
-    assert tp.baseline_reds("o/r", "Pull Request") == set()
+    def flaky(args, input_text=None):
+        if args[:2] == ["pr", "list"]:
+            return "901\n902\n"
+        if str(args[2]) == "901":
+            raise tl.GhError("gh pr view 901 … 失败(exit 1): HTTP 502")
+        # 基线通道列序 [.workflowName, .name, .conclusion](与 checks_ok 候选
+        # 通道相反——按生产 jq 过滤器回放)
+        return "Pull Request\tlint\tFAILURE\n"
+    monkeypatch.setattr(tl, "gh_json_idem", flaky)
+    assert tp.baseline_reds("o/r", "Pull Request") == {"lint"}
 
 
 def test_checks_ok_green_prefix_and_case_forms(monkeypatch):
@@ -808,7 +813,7 @@ def test_checks_ok_green_prefix_and_case_forms(monkeypatch):
             ("zizmor (workflow security)", "SUCCESS", "Security"),
             ("Multi-version (${{ matrix.series }})", "SKIPPED", "Pull Request"),
             ("CodeRabbit", "SKIPPED", "")]                # 状态上下文空 workflow
-    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub(rows))
+    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub({"1": rows}))
     ok, why = tp.checks_ok(_pr(), tp.REQUIRED_CHECKS_FULL, "o/r")
     assert ok is True and why == []
 
@@ -816,7 +821,7 @@ def test_checks_ok_green_prefix_and_case_forms(monkeypatch):
 def test_checks_ok_required_missing_and_gherror(monkeypatch):
     rows = [("lint", "SUCCESS", "Pull Request"),
             ("git-sanity", "SUCCESS", "Pull Request")]   # Build binary/zizmor 缺席
-    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub(rows))
+    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub({"1": rows}))
     ok, why = tp.checks_ok(_pr(), tp.REQUIRED_CHECKS_FULL, "o/r")
     assert ok is False and "required check 缺席" in why[0]
     # docs 集(lint+git-sanity)在 → True
@@ -835,32 +840,50 @@ def test_checks_ok_required_missing_and_gherror(monkeypatch):
 
 
 def test_checks_ok_inherited_red_by_workflow_groups(monkeypatch):
-    """继承红(裁定#2 数据流): 红 job 的 workflowName 从 rollup 行收集,
-    按 workflow 分组对照 main 基线——全组 ⊆ 基线 → 放行并携带证据;
-    任一组有非基线红 → 拒;空 workflowName(状态上下文)基线空集 → 拒。"""
-    rows = [("lint", "FAILURE", "Pull Request"),
+    """继承红(裁定#2 数据流 + fix-round 1 基线重写): 候选 PR 红 job 的
+    workflowName 从 rollup 行收集,按 workflow 分组对照「最近 3 个已合入
+    PR 同 workflowName 的红 job 并集」——全组 ⊆ 基线 → 放行并携带证据;
+    任一组有非基线红 → 拒;空 workflowName(状态上下文)同通道对照,
+    已合入对照组无该红 → 拒。"""
+    cand = [("lint", "FAILURE", "Pull Request"),
             ("git-sanity", "SUCCESS", "Pull Request"),
             ("Build binary for CPU (Linux)", "SUCCESS", "Pull Request"),
             ("zizmor (workflow security)", "SUCCESS", "Security"),
             ("spell-check", "FAILURE", "Docs Lint")]
-    base = {"Pull Request": (101, "lint\n"),   # main 同 workflow 基线红
-            "Docs Lint": (102, "")}             # 基线无 spell-check
-    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub(rows, base))
+    base = {"901": [("lint", "FAILURE", "Pull Request")],   # lint 继承红
+            "902": [("CodeRabbit", "SKIPPED", "")],
+            "903": [("spell-check", "SUCCESS", "Docs Lint")]}   # 基线绿 → 外来红
+    merged = "901\n902\n903\n"
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        _gh_stub({"1": cand, **base}, merged=merged))
     ok, why = tp.checks_ok(_pr(), tp.REQUIRED_CHECKS_FULL, "o/r")
     assert ok is False and "非基线继承" in why[0] and "spell-check" in why[0]
-    # 去掉 Docs Lint 外来红 → lint 红继承自基线 → 放行 + 证据
-    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub(rows[:4], base))
+    # 去掉 Docs Lint 外来红 → lint 红继承自已合入基线 → 放行 + 证据
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        _gh_stub({"1": cand[:4], **base}, merged=merged))
     ok, why = tp.checks_ok(_pr(), tp.REQUIRED_CHECKS_FULL, "o/r")
     assert ok is True and "继承红放行" in why[0] and "lint" in why[0]
-    # 空 workflowName 的红(状态上下文)→ 无从对照 → 拒
+    # 空 workflowName 的红(状态上下文): 已合入对照组同组无该红 → 拒
     rows3 = [("lint", "SUCCESS", "Pull Request"),
              ("git-sanity", "SUCCESS", "Pull Request"),
              ("Build binary for CPU (Linux)", "SUCCESS", "Pull Request"),
              ("zizmor (workflow security)", "SUCCESS", "Security"),
              ("CodeRabbit", "FAILURE", "")]
-    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub(rows3, base))
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        _gh_stub({"1": rows3, **base}, merged=merged))
     ok, why = tp.checks_ok(_pr(), tp.REQUIRED_CHECKS_FULL, "o/r")
     assert ok is False and "非基线继承" in why[0] and "CodeRabbit" in why[0]
+    # merged 清单拉取失败(GhError)→ 空基线 → 红永不放行(宁严勿松)
+
+    def boom(args, input_text=None):
+        if args[:2] == ["pr", "list"]:
+            raise tl.GhError("gh pr list … 失败(exit 1): HTTP 502")
+        if args[:2] == ["pr", "view"] and str(args[2]) == "1":
+            return "".join(f"{nm}\t{c}\t{w}\n" for nm, c, w in cand)
+        raise AssertionError(f"空基线短路后不应再拉基线 PR: {args}")
+    monkeypatch.setattr(tl, "gh_json_idem", boom)
+    ok, why = tp.checks_ok(_pr(), tp.REQUIRED_CHECKS_FULL, "o/r")
+    assert ok is False and "非基线继承" in why[0] and "lint" in why[0]
 
 
 def test_gate_full_path_engine_pr_ok(monkeypatch, tmp_path):
@@ -883,7 +906,10 @@ def test_gate_full_path_engine_pr_ok(monkeypatch, tmp_path):
     assert r.reasons == []
 
 
-def test_gate_rejects_user_wip_and_missing_ownership():
+def test_gate_rejects_user_wip_and_missing_ownership(monkeypatch):
+    # 熔断前置(Minor #4)后 _paused 在入口即查——无 env 重定向的用例必须桩死,
+    # 否则探活真机默认 state 目录(宿主相关)
+    monkeypatch.setattr(tl, "_paused", lambda: False)
     st = _mkstate()
     r = tp.evaluate_merge_gate(st, None, _pr(title="WIP: feat/x"),
                                ["a.md"], datetime.now(timezone.utc), False)
@@ -894,16 +920,19 @@ def test_gate_rejects_user_wip_and_missing_ownership():
     assert r2.ok is False and "非引擎 PR" in " ".join(r2.reasons)
 
 
-def test_gate_rejects_non_engine_branch():
+def test_gate_rejects_non_engine_branch(monkeypatch):
     """门槛 1 引擎分支形: fix/issue-N|fix/ci-N|fix/revert-prN 之外拒
     (用户 WIP 分支结构性排除,无白名单)。"""
+    monkeypatch.setattr(tl, "_paused", lambda: False)
     r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(fix_branch="fix/user-x"),
                                _pr(), ["a.c"], datetime.now(timezone.utc), False)
     assert r.ok is False and "非引擎分支" in " ".join(r.reasons)
 
 
-def test_gate_rejects_closed_draft_conflict():
-    """门槛 4 状态三拒臂: 非 open / DRAFT / mergeable=false。"""
+def test_gate_rejects_closed_draft_conflict(monkeypatch):
+    """门槛 4 状态拒臂: 非 open / DRAFT / fork(Critical #1,fix-round 1)/
+    mergeable=false。"""
+    monkeypatch.setattr(tl, "_paused", lambda: False)
     now = datetime.now(timezone.utc)
     r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(),
                                _pr(state_="closed"), ["a.c"], now, False)
@@ -914,6 +943,24 @@ def test_gate_rejects_closed_draft_conflict():
     r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(),
                                _pr(mergeable=False), ["a.c"], now, False)
     assert r.ok is False and "冲突" in " ".join(r.reasons)
+
+
+def test_gate_rejects_fork_pr(monkeypatch, tmp_path):
+    """Critical #1(fix-round 1): spec 门槛 ④ = open ∧ 非 DRAFT ∧ **非 fork**
+    ∧ mergeable——fork 的 docs PR 也不走快道放行,引擎臂同样拒。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tl, "_paused", lambda: False)
+    monkeypatch.setattr(tp, "checks_ok", lambda pr, req, slug: (True, []))
+    monkeypatch.setattr(tl, "repo_slug", lambda: "o/r")
+    now = datetime.now(timezone.utc)
+    # fork 的 docs PR(entry=None、全绿、无意见)→ ok False
+    r = tp.evaluate_merge_gate(_mkstate(), None, _pr(fork=True), ["a.md"],
+                               now, False)
+    assert r.ok is False and "fork" in " ".join(r.reasons)
+    # 引擎臂同样拒
+    r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(), _pr(fork=True),
+                               ["a.c"], now, False)
+    assert r.ok is False and "fork" in " ".join(r.reasons)
 
 
 def test_gate_docs_fast_path(monkeypatch, tmp_path):
@@ -936,7 +983,8 @@ def test_gate_docs_fast_path(monkeypatch, tmp_path):
     assert seen["req"] == tp.REQUIRED_CHECKS_DOCS   # 快道只查快 job
 
 
-def test_gate_docs_with_opinions_not_ok():
+def test_gate_docs_with_opinions_not_ok(monkeypatch):
+    monkeypatch.setattr(tl, "_paused", lambda: False)   # 熔断入口即查(Minor #4)
     now = datetime.now(timezone.utc)
     pr = _pr(local=True, opinions=2)
     pr.latest_signal = now - timedelta(seconds=400)
@@ -991,21 +1039,33 @@ def test_gate_rejects_when_checks_fail_and_when_paused(monkeypatch, tmp_path):
     r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(), _pr(), ["a.c"],
                                now, False)
     assert r.ok is False and "required check 缺席" in " ".join(r.reasons)
-    # 门槛 5: PAUSED 熔断(引擎与 docs 快道同样受熔断)
+    # 熔断(Minor #4 前置到入口,零 gh 成本): PAUSED 优先于归属/状态等一切
+    # 后续检查——非引擎分支条目在 PAUSED 下报 PAUSED 而非「非引擎分支」
     monkeypatch.setattr(tp, "checks_ok", lambda pr, req, slug: (True, []))
     monkeypatch.setattr(tl, "_paused", lambda: True)
+    r = tp.evaluate_merge_gate(_mkstate(),
+                               _gate_entry(fix_branch="fix/user-x"),
+                               _pr(), ["a.c"], now, False)
+    assert r.ok is False and "PAUSED" in " ".join(r.reasons)
     r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(), _pr(), ["a.c"],
                                now, False)
     assert r.ok is False and "PAUSED" in " ".join(r.reasons)
+    # docs 快道同样受熔断
     r = tp.evaluate_merge_gate(_mkstate(), None, _pr(latest=1000), ["a.md"],
                                now, False)
     assert r.ok is False and "PAUSED" in " ".join(r.reasons)
+    # no_auto_merge 参数臂(检测函数 no_auto_merge_active 属 T8,裁定#4)
+    monkeypatch.setattr(tl, "_paused", lambda: False)
+    r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(), _pr(), ["a.c"],
+                               now, True)
+    assert r.ok is False and "NO_AUTO_MERGE" in " ".join(r.reasons)
 
 
 def test_gate_engine_inherited_red_passes_with_evidence(monkeypatch, tmp_path):
-    """全门槛 + 继承红放行(rollup workflowName 数据流,裁定#2): rollup
-    lint 红 ⊆ main 同 workflow 基线红 → 门过且 reasons 携带证据行
-    (spec §5 门槛 6 审计评论的输入;真实 PR #661 现况即 lint 继承红)。"""
+    """全门槛 + 继承红放行(rollup workflowName 数据流,裁定#2;fix-round 1
+    基线重写): 候选 rollup lint 红 ⊆ 最近 3 个已合入 PR 同 workflow 的红 job
+    并集 → 门过且 reasons 携带证据行(spec §5 门槛 6 审计评论的输入;真实
+    PR #661 现况即 lint 继承红)。"""
     monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
     monkeypatch.setattr(tl.pr_loop, "classify_state",
                         lambda pr, q, now: "READY_TO_MERGE")
@@ -1015,8 +1075,10 @@ def test_gate_engine_inherited_red_passes_with_evidence(monkeypatch, tmp_path):
             ("git-sanity", "SUCCESS", "Pull Request"),
             ("Build binary for CPU (Linux)", "SUCCESS", "Pull Request"),
             ("zizmor (workflow security)", "SUCCESS", "Security")]
+    base = {"901": [("lint", "FAILURE", "Pull Request")],
+            "902": [], "903": []}
     monkeypatch.setattr(tl, "gh_json_idem",
-                        _gh_stub(rows, {"Pull Request": (101, "lint\n")}))
+                        _gh_stub({"1": rows, **base}, merged="901\n902\n903\n"))
     r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(), _pr(), ["a.c"],
                                datetime.now(timezone.utc), False)
     assert r.ok is True and r.fast is False

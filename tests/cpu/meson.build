@@ -587,19 +587,33 @@ tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
         'eigen_gemm/gemm_double_max_arm.cpp',
+        'eigen_gemm/gemm_double_max_arm_sve2.cpp',
         'eigen_gemm/gemm_double_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_double_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_float_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_float_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_cdouble_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_double14_sve.cpp',
+        'eigen_gemm/gemm_double14_sve2.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
+        'eigen_svd/svd_cdouble_sve2.cpp',
         'eigen_svd/svd_double_sve.cpp',
+        'eigen_svd/svd_double_sve2.cpp',
         'eigen_svd/svd_double2_sve.cpp',
+        'eigen_svd/svd_double2_sve2.cpp',
         'eigen_svd/svd_float_sve.cpp',
+        'eigen_svd/svd_float_sve2.cpp',
         'eigen_svd/svd_fvectors_sve.cpp',
+        'eigen_svd/svd_fvectors_sve2.cpp',
         'eigen_svd_jacobi/svd_cdouble_sve.cpp',
+        'eigen_svd_jacobi/svd_cdouble_sve2.cpp',
         'eigen_svd_jacobi/svd_double_sve.cpp',
+        'eigen_svd_jacobi/svd_double_sve2.cpp',
         'eigen_svd_jacobi/svd_float_sve.cpp',
+        'eigen_svd_jacobi/svd_float_sve2.cpp',
         'eigen_svd_jacobi/svd_fvectors_sve.cpp',
+        'eigen_svd_jacobi/svd_fvectors_sve2.cpp',
     )
 )
 
@@ -1263,6 +1277,16 @@ endif
 # tests_eigen_<pfx>_vl<N> static libraries, and the vector-length-agnostic
 # dispatchers pick the variant that matches the worker's pinned tier at run
 # time.
+# Dual-target extension (2026-11-12, SVE2 companion design): the same table
+# is additionally compiled for the armv9-a+sve2 target as
+# tests_eigen_<pfx>_sve2_vl<N> libraries (Eigen namespace EigenSVE2<N>, body
+# symbol namespace <pfx>_sve2_vl<N>) for the _sve2 companion cases; the sve
+# rows keep their library names and args byte-identical. Honesty boundary:
+# the sve2 libraries recompile the same SVE1-subset bodies for backward-
+# compatible execution on SVE2 hardware (objdump-audited: zero SVE2-only
+# instructions); they provide an SVE2-gated entry point, a compile-target
+# declaration and the future hook for an Eigen SVE2 backend — NOT SVE2-only
+# datapath coverage.
 if host_machine.cpu_family() == 'aarch64'
     # --- Eigen payload: one instantiation per VL tier, table-driven --------
     # Eigen's SVE packet types are compile-time fixed-width and appear as
@@ -1280,7 +1304,7 @@ if host_machine.cpu_family() == 'aarch64'
     # shape, so all four tiers are built.
     # Table-driven (2026-11-02 eigen SVE unification, design §3):
     #   [body-source, namespace-prefix, eigen_stack_limit_1024]
-    #   — library name = tests_eigen_<pfx>_vl<t>
+    #   — library name = tests_eigen_<pfx>[_sve2]_vl<t>
     # The existing svd/gemm prefixes keep their library names; the per-tier
     # symbol namespace is now injected uniformly as
     # -DEIGEN_SVE_BODY_NS=<pfx>_vl<t> (the body TUs' old
@@ -1322,44 +1346,39 @@ if host_machine.cpu_family() == 'aarch64'
         body_src = spec[0]
         pfx = spec[1]
         stack_limit_1024 = spec[2]
-        foreach tier : ['128', '256', '512', '1024']
-            eigen_tier_args = [
-                '-march=armv8.2-a+sve',
-                '-msve-vector-bits=' + tier,
-                '-DEIGEN_ARM64_SVE_VL=' + tier,
-                '-DEigen=EigenSVE' + tier,
-                '-DEIGEN_SVE_BODY_NS=' + pfx + '_vl' + tier,
-            ]
-            # issue #520: only the f32 SVD bodies exceed Eigen's 128 KiB
-            # stack sentinel at VL=1024 (see the table comment above).
-            if tier == '1024' and stack_limit_1024 != 0
-                eigen_tier_args += [
-                    '-DEIGEN_STACK_ALLOCATION_LIMIT=' + stack_limit_1024.to_string(),
+        # [suffix, march, Eigen-ns-prefix]: sve keeps the existing
+        # names/args byte-identical; sve2 adds the armv9-a+sve2 target.
+        foreach tgt : [['',   'armv8.2-a+sve', 'EigenSVE'],
+                       ['_sve2', 'armv9-a+sve2', 'EigenSVE2']]
+            foreach tier : ['128', '256', '512', '1024']
+                eigen_tier_args = [
+                    '-march=' + tgt[1],
+                    '-msve-vector-bits=' + tier,
+                    '-DEIGEN_ARM64_SVE_VL=' + tier,
+                    '-DEigen=' + tgt[2] + tier,
+                    '-DEIGEN_SVE_BODY_NS=' + pfx + tgt[0] + '_vl' + tier,
                 ]
-            endif
-            eigen_vl_a = static_library(
-                'tests_eigen_' + pfx + '_vl' + tier,
-                sources : body_src,
-                dependencies: [
-                    eigen3_dep,
-                    boost_dep,
-                ],
-                build_by_default: false,
-                include_directories: [
-                    tests_common_incdirs,
-                ],
-                c_args : [
-                    tests_common_c_args,
-                    eigen_tier_args,
-                ],
-                cpp_args : [
-                    tests_common_cpp_args,
-                    eigen_tier_args,
-                    '-DEIGEN_ARM64_USE_SVE',
-                    sve_bitpattern_exempt,
-                ],
-            )
-            sandstone_tests += [eigen_vl_a]
+                # issue #520: only the f32 SVD bodies exceed Eigen's 128 KiB
+                # stack sentinel at VL=1024 (see the table comment above);
+                # applies to both targets — the sve2 compilation
+                # instantiates the same Eigen kernels.
+                if tier == '1024' and stack_limit_1024 != 0
+                    eigen_tier_args += [
+                        '-DEIGEN_STACK_ALLOCATION_LIMIT=' + stack_limit_1024.to_string(),
+                    ]
+                endif
+                eigen_vl_a = static_library(
+                    'tests_eigen_' + pfx + tgt[0] + '_vl' + tier,
+                    sources : body_src,
+                    dependencies: [ eigen3_dep, boost_dep ],
+                    build_by_default: false,
+                    include_directories: [ tests_common_incdirs ],
+                    c_args : [ tests_common_c_args, eigen_tier_args ],
+                    cpp_args : [ tests_common_cpp_args, eigen_tier_args,
+                                 '-DEIGEN_ARM64_USE_SVE', sve_bitpattern_exempt ],
+                )
+                sandstone_tests += [eigen_vl_a]
+            endforeach
         endforeach
     endforeach
 

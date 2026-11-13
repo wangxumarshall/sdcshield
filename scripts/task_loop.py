@@ -234,7 +234,7 @@ class Entry:
     # source/kind/audit_hash 三个 v2 字段仅 from_dict 容错给默认,直接构造
     # 仍须显式给全;lane/worktree/merged_at/merged_sha 四个 v3 字段带默认
     # (lane="" 其余 None),旧 state 缺键加载即升格、旧构造方无需改动;
-    # conflict_nights/last_conflict_nights(v4,I6)带默认 0/None 同理;
+    # conflict_nights/last_conflict_night(v4,I6)带默认 0/None 同理;
     # host(v5,nodepool)带默认 "local" 同理——合计 25 字段。
 
     def to_dict(self) -> dict:

@@ -75,12 +75,22 @@ def test_probe_remote_parses_combined_output(monkeypatch):
                  "boot_time": "2026-01-02 03:04:05"}
 
 
+_ZERO_PROBE = {"reachable": False, "mem_avail_mb": 0, "load15": 0.0,
+               "cores": 0, "excite_active": False, "boot_time": None}
+
+
 def test_probe_unreachable(monkeypatch):
     def boom(h, cmd, t=45, **kw):
         raise np.NodeError("节点 0101 命令失败(rc=255)")
     monkeypatch.setattr(np, "run_ssh", boom)
-    p = np.probe_node("0101")
-    assert p["reachable"] is False and p["mem_avail_mb"] == 0
+    assert np.probe_node("0101") == _ZERO_PROBE
+
+
+def test_probe_truncated_output_degrades(monkeypatch):
+    """N2 裁定: 输出不足5行必须归一为 NodeError → probe_node 零值降级。"""
+    monkeypatch.setattr(
+        np, "run_ssh", lambda h, cmd, t=45, **kw: "192\n0.1 0.1 0.1\nMemAvailable: 1 kB")
+    assert np.probe_node("0101") == _ZERO_PROBE
 
 
 def test_probe_local_reads_proc(monkeypatch, tmp_path):
@@ -90,3 +100,40 @@ def test_probe_local_reads_proc(monkeypatch, tmp_path):
     p = np.probe_node("local")
     assert p["reachable"] is True and p["mem_avail_mb"] == 1024
     assert p["excite_active"] is False and p["boot_time"] is None
+
+
+def test_pick_node_prefers_richest_and_filters(monkeypatch):
+    import task_loop_pipeline as tp
+    probes = {"local": {"reachable": True, "mem_avail_mb": 26000,
+                        "load15": 0.1, "cores": 0, "excite_active": False,
+                        "boot_time": None},
+              "0102": {"reachable": True, "mem_avail_mb": 636000,
+                       "load15": 0.35, "cores": 192,
+                       "excite_active": False, "boot_time": "x"},
+              "0101": {"reachable": True, "mem_avail_mb": 26000,
+                       "load15": 0.1, "cores": 126,
+                       "excite_active": False, "boot_time": "x"},
+              "0201": {"reachable": True, "mem_avail_mb": 25000,
+                       "load15": 95.0, "cores": 96,          # load 超核半 → 滤掉
+                       "excite_active": False, "boot_time": "x"}}
+    monkeypatch.setattr(np, "probe_node", lambda h: probes[h])
+    monkeypatch.setattr(tp, "free_slots_on", lambda s, k, host="local": 2)
+    monkeypatch.delenv("PIPELINE_NODEPOOL", raising=False)
+    monkeypatch.delenv("PIPELINE_FORCE_NODE", raising=False)
+    st = {}
+    assert np.pick_node("issue_fix", st)["host_id"] == "0102"   # 常态分载
+    probes["0102"]["excite_active"] = True
+    assert np.pick_node("issue_fix", st)["host_id"] == "local"  # 激发跳过
+    probes["local"]["mem_avail_mb"] = 4000                      # 本机内存不足
+    assert np.pick_node("issue_fix", st)["host_id"] == "0101"
+    monkeypatch.setattr(tp, "free_slots_on", lambda s, k, host="local": 0)
+    assert np.pick_node("issue_fix", st) is None                # 全空 → None
+
+
+def test_pick_node_env_valves(monkeypatch):
+    monkeypatch.setenv("PIPELINE_NODEPOOL", "0")
+    assert np.pick_node("pr_review", {}) is np.LOCAL_NODE
+    monkeypatch.setenv("PIPELINE_NODEPOOL", "1")
+    monkeypatch.delenv("PIPELINE_FORCE_NODE", raising=False)
+    monkeypatch.setenv("PIPELINE_FORCE_NODE", "0201")
+    assert np.pick_node("pr_review", {})["host_id"] == "0201"  # 强制不探测

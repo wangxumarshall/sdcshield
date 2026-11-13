@@ -14,6 +14,7 @@ import 它们(锁死依赖方向: tl → tp → np)。
 安全阀: env PIPELINE_NODEPOOL=0 → pick_node 只返回本机(纯本机旧行为);
 PIPELINE_FORCE_NODE=<host_id> → 强制单节点(冒烟/测试用)。
 """
+import os
 import subprocess
 
 # 板注册表(spec §3.1; 凭据不入库——连接经 setup 分发的 ~/.ssh/authorized_keys)
@@ -109,6 +110,8 @@ _PROBE_CMD = ("nproc; cat /proc/loadavg; "
 
 def _parse_probe(out):
     lines = [l.strip() for l in out.splitlines() if l.strip()]
+    if len(lines) < 5:
+        raise NodeError(f"探测输出不足5行: {out[:80]!r}")
     cores = int(lines[0])
     load15 = float(lines[1].split()[2])
     mem_kb = int(lines[2].split()[1])
@@ -139,3 +142,35 @@ def probe_node(host_id):
     except NodeError:
         return {"reachable": False, "mem_avail_mb": 0, "load15": 0.0,
                 "cores": 0, "excite_active": False, "boot_time": None}
+
+
+def _node_ok(probe, node):
+    if not probe["reachable"] or probe["excite_active"]:
+        return False
+    if node["host_id"] != "local" and \
+            probe["cores"] and probe["load15"] >= probe["cores"] * 0.5:
+        return False                       # 本机不查 load(闸已够,白天重载常态)
+    min_mb = int(os.environ.get("PIPELINE_MIN_MEM_GB", "8")) * 1024
+    return probe["mem_avail_mb"] >= min_mb
+
+
+def pick_node(kind, state):
+    """三泳道派发的择优入口(spec §1 决策 1 常态分载)。
+    返回 node dict; None=全节点不可用(调用方维持现行「本轮不派」)。
+    探测零缓存——每 cycle 每候选一次 probe(300s 粒度天然缓存,SSH 12s 超时)。"""
+    if os.environ.get("PIPELINE_NODEPOOL", "1") == "0":
+        return LOCAL_NODE
+    forced = os.environ.get("PIPELINE_FORCE_NODE")
+    if forced:
+        return node_by_host(forced)
+    import task_loop_pipeline as tp          # 懒 import,模块顶层无环
+    best, best_mem = None, -1
+    for node in [LOCAL_NODE] + BOARD_NODES:
+        probe = probe_node(node["host_id"])
+        if not _node_ok(probe, node):
+            continue
+        if tp.free_slots_on(state, kind, host=node["host_id"]) <= 0:
+            continue
+        if probe["mem_avail_mb"] > best_mem:
+            best, best_mem = node, probe["mem_avail_mb"]
+    return best

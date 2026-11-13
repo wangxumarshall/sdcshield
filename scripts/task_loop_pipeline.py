@@ -158,7 +158,6 @@ def free_slot_count(state, kind):
 
 def free_slots_on(state, kind, host="local"):
     """指定节点的空槽数(host 维度分账; local=tp 本机, 板=注册表配额)。"""
-    import task_loop_nodepool as np
     live = sum(1 for s in _slots(state, kind)
                if s.get("host", "local") == host and tl.agent_alive(s["pid"]))
     return max(0, slot_count_cap(state, kind, host) - live)

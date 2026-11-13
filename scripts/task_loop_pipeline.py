@@ -871,6 +871,22 @@ def _upsert_event(events, ev):
     events.append(ev)
 
 
+def _pipeline_night(now: datetime) -> str:
+    """评估时刻所属 pipeline 夜的标识(ISO 日期串 = 该夜 23:00 的本地日期)。
+
+    夜 = **pipeline 夜**(23:00 起跨午夜到 09:00),不是本地日历日——
+    23:30 与次日 01:30 同属一夜;本地日期在 00:00 的翻转会把一夜劈成
+    两夜,连续冲突夜计数被虚增(I6 fix-round 2)。h<9 的凌晨段归昨晚
+    起始的夜((date-1));h≥23 归当日;窗口外 09:00–23:00(夜间编排恒在
+    窗内,仅手动 scan 会发生)归**即将开始**的一夜(当日)——22:30 的
+    评估与 23:30 起的同夜评估同桶,同桶不重复计数(宁少勿多,防假性
+    ESCALATED)。与 in_window 同族本地钟口径(run_pipeline/cycle_once 传入
+    的 now 即本地钟)。"""
+    if now.hour < 9:
+        return (now.date() - timedelta(days=1)).isoformat()
+    return now.date().isoformat()
+
+
 def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
     """单 PR 门评+执行/记录(引擎与 docs 共用): ok → execute_merge(引擎条目
     记账即时回写落盘——merged_sha 是 revert 归因主数据,丢账 = 归因失明);
@@ -879,16 +895,23 @@ def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
     的复评 gh 成本是灰度夜报证据的代价,只读幂等);复评过门记 would-merge
     绝不执行,不过记 gate-reject 携真实 reasons。
 
-    I6(spec §5 承诺补全,引擎条目): 与 main 冲突的拒因(mergeable=false
-    →「与 main 冲突」)每夜 conflict_nights +1——计数在 nam 复评之后(熔断
-    夜的真实拒因同样可见),连续第 2 夜(≥2)→ tl._escalate(复用升级路径,
-    理由引用 spec §5: 不自动 rebase,rebase 决策留给人工;升级即终局即时
-    落盘);过门/非冲突拒 → 清零(只数**连续**冲突夜)。计数写回 state
+    I6(spec §5 承诺补全 + fix-round 2 夜边界锚定,引擎条目): 与 main 冲突
+    的拒因(mergeable=false →「与 main 冲突」)按 _pipeline_night 口径
+    **逐夜** conflict_nights +1——同夜不重复计数(last_conflict_night 夜锚:
+    run_pipeline 整夜持内存 state、每 PIPELINE_CYCLE_SEC 一轮、merge_sweep
+    是尾步,冲突条目当夜被评上百次,每评 +1 会在当夜第 2 轮 cycle 即假性
+    2 → 假性 ESCALATED,升级文案还谎称「已持续 2 晚」)。计数在 nam 复评
+    之后(熔断夜的真实拒因同样可见);连续第 2 夜(≥2)首次评估 →
+    tl._escalate(复用升级路径,文案引用 pipeline 夜口径与 spec §5: 不自动
+    rebase,rebase 决策留给人工;升级即终局即时落盘);过门/非冲突拒 →
+    conflict_nights 与 last_conflict_night **双清零**(只数连续冲突夜;只清
+    计数不清夜锚,清零后同夜再冲突会被夜锚错误吞掉)。计数写回 state
     dict——reject 路径无既有写回,不写回则每轮从旧 dict 重新解析,永远
     停在 1、升级结构性不可达。"""
     gr = evaluate_merge_gate(state, entry, pr, files, now, nam)
     if gr.ok and entry is not None:
         entry.conflict_nights = 0               # 过门清零(只数连续冲突夜)
+        entry.last_conflict_night = None
     if gr.ok:
         sha = execute_merge(state, entry, pr, gr, dry_run)
         if entry is not None:
@@ -902,12 +925,15 @@ def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
         gr = evaluate_merge_gate(state, entry, pr, files, now, False)
     if entry is not None:
         if any("冲突" in r for r in gr.reasons):
-            entry.conflict_nights += 1
+            night = _pipeline_night(now)
+            if entry.last_conflict_night != night:
+                entry.conflict_nights += 1
+                entry.last_conflict_night = night
             if entry.conflict_nights >= 2:
                 tl._escalate(
                     entry, state,
                     f"与 main 冲突已持续 {entry.conflict_nights} 晚"
-                    f"(spec §5: 冲突持续 >2 夜 → ESCALATED,不自动 "
+                    f"(pipeline 夜 23:00–09:00 逐夜计数,spec §5: 不自动 "
                     f"rebase——rebase 决策留给人工)",
                     "人工 rebase/merge 该 PR,或人工关闭之", dry_run)
                 # 升级即终局: 计数写回 + 即时落盘(与 lane_b 派发记账同纪律
@@ -916,7 +942,8 @@ def _merge_one(state, events, num, entry, pr, files, now, nam, dry_run, es):
                 if not dry_run:
                     _pipeline_save(StateStore(), state)
         else:
-            entry.conflict_nights = 0           # 非冲突拒因清零
+            entry.conflict_nights = 0           # 非冲突拒因清零(双清)
+            entry.last_conflict_night = None
         state["entries"] = [x.to_dict() for x in es]
     _upsert_event(events, {"kind": "would-merge" if gr.ok else "gate-reject",
                            "pr": num, "reasons": gr.reasons})

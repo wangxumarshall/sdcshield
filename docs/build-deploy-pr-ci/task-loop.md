@@ -293,7 +293,7 @@ touch ~/.local/state/sdcshield-task-loop/NO_AUTO_MERGE  # 保险:只停自动 me
 | `PR_OPEN` | agent 自开 PR 已核实 | 收割核实 `gh pr list --head` 命中 open PR | 贴 PR 简报评论（车道 A→B 的唯一铰链） |
 | `BOT_FIX` | bot 意见处置 agent 在跑 | 车道 B READY_TO_FIX → collect 导出 + 派 agent（rounds+1，**同 head 只派一次**） | 处置报告贴 issue |
 | `DONE` | 结案 | 引擎 PR：merge 门六门槛全过自动 squash merge（§7）后置 DONE，**记账 `merged_at`/`merged_sha`（revert 归因主数据，人工 merge 永不写）**；用户 docs PR：merge 门过即合（无条目，不进状态机） | PR 评论贴门槛证据审计 + issue 贴闭环评论 + 关 issue + 摘 wip |
-| `ESCALATED` | 升级人工，冻结 | attempts>2 / rounds 超动态上限（2/3，§4 全局机制）/ agent 自报 escalated / 熔断 / revert 二阶链 / 与 main 冲突连续 ≥2 夜（`conflict_nights`，merge 门逐夜计数，spec §5——不自动 rebase） | @wangxumarshall 评论附日志尾证据与建议 + `agent-escalated` 标签 + 摘 wip |
+| `ESCALATED` | 升级人工，冻结 | attempts>2 / rounds 超动态上限（2/3，§4 全局机制）/ agent 自报 escalated / 熔断 / revert 二阶链 / 与 main 冲突连续 ≥2 夜（`conflict_nights`，merge 门逐夜计数——夜 = pipeline 夜 23:00–09:00 跨午夜，同夜多轮 cycle 不重复计数；spec §5——不自动 rebase） | @wangxumarshall 评论附日志尾证据与建议 + `agent-escalated` 标签 + 摘 wip |
 | `HUMAN_CLOSED` | 人工接管，工具永不再碰 | QUEUED/DISPATCHED 条目 issue 已被人工关闭（无 PR 路径；有 PR 路径的由车道 B 收尾） | 不 @ 不评论（DISPATCHED 先击杀在跑 agent、摘 wip） |
 
 **全局机制**：

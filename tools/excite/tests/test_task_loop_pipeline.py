@@ -61,15 +61,18 @@ def test_entry_new_fields_roundtrip_and_legacy():
                 last_dispatched_head=None, extra_runs=[], created_at="t",
                 updated_at="t", source="audit", kind="bug", audit_hash=None)
     e = Entry(**base, lane="issue_fix", worktree="/w", merged_at="m",
-              merged_sha="ab", conflict_nights=2)
+              merged_sha="ab", conflict_nights=2,
+              last_conflict_night="2026-11-13")
     d = e.to_dict()
     assert d["lane"] == "issue_fix" and d["merged_sha"] == "ab"
     assert d["conflict_nights"] == 2          # I6 第 23 字段: 连续冲突夜计数
+    assert d["last_conflict_night"] == "2026-11-13"   # I6 fix-2 第 24 字段: 夜锚
     # 旧 state(无 4 新键)加载容错: lane="" 其余 None
     legacy = Entry.from_dict(base)
     assert legacy.lane == "" and legacy.worktree is None
     assert legacy.merged_at is None and legacy.merged_sha is None
     assert legacy.conflict_nights == 0        # I6 缺省容错
+    assert legacy.last_conflict_night is None # I6 fix-2 缺省容错
     # 往返
     assert Entry.from_dict(d).to_dict() == d
 
@@ -2226,42 +2229,98 @@ def _patch_conflict_offline(monkeypatch, tmp_path):
     monkeypatch.setattr(tl, "gh_label_add", lambda n, l: None)
 
 
-def test_merge_sweep_conflict_two_nights_escalates(monkeypatch, tmp_path,
-                                                   capsys):
-    """I6(spec §5 承诺补全,2026-11-13 终审): 与 main 冲突(mergeable=
-    false,gate-reject 拒因含「冲突」)的引擎条目每夜 conflict_nights +1、
-    连续第 2 夜(≥2)→ _escalate(复用 tl 侧升级,理由文案引用 spec §5:
-    冲突不自动 rebase——rebase 决策留给人工);计数经 state 写回跨夜存续
-    (不写回则每轮从 dict 旧值重新解析,永远停在 1)。"""
-    _patch_conflict_offline(monkeypatch, tmp_path)
+def test_pipeline_night_boundary():
+    """I6 fix-round 2: 夜 = pipeline 夜(23:00 起跨午夜到 09:00),不是本地
+    日历日——本地日期 00:00 翻转会错误地把一夜劈成两夜。23:30 与次日
+    01:30 同属一夜(同标识);09:00 前的凌晨归昨晚;窗口外 09:00–23:00
+    (仅手动 scan 会发生)归即将开始的一夜。"""
+    assert tp._pipeline_night(datetime(2026, 11, 13, 23, 0)) == "2026-11-13"
+    assert tp._pipeline_night(datetime(2026, 11, 13, 23, 30)) == "2026-11-13"
+    assert tp._pipeline_night(datetime(2026, 11, 14, 0, 30)) == "2026-11-13"
+    assert tp._pipeline_night(datetime(2026, 11, 14, 1, 30)) == "2026-11-13"
+    assert tp._pipeline_night(datetime(2026, 11, 14, 8, 59)) == "2026-11-13"
+    assert tp._pipeline_night(datetime(2026, 11, 14, 9, 0)) == "2026-11-14"
+    assert tp._pipeline_night(datetime(2026, 11, 14, 22, 30)) == "2026-11-14"
+    assert tp._pipeline_night(datetime(2026, 11, 14, 23, 0)) == "2026-11-14"
+    assert tp._pipeline_night(datetime(2026, 11, 15, 1, 0)) == "2026-11-14"
+
+
+def _patch_conflict_gate(monkeypatch, mergeable):
+    """冲突用例的门依赖桩: classify=READY_TO_MERGE + checks 绿 + 指定
+    mergeable——拒因只可能是(或不可能是)「与 main 冲突」。"""
     monkeypatch.setattr(tl.pr_loop, "classify_state",
                         lambda pr, q, now: "READY_TO_MERGE")
     monkeypatch.setattr(tp, "checks_ok", lambda pr, req, slug: (True, []))
     monkeypatch.setattr(tl.pr_loop, "fetch_pr",
                         lambda slug, n: NS(number=n, state="open", draft=False,
-                                          fork=False, mergeable=False))
+                                          fork=False, mergeable=mergeable))
+
+
+def test_merge_sweep_conflict_same_night_counts_once(monkeypatch, tmp_path):
+    """I6 fix-round 2(生产真节奏回归): run_pipeline 整夜持有内存 state、
+    每 300s 一轮 cycle、merge_sweep 是尾步——冲突条目当夜会被评估上百次。
+    旧实现每次含「冲突」拒因的门评都 +1,当夜第 2 轮 cycle(约 10 分钟)
+    即假性 2 → 假性 ESCALATED,升级文案还谎称「已持续 2 晚」。夜边界
+    锚定(_pipeline_night): 同一夜(23:30 → 23:40 → 跨午夜 00:30)只 +1
+    一次,条目整夜保持 PR_OPEN。"""
+    _patch_conflict_offline(monkeypatch, tmp_path)
+    _patch_conflict_gate(monkeypatch, mergeable=False)
     st = _mkstate()
     st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
                             fix_branch="fix/issue-7", agent_pid=None,
                             agent_log=None, conflict_nights=0)]
     events = []
-    # 第 1 夜: 冲突拒 → conflict_nights 0→1,条目保持 PR_OPEN(记 gate-reject)
-    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    # 夜 2026-11-13 第 1 轮(23:30): 冲突拒 → 0→1 + 夜锚
+    tp.merge_sweep(st, events, False, datetime(2026, 11, 13, 23, 30))
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "PR_OPEN" and e.conflict_nights == 1 \
+        and e.last_conflict_night == "2026-11-13"
+    assert events[-1]["kind"] == "gate-reject"
+    # 同夜第 2 轮(23:40,300s 节奏)与跨午夜段(次日 00:30): 不再 +1、
+    # 不升级(旧实现在此即假性 2 → ESCALATED,本测红)
+    tp.merge_sweep(st, events, False, datetime(2026, 11, 13, 23, 40))
+    tp.merge_sweep(st, events, False, datetime(2026, 11, 14, 0, 30))
+    e2 = tl.StateStore.entries(st)[0]
+    assert e2.status == "PR_OPEN" and e2.conflict_nights == 1
+    assert e2.last_conflict_night == "2026-11-13"
+    # 同夜再评仍逐轮记 gate-reject 事件(报告可见),只是计数不涨
+    assert events[-1]["kind"] == "gate-reject"
+
+
+def test_merge_sweep_conflict_second_night_escalates(monkeypatch, tmp_path,
+                                                     capsys):
+    """I6 fix-round 2(跨夜再 +1,第二夜首次评估即升级): 夜 1 的凌晨段
+    (00:30,h<9 归昨晚)与夜 2 的开局(23:30)是真·跨夜对——第二夜首次
+    评估 1→2 即 ESCALATED,升级文案为真(「已持续 2 晚」+ pipeline 夜
+    口径,不再谎称);计数/夜锚经 state 写回跨夜存续(不写回则每轮从
+    dict 旧值重新解析,永远停在 1)。"""
+    _patch_conflict_offline(monkeypatch, tmp_path)
+    _patch_conflict_gate(monkeypatch, mergeable=False)
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                            fix_branch="fix/issue-7", agent_pid=None,
+                            agent_log=None, conflict_nights=0)]
+    events = []
+    # 夜 1 开局(11-13 23:30)与凌晨段(11-14 00:30)同夜: 只计 1
+    tp.merge_sweep(st, events, False, datetime(2026, 11, 13, 23, 30))
+    tp.merge_sweep(st, events, False, datetime(2026, 11, 14, 0, 30))
     e = tl.StateStore.entries(st)[0]
     assert e.status == "PR_OPEN" and e.conflict_nights == 1
-    assert events[-1]["kind"] == "gate-reject"
-    # 第 2 夜(计数已写回 state): 1→2 → ESCALATED
-    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    # 夜 2 首次评估(11-14 23:30): 1→2 → ESCALATED(文案真)
+    tp.merge_sweep(st, events, False, datetime(2026, 11, 14, 23, 30))
     e2 = tl.StateStore.entries(st)[0]
     assert e2.status == "ESCALATED" and e2.conflict_nights == 2
+    assert e2.last_conflict_night == "2026-11-14"
     out = capsys.readouterr().out
-    assert "ESCALATED" in out and "spec §5" in out
+    assert "ESCALATED" in out and "持续 2 晚" in out \
+        and "pipeline 夜" in out and "spec §5" in out
 
 
 def test_merge_sweep_conflict_counter_resets(monkeypatch, tmp_path):
-    """I6 清零两臂: 非冲突 gate-reject(classify≠READY_TO_MERGE,无冲突
-    拒因)→ conflict_nights 清零;过门 → 清零(随 merge 终态无意义,但
-    「只数连续冲突夜」语义保持——冲突与过门交替时不再升级)。"""
+    """I6 fix-round 2 清零双字段: 非冲突 gate-reject / 过门 → conflict_
+    nights=0 ∧ last_conflict_night=None **双清**——只清计数不清夜锚,
+    「清零后同夜又见冲突」会被同夜锚错误吞掉(不 +1);双清后同夜再冲突
+    正确地按新连击第 1 夜起步。"""
     _patch_conflict_offline(monkeypatch, tmp_path)
     # 非冲突拒因臂: classify=READY_TO_FIX(拒因无「冲突」)
     monkeypatch.setattr(tl.pr_loop, "classify_state",
@@ -2273,13 +2332,15 @@ def test_merge_sweep_conflict_counter_resets(monkeypatch, tmp_path):
     st = _mkstate()
     st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
                             fix_branch="fix/issue-7", agent_pid=None,
-                            agent_log=None, conflict_nights=1)]
-    tp.merge_sweep(st, [], False, datetime.now(timezone.utc))
+                            agent_log=None, conflict_nights=1,
+                            last_conflict_night="2026-11-13")]
+    tp.merge_sweep(st, [], False, datetime(2026, 11, 13, 23, 30))
     e = tl.StateStore.entries(st)[0]
-    assert e.status == "PR_OPEN" and e.conflict_nights == 0   # 非冲突拒 → 清零
+    assert e.status == "PR_OPEN" and e.conflict_nights == 0 \
+        and e.last_conflict_night is None      # 非冲突拒 → 双清
 
     # 过门臂: classify=READY_TO_MERGE + checks 绿 + mergeable=True → 门过
-    # → 计数清零(execute_merge 打桩记录,门本体真实)
+    # → 双清(execute_merge 打桩记录,门本体真实)
     monkeypatch.setattr(tl.pr_loop, "classify_state",
                         lambda pr, q, now: "READY_TO_MERGE")
     merged = []
@@ -2288,10 +2349,12 @@ def test_merge_sweep_conflict_counter_resets(monkeypatch, tmp_path):
                         merged.append(1) or "sha9")
     st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
                             fix_branch="fix/issue-7", agent_pid=None,
-                            agent_log=None, conflict_nights=1)]
-    tp.merge_sweep(st, [], False, datetime.now(timezone.utc))
+                            agent_log=None, conflict_nights=1,
+                            last_conflict_night="2026-11-13")]
+    tp.merge_sweep(st, [], False, datetime(2026, 11, 13, 23, 30))
     assert merged == [1]                       # 门过,merge 执行被调
-    assert tl.StateStore.entries(st)[0].conflict_nights == 0   # 过门清零
+    e2 = tl.StateStore.entries(st)[0]
+    assert e2.conflict_nights == 0 and e2.last_conflict_night is None
 
 
 def test_cycle_once_ready_to_merge_reaches_merge_gate_end_to_end(

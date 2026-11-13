@@ -1457,7 +1457,11 @@ def test_revert_attribution_creates_issue_for_merged_sha(monkeypatch, tmp_path):
                         lambda title, body, labels:
                         made.append((title, body, labels)) or 99)
     got = tp.revert_attribution(st, [_red("deadbeef1234")])
-    assert got == [99] and len(made) == 1
+    # I2: 返回二元组 (issue 清单, 已吸收红 run id 集)——归因命中且 revert
+    # issue 已建的红 run 由 cycle_once 从 triage 前向修复里滤除
+    assert got == ([99], {555}) and len(made) == 1
+    # I3: 建成后 state["revert_seen"] 记账(主查重,state 侧)
+    assert st["revert_seen"] == ["deadbeef1234"]
     title, body, labels = made[0]
     assert "revert" in title.lower()
     assert title == "[revert] PR #42 自动 merge 后 main 红(Sanitizer)"
@@ -1481,7 +1485,7 @@ def test_revert_attribution_ignores_unrelated_red(monkeypatch):
     _no_gh(monkeypatch)
     st = _mkstate()
     st["entries"] = []
-    assert tp.revert_attribution(st, [_red("other")]) == []
+    assert tp.revert_attribution(st, [_red("other")]) == ([], set())
 
 
 def test_revert_attribution_set_requires_sha_and_pr(monkeypatch):
@@ -1492,7 +1496,7 @@ def test_revert_attribution_set_requires_sha_and_pr(monkeypatch):
     st = _mkstate()
     st["entries"] = [_merged_entry(merged_sha=None),
                      _merged_entry(pr_number=None, issue_number=None)]
-    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == ([], set())
 
 
 def test_revert_attribution_second_order_chain_escalates(monkeypatch, capsys):
@@ -1511,8 +1515,9 @@ def test_revert_attribution_second_order_chain_escalates(monkeypatch, capsys):
     made = []
     monkeypatch.setattr(tl, "create_task_issue",
                         lambda title, body, labels: made.append(title) or 99)
-    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
-    assert made == [] and "_last_revert_body" not in st
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == ([], set())
+    assert made == [] and "_last_revert_body" not in st \
+        and "revert_seen" not in st
     out = capsys.readouterr().out
     assert "本身是 revert 产物" in out and "转人工" in out
 
@@ -1533,7 +1538,7 @@ def test_revert_attribution_title_probe_failure_escalates(monkeypatch, capsys):
     made = []
     monkeypatch.setattr(tl, "create_task_issue",
                         lambda title, body, labels: made.append(title) or 99)
-    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == ([], set())
     assert made == []
     out = capsys.readouterr().out
     assert "[warn]" in out and "二阶链不可判" in out
@@ -1541,8 +1546,9 @@ def test_revert_attribution_title_probe_failure_escalates(monkeypatch, capsys):
 
 
 def test_revert_attribution_dry_run_only_prints(monkeypatch, capsys):
-    """dry_run: 只打印拟建动作——零建 issue、零 _last_revert_body 记账;
-    拟建输出在查重搜索与二阶链闸之后(两者皆只读,零写),打印即真实将建集。"""
+    """dry_run: 只打印拟建动作——零建 issue、零 _last_revert_body/revert_seen
+    记账(不吸收进 state);但 absorbed_run_ids 已含该 run(拟建输出即真实
+    将建集——真实跑该 run 会被吸收,cycle_once dry 预演口径一致)。"""
     monkeypatch.setenv("TASKLOOP_REPO", "o/r")
     st = _mkstate()
     st["entries"] = [_merged_entry()]
@@ -1552,8 +1558,9 @@ def test_revert_attribution_dry_run_only_prints(monkeypatch, capsys):
     monkeypatch.setattr(tl, "create_task_issue",
                         lambda title, body, labels: made.append(title) or 99)
     assert tp.revert_attribution(st, [_red("deadbeef1234")],
-                                 dry_run=True) == []
-    assert made == [] and "_last_revert_body" not in st
+                                 dry_run=True) == ([], {555})
+    assert made == [] and "_last_revert_body" not in st \
+        and "revert_seen" not in st
     out = capsys.readouterr().out
     assert "[dry-run] 将建 revert issue" in out
     assert "deadbeef1234" in out
@@ -1578,21 +1585,23 @@ def test_revert_attribution_dedups_same_merge_within_call(monkeypatch, capsys):
         _red("deadbeef1234", run_id=555),
         _red("deadbeef1234", run_id=556, workflow="Multi-OS Verify",
              url="u2")])
-    assert got == [99] and len(made) == 1
+    # 同 merge 的两个红 run 都被吸收(revert issue 覆盖整个坏 merge——
+    # 不吸收则 run 556 仍会走 triage 前向修复,与 revert 双 agent 互踩)
+    assert got == ([99], {555, 556}) and len(made) == 1
     out = capsys.readouterr().out
     assert "[revert-dedup]" in out and "去重" in out
 
 
 def test_revert_attribution_cross_call_marker_idempotent(monkeypatch, capsys):
-    """跨调用 marker 幂等(fix-round 1 Important#1,先例直接移植
-    _search_audit_issue 双态形态): LOOKBACK_DAYS=3 窗内坏 merge 未修时
-    红 run 每轮重见,第二次调用必对同一 merged_sha 重复建 issue → 双
-    agent 同 revert 竞态/attempts 燃烧/假性 ESCALATED——引擎自书不变量
-    「幂等由 marker 查重保证」(ci 源 _search_marker_issues/audit 源
-    _search_audit_issue 同款)在此兑现。建 issue(含 dry-run 打印)之前
-    open+closed 双态 gh search;closed 命中兑现「人工关闭的 revert issue
-    不重建」的人工接管语义(检视#35 同一缺陷类);宽松命中但正文无完整
-    marker 的干扰项必须被 marker 复核滤掉。"""
+    """跨调用 marker 幂等(fix-round 1 Important#1 + I3 裸 sha 查询词):
+    LOOKBACK_DAYS=3 窗内坏 merge 未修时红 run 每轮重见,第二次调用必对
+    同一 merged_sha 重复建 issue → 双 agent 同 revert 竞态/attempts 燃烧/
+    假性 ESCALATED。I3 双层查重: state revert_seen 是主闸(建成即记,下一
+    轮先命中,零 gh);gh 双态搜索是 state 丢失/重启后的兜底闸——查询词改
+    **裸 sha**(正文 revert-for: 纯文本必被索引;HTML 注释 marker 有已知
+    正文索引漏命中特征),Python 侧完整 marker 复核保留(宽松命中干扰项
+    滤掉)。closed 命中兑现「人工关闭的 revert issue 不重建」的人工接管
+    语义(检视#35 同一缺陷类)。"""
     monkeypatch.setenv("TASKLOOP_REPO", "o/r")
     st = _mkstate()
     st["entries"] = [_merged_entry()]
@@ -1611,31 +1620,56 @@ def test_revert_attribution_cross_call_marker_idempotent(monkeypatch, capsys):
     made = []
     monkeypatch.setattr(tl, "create_task_issue",
                         lambda title, body, labels: made.append(title) or 99)
-    # 第一次调用: 双态皆空 → 建 issue
-    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == [99]
+    # 第一次调用: 双态皆空 → 建 issue + revert_seen 记账
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == ([99], {555})
     assert len(made) == 1
-    # 第二次调用(同一 state,红 run 重见): open 空、closed 命中 → 零新建
+    assert st["revert_seen"] == ["deadbeef1234"]
+    # 第二次调用前清 revert_seen(模拟重启/state 丢失)——兜底 gh 搜索闸
+    # 才被真正考察;state 完好时第二轮零 gh(主闸测试另行覆盖)
+    del st["revert_seen"]
+    # 第二次调用(红 run 重见): open 空、closed 命中 → 零新建、run 被吸收
     hit_closed.append(1)
-    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == ([], {555})
     assert len(made) == 1                          # create 桩零新增调用
     out = capsys.readouterr().out
     assert "[revert-dedup]" in out and "不重建" in out
     # gh search 形锚(先例移植): 双态逐查 + --repo + --json number,body +
-    # marker 查询词(完整 marker 复核在 Python 侧)
+    # 裸 sha 查询词(I3: 不再押 HTML 注释 marker 的正文索引;完整 marker
+    # 复核在 Python 侧)
     states = [a[a.index("--state") + 1] for a in searches]
     assert states[:2] == ["open", "closed"]        # 第一轮即双态
     for a in searches:
         assert a[:2] == ["search", "issues"]
         assert a[a.index("--repo") + 1] == "o/r"
         assert a[a.index("--json") + 1] == "number,body"
-        assert "task-loop:revert:deadbeef1234" in a
+        assert "deadbeef1234" in a                 # 裸 sha 查询词
+        assert "task-loop:revert:deadbeef1234" not in a   # 非完整 marker 形态
+
+
+def test_revert_attribution_revert_seen_primary_dedup(monkeypatch, capsys):
+    """I3 主查重: state["revert_seen"] 含该 sha(上一轮建成记账)→ 本轮
+    查重**先看 state 再 gh 搜索**——state 命中零 gh 调用、零建 issue、
+    run 被吸收(镜像 audit 的 audit_seen 双源设计,state 是第一道闸,
+    gh body marker 搜索是 state 丢失后的兜底)。"""
+    monkeypatch.setenv("TASKLOOP_REPO", "o/r")
+    st = _mkstate()
+    st["entries"] = [_merged_entry()]
+    st["revert_seen"] = ["deadbeef1234"]
+    _no_gh(monkeypatch)          # 任何 gh 调用当场炸——state 命中必零 gh
+    made = []
+    monkeypatch.setattr(tl, "create_task_issue",
+                        lambda title, body, labels: made.append(title) or 99)
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == ([], {555})
+    assert made == []
+    out = capsys.readouterr().out
+    assert "revert_seen" in out and "跳过" in out
 
 
 def test_revert_attribution_marker_search_failure_escalates(monkeypatch, capsys):
     """查重搜索 GhError → 幂等不可证,宁严勿松转人工: [warn] 留痕、不建
-    issue、不记 _last_revert_body——误建的代价(双 agent 同 revert 竞态/
-    attempts 燃烧)大于漏建(红 run 仍有 T10 intake 普通红 issue 前向修复
-    兜底),与二阶链不可判臂同向。"""
+    issue、不记 _last_revert_body、**不吸收**(红 run 仍有 T10 intake 普通
+    红 issue 前向修复兜底——误建的代价(双 agent 同 revert 竞态/attempts
+    燃烧)大于漏建,与二阶链不可判臂同向)。"""
     monkeypatch.setenv("TASKLOOP_REPO", "o/r")
     st = _mkstate()
     st["entries"] = [_merged_entry()]
@@ -1646,7 +1680,7 @@ def test_revert_attribution_marker_search_failure_escalates(monkeypatch, capsys)
     made = []
     monkeypatch.setattr(tl, "create_task_issue",
                         lambda title, body, labels: made.append(title) or 99)
-    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == []
+    assert tp.revert_attribution(st, [_red("deadbeef1234")]) == ([], set())
     assert made == [] and "_last_revert_body" not in st
     out = capsys.readouterr().out
     assert "[warn]" in out and "幂等不可证" in out
@@ -1796,13 +1830,13 @@ def test_cycle_once_lane2_paused_blocks_and_dry_run_no_spawn(monkeypatch,
 
 
 def test_cycle_once_collects_revert_and_slot_events(monkeypatch, tmp_path):
-    """事件收集(裁定#4): revert_attribution 返回的 issue 清单记
-    {"kind":"revert-issue"};janitor 回收清单记 {"kind":"slot-released"}
-    ——夜间报告的数据源(revert 转人工信号本身在 pipeline.log/stdout,
-    正文只引路径)。"""
+    """事件收集(裁定#4): revert_attribution 返回 (issue 清单, 吸收集)
+    二元组,issue 清单记 {"kind":"revert-issue"};janitor 回收清单记
+    {"kind":"slot-released"}——夜间报告的数据源(revert 转人工信号本身在
+    pipeline.log/stdout,正文只引路径)。"""
     _patch_cycle_offline(monkeypatch, tmp_path)
     monkeypatch.setattr(tp, "revert_attribution",
-                        lambda st, runs, dry_run=False: [99])
+                        lambda st, runs, dry_run=False: ([99], set()))
     monkeypatch.setattr(tl, "agent_alive", lambda pid: False)
     monkeypatch.setattr(tl, "worktree_cleanup", lambda p: None)
     monkeypatch.setattr(tp, "boot_id", lambda: "new-boot")
@@ -1813,6 +1847,34 @@ def test_cycle_once_collects_revert_and_slot_events(monkeypatch, tmp_path):
     tp.cycle_once(st, False, events, datetime.now())
     assert {"kind": "revert-issue", "issues": [99]} in events
     assert any(ev["kind"] == "slot-released" for ev in events)
+
+
+def test_cycle_once_absorbed_runs_skip_forward_triage(monkeypatch, tmp_path):
+    """I2 双建消解(终审): 归因命中的红 run 若不被吸收,revert_attribution
+    建了 revert issue 之后 triage_new_red_runs 又对同一 run 建「修复」
+    issue——双 agent 对同一故障互相冲突。cycle_once 必须把 absorbed 集里
+    的 run 从传给 triage 的清单里滤除(未吸收的照旧前向修复,T9 兜底)。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "scan_red_runs",
+                        lambda: [_red("deadbeef1234", run_id=555),
+                                 _red("other", run_id=556)])
+    monkeypatch.setattr(tp, "revert_attribution",
+                        lambda st, runs, dry_run=False: ([99], {555}))
+    seen_runs = []
+    monkeypatch.setattr(
+        tl, "triage_new_red_runs",
+        lambda s, r, dry_run=False: seen_runs.append(list(r)) or [])
+    st = _mkstate()
+    events = []
+    tp.cycle_once(st, False, events, datetime.now())
+    assert seen_runs == [[_red("other", run_id=556)]]   # run 555 被滤除
+    assert {"kind": "revert-issue", "issues": [99]} in events
+    # 吸收集为空时全量透传(无 revert 命中的常态夜)
+    seen_runs.clear()
+    monkeypatch.setattr(tp, "revert_attribution",
+                        lambda st, runs, dry_run=False: ([], set()))
+    tp.cycle_once(st, False, events, datetime.now())
+    assert len(seen_runs[0]) == 2
 
 
 def test_write_report(tmp_path, monkeypatch):

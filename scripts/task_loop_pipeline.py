@@ -16,7 +16,7 @@ import shlex
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import task_loop as tl  # noqa: E402  (与 tl.pr_loop 同款命名空间引用,测试可 monkeypatch)
@@ -31,15 +31,18 @@ SOFT_STOP_KILL_GRACE_SEC = 10     # SIGTERM 后给仍活者的收尾窗,再 SIGK
 REVIEW_AGENT_TIMEOUT_SEC = 5400
 REVIEW_PER_HEAD_PER_NIGHT = 2
 DOCS_QUIET_SEC = 300
+AUDIT_LINE_TIMEOUT_SEC = 7500      # audit 后台线自身 timeout 预算(≈2h/轮)
 MEMINFO_PATH = "/proc/meminfo"
 
-# audit 自有 state 键(task_loop 裁定 11: audit 子进程只经 _audit_state_merge_write
-# 在 scan.lock 内读-合-写这四个键)。pipeline 是长驻进程、整份 state 存内存,
-# 若裸 save 整份覆盖落盘,会把 audit 线同窗写入的 cursor/seen/streak 写回旧值
-# (生产事故 9d6ba452 同类丢记账)——pipeline 的一切落盘走 _pipeline_save:
-# scan.lock 内以磁盘为权威回填这四键,其余键 pipeline 为唯一写者。
-AUDIT_OWNED_KEYS = ("audit_cursor", "audit_seen", "auth_failure_streak",
-                    "auth_failure_at")
+# audit 独占 state 键(task_loop 裁定 11: audit 子进程只经 _audit_state_merge_write
+# 在 scan.lock 内读-合-写)——pipeline 不写,pipeline 落盘时以磁盘为权威回填。
+AUDIT_OWNED_KEYS = ("audit_cursor", "audit_seen")
+# 双写者键(fix-round 1 Important#1 修正,controller 裁定 2026-11-13):
+# auth_failure_streak / auth_failure_at 由 pipeline(reap_or_advance 每轮在
+# 内存 bump/归零)与 audit 子进程(_audit_streak_add,scan.lock 下)两线共管
+# ——pipeline 落盘合并取近似: streak=max(盘,内存)、at=取两侧较新。裸拷
+# 磁盘旧值会把 pipeline 的 bump 在内存与磁盘同时抹掉,「连续 ≥3 → PAUSED」
+# 熔断跨轮结构性失效(凭据过期夜=整夜空转 ~120 轮不熔断不升级)。
 
 
 def min_mem_gb() -> int:
@@ -665,22 +668,41 @@ def revert_attribution(state, red_runs, dry_run=False):
 
 
 def _pipeline_save(store, state):
-    """pipeline 的 state 落盘唯一通道: scan.lock 内 merge-save——audit
-    自有键(AUDIT_OWNED_KEYS)以磁盘为权威回填,其余键 pipeline 为唯一写者。
-    audit 子进程(spawn_audit 拉起的 task_loop.py audit)在运行数分钟至
-    数小时后经 _audit_state_merge_write 把 cursor/seen/streak 合并落盘;
-    pipeline 整夜持有内存 state,裸 store.save 会把 audit 同窗推进写回旧值
-    (生产事故 9d6ba452 同类丢记账)——每次落盘前重读磁盘把 audit 键抬新。
-    阻塞 flock 的临界区只有 load+save(亚秒级);常态下 scan.lock 唯一的
-    生产持有者就是 audit 合并写(亚秒级)。过渡期注意(crontab 3 删 2 增
-    部署前): 旧 cron 的 scan tick 仍整段持有 scan.lock(分钟级),pipeline
-    的落盘会与之串行(阻塞等待 tick 结束,自愈不超时)——这是迁移窗口的
-    有界代价,不构成死锁(旧 tick 必然终结)。"""
+    """pipeline 的 state 落盘唯一通道: scan.lock 内 merge-save。
+
+    键分三类(controller 裁定 2026-11-13,fix-round 1 Important#1):
+    - audit 独占键(AUDIT_OWNED_KEYS = audit_cursor/audit_seen): audit 子进程
+      经 _audit_state_merge_write 锁下写,pipeline 不写 → 磁盘权威直接回填
+      (pipeline 整夜持有内存 state,裸 save 会把 audit 同窗推进写回旧值,
+      生产事故 9d6ba452 同类丢记账)。
+    - 双写者键 auth_failure_streak/auth_failure_at: pipeline 的
+      reap_or_advance 每轮在内存 bump/归零,audit 子进程亦在锁下
+      merge-write(_audit_streak_add) → 合并取**近似**(宁严勿松): streak=
+      max(盘,内存)——两源任一见 ≥3 连败即触发熔断;成功归零可能被另一线
+      未归零值掩盖 → 熔断宁早勿晚(fail-safe)。at=取两侧较新(缺侧取有;
+      两侧皆 _now_iso 同形,字典序即时间序)。
+    - 其余键: pipeline 唯一写者,内存为准。
+    合并结果同步回内存对象——下一轮的 bump 从合并值起步,不再被磁盘旧值
+    抹掉(裸拷的回归点)。阻塞 flock 的临界区只有 load+save(亚秒级);常态
+    下 scan.lock 唯一的生产持有者就是 audit 合并写。过渡期注意(crontab
+    3 删 2 增部署前): 旧 cron 的 scan tick 仍整段持有 scan.lock(分钟级),
+    pipeline 落盘与之串行(有界等待,不构成死锁)。"""
     def _merge():
         disk = store.load()
         for k in AUDIT_OWNED_KEYS:
             if k in disk:
                 state[k] = disk[k]
+        if "auth_failure_streak" in disk:
+            state["auth_failure_streak"] = max(
+                int(disk["auth_failure_streak"]),
+                int(state.get("auth_failure_streak", 0)))
+        mem_at = state.get("auth_failure_at")
+        disk_at = disk.get("auth_failure_at")
+        if mem_at is not None and disk_at is not None:
+            state["auth_failure_at"] = max(mem_at, disk_at)
+        elif disk_at is not None:
+            state["auth_failure_at"] = disk_at
+        # mem_at 有而盘无 → 内存值本就在 state,不动
         store.save(state)
     tl._with_scan_lock(_merge)
 
@@ -739,13 +761,29 @@ def audit_line_running(state):
     return free_slot_count(state, "audit") == 0
 
 
-def spawn_audit(state, dry_run):
+def _seconds_to_window_end(now, end_hour):
+    """距窗口结束(本地 end_hour:00 的下一次出现)的秒数——与 in_window
+    同款本地时钟口径(跨午夜窗: 当前时刻已过 end_hour 时取次日)。"""
+    end = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+    if end <= now:
+        end += timedelta(days=1)
+    return (end - now).total_seconds()
+
+
+def spawn_audit(state, dry_run, window_end=9, now=None):
     """audit 后台线(spec §2): 槽空则 spawn 一发 `task_loop.py audit`
-    (timeout 7500s ≈ 2h;切块审查 3000 行/轮,余量由后续轮次续审接力)。
-    run_audit 自带 PAUSED/audit.lock/内存外的全部闸,编排层只补内存闸
-    (spec §7「audit 同过闸」)与克隆目录存在性(cmd_audit 同款前置,
-    缺目录时 run_background 的 Popen 直接 FileNotFoundError 炸整轮)。
-    dry_run 只打印意图零 spawn。"""
+    (timeout AUDIT_LINE_TIMEOUT_SEC=7500s ≈ 2h;切块审查 3000 行/轮,
+    余量由后续轮次续审接力)。run_audit 自带 PAUSED/audit.lock/内存外的
+    全部闸,编排层只补内存闸(spec §7「audit 同过闸」)与克隆目录存在性
+    (cmd_audit 同款前置,缺目录时 run_background 的 Popen 直接
+    FileNotFoundError 炸整轮)。窗口末端守卫(fix-round 1 Minor#1): 距窗口
+    结束剩余 < AUDIT_LINE_TIMEOUT_SEC(audit 自身 timeout 预算)不再
+    spawn——audit 唯一持久化是收尾一次 merge-write,09:00 软停击杀会丢掉
+    最长 ~2h 的在审块(白审)。now 可注入(裁定#9 时钟纪律),缺省本地钟
+    (与 in_window 同族;cycle_once 传入的 now 已归一为 UTC,本地小时
+    算术须本地钟,故不接 cycle 时钟)。dry_run 只打印意图零 spawn。"""
+    if now is None:
+        now = datetime.now()
     if audit_line_running(state):
         return
     if tl._paused():
@@ -758,11 +796,19 @@ def spawn_audit(state, dry_run):
     if not os.path.isdir(clone_dir):
         print(f"[audit] 克隆目录不存在: {clone_dir}——本轮不 spawn audit 线")
         return
+    remaining = _seconds_to_window_end(now, window_end)
+    if remaining < AUDIT_LINE_TIMEOUT_SEC:
+        print(f"[audit] 距窗口结束仅 {int(remaining)}s(< 审查预算 "
+              f"{AUDIT_LINE_TIMEOUT_SEC}s)——不再 spawn audit 线"
+              f"(软停会击杀在审块,收尾 merge-write 丢失)")
+        return
     if dry_run:
-        print("[dry-run] 将 spawn audit 后台线(audit-nightly,timeout 7500s)")
+        print(f"[dry-run] 将 spawn audit 后台线(audit-nightly,"
+              f"timeout {AUDIT_LINE_TIMEOUT_SEC}s)")
         return
     log = os.path.join(tl._resolve_state_dir(), "audit.log")
-    inner = "timeout 7500 /usr/bin/python3 scripts/task_loop.py audit"
+    inner = (f"timeout {AUDIT_LINE_TIMEOUT_SEC} "
+             f"/usr/bin/python3 scripts/task_loop.py audit")
     cmd = f"nohup setsid bash -c {shlex.quote(inner)} >> {shlex.quote(log)} 2>&1 & echo $!"
     pid = tl.run_background(cmd, cwd=clone_dir, log=log)
     if not slot_acquire(state, "audit", "audit-nightly", pid, pid, log, None,
@@ -863,13 +909,15 @@ def merge_sweep(state, events, dry_run, now=None):
             print(f"[merge-sweep] docs PR #{num} 评估失败: {exc}")
 
 
-def cycle_once(state, dry_run, events, now):
+def cycle_once(state, dry_run, events, now, window_end=9):
     """单轮循环(裁定#2 顺序载荷,不可破坏——同 key 死槽依赖 janitor 先清,
     janitor 先于一切派发): intake(scan_red_runs → revert 归因 → triage)
     → janitor → 收割 → 对账 → 自愈 → 泳道1 派发 → 泳道2 派发 → 泳道3
     (lane_b) → audit 后台线 → merge 门扫。revert 转人工/去重信号在
     revert_attribution 的 stdout(经 cron 重定向归档 pipeline.log,夜报
-    正文引路径),本函数只收其返回的 issue 清单(裁定#4)。"""
+    正文引路径),本函数只收其返回的 issue 清单(裁定#4)。window_end 仅
+    供 spawn_audit 的窗口末端守卫用(fix-round 1 Minor#1,run_pipeline 的
+    --window-end 透传;缺省 9 与 spec 窗口一致)。"""
     if now.tzinfo is None:
         now = now.astimezone()   # brief 调用形态 naive → 感知(docs_ready 减法需感知时)
     runs = tl.scan_red_runs()
@@ -920,7 +968,7 @@ def cycle_once(state, dry_run, events, now):
     # 泳道3: 车道 B(其派发已槽位化为 pr_repair)
     tl.lane_b_advance(state, dry_run=dry_run)
     # audit 后台线
-    spawn_audit(state, dry_run)
+    spawn_audit(state, dry_run, window_end=window_end)
     # merge 门
     merge_sweep(state, events, dry_run, now)
 
@@ -951,9 +999,14 @@ def soft_stop(state, grace_sec=SOFT_STOP_GRACE_SEC):
     """09:00 软停(spec §4): 在跑 agent 先给 ≤grace_sec 自然退出,超时击杀;
     条目干净回队不计 attempts(#611 attempts=4 假性升级教训);清 worktree。
     击杀两段: SIGTERM 让其收尾,SOFT_STOP_KILL_GRACE_SEC 后对仍活者 SIGKILL
-    补刀(_kill_agent_if_alive 同款纪律——宁可补刀不留无主活进程)。自然
-    退场的槽只清槽/worktree,条目不动(真实结局归下一轮/次夜 reap 记账,
-    软停不冒充收割)。报告由调用方写(run_pipeline)。"""
+    补刀(_kill_agent_if_alive 同款纪律——宁可补刀不留无主活进程)。回队
+    循环只认 issue_fix/pr_repair 槽(fix-round 1 Important#2): pr_review 与
+    pr_repair 槽对同一 PR 共用 key f"pr-<N>"(泳道2+3 并行是 spec 设计流,
+    reviewer 5400s 超时 > 300s 轮询,碰撞不罕见),按 key 匹配任意活槽会把
+    BOT_FIX 条目误降 QUEUED、或把 pr_repair 臂刚写的 PR_OPEN 再抹掉——
+    pr_review/audit 槽只击杀清槽,条目归其所属泳道的槽处置。自然退场的槽
+    只清槽/worktree,条目不动(真实结局归下一轮/次夜 reap 记账,软停不冒充
+    收割)。报告由调用方写(run_pipeline)。"""
     deadline = time.time() + grace_sec
     while time.time() < deadline:
         live = [s for lst in (state.get("slots") or {}).values()
@@ -977,6 +1030,13 @@ def soft_stop(state, grace_sec=SOFT_STOP_GRACE_SEC):
             except OSError:
                 pass
             killed.append(s["key"])
+            # 泳道过滤(fix-round 1 Important#2): 检视/audit 槽只击杀清槽,
+            # 不动条目——pr_review 槽 key 与 pr_repair 槽同形 f"pr-<N>",
+            # 按 key 匹配任意活槽会把 BOT_FIX 条目误降 QUEUED(pr_review 槽
+            # 命中时 kind≠pr_repair),同 key 双槽时还会把 pr_repair 臂刚写
+            # 的 PR_OPEN 按 dict 序再抹掉。
+            if kind not in ("issue_fix", "pr_repair"):
+                continue
             for e in entries:
                 if e.status not in tl.AGENT_STATES:
                     continue
@@ -1053,7 +1113,8 @@ def run_pipeline(dry_run=False, window_start=23, window_end=9) -> int:
         events = []
         while in_window(datetime.now(), window_start, window_end):
             try:
-                cycle_once(state, False, events, datetime.now())
+                cycle_once(state, False, events, datetime.now(),
+                           window_end=window_end)
             except GhError as exc:
                 print(f"[cycle] 本轮失败(下轮重试): {exc}", file=sys.stderr)
             except Exception as exc:

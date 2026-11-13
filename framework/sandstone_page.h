@@ -25,8 +25,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* align to a power of 2 */
-#define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
+/* align to a power of 2.
+ * The mask must be computed in size_t: with a 32-bit n (sandstone_page_size()
+ * returns unsigned) ~((n) - 1) is a 32-bit mask that silently drops bits
+ * >= 2^32, so ROUND_UP_TO_PAGE on a >=4 GiB size returned only its low
+ * 32 bits (observed 2026-11-11: a 4.14 GB stderr memfd got mmap'ed as
+ * 142 MB and the scan ran off the mapping -> SIGSEGV). */
+#define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & ~((size_t)(n) - 1))
 
 /*
  * Page size used for mmap/mprotect alignment.  MUST match the system's actual

@@ -1690,14 +1690,28 @@ void AbstractLogger::print_child_stderr_common(std::function<void(int)> header)
     if (f.size_bytes() == 0)
         return;
 
-    char indent[] = "    ";
-    std::string_view contents(f.bytes(), f.size_bytes());
+    /* A runaway test can write gigabytes to stderr (observed 2026-11-11:
+     * memcpy1_neon filled a 4.14 GB memfd in one 5-minute round).  Dumping
+     * all of it is useless and slow; keep the head and report the cut. */
+    static constexpr size_t MaxStderrDumpSize = 1024 * 1024;
+    const size_t total = f.size_bytes();
+    const size_t shown = total < MaxStderrDumpSize ? total : MaxStderrDumpSize;
+    std::string_view contents(f.bytes(), shown);
+    std::string truncation_note;
+    if (total > shown)
+        truncation_note = "    ... [stderr truncated: " + std::to_string(total)
+                + " bytes total, first " + std::to_string(shown) + " bytes shown]";
 
+    char indent[] = "    ";
     header(AbstractLogger::file_log_fd);
     print_content_indented(AbstractLogger::file_log_fd, indent, contents);
+    if (!truncation_note.empty())
+        writeln(AbstractLogger::file_log_fd, truncation_note);
     if (AbstractLogger::file_log_fd != AbstractLogger::real_stdout_fd && sApp->shmem->cfg.verbosity > 0) {
         header(AbstractLogger::real_stdout_fd);
         print_content_indented(AbstractLogger::real_stdout_fd, indent, contents);
+        if (!truncation_note.empty())
+            writeln(AbstractLogger::real_stdout_fd, truncation_note);
     }
     f.unmap();
 

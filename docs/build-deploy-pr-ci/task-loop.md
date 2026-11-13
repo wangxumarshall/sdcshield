@@ -89,7 +89,8 @@ state 唯一写者；每次成功派发/merge 记账即时落盘，见下）。
 
 **scan 薄壳与 dry-run**：`scan` 子命令降级为「单轮 pipeline 循环」薄壳
 （`run_pipeline_single_cycle`，与 pipeline 共用 pipeline.lock 和同一编排；
-cron 不再调它，供会话内手动推进）——旧 `_run_scan_orchestration` 编排保留
+终态 cron 不再调它——旧 scan 行删除随 §3.1 runbook 部署，供会话内手动
+推进）——旧 `_run_scan_orchestration` 编排保留
 给 `dry-run` 子命令的只读预演。`pipeline --dry-run` 全流程零副作用演练
 （零 gh 写/零 git/零 spawn/零本地写）。
 
@@ -222,7 +223,9 @@ rounds≤4）、认证连续 ≥3 → PAUSED 熔断；merge 门独立双熔断�
 - 历史注记（如实记录）：2026-10-31 切换时 scan 部署为 `*/30`，实况后
   漂移为 `33 */6`（2026-11-12 实测，`crontab -l` 为准）；audit `17 */6`
   与文档一致；第 5 bot 时间线日志此前仍写旧目录
-  `sdcshield-ci-triage/cron.log`。三行现已全部删除，漂移随终态消解。
+  `sdcshield-ci-triage/cron.log`。三行将随本节 runbook 部署删除，漂移随之
+  消解——runbook 是**合入 main 后的人工步骤**，执行前三行旧 cron 仍在，
+  实况以 `crontab -l` 为准。
 
 **部署 runbook（合入 main 后人工执行，四步）**：
 
@@ -354,7 +357,8 @@ python3 scripts/task_loop.py status            # 队列总览: streak/PAUSED/槽
                                                #   + 全部条目 + 待入队任务
 python3 scripts/task_loop.py scan              # 单轮 pipeline 循环薄壳: 会话内手动推进,
                                                #   与 pipeline 共用 pipeline.lock 和同一编排;
-                                               #   不再由 cron 调(夜间编排归 pipeline)
+                                               #   (终态不再由 cron 调,夜间编排归 pipeline;
+                                               #    旧 scan 行删除随 §3.1 runbook)
 python3 scripts/task_loop.py pipeline --dry-run # nightly pipeline 全流程零副作用演练:
                                                #   零 gh 写/零 git/零 spawn/零本地写
 python3 scripts/task_loop.py dry-run           # 旧 scan 编排只读演练: 零 gh 写/零 git/零派发/零本地写
@@ -394,7 +398,7 @@ env 重定向（测试/多实例）：`TASKLOOP_STATE_DIR`（>
 | `pipeline.log` | crontab `0 23` 重定向的 pipeline 输出（revert 转人工/升级/查重留痕在此，夜报正文引其路径） |
 | `report-YYYYMMDD.md` | 每晚夜间报告（merge 清单含 sha 与门槛摘要/would-merge 证据/revert/失败超时/槽位与内存事件；`state["last_report"]` 记最新一份，`status` 顶部展示） |
 | `audit.log` | pipeline spawn 的 audit 后台线输出 |
-| `cron.log` | 历史 scan 输出归档（cron 已不再调 scan） |
+| `cron.log` | 旧 scan 输出归档（终态 cron 不再调 scan——旧 scan 行删除随 §3.1 runbook） |
 
 旧目录 `~/.local/state/sdcshield-ci-triage/` 迁移后保留归档（含历史
 agent 日志与 cron.log）。
@@ -452,8 +456,8 @@ prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/
   不是安全边界**（同 pr_local_review 的 I3 已知边界）。所有 agent 与
   audit 审查都以 `--dangerously-skip-permissions` 跑**无沙箱** claude，
   可执行任意命令；其输入面包括 PR diff/正文、issue 正文/评论、CI 日志，
-  以及 **audit 后台线（旧「每 6h」cron 已删，现为 pipeline 窗口内
-  spawn 的多轮接力，§1）对 main 增量的 diff 全文 + commit messages**——
+  以及 **audit 后台线（旧「每 6h」cron 将随 §3.1 runbook 部署删除，终态为
+  pipeline 窗口内 spawn 的多轮接力，§1）对 main 增量的 diff 全文 + commit messages**——
   squash-merge 的 commit message 可含外部贡献者（无 push 权者）撰写的
   PR 标题/正文文本，即无人值守线会周期性地把此类文本喂给无沙箱 claude。
   这是与第 5 bot「PR 内容同源暴露」同级的**已知接受边界**（单人体量下
@@ -482,7 +486,7 @@ prompt 红线明令主工作区只读；git 单树纪律要求任务从 `origin/
     放宽）；②检视——`classify_state == READY_TO_MERGE`，docs 快道放宽为
     第 5 bot 唯一必需信号（外部 4 bot 事件驱动照跑不等待）+ 静默窗
     900→300s + 零可行动意见；③CI check——全门槛查 `lint`/`git-sanity`/
-    `Build binary for CPU`/`zizmor`，docs-only 只查前二；红 job 与
+    `Build binary for CPU (Linux)`/`zizmor`，docs-only 只查前二；红 job 与
     **最近 3 个已合入 PR 同 workflowName 的红 job 集**对照，全组 ⊆
     基线 → 判「继承红」放行（PR #426/#343 先例，门槛内建基线对照）；
     ④open ∧ 非 DRAFT ∧ 非 fork ∧ mergeable；⑤熔断——PAUSED 与

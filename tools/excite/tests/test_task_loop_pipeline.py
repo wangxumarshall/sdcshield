@@ -2160,26 +2160,29 @@ def test_spawn_audit_dry_gates_and_shape(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(tl, "run_background",
                         lambda cmd, cwd, log: calls.append((cmd, cwd, log))
                         or 4242)
+    # 时钟钉死 23:30(窗口起点,剩 9.5h)——fix-round 1 起 spawn_audit 有窗口
+    # 末端守卫,不钉死会在 06:55-09:00 时段跑套件时被守卫拦下(宿主时间炸弹)
+    PIN = dict(window_end=9, now=datetime(2026, 11, 13, 23, 30))
     st = _mkstate()
-    tp.spawn_audit(st, True)               # dry: 意图打印,零 spawn
+    tp.spawn_audit(st, True, **PIN)        # dry: 意图打印,零 spawn
     assert calls == []
     assert "将 spawn audit" in capsys.readouterr().out
-    tp.spawn_audit(st, False)              # 真 spawn + 占槽
+    tp.spawn_audit(st, False, **PIN)       # 真 spawn + 占槽
     assert len(calls) == 1
     assert "task_loop.py audit" in calls[0][0]
     assert "timeout 7500" in calls[0][0]
     assert calls[0][1] == str(tmp_path / "cl")
     assert tp.slot_get(st, "audit", "audit-nightly") is not None
     monkeypatch.setattr(tp, "audit_line_running", lambda s: True)
-    tp.spawn_audit(st, False)              # 已在跑 → 早退
+    tp.spawn_audit(st, False, **PIN)       # 已在跑 → 早退
     assert len(calls) == 1
     monkeypatch.setattr(tp, "audit_line_running", lambda s: False)
     monkeypatch.setattr(tp, "mem_gate_ok", lambda: False)
-    tp.spawn_audit(st, False)              # 内存闸 → 早退
+    tp.spawn_audit(st, False, **PIN)       # 内存闸 → 早退
     assert len(calls) == 1
     monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
     monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "nope"))
-    tp.spawn_audit(st, False)              # 克隆缺失 → 早退
+    tp.spawn_audit(st, False, **PIN)       # 克隆缺失 → 早退
     assert len(calls) == 1
 
 
@@ -2301,3 +2304,159 @@ def test_cmd_status_shows_last_report(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(tl, "list_open_agent_issues", lambda: [])
     assert tl.cmd_status(NS()) == 0
     assert "最近夜间报告: report-20261113.md" in capsys.readouterr().out
+
+
+# ============ Task 10 fix round 1: 共管键合并 / soft_stop 泳道过滤 / audit 窗口守卫 ============
+
+
+def test_pipeline_save_co_managed_streak_keys_max_merge(monkeypatch, tmp_path):
+    """Important#1(fix-round 1): auth_failure_streak/auth_failure_at 是**双写者
+    键**——pipeline 的 reap_or_advance 每轮在内存 bump/归零,audit 子进程亦在
+    scan.lock 下 merge-write(_audit_streak_add)。裸拷磁盘旧值会把 pipeline 的
+    bump 在内存与磁盘同时抹掉,「连续 ≥3 → PAUSED」熔断跨轮结构性失效(凭据
+    过期夜=整夜空转 ~120 轮)。合并语义(controller 裁定,熔断宁早勿晚):
+    streak=max(盘,内存)、at=取两侧较新;audit_cursor/audit_seen 保持磁盘权威。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    store = tl.StateStore()
+    # 臂①: 磁盘侧 audit 推进在先(streak=2, at=T1),内存侧 reap bump(streak=1)
+    # → max=2 落盘且**内存对象同步为 2**(下轮 bump 从 2 起,不再被抹)
+    store.save({"entries": [], "auth_failure_streak": 2,
+                "auth_failure_at": "2026-11-13T01:00:00Z",
+                "audit_cursor": {"sha": "s", "at": "t"},
+                "audit_seen": ["h1"]})
+    mem = _mkstate()
+    mem["auth_failure_streak"] = 1
+    mem["auth_failure_at"] = "2026-11-13T00:00:00Z"      # 内存侧更旧
+    tp._pipeline_save(store, mem)
+    assert mem["auth_failure_streak"] == 2               # max 且内存同步
+    assert mem["auth_failure_at"] == "2026-11-13T01:00:00Z"   # at 取较新(盘)
+    disk = store.load()
+    assert disk["auth_failure_streak"] == 2
+    assert disk["audit_cursor"] == {"sha": "s", "at": "t"}     # 磁盘权威
+    assert disk["audit_seen"] == ["h1"]
+    # 臂②(反向,RED 判别臂): 内存 3(已达熔断阈)、磁盘 1 → 3 保留;
+    # at 反向同理——内存较新 T2 胜出
+    store.save({"entries": [], "auth_failure_streak": 1,
+                "auth_failure_at": "2026-11-13T00:00:00Z"})
+    mem2 = _mkstate()
+    mem2["auth_failure_streak"] = 3
+    mem2["auth_failure_at"] = "2026-11-13T02:00:00Z"
+    tp._pipeline_save(store, mem2)
+    assert mem2["auth_failure_streak"] == 3
+    assert mem2["auth_failure_at"] == "2026-11-13T02:00:00Z"   # at 取较新(内存)
+    assert store.load()["auth_failure_streak"] == 3
+    # 臂③(裁定明示的近似): 内存成功归零 0、磁盘仍 2 → max=2——成功归零
+    # 可能被另一线未归零值掩盖,熔断宁早勿晚(fail-safe),docstring 如实注明
+    store.save({"entries": [], "auth_failure_streak": 2})
+    mem3 = _mkstate()
+    mem3["auth_failure_streak"] = 0
+    tp._pipeline_save(store, mem3)
+    assert mem3["auth_failure_streak"] == 2
+    # 双写者键缺侧取有: 磁盘无 at、内存有 → 内存保留
+    store.save({"entries": [], "auth_failure_streak": 0})
+    mem4 = _mkstate()
+    mem4["auth_failure_at"] = "2026-11-13T03:00:00Z"
+    tp._pipeline_save(store, mem4)
+    assert mem4["auth_failure_at"] == "2026-11-13T03:00:00Z"
+
+
+def test_soft_stop_pr_review_slot_does_not_demote_entry(monkeypatch, tmp_path):
+    """Important#2(fix-round 1): pr_review 与 pr_repair 槽对同一 PR 用同 key
+    f"pr-<N>"(泳道2+3 并行是 spec 设计流,reviewer 5400s 超时 > 300s 轮询,
+    碰撞不罕见)。回队循环只认 issue_fix/pr_repair 槽——pr_review/audit 槽只
+    击杀清槽不动条目;旧形态按 key 匹配任意活槽,pr_review 槽命中 BOT_FIX
+    条目时 kind≠pr_repair 把它误降 QUEUED,同 key 双槽时还会把 pr_repair 臂
+    刚写的 PR_OPEN 再抹掉。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tp.time, "sleep", lambda s: None)
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: True)
+    monkeypatch.setattr(tl, "worktree_cleanup", lambda p: None)
+    # 场景①: BOT_FIX 条目 + 同 PR 双活槽(修复 agent + reviewer 并行)
+    st = _mkstate()
+    st["entries"] = [_entry(status="BOT_FIX", pr_number=88, attempts=1,
+                            agent_pid=4242, worktree="/wt/pr-88")]
+    tp.slot_acquire(st, "pr_repair", "pr-88", 4242, 4242, "/l", "/wt/pr-88",
+                    "t", "b")
+    tp.slot_acquire(st, "pr_review", "pr-88", 4245, 4245, "/l", None,
+                    "t", "b")
+    tp.soft_stop(st, grace_sec=0)
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "PR_OPEN"          # 修复臂回队,检视臂不再抹成 QUEUED
+    assert e.attempts == 1                # 击杀不计 attempts
+    assert not st.get("slots", {}).get("pr_repair")
+    assert not st.get("slots", {}).get("pr_review")   # 检视槽照样击杀清槽
+    # 场景②: 同 PR 只有 pr_review 活槽(修复 agent 已退场的过渡形态)
+    # → 条目原样,检视槽不越权处置条目
+    st2 = _mkstate()
+    st2["entries"] = [_entry(status="BOT_FIX", pr_number=88, attempts=1,
+                             agent_pid=None)]
+    tp.slot_acquire(st2, "pr_review", "pr-88", 4245, 4245, "/l", None,
+                    "t", "b")
+    tp.soft_stop(st2, grace_sec=0)
+    e2 = tl.StateStore.entries(st2)[0]
+    assert e2.status == "BOT_FIX" and e2.attempts == 1
+    assert not st2.get("slots", {}).get("pr_review")
+
+
+def test_spawn_audit_window_end_guard(monkeypatch, tmp_path, capsys):
+    """Minor#1(fix-round 1): 距窗口结束剩余 < AUDIT_LINE_TIMEOUT_SEC(7500s,
+    audit 自身 timeout 预算)不再 spawn——audit 唯一持久化是收尾一次
+    merge-write,09:00 软停击杀会丢掉最长 ~2h 在审块(白审)。时钟经参数
+    注入(裁定#9),与 in_window 同款本地口径(跨午夜窗)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "cl")
+    monkeypatch.setenv("TASKLOOP_CLONE_DIR", str(tmp_path / "cl"))
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    calls = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: calls.append(cmd) or 4242)
+    # 07:00 → 剩 2h < 7500s → 拦(dry 预演同样只报拦因,不出现将 spawn)
+    st = _mkstate()
+    tp.spawn_audit(st, True, window_end=9, now=datetime(2026, 11, 13, 7, 0))
+    tp.spawn_audit(st, False, window_end=9, now=datetime(2026, 11, 13, 7, 0))
+    assert calls == []
+    out = capsys.readouterr().out
+    assert "距窗口结束" in out and "将 spawn audit" not in out
+    # 23:30(窗口起点附近)→ 剩 9.5h → 正常 spawn
+    tp.spawn_audit(_mkstate(), False, window_end=9,
+                   now=datetime(2026, 11, 13, 23, 30))
+    assert len(calls) == 1
+    # 跨午夜: 01:00 → 剩 8h → spawn
+    tp.spawn_audit(_mkstate(), False, window_end=9,
+                   now=datetime(2026, 11, 13, 1, 0))
+    assert len(calls) == 2
+    # 08:59 → 剩 60s → 拦
+    tp.spawn_audit(_mkstate(), False, window_end=9,
+                   now=datetime(2026, 11, 13, 8, 59))
+    assert len(calls) == 2
+
+
+def test_run_pipeline_single_cycle_gherror_rc1_persists_progress(
+        monkeypatch, tmp_path, capsys):
+    """Minor#2(fix-round 1): 单轮薄壳 GhError → rc 1 且已推进 state 落盘
+    (旧 scan 先例语义的覆盖锁): 预置 boot 变化死槽 → 启动对账干净回队先
+    落盘,cycle 首步 GhError 后回读 state 证推进未丢。"""
+    _patch_cycle_offline(monkeypatch, tmp_path)
+    monkeypatch.setattr(tl, "_migrate_legacy_state_dir", lambda: None)
+    monkeypatch.setattr(tl, "ensure_agent_labels", lambda: None)
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)
+    monkeypatch.setattr(tl, "worktree_cleanup", lambda p: None)
+    monkeypatch.setattr(tp, "boot_id", lambda: "new-boot")
+    os.makedirs(tmp_path / "st")
+    seeded = _mkstate()
+    seeded["entries"] = [_entry(status="DISPATCHED", agent_pid=111,
+                                attempts=2)]
+    tp.slot_acquire(seeded, "issue_fix", "issue-5", 111, 0, "/l", "/w",
+                    "t", "old-boot")
+    tl.StateStore().save(seeded)
+
+    def boom():
+        raise tl.GhError("gh run list … 失败(exit 1): HTTP 502")
+    monkeypatch.setattr(tl, "scan_red_runs", boom)
+    assert tp.run_pipeline_single_cycle() == 1
+    assert "GhError" in capsys.readouterr().err
+    disk = tl.StateStore().load()
+    assert disk["entries"][0]["status"] == "QUEUED"   # 启动对账推进已落盘
+    assert disk["entries"][0]["agent_pid"] is None
+    assert disk["entries"][0]["attempts"] == 2        # 环境性死亡豁免不动 attempts

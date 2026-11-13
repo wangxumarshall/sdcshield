@@ -25,6 +25,7 @@ MemAvailable ≥ 8G。用户意图：**把 SDC 板卡舰队纳入执行面**。�
 | 6 | 连接 | 0103 生成专用 SSH 密钥分发三板 `sdc@` authorized_keys（免密、无密码进 argv/进程表） |
 | 7 | 激发冲突 | 板上 sdc 激发战役 active → **探测即跳过，绝不自动停**（SDC 检测实验优先于夜间队列） |
 | 8 | audit | 留本机（其 state 写入与本机 state.json 耦合，远程会写错地方；且无构建、内存轻） |
+| 9 | 多 key 轮询（2026-11-13 增补） | agent 派发经 **GLM 三 key（key3/wang/ding，同 BASE_URL 同模型）round-robin 轮询**——池文件 `agent-key-*.env` 由 `scripts/gen_agent_envs.sh` 从 `~/.bashrc` 三函数幂等提取（0600，token 绝不打印/入库）；派发按 `state["env_rr"]` 计数轮换，8 并发 agent 均摊三 key，单 key 速率压力 ⅓（**降时延**，用户 2026-11-13 指示）；远程派发 scp 选中池文件到板 `agent.env`（板端命令零改动）；池空回落单 `agent.env`（兼容）；audit 单实例保持 base `agent.env` |
 
 ## 2. 总体架构
 

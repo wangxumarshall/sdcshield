@@ -20,6 +20,7 @@
 - 每任务一 commit：`git commit -s`（DCO 尾行 `Signed-off-by: wangxu <wangxumarshall@qq.com>`，无 Co-Authored-By）；分支 `feat/nodepool-offload`；commit 前全量 `/usr/bin/python3 -m pytest tools/excite/tests/ -x -q`（基线 374 passed）。
 - 注释/标识符风格贴 `scripts/task_loop.py` 现状：中文注释、`_` 前缀私有、print 带 `[tag]` 前缀。
 - 安全阀：env `PIPELINE_NODEPOOL=0` 全关（纯本机旧行为）；`PIPELINE_FORCE_NODE=<host_id>` 强制单节点（冒烟/测试用）。
+- 多 key 轮询（spec 决策表 #9 增补）：GLM 三 key（key3/wang/ding）round-robin；池文件 `agent-key-*.env` 0600；**token 绝不打印/入库**，测试用假 token 文件。
 - x86-64 零触碰（纯 Python/bash）。行号引用以当前 main（060812ea 系）函数名/注释锚点定位，漂移以实码为准。
 
 ---
@@ -761,6 +762,131 @@ def test_dispatch_agent_remote_spawnfail_falls_back_local(monkeypatch, tmp_path)
 ```bash
 git add scripts/task_loop.py scripts/task_loop_pipeline.py tools/excite/tests/test_task_loop_pipeline.py
 git commit -s -m "feat(nodepool): dispatch_agent/dispatch_review 远程分支——pick_node 择优,prompt/agent.env 上板,NodeError 回退本机,记账段两分支共用防漂移"
+```
+
+---
+
+### Task 6b: 多 key 轮询降时延（GLM key3/wang/ding round-robin）
+
+**Files:**
+- Create: `scripts/gen_agent_envs.sh`
+- Modify: `scripts/task_loop.py`（dispatch_agent 的 env source 路径 + 两助手）
+- Modify: `scripts/task_loop_pipeline.py`（dispatch_review 的 env source）
+- Test: `tools/excite/tests/test_task_loop_pipeline.py`
+
+**Interfaces:**
+- Produces: `tl._env_pool(state_dir) -> list[str]`（glob `agent-key-*.env` 排序，空池回落 `[agent.env]`）；`tl._pick_env_path(state, state_dir) -> str`（`state["env_rr"]` 计数取模轮换，计数入 state 跨 cycle 持续）；`gen_agent_envs.sh`（从 `~/.bashrc` 三函数 `set-glm-qwen-key3/-key-wang/-key-ding` 提取 token，基于现行 `agent.env` 生成池文件，幂等 0600）；dispatch_agent/dispatch_review 的 local inner `source <选中池文件>`；远程分支 `refresh_env_remote(node, <选中池文件>)`——板上落名恒 `agent.env`，板端命令零改动。
+- Consumes: Task 5 `refresh_env_remote`、Task 6 远程分支。
+- 约束：token 绝不打印/入库；测试一律假 token 文件；audit 线保持 base `agent.env`（单实例无并发压力，注释注明）。
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+def test_env_pool_rotation_and_fallback(tmp_path):
+    sd = tmp_path / "st"
+    sd.mkdir()
+    (sd / "agent.env").write_text("base\n")
+    st = {}
+    p = tp.tl._pick_env_path(st, str(sd))
+    assert p.endswith("agent.env")                    # 池空回落单文件
+    assert st["env_rr"] == 1
+    for i in ("1", "2", "3"):
+        (sd / f"agent-key-{i}.env").write_text(f"k{i}\n")
+    st = {}
+    picks = [tp.tl._pick_env_path(st, str(sd)) for _ in range(7)]
+    order = [p.rsplit("agent-key-", 1)[1][0] for p in picks]
+    assert order == ["1", "2", "3", "1", "2", "3", "1"]   # round-robin
+    assert st["env_rr"] == 7
+
+
+def test_dispatch_local_sources_picked_env(monkeypatch, tmp_path):
+    """本机派发: inner source 的是轮换到的池文件(非固定 agent.env)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    sd = tmp_path / "st"
+    sd.mkdir()
+    (sd / "agent.env").write_text("base\n")
+    (sd / "agent-key-1.env").write_text("k1\n")
+    (sd / "agent-key-2.env").write_text("k2\n")
+    cmds = []
+    monkeypatch.setattr(tp.tl, "run_background",
+                        lambda cmd, cwd, log: cmds.append(cmd) or 42)
+    monkeypatch.setattr(tp.tl, "gh_label_add", lambda *a: None)
+    monkeypatch.setattr(tp.tl, "_worktree_prepare", lambda c, k: "/w")
+    from task_loop import Entry
+    e = Entry(workflow="w", run_id=1, status="QUEUED", issue_number=3,
+              fix_branch="fix/issue-3", pr_number=None, attempts=0, rounds=0,
+              agent_pid=None, agent_started_at=None, agent_log=None,
+              last_dispatched_head=None, extra_runs=[], created_at="t",
+              updated_at="t", source="audit", kind="bug", audit_hash=None)
+    st = {"entries": [e.to_dict()], "auth_failure_streak": 0}
+    es = tp.tl.StateStore.entries(st)
+    tp.tl.dispatch_agent(es[0], st)                 # rr=0 → pool[0]=agent-key-1
+    tp.tl.dispatch_agent(es[0], st) if False else None
+    assert "agent-key-1.env" in cmds[0]
+```
+
+（第二个 dispatch 断言略——同一 entry 重派被同 key 闸拦属正确行为；轮换顺序由第一个单测覆盖。实现时如需二连派断言用两个 entry。）
+
+- [ ] **Step 2: 确认失败** → FAIL（_pick_env_path 未定义）
+
+- [ ] **Step 3: 实现**
+
+(a) `scripts/gen_agent_envs.sh`：
+
+```bash
+#!/bin/bash
+# gen_agent_envs.sh — 从 ~/.bashrc 提取三把 GLM key(key3/wang/ding)生成
+# agent-key-N.env 池文件(0600,幂等)。派发层 round-robin 消费(spec 决策 #9:
+# 8 并发 agent 均摊三 key,单 key 速率压力 1/3——降时延)。
+# token 绝不打印,只经文件传递;失败即止(缺一个 key 就少一个池文件,如实报告)。
+set -euo pipefail
+STATE_DIR="${TASKLOOP_STATE_DIR:-$HOME/.local/state/sdcshield-task-loop}"
+BASE="$STATE_DIR/agent.env"
+[ -f "$BASE" ] || { echo "缺基准 $BASE"; exit 1; }
+i=0
+for fn in set-glm-qwen-key3 set-glm-qwen-key-wang set-glm-qwen-key-ding; do
+  tok=$(sed -n "/^${fn}()/,/^}/p" "$HOME/.bashrc" \
+        | grep -oP 'ANTHROPIC_AUTH_TOKEN="\K[^"]+' | head -1 || true)
+  if [ -z "$tok" ]; then echo "[warn] $fn 无 token,跳过"; continue; fi
+  i=$((i+1))
+  out="$STATE_DIR/agent-key-${i}.env"
+  sed -E "s|^export ANTHROPIC_AUTH_TOKEN=.*|export ANTHROPIC_AUTH_TOKEN=\"${tok}\" #pool-${i}|" \
+      "$BASE" > "$out"
+  chmod 600 "$out"
+done
+echo "生成 ${i} 个池文件于 $STATE_DIR(期望 3)"
+```
+
+(b) `task_loop.py`（dispatch_agent 区段前）：
+
+```python
+def _env_pool(state_dir):
+    """agent 凭据池(多 key 轮询,spec 决策 #9): agent-key-*.env 排序;
+    池空回落单文件 agent.env(兼容现部署——gen_agent_envs.sh 未跑过)。"""
+    import glob as _glob
+    pool = sorted(_glob.glob(os.path.join(state_dir, "agent-key-*.env")))
+    return pool or [os.path.join(state_dir, AGENT_ENV_NAME)]
+
+
+def _pick_env_path(state, state_dir):
+    """round-robin 取一个 env 文件(计数入 state 跨 cycle 持续轮换)。"""
+    pool = _env_pool(state_dir)
+    n = state.get("env_rr", 0)
+    state["env_rr"] = n + 1
+    return pool[n % len(pool)]
+```
+
+(c) dispatch_agent：inner 构造处（现 `source <STATE_DIR>/agent.env`）改 `source {_pick_env_path(state, state_dir)}`；Task 6 远程分支的 `refresh_env_remote(node, <picked>)` 同源（远程 scp 选中池文件、板端落名 `agent.env` 不变）。dispatch_review 同款两处。audit 线不接（保持 base，注释注明单实例）。
+
+- [ ] **Step 4: 通过 + 全量 + 真机冒烟**
+
+Run: 全量绿；`bash scripts/gen_agent_envs.sh` 真跑 → `ls ~/.local/state/sdcshield-task-loop/agent-key-*.env` 恰 3 个、`grep -c '#pool-'` 3 行（**不 cat 全文**）；`pipeline --dry-run` EXIT=0。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/gen_agent_envs.sh scripts/task_loop.py scripts/task_loop_pipeline.py tools/excite/tests/test_task_loop_pipeline.py
+git commit -s -m "feat(nodepool): GLM 三 key round-robin 轮询——gen_agent_envs.sh 池生成,派发按 env_rr 轮换 source,远程 scp 选中文件,池空回落单 env"
 ```
 
 ---

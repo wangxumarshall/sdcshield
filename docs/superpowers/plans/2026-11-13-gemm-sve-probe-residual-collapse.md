@@ -49,14 +49,14 @@ issue #615 = GEMM 探针/复制缺陷谱系**第 6 次上报**(#389/#440 → #53
 
 **Steps:**
 
-- [ ] **Step 1: 建分支**(执行会话以 origin/main 为基)
+- [x] **Step 1: 建分支**(执行会话以 origin/main 为基)
 
 ```bash
 git checkout -B fix/issue-615 origin/main
 git branch --show-current   # 期望: fix/issue-615
 ```
 
-- [ ] **Step 2: 本计划写入该路径并 commit**
+- [x] **Step 2: 本计划写入该路径并 commit**
 
 ```bash
 git add docs/superpowers/plans/2026-11-13-gemm-sve-probe-residual-collapse.md
@@ -69,7 +69,7 @@ gemm_{f64,f32,c128}_sve_body.cpp 三份逐字 splitmix 探针(4a6c7acf 引入,�
 #542 先例「主体已修但补残余」。"
 ```
 
-- [ ] **Step 3: push**
+- [x] **Step 3: push**
 
 ```bash
 git push -u origin fix/issue-615
@@ -88,7 +88,7 @@ git push -u origin fix/issue-615
 
 **Steps:**
 
-- [ ] **Step 1: 写入双 kernel 源(完整内容如下,含逐字旧副本三变体)**
+- [x] **Step 1: 写入双 kernel 源(完整内容如下,含逐字旧副本三变体)**
 
 ```cpp
 // GEMM sizing-probe lineage equivalence (issue #615 residual sweep).
@@ -321,7 +321,7 @@ int main(void)
 }
 ```
 
-- [ ] **Step 2: native 编译并运行(NEON/scalar 腿,收口前提先行验证)**
+- [x] **Step 2: native 编译并运行(NEON/scalar 腿,收口前提先行验证)**
 
 ```bash
 g++ -O2 -std=c++17 -I third-party/eigen5 \
@@ -332,7 +332,7 @@ g++ -O2 -std=c++17 -I third-party/eigen5 \
 
 Expected:`RESULT: ALL PASS (21/21 …)`,`exit=0`。若 FAIL:收口前提不成立,停止、报告 escalated,不得猜测式收口。
 
-- [ ] **Step 3: commit harness**
+- [x] **Step 3: commit harness**
 
 ```bash
 git add scripts/eigen-sve-double/test_gemm_probe_lineage.cpp
@@ -361,7 +361,7 @@ git push
 
 **Steps:**
 
-- [ ] **Step 1: 基线构建 + 抓基线 objdump**(修改前,取证旧指令序列)
+- [x] **Step 1: 基线构建 + 抓基线 objdump**(修改前,取证旧指令序列)
 
 ```bash
 ls builddir >/dev/null 2>&1 || PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
@@ -379,7 +379,7 @@ ls /tmp/objdump_old/ | wc -l   # 期望 12
 
 (库名/路径若与预期不符,以 `find builddir -name "*eigen_gemm*vl*"` 实测为准,如实记录。)
 
-- [ ] **Step 2: 编辑 `gemm_f64_sve_body.cpp`** — 三处 Edit:
+- [x] **Step 2: 编辑 `gemm_f64_sve_body.cpp`** — 三处 Edit:
 
 Edit 2a(include 増补):
 ```
@@ -438,11 +438,11 @@ new: int solve_once(int dim)
      }
 ```
 
-- [ ] **Step 3: 编辑 `gemm_f32_sve_body.cpp`** — 同型三处(include 15-17 行、头注释 8-11 行含 f64 中间量措辞、探针体 108-126 行,old 文本以 f32 变体逐字为准:注释为「f32 赋值转型经 f64 中间量(原用例同款转型)」,填充两行为 `(float)((double)(h % 2000u) / 1000.0 - 1.0)`)。
+- [x] **Step 3: 编辑 `gemm_f32_sve_body.cpp`** — 同型三处(include 15-17 行、头注释 8-11 行含 f64 中间量措辞、探针体 108-126 行,old 文本以 f32 变体逐字为准:注释为「f32 赋值转型经 f64 中间量(原用例同款转型)」,填充两行为 `(float)((double)(h % 2000u) / 1000.0 - 1.0)`)。
 
-- [ ] **Step 4: 编辑 `gemm_c128_sve_body.cpp`** — 同型三处(include 17-19 行、头注释 11-13 行(re/im 四流措辞)、探针体 116-141 行,old 文本以 c128 变体逐字为准:h3/h4 四流 + 两个 std::complex<double> 构造)。
+- [x] **Step 4: 编辑 `gemm_c128_sve_body.cpp`** — 同型三处(include 17-19 行、头注释 11-13 行(re/im 四流措辞)、探针体 116-141 行,old 文本以 c128 变体逐字为准:h3/h4 四流 + 两个 std::complex<double> 构造)。
 
-- [ ] **Step 5: `gemm_solve_probe.h` 头注释增补**(在「措辞勘误(检视 #392-R9)」段末尾、` */` 之前追加):
+- [x] **Step 5: `gemm_solve_probe.h` 头注释增补**(在「措辞勘误(检视 #392-R9)」段末尾、` */` 之前追加):
 ```
 new(追加段):
  * 使用方谱系增补(issue #615, 2026-11-13): 本头消费方现为 7 个 T9
@@ -454,7 +454,7 @@ new(追加段):
  * 「守门不附 __linux__」的理据由 4 个 body 共同承载。
 ```
 
-- [ ] **Step 6: 构建 + 零新警告 + 符号 + objdump 新旧对比**
+- [x] **Step 6: 构建 + 零新警告 + 符号 + objdump 新旧对比**
 
 ```bash
 ./scripts/build.sh 2>&1 | tail -20        # 期望: 成功, 无新警告(对照 Step 1 基线)
@@ -473,7 +473,7 @@ for f in /tmp/objdump_new/*.txt; do
 done
 ```
 
-- [ ] **Step 7: 受影响行为 + 回归 + SKIP 路径(本机真跑)**
+- [x] **Step 7: 受影响行为 + 回归 + SKIP 路径(本机真跑)**
 
 ```bash
 ./builddir/sdcshield -e zstd19 -t 2000 -n 1 2>&1 | tail -3   # 期望 exit: pass
@@ -485,9 +485,9 @@ done
 # 真实档位证据在 Task 4 gem5)。修改前先跑一遍留存 SKIP 原文以对比。
 ```
 
-- [ ] **Step 8: x86-64 非回归(按检视声明)**:3 个 body 均为 `if host_machine.cpu_family() == 'aarch64'` meson 门控专属 TU(x86-64 从不编译);`gemm_solve_probe.h` 仅注释增补零逻辑变化;harness 是新增验证工具。结论:纯 aarch64 内部等价重构,x86-64 零触及(如实声明,非验证豁免)。
+- [x] **Step 8: x86-64 非回归(按检视声明)**:3 个 body 均为 `if host_machine.cpu_family() == 'aarch64'` meson 门控专属 TU(x86-64 从不编译);`gemm_solve_probe.h` 仅注释增补零逻辑变化;harness 是新增验证工具。结论:纯 aarch64 内部等价重构,x86-64 零触及(如实声明,非验证豁免)。
 
-- [ ] **Step 9: commit 修复单元**
+- [x] **Step 9: commit 修复单元**
 
 ```bash
 git add tests/cpu/eigen_gemm/gemm_f64_sve_body.cpp \
@@ -521,7 +521,7 @@ git push
 
 **Steps:**
 
-- [ ] **Step 1: 四档编译 harness**
+- [x] **Step 1: 四档编译 harness**
 
 ```bash
 mkdir -p /tmp/gem5_bins
@@ -534,7 +534,7 @@ done
 ls /tmp/gem5_bins/    # 期望 4 个二进制
 ```
 
-- [ ] **Step 2: gem5 SE 逐档真跑**
+- [x] **Step 2: gem5 SE 逐档真跑**
 
 ```bash
 for QW in 1 2 4 8; do
@@ -546,7 +546,7 @@ done
 
 Expected(每档):`VL identity: svcntb=<16/32/64/128> bytes (<128/256/512/1024>-bit tier)`、`RESULT: ALL PASS (21/21 …)`、`Simulated exit code: 0`。run_sve.sh 会回显 `G5=… md5=5101f2a8…`——引用时保留。
 
-- [ ] **Step 3: 勾选本计划全部复选框 + commit**
+- [x] **Step 3: 勾选本计划全部复选框 + commit**
 
 ```bash
 # 将本文件中所有 "- [ ]" 改为 "- [x]"
@@ -565,7 +565,7 @@ git push
 
 **Steps:**
 
-- [ ] **Step 1: 开 PR**(若 auto-pr.yml 抢先导致 create 失败,按契约兜底 `gh pr edit fix/issue-615 --title … --body …`)
+- [x] **Step 1: 开 PR**(若 auto-pr.yml 抢先导致 create 失败,按契约兜底 `gh pr edit fix/issue-615 --title … --body …`)
 
 ```bash
 gh pr create --base main --head fix/issue-615 \
@@ -574,9 +574,9 @@ gh pr create --base main --head fix/issue-615 \
 改动点、验证证据(native 21/21 + gem5 四档输出引用 + 构建/回归/SKIP/x86 声明)>"
 ```
 
-- [ ] **Step 2: issue #615 贴处置报告**(内容 = PR 正文同源 + 本处置判定细节与时间线;不 resolve,关闭随人工 merge)。
+- [x] **Step 2: issue #615 贴处置报告**(内容 = PR 正文同源 + 本处置判定细节与时间线;不 resolve,关闭随人工 merge)。
 
-- [ ] **Step 3: 工作区收尾**
+- [x] **Step 3: 工作区收尾**
 
 ```bash
 git checkout main && git status    # 期望 clean
@@ -589,3 +589,47 @@ git checkout main && git status    # 期望 clean
 1. **Spec 覆盖**: issue 两项指控均有处置(指控 1 不重做 + 残余 3 副本修复;指控 2 边界裁定不重开,报告如实说明);gem5-fi 规则四档覆盖;rule 2 四要素(构建/行为/回归/x86)全落位。
 2. **占位符扫描**: 无 TBD/“类似上文”——三 body 的 Edit old 文本全部以仓库实测逐字文本给出(f32/c128 变体注明以其自身逐字为准,执行者 Read 后逐字替换,与 Edit 工具语义一致)。
 3. **类型一致性**: `gemm_probe::solve_once<Mat>`/`fill_pair<Mat>` 签名、`pfx##_vl<N>::solve_once(int)` 符号契约、harness MatD/MatF/MatC 与 body typedef 一致。
+
+## 执行记录(2026-11-13,全部勾选依据)
+
+commits: `30f34993`(计划)→ `fa208070`(双 kernel v1, native 21/21)→
+`ee0e1ce9`(探针收口, +42/−77)→ `0d7faf1d`(harness 同缓冲区重构)。
+
+### 基线勘误(执行中发现的计划偏差)
+
+计划 Step 7 预期 4 个 SVE 用例「SKIP 且理由与修改前逐字一致」——实测
+确认:SKIP 为真(`-v` 下 `result: skip / skip-category: CpuNotSupported /
+skip-reason: 'test compiled with sve'` ×4),非 verbose 输出不打印
+per-test 行,整跑 `exit: pass` 是 SKIP 不算失败的框架语义,勿误读为"真跑
+通过"。基线/改后 SKIP 原文 diff 逐字一致(builddir version 串
+`fd2f9bcda3e4` 为 meson 配置期滞后戳,二进制经 ninja 判定与 HEAD 零待
+构建——#573 会话已披露的同款现象)。
+
+### VL512 红灯事件与处置(Task 4 执行记录)
+
+初版 harness 在 gem5 VL-512 报 `c128 n∈{17,33}` c 腿 MISMATCH(19/21)。
+未带红前行,按红线三轮取证:`addr_sensitivity`(输入基址对齐假设证伪)、
+`discriminator` Test B(同缓冲区填充+乘积双同——真等价命题通过)、
+`lineage_replica`(复现 + 锁定诱因:旧腿目的缓冲区 64B 全对齐
+co@%64=0 vs 新腿 cn@%64=32、列距 ≡16 (mod 64) 时 Eigen GEBP 按目的
+对齐类选核,复数标量/向量路径舍入不同——**harness 伪差异,非谱系分歧**;
+填充 a/b 在全部档位全程字节一致)。处置:harness 改同缓冲区三元组形态
+(两次乘积直写同一 C 缓冲区,影子 memcpy 全字节比对),`0d7faf1d`。
+
+### 终局证据
+
+- native 腿:`RESULT: ALL PASS (21/21 (variant,n) triplets byte-identical)`,exit=0。
+- gem5 SE 四档(G5 md5 `5101f2a811fa5cfc17c6e52d51c39f18`,如实披露
+  ≠ campaign 的 `3f9011f4…`):
+  - vl128(svcntb=16):ALL PASS 21/21,`Simulated exit code: 0`
+  - vl256(svcntb=32):ALL PASS 21/21,`Simulated exit code: 0`
+  - vl512(svcntb=64):ALL PASS 21/21,`Simulated exit code: 0`
+  - vl1024(svcntb=128):ALL PASS 21/21,`Simulated exit code: 0`
+- 构建 `./scripts/build.sh` 41/41 零警告;12 个 tier 库 `solve_once`
+  符号在位;objdump: c128 四档逐字相同,f64/f32 高档助记符序列相同
+  (仅 `cmp` 操作数交换,消费者 `b.eq` 对 Z 标志恒等),vl128 净 −2
+  指令(−8 字节,寄存器分配,#392 先例同型)。
+- 回归:`zstd19 -t 2000 -n 1` exit: pass;T9 用例
+  `eigen_gemm_double_dynamic_square` 实跑联合求解活体
+  (`[联合求解] n_mem=21581 n_run=7058 AR=1.0 c=32.3 → 4096`)result: pass。
+- x86-64 零触及(3 个 body 为 aarch64 专属 meson 门控 TU,probe 头纯注释)。

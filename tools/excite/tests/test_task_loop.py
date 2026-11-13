@@ -688,6 +688,65 @@ def test_lane_b_persists_dispatch_accounting_immediately(tmp_path, monkeypatch):
         e["worktree"] == f"{tmp_path}/cl/.worktrees/pr-88"
 
 
+def test_lane_b_immediate_save_preserves_audit_advances(tmp_path, monkeypatch):
+    """T13 归位(检视#6 半边): lane_b 派发即时落盘必须走
+    _pipeline_save(scan.lock 内 merge-save),不得裸 save——cycle_once 整夜
+    持内存 state,audit 子进程同窗在 scan.lock 下推进 cursor/seen/streak;
+    裸 save 把内存陈旧快照整份覆写回磁盘,竞态窗口内丢 audit 记账。T10 推迟
+    理由「cmd_scan 整段持 scan.lock 时同进程二次 flock 自死锁」已随 scan
+    薄壳化(pipeline.lock)消解,归位生效。"""
+    from types import SimpleNamespace
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
+    monkeypatch.setenv("TASKLOOP_REPO", "selftest/local")
+    pr = SimpleNamespace(number=89, head_sha="c" * 40, url="https://x/89",
+                         bot_done={"local-claude": "t"})
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr", lambda slug, num: pr)
+    monkeypatch.setattr(tl.pr_loop, "classify_state",
+                        lambda p, quiet, now: "READY_TO_FIX")
+    monkeypatch.setattr(tl.pr_loop, "render_collect",
+                        lambda p, slug, quiet: "# collect(fake)\n")
+    monkeypatch.setattr(tl.pr_loop, "ensure_local_review",
+                        lambda num, sha: None)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["src/a.c"])
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None:
+                        {"additions": 500, "deletions": 200})
+    import task_loop_pipeline as tp
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_worktree_prepare",
+                        lambda clone_dir, key: f"{tmp_path}/cl/.worktrees/{key}")
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: os.getpid())
+    # 磁盘侧 = audit 子进程锁下推进后的最新值(cursor/seen 前进、streak=2)
+    tl.StateStore(str(tmp_path)).save(
+        {"entries": [], "auth_failure_streak": 2,
+         "auth_failure_at": "2026-11-13T01:00:00Z",
+         "audit_cursor": {"sha": "audit-advanced", "at": "t1"},
+         "audit_seen": ["h1", "h2"]})
+    # 内存侧 = pipeline 窗口启动时装载的陈旧快照(cursor 旧、streak=0)
+    entry = _task_entry(status="PR_OPEN", pr_number=89, rounds=0,
+                        last_dispatched_head=None)
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0,
+             "audit_cursor": {"sha": "stale-window-start", "at": "t0"},
+             "audit_seen": []}
+    tl.lane_b_advance(state, dry_run=False)     # 调用方不 save,直接看磁盘
+    disk = tl.StateStore(str(tmp_path)).load()
+    e = disk["entries"][0]
+    assert e["status"] == "BOT_FIX" and e["agent_pid"] == os.getpid(), \
+        "车道 B 派发记账未即时落盘(归位不得破坏检视#6 原语义)"
+    assert disk["audit_cursor"] == {"sha": "audit-advanced", "at": "t1"}, \
+        "lane_b 落盘把 audit 子进程的 cursor 推进写回旧值(裸 save 竞态)"
+    assert disk["audit_seen"] == ["h1", "h2"], "audit_seen 磁盘权威被抹"
+    assert disk["auth_failure_streak"] == 2, "streak 双写者键未取 max 合并"
+    assert disk["auth_failure_at"] == "2026-11-13T01:00:00Z", \
+        "auth_failure_at 未取两侧较新"
+    # 合并结果同步回内存对象——下一轮 bump 从合并值起步,不再被磁盘旧值抹掉
+    assert state["auth_failure_streak"] == 2
+    assert state["audit_cursor"]["sha"] == "audit-advanced"
+
+
 # ============ PR#317 检视#11: paused 横幅与闸门同口径(双路径) ============
 
 def test_scan_paused_banner_honors_legacy_dir(tmp_path, monkeypatch, capsys):

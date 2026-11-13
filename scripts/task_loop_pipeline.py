@@ -338,10 +338,10 @@ def checks_ok(pr, required, slug):
         wf_label = workflow or "<无 workflow>"
         if jobs <= base:
             evidence_ok.append(
-                f"[{wf_label}] {sorted(jobs)} ⊆ main 基线红 {sorted(base)}")
+                f"[{wf_label}] {sorted(jobs)} ⊆ 已合入 PR 基线红 {sorted(base)}")
         else:
             evidence_bad.append(
-                f"[{wf_label}] {sorted(jobs - base)} 不在 main 基线红 "
+                f"[{wf_label}] {sorted(jobs - base)} 不在已合入 PR 基线红 "
                 f"{sorted(base)}")
     if evidence_bad:
         return False, [f"红 job 非基线继承: {'; '.join(evidence_bad)}"]
@@ -411,3 +411,80 @@ def evaluate_merge_gate(state, entry, pr, files, now, no_auto_merge):
     if not ok:
         return GateResult(False, fast, why)
     return GateResult(True, fast, why)      # why=继承红放行的证据,审计用
+
+
+# ============ 泳道3 merge 执行 + 记账(Task 8) ============
+
+
+def fill_mergeable(pr) -> None:
+    """补 PRData 缺失的 mergeable 字段(公开接缝,裁定#1): 真实 PRData
+    无该字段,调用方(T10 merge_sweep)过门前先过本函数,门的 mergeable
+    False 拒臂才有数据。缺/None 才拉(有值不重复拉);GhError → 保持
+    None 并 [warn];gh 空输出 None → 保持 None——门按 T7 过渡语义
+    (None 不拒)放行,接线遗漏由 gate 测试锁形。"""
+    if getattr(pr, "mergeable", None) is not None:
+        return
+    slug = tl.repo_slug()
+    try:
+        v = tl.gh_json_idem(["pr", "view", str(pr.number), "--repo", slug,
+                              "--json", "mergeable", "--jq", ".mergeable"])
+    except GhError as exc:
+        print(f"[warn] PR #{pr.number} mergeable 拉取失败"
+              f"(保持 None,门按过渡语义不拒): {exc}")
+        return
+    if v is None:
+        return
+    pr.mergeable = v
+
+
+def no_auto_merge_active() -> bool:
+    """NO_AUTO_MERGE 熔断探测(STATE_DIR/NO_AUTO_MERGE 存在即 True): 纯
+    存在性掺查——幂等、零 gh、零状态变更。门只收 no_auto_merge: bool,
+    由编排器调本函数传入(裁定#4: 熔断存在 → 门转纯报告模式=灰度)。"""
+    return os.path.exists(
+        os.path.join(tl._resolve_state_dir(), NO_AUTO_MERGE_NAME))
+
+
+def execute_merge(state, entry, pr, gate, dry_run=False) -> "str | None":
+    """过门后执行 squash merge: PR 评论贴门槛证据 → `gh pr merge --squash
+    --delete-branch` → 回读新 main sha 记 entry.merged_at/merged_sha
+    (revert 归因主数据,人工 merge 永不写)→ 引擎条目 DONE + issue 收尾
+    评论/关闭(entry 为 None 的用户 docs PR 只 merge+评论)。merge 执行权
+    在编排器代码,绝不在 LLM(spec §1 决策 7)。三步序评论→merge→回读,
+    任一步 GhError 原样上抛——条目不置 DONE,下轮门复评;PR 号经双形
+    解析 pr_number|number(真实 PRData 字段名是 number,与 checks_ok/
+    T5 _pr_number 同款契约)。"""
+    slug = tl.repo_slug()
+    num = getattr(pr, "pr_number", None) or getattr(pr, "number", None)
+    evidence = "\n".join(f"- {r}" for r in gate.reasons) or "- 全门槛通过"
+    body = (f"🤖 task-loop pipeline 自动 merge(spec 2026-11-12):\n"
+            f"- 门槛证据:\n{evidence}\n"
+            f"- 方式: squash + delete-branch;"
+            f"{'docs-only 快速通道' if gate.fast else '全门槛'}")
+    if dry_run:
+        print(f"[dry-run] 将 merge PR #{num}: {body[:120]}…")
+        return None
+    tl.gh_json_idem(["pr", "comment", str(num), "--repo", slug,
+                     "--body", body])
+    tl.gh_json_idem(["pr", "merge", str(num), "--repo", slug,
+                     "--squash", "--delete-branch"])
+    merged_sha = tl.gh_json_idem(
+        ["pr", "view", str(num), "--repo", slug, "--json",
+         "mergeCommit", "--jq", ".mergeCommit.oid"]).strip()
+    if entry is not None:
+        entry.merged_at = _now_local_iso()
+        entry.merged_sha = merged_sha
+        entry.status = "DONE"
+        entry.updated_at = _now_local_iso()
+        if entry.issue_number is not None:
+            tl.comment_on_issue(
+                entry.issue_number,
+                f"修复 PR #{num} 已由 pipeline 自动 squash merge"
+                f"(main {merged_sha[:12]})。本 issue 闭环。")
+            try:
+                tl.gh_json_idem(["issue", "close", str(entry.issue_number),
+                                 "--repo", slug])
+            except GhError as exc:
+                print(f"[warn] issue 关闭失败(state 为权威): {exc}")
+    print(f"[merge] PR #{num} 已自动合入 → {merged_sha[:12]}")
+    return merged_sha

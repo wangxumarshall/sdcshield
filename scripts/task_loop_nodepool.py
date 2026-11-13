@@ -95,3 +95,47 @@ def put_file(host_id, local_path, remote_path):
     if proc.returncode != 0:
         raise NodeError(f"scp → {host_id} 失败(rc={proc.returncode}): "
                         f"{proc.stderr.decode(errors='replace')[:200]}")
+
+
+MEMINFO_PATH = "/proc/meminfo"
+
+# 一次 SSH 取全字段(nproc/loadavg/MemAvailable/uptime/激发状态)——probe 每
+# cycle 对候选板各一次,单次往返优先于多次。
+_PROBE_CMD = ("nproc; cat /proc/loadavg; "
+              "grep MemAvailable /proc/meminfo; "
+              "uptime -s; systemctl is-active sdc-excite-reproduce 2>/dev/null"
+              " || echo inactive")
+
+
+def _parse_probe(out):
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    cores = int(lines[0])
+    load15 = float(lines[1].split()[2])
+    mem_kb = int(lines[2].split()[1])
+    boot = lines[3]
+    excite = lines[4] == "active"
+    return {"reachable": True, "mem_avail_mb": mem_kb // 1024,
+            "load15": load15, "cores": cores, "excite_active": excite,
+            "boot_time": boot}
+
+
+def probe_node(host_id):
+    """节点健康探测(spec §2): 不可达 → reachable=False 其余零值。"""
+    if host_id == "local":
+        avail = 0
+        try:
+            with open(MEMINFO_PATH) as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        avail = int(line.split()[1]) // 1024
+                        break
+        except OSError:
+            return {"reachable": False, "mem_avail_mb": 0, "load15": 0.0,
+                    "cores": 0, "excite_active": False, "boot_time": None}
+        return {"reachable": True, "mem_avail_mb": avail, "load15": 0.0,
+                "cores": 0, "excite_active": False, "boot_time": None}
+    try:
+        return _parse_probe(run_ssh(host_id, _PROBE_CMD, timeout=12))
+    except NodeError:
+        return {"reachable": False, "mem_avail_mb": 0, "load15": 0.0,
+                "cores": 0, "excite_active": False, "boot_time": None}

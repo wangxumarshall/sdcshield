@@ -54,3 +54,39 @@ def test_run_ssh_timeout_becomes_nodeerror(monkeypatch):
     with pytest.raises(np.NodeError) as excinfo:
         np.run_ssh("0201", "sleep 999", timeout=45)
     assert "0201" in str(excinfo.value) and "55" in str(excinfo.value)
+
+
+# probe_node 的三条测试桩: probe 以 timeout=12 关键字调用 run_ssh(单次往返),
+# 桩函数加 **kw 对齐该签名。
+def test_probe_remote_parses_combined_output(monkeypatch):
+    out = "\n".join([
+        "192",                                   # nproc
+        "0.92, 0.48, 0.35",                      # /proc/loadavg
+        "MemAvailable:  651304200 kB",           # grep MemAvailable
+        "2026-01-02 03:04:05",                   # uptime -s
+        "inactive",                              # systemctl is-active
+    ])
+    monkeypatch.setattr(np, "run_ssh", lambda h, cmd, t=45, **kw: out)
+    p = np.probe_node("0102")
+    # 651304200 kB // 1024 = 636039 MB(计划草稿写 636043 为笔误: 无换算口径
+    # 能从 651304200 kB 得出 636043, 该值对应 651308032 kB)。
+    assert p == {"reachable": True, "mem_avail_mb": 636039, "load15": 0.35,
+                 "cores": 192, "excite_active": False,
+                 "boot_time": "2026-01-02 03:04:05"}
+
+
+def test_probe_unreachable(monkeypatch):
+    def boom(h, cmd, t=45, **kw):
+        raise np.NodeError("节点 0101 命令失败(rc=255)")
+    monkeypatch.setattr(np, "run_ssh", boom)
+    p = np.probe_node("0101")
+    assert p["reachable"] is False and p["mem_avail_mb"] == 0
+
+
+def test_probe_local_reads_proc(monkeypatch, tmp_path):
+    fake = tmp_path / "meminfo"
+    fake.write_text("MemAvailable:  1048576 kB\n")
+    monkeypatch.setattr(np, "MEMINFO_PATH", str(fake))
+    p = np.probe_node("local")
+    assert p["reachable"] is True and p["mem_avail_mb"] == 1024
+    assert p["excite_active"] is False and p["boot_time"] is None

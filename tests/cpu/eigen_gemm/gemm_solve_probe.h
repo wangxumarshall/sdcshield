@@ -38,7 +38,14 @@
  * include 指令在各自守门块之外无条件生效, 非 Linux 下本头仍全量展开
  * (命名空间/std 头/lineage 头在编译面可见, 唯模板不具现), 编译暴露面
  * 以展开口径如实记。T9 wrapper 守门与头守门的包含关系不变——是本
- * 守门的真子集, 不受放宽影响。 */
+ * 守门的真子集, 不受放宽影响。
+ * 使用方谱系增补(issue #615, 2026-11-13): 本头消费方现为 7 个 T9
+ * wrapper + 4 个 per-tier SVE body——gemm_double_max_arm_body 之外,
+ * gemm_{f64,f32,c128}_sve_body 三份逐字 splitmix 探针副本(4a6c7acf
+ * 引入, 先于 PR #392 合并, 漏入当时收口清单)一并收编为一行转发;
+ * SVE body 的 meson 门控同 eigen_sve_body_specs 表(仅
+ * host cpu_family=='aarch64', 无 OS 谓词), 一行转发无 #else 回退,
+ * 「守门不附 __linux__」的理据由 4 个 body 共同承载。 */
 #ifndef GEMM_SOLVE_PROBE_H
 #define GEMM_SOLVE_PROBE_H
 

@@ -5,15 +5,17 @@
  * Eigen GEMM payload body — double,compiled ONCE PER VL TIER
  * (128/256/512/1024)。run 语义镜像 gemm_double_dynamic_square.cpp 的
  * run(per-thread operands + golden 同源首算 + kRerollEvery 重掷 +
- * memcmp_or_fail;T10 bad_alloc 窄 catch 边界契约);solve_once 谱系
- * 契约(检视 #51)同 gemm_double_dynamic_square.cpp 的 gemm_solve_once
- * (splitmix 确定性哈希,与 fill_rand 同分布)。服务
+ * memcmp_or_fail;T10 bad_alloc 窄 catch 边界契约);solve_once 一行
+ * 转发共享模板 gemm_solve_probe.h(#392 收口;谱系魔数/值域单源
+ * eigen_splitmix_lineage.h,契约(检视 #51)不再依赖本 TU 手工
+ * 镜像)。服务
  * eigen_gemm_double_dynamic_square_sve 与 eigen_gemm_double14_sve
  * (两 dispatcher,同一计算,knob 名/lo-hi 差异在各自 TU)。
  * 签名契约见 sandstone_eigen_sve_dispatch.h。
  */
 #include <sandstone.h>
 #include "sdc_stress_config.h"
+#include "gemm_solve_probe.h"
 
 #include <Eigen/Core>
 #include <new>
@@ -108,24 +110,11 @@ int run_body(struct test *test, int cpu)
 
 int solve_once(int dim)
 {
-    /* splitmix 同谱系探针(镜像 gemm_double_dynamic_square.cpp 的
-     * gemm_solve_once):与 fill_rand 同分布、不依赖 per-thread RNG。 */
-    Mat a(dim, dim), b(dim, dim), c;
-    for (int r = 0; r < dim; ++r)
-        for (int col = 0; col < dim; ++col) {
-            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
-            h ^= h >> 32;
-            h *= 0xD6E8FEB86659FD93ull;
-            h ^= h >> 32;
-            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h2 ^= h2 >> 32;
-            a(r, col) = (double)(h % 2000u) / 1000.0 - 1.0;
-            b(r, col) = (double)(h2 % 2000u) / 1000.0 - 1.0;
-        }
-    c = a * b;
-    return 0;
+    /* 联合求解 sizing 探针: 一行转发共享模板, 同
+     * gemm_double_max_arm_body.cpp 的转发范式(#392 收口口径)——
+     * splitmix 填充谱系魔数/值域单源 eigen_splitmix_lineage.h,
+     * 谱系契约(检视 #51)不再依赖本 TU 手工镜像保持同步。 */
+    return gemm_probe::solve_once<Mat>(dim);
 }
 
 }  // namespace EIGEN_SVE_BODY_NS

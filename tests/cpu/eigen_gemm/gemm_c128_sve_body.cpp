@@ -8,13 +8,15 @@
  * memcmp_or_fail;T10 bad_alloc 窄 catch 边界契约;比对口径同原用例
  * reinterpret_cast<double *> + 2*dim*dim——memcmp_or_fail 的模板约束
  * ValidDataType 不含 complex,T 推导口径不可编译,框架事实);
- * solve_once 谱系契约(检视 #51)同 gemm_cdouble_dynamic_square.cpp 的
- * gemm_solve_once(splitmix 确定性哈希,与 fill_rand 同分布,re/im 独立
- * 四流)。服务 eigen_gemm_cdouble_dynamic_square_sve。
+ * solve_once 一行转发共享模板 gemm_solve_probe.h(#392 收口;谱系
+ * 魔数/值域单源 eigen_splitmix_lineage.h,契约(检视 #51)不再依赖
+ * 本 TU 手工镜像;re/im 独立四流由共享模板 complex 分支承载)。
+ * 服务 eigen_gemm_cdouble_dynamic_square_sve。
  * 签名契约见 eigen_svd/sandstone_eigen_sve_dispatch.h。
  */
 #include <sandstone.h>
 #include "sdc_stress_config.h"
+#include "gemm_solve_probe.h"
 
 #include <Eigen/Core>
 #include <new>
@@ -115,35 +117,12 @@ int run_body(struct test *test, int cpu)
 
 int solve_once(int dim)
 {
-    /* splitmix 同谱系探针(镜像 gemm_cdouble_dynamic_square.cpp 的
-     * gemm_solve_once):与 fill_rand 同分布、不依赖 per-thread RNG,
-     * re/im 独立四流(a.re/a.im/b.re/b.im)。 */
-    Mat a(dim, dim), b(dim, dim), c;
-    for (int r = 0; r < dim; ++r)
-        for (int col = 0; col < dim; ++col) {
-            std::uint64_t h = (std::uint64_t)r * 0x9E3779B97F4A7C15ull
-                            ^ (std::uint64_t)col * 0xC2B2AE3D27D4EB4Full;
-            h ^= h >> 32;
-            h *= 0xD6E8FEB86659FD93ull;
-            h ^= h >> 32;
-            std::uint64_t h2 = h * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h2 ^= h2 >> 32;
-            std::uint64_t h3 = h2 * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h3 ^= h3 >> 32;
-            std::uint64_t h4 = h3 * 0xD6E8FEB86659FD93ull
-                             + 0x9E3779B97F4A7C15ull;
-            h4 ^= h4 >> 32;
-            a(r, col) = std::complex<double>(
-                (double)(h % 2000u) / 1000.0 - 1.0,
-                (double)(h2 % 2000u) / 1000.0 - 1.0);
-            b(r, col) = std::complex<double>(
-                (double)(h3 % 2000u) / 1000.0 - 1.0,
-                (double)(h4 % 2000u) / 1000.0 - 1.0);
-        }
-    c = a * b;
-    return 0;
+    /* 联合求解 sizing 探针: 一行转发共享模板, 同
+     * gemm_double_max_arm_body.cpp 的转发范式(#392 收口口径)——
+     * splitmix 填充谱系魔数/值域单源 eigen_splitmix_lineage.h,
+     * 谱系契约(检视 #51)不再依赖本 TU 手工镜像保持同步;re/im
+     * 独立四流(a.re/a.im/b.re/b.im)由共享模板 complex 分支承载。 */
+    return gemm_probe::solve_once<Mat>(dim);
 }
 
 }  // namespace EIGEN_SVE_BODY_NS

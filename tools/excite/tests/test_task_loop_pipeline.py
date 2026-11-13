@@ -77,6 +77,18 @@ def test_entry_new_fields_roundtrip_and_legacy():
     assert Entry.from_dict(d).to_dict() == d
 
 
+def test_entry_host_field_roundtrip_and_legacy():
+    from task_loop import Entry
+    base = dict(workflow="w", run_id=1, status="PR_OPEN", issue_number=5,
+                fix_branch="fix/issue-5", pr_number=9, attempts=1, rounds=0,
+                agent_pid=None, agent_started_at=None, agent_log=None,
+                last_dispatched_head=None, extra_runs=[], created_at="t",
+                updated_at="t", source="audit", kind="bug", audit_hash=None)
+    e = Entry(**base, host="0102")
+    assert e.to_dict()["host"] == "0102"
+    assert Entry.from_dict(base).host == "local"      # 旧 state 升格
+
+
 # ============ 槽位账本(Task 3) ============
 
 
@@ -106,6 +118,24 @@ def test_slot_release_and_free_count(monkeypatch):
     assert tp.free_slot_count(st, "pr_review") == 2   # 死 PID → janitor 清 → 空槽
     tp.slot_release(st, "pr_review", "pr-9")
     assert tp.slot_get(st, "pr_review", "pr-9") is None
+
+
+def test_slot_host_dimension(monkeypatch):
+    st = _mkstate()
+    monkeypatch.setattr(tp.tl, "agent_alive", lambda pid: True)
+    assert tp.slot_acquire(st, "issue_fix", "issue-1", 101, 100, "/l", "/w",
+                           "t", "b") is True                      # host=local 默认
+    assert tp.slot_acquire(st, "issue_fix", "issue-2", 201, 200, "/l", "/w",
+                           "t", "b", host="0102") is True
+    assert tp.slot_acquire(st, "issue_fix", "issue-3", 301, 300, "/l", "/w",
+                           "t", "b", host="0102") is True
+    assert tp.free_slots_on(st, "issue_fix", "local") == 1
+    assert tp.free_slots_on(st, "issue_fix", "0102") == 0
+    assert tp.slot_count_cap(st, "issue_fix", "0102") == 2
+    assert tp.slot_count_cap(st, "issue_fix", "local") == tp.SLOT_KINDS["issue_fix"]
+    # 同 key 跨节点互斥: 同一 issue 不同时在两台跑
+    assert tp.slot_acquire(st, "issue_fix", "issue-1", 401, 400, "/l", "/w",
+                           "t", "b", host="0101") is False
 
 
 def test_slot_janitor_marks_environmental(monkeypatch):

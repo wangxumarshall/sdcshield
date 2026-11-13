@@ -123,16 +123,22 @@ def slot_get(state, kind, key):
 
 
 def slot_acquire(state, kind, key, pid, pgid, log, worktree,
-                 started_iso, boot):
-    """占用一槽;同 key 互斥(同条目/同 PR 至多 1 agent)、满槽拒绝。"""
-    live = [s for s in _slots(state, kind) if tl.agent_alive(s["pid"])]
+                 started_iso, boot, host="local"):
+    """占用一槽;同 key 互斥(同条目/同 PR 至多 1 agent)、满槽拒绝。
+
+    同 key 互斥不区分 host(spec §4: 同一 key 不同时在两台跑);
+    满槽按 host 分账(slot_count_cap: local=SLOT_KINDS,板=注册表配额)。
+    既有 9 参调用零改动——host 缺省 local,旧租约缺 host 键按 local 数。"""
     if slot_get(state, kind, key) is not None:
         return False
-    if len(live) >= SLOT_KINDS.get(kind, 0):
+    live = sum(1 for s in _slots(state, kind)
+               if s.get("host", "local") == host and tl.agent_alive(s["pid"]))
+    if live >= slot_count_cap(state, kind, host):
         return False
     _slots(state, kind).append(
         {"key": key, "pid": pid, "pgid": pgid, "log": log,
-         "worktree": worktree, "started_at": started_iso, "boot": boot})
+         "worktree": worktree, "started_at": started_iso, "boot": boot,
+         "host": host})
     return True
 
 
@@ -142,9 +148,27 @@ def slot_release(state, kind, key):
 
 
 def free_slot_count(state, kind):
-    """空槽数 = 槽上限 − 活 PID 占用数(死槽即时回收)。"""
+    """空槽数 = 槽上限 − 活 PID 占用数(死槽即时回收)。
+
+    本机闸口径: 不分 host,数全部活槽(过渡期兼容行为,N8 cycle 接线时
+    再按需切 free_slots_on;既有闸与测试零破坏)。"""
     live = sum(1 for s in _slots(state, kind) if tl.agent_alive(s["pid"]))
     return max(0, SLOT_KINDS.get(kind, 0) - live)
+
+
+def free_slots_on(state, kind, host="local"):
+    """指定节点的空槽数(host 维度分账; local=tp 本机, 板=注册表配额)。"""
+    import task_loop_nodepool as np
+    live = sum(1 for s in _slots(state, kind)
+               if s.get("host", "local") == host and tl.agent_alive(s["pid"]))
+    return max(0, slot_count_cap(state, kind, host) - live)
+
+
+def slot_count_cap(state, kind, host):
+    if host == "local":
+        return SLOT_KINDS.get(kind, 0)
+    import task_loop_nodepool as np
+    return np.node_by_host(host)["slots"].get(kind, 0)
 
 
 def slot_janitor(state, now_iso):

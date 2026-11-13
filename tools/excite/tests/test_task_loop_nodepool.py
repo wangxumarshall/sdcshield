@@ -1,5 +1,7 @@
 # tools/excite/tests/test_task_loop_nodepool.py
+import subprocess
 import sys, os
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  "..", "..", "..", "scripts"))
 import task_loop_nodepool as np
@@ -42,3 +44,13 @@ def test_run_ssh_failure_raises_nodeerror(monkeypatch):
         assert False, "应抛 NodeError"
     except np.NodeError as exc:
         assert "0101" in str(exc) and "255" in str(exc)
+
+
+def test_run_ssh_timeout_becomes_nodeerror(monkeypatch):
+    """网络静默黑洞: subprocess 超时必须归一为 NodeError,不得穿透降级契约。"""
+    def boom(argv, **kwargs):
+        raise subprocess.TimeoutExpired("ssh", 55)
+    monkeypatch.setattr(np.subprocess, "run", boom)
+    with pytest.raises(np.NodeError) as excinfo:
+        np.run_ssh("0201", "sleep 999", timeout=45)
+    assert "0201" in str(excinfo.value) and "55" in str(excinfo.value)

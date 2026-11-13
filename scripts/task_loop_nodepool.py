@@ -14,7 +14,6 @@ import 它们(锁死依赖方向: tl → tp → np)。
 安全阀: env PIPELINE_NODEPOOL=0 → pick_node 只返回本机(纯本机旧行为);
 PIPELINE_FORCE_NODE=<host_id> → 强制单节点(冒烟/测试用)。
 """
-import os
 import subprocess
 
 # 板注册表(spec §3.1; 凭据不入库——连接经 setup 分发的 ~/.ssh/authorized_keys)
@@ -52,7 +51,7 @@ def node_by_host(host_id):
     raise NodeError(f"未知节点: {host_id}")
 
 
-def _ssh_argv(host_id, cmd, timeout):
+def _ssh_argv(host_id, cmd):
     node = node_by_host(host_id)
     user_host, _, port = node["ssh"].rpartition(":")
     return ["ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
@@ -61,9 +60,17 @@ def _ssh_argv(host_id, cmd, timeout):
 
 def run_ssh(host_id, cmd, timeout=SSH_TIMEOUT_DEFAULT):
     """全模块唯一 ssh 出口(测试 monkeypatch 此单点,零真触网)。
-    成功返回 stdout.strip(); 非零退出抛 NodeError(含退出码+stderr 摘要)。"""
-    proc = subprocess.run(_ssh_argv(host_id, cmd, timeout), capture_output=True,
-                          timeout=timeout + 10)
+    成功返回 stdout.strip(); 非零退出抛 NodeError(含退出码+stderr 摘要);
+    超时同样归一为 NodeError(ConnectTimeout=8 只限 TCP 连接段,不覆盖已建
+    连接的死寂——那是 subprocess 超时的职责),调用方只捕 NodeError 即可。"""
+    try:
+        proc = subprocess.run(_ssh_argv(host_id, cmd), capture_output=True,
+                              timeout=timeout + 10)
+    except subprocess.TimeoutExpired as exc:
+        secs = exc.timeout if exc.timeout else timeout + 10
+        cmd0 = exc.cmd[0] if isinstance(exc.cmd, (list, tuple)) else exc.cmd
+        raise NodeError(f"节点 {host_id} 命令超时(>{secs}s): {cmd0} 无响应"
+                        ) from exc
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", errors="replace")[:200]
         raise NodeError(f"节点 {host_id} 命令失败(rc={proc.returncode}): {err}")
@@ -71,13 +78,20 @@ def run_ssh(host_id, cmd, timeout=SSH_TIMEOUT_DEFAULT):
 
 
 def put_file(host_id, local_path, remote_path):
-    """scp 单点(同 run_ssh 的免密形态; agent.env/prompt 上板走这里)。"""
+    """scp 单点(同 run_ssh 的免密形态; agent.env/prompt 上板走这里)。
+    超时同 run_ssh 归一为 NodeError。"""
     node = node_by_host(host_id)
     user_host, _, port = node["ssh"].rpartition(":")
     argv = ["scp", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null", "-P", port,
             local_path, f"{user_host}:{remote_path}"]
-    proc = subprocess.run(argv, capture_output=True, timeout=60)
+    try:
+        proc = subprocess.run(argv, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        secs = exc.timeout if exc.timeout else 60
+        cmd0 = exc.cmd[0] if isinstance(exc.cmd, (list, tuple)) else exc.cmd
+        raise NodeError(f"scp → {host_id} 超时(>{secs}s): {cmd0} 无响应"
+                        ) from exc
     if proc.returncode != 0:
         raise NodeError(f"scp → {host_id} 失败(rc={proc.returncode}): "
                         f"{proc.stderr.decode(errors='replace')[:200]}")

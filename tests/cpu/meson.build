@@ -587,6 +587,7 @@ tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
         'eigen_gemm/gemm_double_max_arm.cpp',
+        'eigen_gemm/gemm_double_max_arm_sve2.cpp',
         'eigen_gemm/gemm_double_dynamic_square_sve.cpp',
         'eigen_gemm/gemm_float_dynamic_square_sve.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square_sve.cpp',

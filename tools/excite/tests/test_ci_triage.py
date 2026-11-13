@@ -64,10 +64,10 @@
     「退场后同 head 不重派」即死锁本身,该断言迁移至用例 25);head 变化
     → 再派(共 3 次;Task 4 起重派前先 slot_release 旧槽——同 key 互斥
     不判活,清死槽是 janitor 的职责,此处内联模拟);
- 19 test_lane_b_merge_ready_notifies_and_closes: READY_TO_MERGE → issue
-    评论含 @wangxumarshall、FakeGh 记录 issue close 调用(gh issue close
-    <n> 分支)、条目 DONE;评论措辞「本跟踪 issue 现已关闭」与当场 close
-    动作一致(Minor#7,不再虚报「将自动关闭」);
+ 19 test_lane_b_merge_ready_defers_to_merge_gate(C1 终审语义归位):
+    READY_TO_MERGE → lane_b 不动条目——零评论(不 @人工)/零 issue close/
+    零派发,条目保持 PR_OPEN 等待 merge 门评估(merge 属主是 merge_sweep,
+    短路 DONE 会让自动 merge 结构性不可达、merged_sha 永不记账);
  20 test_scan_heals_dirty_tree_when_no_agent（Review Focus #4）:
     monkeypatch ct._git → 克隆 HEAD 非 main 且 dirty → 断言完整恢复序列
     (fetch --all --prune → checkout main → reset --hard origin/main →
@@ -1026,9 +1026,13 @@ def test_lane_b_dispatches_once_per_head(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 用例 19: READY_TO_MERGE → @wangxumarshall 请人工 merge + issue close + DONE
+# 用例 19: READY_TO_MERGE → lane_b 不动条目(C1 语义归位,2026-11-13 终审):
+#          merge 属主是 merge_sweep(evaluate_merge_gate→execute_merge)——
+#          lane_b 当轮短路 @人工+关 issue+DONE 会让条目离开 PR_OPEN,merge 门
+#          只评估 PR_OPEN 条目 → 自动 merge 结构性不可达、merged_sha 永不
+#          记账、revert 归因链死亡。新语义: 打印移交提示,条目保持 PR_OPEN。
 
-def test_lane_b_merge_ready_notifies_and_closes(monkeypatch, tmp_path):
+def test_lane_b_merge_ready_defers_to_merge_gate(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("CITRIAGE_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("CITRIAGE_REPO", REPO)
     fake = FakeGh()
@@ -1040,24 +1044,28 @@ def test_lane_b_merge_ready_notifies_and_closes(monkeypatch, tmp_path):
                           issue_number=77, pr_number=88, rounds=2,
                           agent_pid=None, agent_started_at=None,
                           agent_log=None, extra_runs=[])
+    before = entry.to_dict()
     state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
 
     _fake_pr_loop(monkeypatch, _fake_pr(), "READY_TO_MERGE")
     ct.lane_b_advance(state, dry_run=False)
 
-    # 评论 @人工请 merge;issue 关闭;条目 DONE;零派发
-    assert len(fake.comments) == 1
-    assert fake.comments[0][0] == 77
-    assert "wangxumarshall" in fake.comments[0][1]
-    assert "merge" in fake.comments[0][1].lower()
-    # Minor#7: 措辞与动作一致——代码当场 gh issue close,评论不得虚报
-    # 「merge 后将自动关闭」
-    assert "现已关闭" in fake.comments[0][1]
-    assert "自动关闭" not in fake.comments[0][1]
-    assert fake.closed_issues == [77]
-    e = ct.StateStore.entries(state)[0]
-    assert e.status == "DONE"
+    # 零写: 不评论(不 @人工)、不关 issue、零派发
+    assert fake.comments == []
+    assert fake.closed_issues == []
     assert bg.calls == []
+    # 条目完全不动(保持 PR_OPEN 等待 merge 门评估;dry_run/非 dry_run 同形)
+    e = ct.StateStore.entries(state)[0]
+    assert e.status == "PR_OPEN"
+    assert e.to_dict() == before
+    out = capsys.readouterr().out
+    assert "READY_TO_MERGE" in out and "merge 门" in out
+
+    # dry_run 同语义: 同样零写零派发、条目不动(只打印意图)
+    ct.lane_b_advance(state, dry_run=True)
+    e2 = ct.StateStore.entries(state)[0]
+    assert e2.status == "PR_OPEN" and e2.to_dict() == before
+    assert bg.calls == [] and fake.closed_issues == []
 
 
 # ---------------------------------------------------------------------------
@@ -1384,12 +1392,15 @@ def test_cmd_scan_toplevel_gherror_returns_1_and_saves_state(
     monkeypatch.setenv("CITRIAGE_CLONE_DIR", str(tmp_path / "cl"))
     _patch_task4_seams(monkeypatch, tmp_path)
 
-    # lane_b 阶段: classify=READY_TO_MERGE,单条目级 try 内的 fetch_pr 走
-    # fake 不抛;抛点选该分支的 gh issue close(lane_b 的真实 gh 写路径,
-    # 无单条目 except 包裹)——正是检视所述「lane_b 的 gh 写任一抛 GhError
-    # 都会裸 traceback」的场景。
+    # lane_b 阶段: classify=CLOSED(人工 merge/关闭后 classify→CLOSED 的
+    # 收尾路径,C1 后 lane_b 仅存的 gh 写收尾分支),单条目级 try 内的
+    # fetch_pr 走 fake 不抛;抛点选该分支的 gh issue close(lane_b 的真实
+    # gh 写路径,无单条目 except 包裹)——正是检视所述「lane_b 的 gh 写
+    # 任一抛 GhError 都会裸 traceback」的场景。READY_TO_MERGE 分支已随
+    # C1(2026-11-13 终审)退役为零写移交(merge 属主归位 merge_sweep),
+    # 不再构成 gh 写路径。
     pr = _fake_pr()
-    _fake_pr_loop(monkeypatch, pr, "READY_TO_MERGE")
+    _fake_pr_loop(monkeypatch, pr, "CLOSED")
 
     fake = FakeGh(runs=[], open_issues=[
         # 检视#12 起,重派扫资格复查以 open+agent-task 列表为准: #151 仍
@@ -1397,7 +1408,7 @@ def test_cmd_scan_toplevel_gherror_returns_1_and_saves_state(
         {"number": 151, "title": "t",
          "labels": [{"name": "agent-task"}, {"name": "agent-bug"}]},
     ])
-    # READY_TO_MERGE 分支的 gh issue close 抛 GhError(非 fetch 路径——
+    # CLOSED 分支的 gh issue close 抛 GhError(非 fetch 路径——
     # 那条已被单条目 except 消化,构不成顶层验证)
     def gh_boom(args, input_text=None):
         fake.calls.append(list(args))
@@ -1411,7 +1422,7 @@ def test_cmd_scan_toplevel_gherror_returns_1_and_saves_state(
     monkeypatch.setattr(ct, "_git", lambda args: "")
 
     # 预置: 一个 reap 待收割条目(dead → attempts 1→2 记账)+ 一个 lane_b
-    # 待收尾条目(READY_TO_MERGE → issue close 抛 GhError)
+    # 待收尾条目(CLOSED → issue close 抛 GhError)
     reaped = _sample_entry(
         workflow="Sanitizer", run_id=51, status="DISPATCHED", issue_number=151,
         agent_pid=999999901, attempts=1,

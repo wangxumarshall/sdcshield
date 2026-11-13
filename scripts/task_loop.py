@@ -1959,13 +1959,15 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
 
     对每个候选条目: fetch_pr → classify_state:
       WAITING_BOTS / QUIET_WINDOW → 不动;
-      READY_TO_FIX → rounds>4 先 ESCALATED;否则 render_collect 落盘
+      READY_TO_FIX → rounds 达动态上限(docs/简单 diff → 2、其余 → 3)
+        先 ESCALATED;否则 render_collect 落盘
         <STATE_DIR>/collect-pr<N>.md + dispatch_agent(bot prompt、
         rounds+1、last_dispatched_head=head_sha、status→BOT_FIX);
         同 head 已派过(last_dispatched_head == head_sha)不重派(同 head
         单派——意见没变就再派是浪费,head 变了才允许新一轮);
-      READY_TO_MERGE → issue 评论 @wangxumarshall 请人工 merge +
-        gh issue close + 条目 DONE;
+      READY_TO_MERGE → 不动条目(只打印移交提示)——merge 属主在
+        merge 门(merge_sweep: evaluate_merge_gate → execute_merge),
+        灰度期(NO_AUTO_MERGE)保持 PR_OPEN 由门报告 would-merge;
       CLOSED → 总结评论(关联 issue + PR 链接)+ issue close + DONE;
       DRAFT / FORK → 打印跳过,条目不动。
 
@@ -2073,29 +2075,15 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
                   f"条目 DONE")
             continue
         if pr_state == "READY_TO_MERGE":
-            body = (f"@wangxumarshall 修复 PR #{entry.pr_number}({pr.url})"
-                    f"四 bot 检视通过、当前 head 无待处置意见——请人工 merge。"
-                    f"本跟踪 issue 现已关闭。")
-            if dry_run:
-                print(f"[dry-run] 将评论 issue #{entry.issue_number}: "
-                      f"{body[:120]}…")
-                print(f"[dry-run] 将关闭 issue #{entry.issue_number},"
-                      f"条目 run {entry.run_id} → DONE")
-            else:
-                if entry.issue_number is not None:
-                    comment_on_issue(entry.issue_number, body)
-                    gh_json_idem(["issue", "close", str(entry.issue_number),
-                                  "--repo", slug])
-                    # 终态摘 wip(spec §7.2,建议性线索——state 为权威)
-                    try:
-                        gh_label_remove(entry.issue_number, AGENT_LABEL_WIP)
-                    except GhError as exc:
-                        print(f"[warn] agent-wip 标签摘除失败"
-                              f"(state 为权威,继续): {exc}")
-            entry.status = "DONE"
-            entry.updated_at = _now_iso()
-            print(f"[lane-b] run {entry.run_id}: READY_TO_MERGE → 已 @人工"
-                  f"请 merge,issue 收尾,条目 DONE")
+            # C1(2026-11-13 终审): merge 属主是 merge_sweep
+            # (evaluate_merge_gate → execute_merge)。旧形态在此 @人工 +
+            # 关 issue + 置 DONE,会让条目当轮离开 PR_OPEN——merge 门只评估
+            # status=="PR_OPEN" 的条目 → 引擎 PR 自动 merge 结构性不可达、
+            # merged_sha 永不记账、revert 归因链死亡。灰度期(NO_AUTO_MERGE)
+            # 语义 = 条目保持 PR_OPEN、merge 门纯报告 would-merge、次晨人工
+            # 复核、熔断放开后自动合。零写路径,dry_run/非 dry 同形。
+            print(f"[lane-b] run {entry.run_id}: READY_TO_MERGE——交由 merge "
+                  f"门评估(NO_AUTO_MERGE 灰度时保持 PR_OPEN),条目不动")
             continue
 
         # READY_TO_FIX: 轮数上限 → 升级;同 head 已派 → 不重派;否则派 bot agent

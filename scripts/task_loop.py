@@ -227,12 +227,14 @@ class Entry:
     merged_at: Optional[str] = None # 自动 merge 时间(ISO8601;人工 merge 不记)
     merged_sha: Optional[str] = None # squash merge 产生的新 main commit sha(revert 归因主数据)
     conflict_nights: int = 0        # 与 main 冲突的连续夜数(I6,spec §5: ≥2 → ESCALATED;过门/非冲突拒清零)
+    last_conflict_night: Optional[str] = None  # 最近计数夜的 pipeline 夜标识(I6 fix-2: 同夜不重复 +1 的夜锚)
 
     # 注: 前 18 字段显式必填(含 extra_runs)——不做隐式默认,构造方须给全。
     # source/kind/audit_hash 三个 v2 字段仅 from_dict 容错给默认,直接构造
     # 仍须显式给全;lane/worktree/merged_at/merged_sha 四个 v3 字段带默认
     # (lane="" 其余 None),旧 state 缺键加载即升格、旧构造方无需改动;
-    # conflict_nights(v4,I6)带默认 0 同理——合计 23 字段。
+    # conflict_nights/last_conflict_nights(v4,I6)带默认 0/None 同理——
+    # 合计 24 字段。
 
     def to_dict(self) -> dict:
         """state.json 序列化形态。"""
@@ -260,6 +262,7 @@ class Entry:
             "merged_at": self.merged_at,
             "merged_sha": self.merged_sha,
             "conflict_nights": self.conflict_nights,
+            "last_conflict_night": self.last_conflict_night,
         }
 
     @classmethod
@@ -270,7 +273,8 @@ class Entry:
         source/kind/audit_hash 三键缺省回落 ci/bug/None——v1 state.json
         现存条目无此三键,加载即升格 v2;lane/worktree/merged_at/merged_sha
         四键缺省回落 ""/None/None/None——v2 state.json 加载即升格 v3;
-        conflict_nights 缺省回落 0——v3 加载即升格 v4,I6)。
+        conflict_nights/last_conflict_night 缺省回落 0/None——v3 加载即
+        升格 v4,I6)。
         """
         return cls(
             workflow=d["workflow"],
@@ -296,6 +300,7 @@ class Entry:
             merged_at=d.get("merged_at"),
             merged_sha=d.get("merged_sha"),
             conflict_nights=d.get("conflict_nights", 0),
+            last_conflict_night=d.get("last_conflict_night"),
         )
 
 

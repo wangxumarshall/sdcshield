@@ -549,21 +549,25 @@ REVERT_MARKER_FMT = "<!-- task-loop:revert:{sha} -->"
 
 
 def _revert_issue_exists(slug, merged_sha):
-    """双态 marker 幂等搜索(fix-round 1 Important#1,先例直接移植
-    tl._search_audit_issue/_search_finding_issue 的 gh search issues 形态,
-    检视#35 同一缺陷类): open 与 closed 各查一次,body 含完整
-    REVERT_MARKER_FMT marker 即命中——搜索宽松命中但正文无完整 marker 的
-    干扰项被 Python 侧复核滤掉(与 audit 先例同款双保险)。closed 命中兑现
-    「人工关闭的 revert issue 不重建」的人工接管语义。LOOKBACK_DAYS 窗内
-    坏 merge 未修时红 run 每轮重见,引擎自书不变量「幂等由 marker 查重
-    保证」(ci 源 _search_marker_issues / audit 源 _search_audit_issue
-    同款)在此兑现。"""
+    """双态 marker 幂等搜索(fix-round 1 Important#1 + I3 裸 sha 查询词,
+    先例直接移植 tl._search_audit_issue/_search_finding_issue 的 gh search
+    issues 形态,检视#35 同一缺陷类): open 与 closed 各查一次,body 含
+    完整 REVERT_MARKER_FMT marker 即命中——查询词用**裸 sha**(正文
+    `revert-for: PR #N @ <sha>` 是纯文本必被索引;HTML 注释
+    `<!-- task-loop:revert:<sha> -->` 有引擎已知的正文索引漏命中特征,
+    押它会让漏命中每轮重复建 issue),搜索宽松命中但正文无完整 marker 的
+    干扰项被 Python 侧复核滤掉(与 audit 先例同款双保险)。closed 命中
+    兑现「人工关闭的 revert issue 不重建」的人工接管语义。LOOKBACK_DAYS
+    窗内坏 merge 未修时红 run 每轮重见,引擎自书不变量「幂等由 marker
+    查重保证」(ci 源 _search_marker_issues / audit 源 _search_audit_issue
+    同款)在此兑现;state revert_seen(I3 主查重,调用方先查)命中时本
+    函数不被触达——它是 state 丢失/重启后的兜底闸。"""
     marker = REVERT_MARKER_FMT.format(sha=merged_sha)
     for st in ("open", "closed"):
         res = tl.gh_json(["search", "issues", "--repo", slug,
                           "--state", st, "--json", "number,body",
                           "--limit", "20",
-                          f"task-loop:revert:{merged_sha}"])
+                          merged_sha])
         for it in (res if isinstance(res, list) else []):
             if marker in (it.get("body") or ""):
                 return True
@@ -591,16 +595,31 @@ def revert_attribution(state, red_runs, dry_run=False):
     皆红是常态)只建一个 revert issue——revert 的对象是坏 merge 不是红
     run,不去重则双 agent 同 revert 竞态;批内去重打印前缀 [revert-dedup],
     与二阶链升级提示 [revert] 分离(T10 夜报 grep "revert" 时去重噪声不得
-    混入人工升级信号)。跨调用幂等经 _revert_issue_exists 双态(open+closed)
-    marker 搜索内建(fix-round 1 Important#1,先例移植 _search_audit_issue
-    ——人工关闭的 revert issue 不重建;搜索失败幂等不可证 → 宁严勿松
-    转人工)。dry_run 在查重与闸后判: 拟建输出已经是真实将建集,零写零
-    记账(查重/探针皆只读照跑)。"""
+    混入人工升级信号)。
+
+    返回 (issues, absorbed_run_ids) 二元组(I2,2026-11-13 终审): issues =
+    本批新建 revert issue 号清单;absorbed_run_ids = 已由 revert issue 接管
+    的红 run databaseId 集(建成的 + 查重命中已存在的——含同批同 merge 去重
+    与 state/gh 双层查重命中,幂等即吸收)。cycle_once 把 absorbed 的 run
+    从传给 triage 的清单里滤除——归因命中的红 run 若再走前向修复,同一故障
+    会同时有 revert agent 与「修复」agent 互相冲突。查重搜索失败/标题探针
+    失败/二阶链命中转人工的 run **不**吸收(照旧前向修复,维持 T9 兜底
+    零丢失)。dry_run: 拟建输出即真实将建集,absorbed 同步收录(预演口径
+    与真实一致),state 零写(不记 revert_seen)。
+
+    跨调用幂等双层(I3): ①state["revert_seen"] 主查重——建成 revert issue
+    即把 sha 记入(state 键属 _pipeline_save「其余键」类,pipeline 唯一写者,
+    落盘随 cycle 走;查重先看 state,命中零 gh);②_revert_issue_exists 双态
+    (open+closed)marker 搜索兜底(fix-round 1 Important#1,先例移植
+    _search_audit_issue——state 丢失/重启后仍「人工关闭的 revert issue 不
+    重建」;查询词裸 sha,正文 revert-for 纯文本必被索引)。镜像 audit 的
+    audit_seen 双源设计。搜索失败幂等不可证 → 宁严勿松转人工(不吸收)。"""
     merged = {}
     for e in tl.StateStore.entries(state):
         if e.merged_sha and e.pr_number:
             merged[e.merged_sha] = e
     issues = []
+    absorbed = set()
     seen_merges = set()
     for run in red_runs:
         hit = merged.get(run.get("headSha"))
@@ -609,17 +628,27 @@ def revert_attribution(state, red_runs, dry_run=False):
         if hit.merged_sha in seen_merges:
             print(f"[revert-dedup] merge {hit.merged_sha[:12]} 本批已处理"
                   f"——红 run {run.get('url')} 同 merge 去重跳过")
+            absorbed.add(run.get("databaseId"))
             continue
         seen_merges.add(hit.merged_sha)
-        # 跨调用幂等(fix-round 1 Important#1): 建 issue(含 dry-run 打印)
-        # 之前双态 marker 搜索——红 run 在 LOOKBACK_DAYS 窗内每轮重见,
-        # 不查重则同一坏 merge 反复建 revert issue(双 agent 同 revert 竞态/
-        # attempts 燃烧/假性 ESCALATED 唤醒人工)。搜索失败幂等不可证 →
-        # 宁严勿松转人工(误建代价 > 漏建,漏建仍有 T10 intake 前向修复兜底)。
+        # I3 主查重①: state revert_seen(pipeline 唯一写者,跨轮第一道闸,
+        # 命中零 gh)。红 run 在 LOOKBACK_DAYS 窗内每轮重见,不查重则同一
+        # 坏 merge 反复建 revert issue(双 agent 同 revert 竞态/attempts
+        # 燃烧/假性 ESCALATED 唤醒人工)。零建成不落键(setdefault 会把空键
+        # 塞进 state——查重只在建成路径记账)。
+        if hit.merged_sha in state.get("revert_seen", []):
+            print(f"[revert-dedup] merge {hit.merged_sha[:12]} 已在 state "
+                  f"revert_seen(本流水线建过 revert issue)——跳过")
+            absorbed.add(run.get("databaseId"))
+            continue
+        # I3 主查重②(兜底闸): 建 issue(含 dry-run 打印)之前双态 marker
+        # 搜索——覆盖 state 丢失/重启场景。搜索失败幂等不可证 → 宁严勿松
+        # 转人工(误建代价 > 漏建,漏建仍有 intake 前向修复兜底,不吸收)。
         try:
             if _revert_issue_exists(tl.repo_slug(), hit.merged_sha):
                 print(f"[revert-dedup] merge {hit.merged_sha[:12]} 已有 "
                       f"revert issue(双态查重命中,人工关闭亦不重建)——跳过")
+                absorbed.add(run.get("databaseId"))
                 continue
         except GhError as exc:
             print(f"[warn] revert 查重搜索失败——幂等不可证,转人工"
@@ -651,6 +680,7 @@ def revert_attribution(state, red_runs, dry_run=False):
             f"完成后以结束语 `task-loop: done <fix_branch>` 收尾。")
         if dry_run:
             print(f"[dry-run] 将建 revert issue: {body[:100]}…")
+            absorbed.add(run.get("databaseId"))   # 拟建即真实将建集(预演口径)
             continue
         num = tl.create_task_issue(
             title=f"[revert] PR #{hit.pr_number} 自动 merge 后 main 红"
@@ -658,9 +688,12 @@ def revert_attribution(state, red_runs, dry_run=False):
             body=body,
             labels=[tl.AGENT_LABEL_TASK, tl.AGENT_LABEL_BUG])
         issues.append(num)
+        # I3 主查重记账: 建成即记 sha(下一轮 state 命中零 gh)
+        state.setdefault("revert_seen", []).append(hit.merged_sha)
+        absorbed.add(run.get("databaseId"))
         # 临时观察键: T10 落盘 state 时无害但留意(非契约字段,测试断言用)
         state["_last_revert_body"] = body
-    return issues
+    return issues, absorbed
 
 
 # ============ 编排器主循环 + 软停 + 夜报 + CLI(Task 10) ============
@@ -680,7 +713,8 @@ def _pipeline_save(store, state):
       max(盘,内存)——两源任一见 ≥3 连败即触发熔断;成功归零可能被另一线
       未归零值掩盖 → 熔断宁早勿晚(fail-safe)。at=取两侧较新(缺侧取有;
       两侧皆 _now_iso 同形,字典序即时间序)。
-    - 其余键: pipeline 唯一写者,内存为准。
+    - 其余键: pipeline 唯一写者,内存为准(revert_seen——I3 revert 主查重
+      记账——同此类: audit 子进程不写它,无需合并特殊处理)。
     合并结果同步回内存对象——下一轮的 bump 从合并值起步,不再被磁盘旧值
     抹掉(裸拷的回归点)。阻塞 flock 的临界区只有 load+save(亚秒级);常态
     下 scan.lock 唯一的生产持有者就是 audit 合并写。过渡期注意(crontab
@@ -914,16 +948,24 @@ def cycle_once(state, dry_run, events, now, window_end=9):
     → janitor → 收割 → 对账 → 自愈 → 泳道1 派发 → 泳道2 派发 → 泳道3
     (lane_b) → audit 后台线 → merge 门扫。revert 转人工/去重信号在
     revert_attribution 的 stdout(经 cron 重定向归档 pipeline.log,夜报
-    正文引路径),本函数只收其返回的 issue 清单(裁定#4)。window_end 仅
-    供 spawn_audit 的窗口末端守卫用(fix-round 1 Minor#1,run_pipeline 的
-    --window-end 透传;缺省 9 与 spec 窗口一致)。"""
+    正文引路径),本函数只收其返回的 (issue 清单, absorbed 集) 二元组
+    (裁定#4 + I2: absorbed 的红 run 从 triage 前向修复清单滤除,防 revert
+    与「修复」双 agent 对同一故障互踩)。window_end 仅供 spawn_audit 的窗口
+    末端守卫用(fix-round 1 Minor#1,run_pipeline 的 --window-end 透传;
+    缺省 9 与 spec 窗口一致)。"""
     if now.tzinfo is None:
         now = now.astimezone()   # brief 调用形态 naive → 感知(docs_ready 减法需感知时)
     runs = tl.scan_red_runs()
-    issues = revert_attribution(state, runs, dry_run)
+    issues, absorbed_run_ids = revert_attribution(state, runs, dry_run)
     if issues:
         events.append({"kind": "revert-issue", "issues": issues})
-    tl.triage_new_red_runs(state, runs, dry_run=dry_run)
+    # I2(2026-11-13 终审): 归因命中的红 run 已由 revert issue 接管(absorbed
+    # = 建成 + 查重命中已存在),从 triage 前向修复清单里滤除——不滤则同一
+    # 故障同时建 revert issue 与「修复」issue,双 agent 互踩。查重/探针失败
+    # 转人工的 run 不在 absorbed 里,照旧前向修复(T9 兜底,零丢失)。
+    fwd_runs = [r for r in runs
+                if r.get("databaseId") not in absorbed_run_ids]
+    tl.triage_new_red_runs(state, fwd_runs, dry_run=dry_run)
     released = slot_janitor(state, _now_local_iso())
     if released:
         events.append({"kind": "slot-released", "released": released})

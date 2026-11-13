@@ -22,8 +22,9 @@ feature 类需求确认（`agent-approved`）、紧急停机（`PAUSED` /
   熔断语义的搬移来源，本文是其泛化后继
 - 测试：`tools/excite/tests/test_task_loop.py` +
   `tools/excite/tests/test_ci_triage.py`（经薄壳，锚定搬移零语义变化），
-  离线锚定全部关键语义；全套 `tools/excite/tests/` 366 passed（2026-11-13
-  实测，含 pipeline 泳道/merge 门/轮次/软增补用例）
+  离线锚定全部关键语义；全套 `tools/excite/tests/` 372 passed（2026-11-13
+  实测，含 pipeline 泳道/merge 门/轮次/软增补/终审修复波用例——C1 跨模块
+  集成、revert 吸收/主查重、冲突夜计数、检视超时锚）
 - 设计规格（会话产物，不入库）：主仓
   `docs/superpowers/specs/2026-10-29-task-loop-design.md`（初代）、
   `docs/superpowers/specs/2026-11-12-full-auto-pipeline-design.md`
@@ -50,8 +51,10 @@ cron 0 23(timeout 39600)                    @reboot scripts/pipeline_selfheal.sh
        ├─ 前奏: 首启动迁移(§3.2)/标签渠道就位/清检视每晚计数/启动对账
        └─ 窗口循环: 23:00–09:00 每 PIPELINE_CYCLE_SEC=300s 一轮(cycle_once)
             ├ intake: scan_red_runs(main 红 run,回看 3 天)
-            │    → revert 归因(merged_sha 集命中 → revert issue)
-            │    → triage_new_red_runs(幂等建 issue → QUEUED;同根因收敛)
+            │    → revert 归因(merged_sha 集命中 → revert issue;命中 run
+            │      吸收——不再前向修复,防双 agent 互踩)
+            │    → triage_new_red_runs(吸收后的红 run 幂等建 issue →
+            │      QUEUED;同根因收敛)
             ├ 槽位 janitor(超时判死回收;boot_id 变化期死亡不计 attempts)
             ├ 收割 reap_or_advance / 队列对账 reconcile_issues
             ├ 泳道1 issue-agent ×2 空槽: QUEUED FIFO(资格公式 §2)
@@ -290,7 +293,7 @@ touch ~/.local/state/sdcshield-task-loop/NO_AUTO_MERGE  # 保险:只停自动 me
 | `PR_OPEN` | agent 自开 PR 已核实 | 收割核实 `gh pr list --head` 命中 open PR | 贴 PR 简报评论（车道 A→B 的唯一铰链） |
 | `BOT_FIX` | bot 意见处置 agent 在跑 | 车道 B READY_TO_FIX → collect 导出 + 派 agent（rounds+1，**同 head 只派一次**） | 处置报告贴 issue |
 | `DONE` | 结案 | 引擎 PR：merge 门六门槛全过自动 squash merge（§7）后置 DONE，**记账 `merged_at`/`merged_sha`（revert 归因主数据，人工 merge 永不写）**；用户 docs PR：merge 门过即合（无条目，不进状态机） | PR 评论贴门槛证据审计 + issue 贴闭环评论 + 关 issue + 摘 wip |
-| `ESCALATED` | 升级人工，冻结 | attempts>2 / rounds 超动态上限（2/3，§4 全局机制）/ agent 自报 escalated / 熔断 / revert 二阶链 | @wangxumarshall 评论附日志尾证据与建议 + `agent-escalated` 标签 + 摘 wip |
+| `ESCALATED` | 升级人工，冻结 | attempts>2 / rounds 超动态上限（2/3，§4 全局机制）/ agent 自报 escalated / 熔断 / revert 二阶链 / 与 main 冲突连续 ≥2 夜（`conflict_nights`，merge 门逐夜计数，spec §5——不自动 rebase） | @wangxumarshall 评论附日志尾证据与建议 + `agent-escalated` 标签 + 摘 wip |
 | `HUMAN_CLOSED` | 人工接管，工具永不再碰 | QUEUED/DISPATCHED 条目 issue 已被人工关闭（无 PR 路径；有 PR 路径的由车道 B 收尾） | 不 @ 不评论（DISPATCHED 先击杀在跑 agent、摘 wip） |
 
 **全局机制**：
@@ -313,9 +316,15 @@ touch ~/.local/state/sdcshield-task-loop/NO_AUTO_MERGE  # 保险:只停自动 me
   `merged_at`/`merged_sha`——只由编排器 merge 执行写（**人工 merge 的
   sha 永不进归因集**，回读失败降级 None 并 [warn]——已合入是事实，账面
   如实反映）；夜间 intake 发现 main 红 run 且 `head_sha` 命中 `merged_sha`
-  集 → 建 revert issue（`fix/revert-pr<N>`，正文 `revert-for: PR #N @ <sha>`
-  双态 marker 查重——open/closed 命中均不重建）入泳道1，revert PR 走
-  **同一 merge 门**；归因不到的红照旧前向修复；revert 链深度 ≤1——revert
+  集 → 建 revert issue（分支随 issue 约定 `fix/issue-<N>`——issue 走泳道1
+  派发即按 issue 号建分支，不为 revert 单设命名；merge 门正则
+  `fix/revert-prN` 模式为防御性冗余保留，正文 `revert-for: PR #N @ <sha>`
+  双源查重——state `revert_seen` 主查重（建成即记，跨轮零 gh）+ gh 裸 sha
+  双态搜索兜底（state 丢失/重启后，open/closed 命中均不重建））入泳道1，
+  revert PR 走**同一 merge 门**；归因命中且已建/已有 revert issue 的红 run
+  **吸收**——不再走 triage 前向修复（防 revert agent 与修复 agent 对同一
+  故障互踩），归因不到/查重与探针失败转人工的红照旧前向修复（兜底零
+  丢失）；revert 链深度 ≤1——revert
   PR 再引红直接 ESCALATED（防 revert 打乒乓球）。
 - **同根因收敛**：同 workflow 有活跃条目（非 DONE/ESCALATED/HUMAN_CLOSED
   三终态，与上表一致）时新红 run 不开新 issue，只挂 `extra_runs` + 追加评论；
@@ -398,7 +407,7 @@ env 重定向（测试/多实例）：`TASKLOOP_STATE_DIR`（>
 | `prompt-<issue 号>-<UTC 时间戳>.txt` | 派发 prompt 落盘（0600，经 stdin 喂给 claude——修 argv 传 prompt 的 ARG_MAX 隐患；issue 号缺省时用 run_id） |
 | `collect-pr<N>.md` | 车道 B 派发前导出的 bot 检视意见（不可信检视数据） |
 | `pipeline.log` | crontab `0 23` 重定向的 pipeline 输出（revert 转人工/升级/查重留痕在此，夜报正文引其路径） |
-| `report-YYYYMMDD.md` | 每晚夜间报告（merge 清单含 sha 与门槛摘要/would-merge 证据/revert/失败超时/槽位与内存事件；`state["last_report"]` 记最新一份，`status` 顶部展示） |
+| `report-YYYYMMDD.md` | 每晚夜间报告＝**事件清单**（`write_report` 实落内容：merge/would-merge/gate-reject/revert-issue/槽回收事件，一事一行）+ 人工介入信号见 `pipeline.log`（转人工/升级/查重/去重留痕只在 stdout，夜报正文只引其路径，不复制内容）；`state["last_report"]` 记最新一份，`status` 顶部展示 |
 | `audit.log` | pipeline spawn 的 audit 后台线输出 |
 | `cron.log` | 旧 scan 输出归档（终态 cron 不再调 scan——旧 scan 行删除随 §3.1 runbook） |
 

@@ -253,3 +253,33 @@ pipeline 进程（唯一 state 写者）:
 | 10 | 子命令表/env 表 | argparse 2759-2795；TASKLOOP_* 284-302 等 |
 | 11 | 文件规模：task_loop.py 2804 行 / pr_loop.py 1872 行（dev 与 autoci 逐字节一致，克隆干净在 main） | wc -l + diff |
 | 12 | 第 5 bot 反复超时现状（#661） | review 超时提到 5400s + 每晚每 head 2 次上限 |
+
+## 14. 勘误（2026-11-13 终审）
+
+终审修复波（final-review-findings C1/I2-I6/M13 + 文档对齐 M7-M15）落地时
+对本设计文本的勘误——**代码以本节为准**：
+
+1. **决策表 #2「每 head 每晚至多 1 次」与 §4 泳道2 边界列/附录 A #12 的
+   「每晚每 head 2 次」矛盾——统一为 2**（`REVIEW_PER_HEAD_PER_NIGHT=2`，
+   §8 常量表同款）。
+2. **`PROC_TIMEOUT_SEC=37800`（§2/§8）→ 39600**：外层 timeout 与「10h 窗口
+   + 30min 软停 grace」**零裕量**咬合——软停等待段必被外层 timeout 击杀，
+   夜报/state 记账丢失（I4）；11h 留 30min 裕量。
+3. **`max_slots` 未入 state（§3）**：实现用代码常量
+   `SLOT_KINDS = {"issue_fix": 2, "pr_review": 2, "pr_repair": 2, "audit": 1}`
+   ——槽位上限是引擎语义不是运行时状态，常量更优；state 只记实际占用
+   （`slots` 租约账本）。
+4. **§7「`status` 子命令顶部增最近一夜摘要」＝报告文件名指针**：实码是
+   `state["last_report"]` 存在时 status 打一行报告文件名（内容仍归
+   `report-YYYYMMDD.md`），非内容摘要。
+5. **revert 分支命名（§6）**：`fix/revert-pr<N>` → 实码按 issue 约定
+   `fix/issue-<N>`（revert issue 走泳道1 派发，分支随 issue 号生成，
+   不为 revert 单设命名）；`fix/revert-prN` 降级为标题约定，merge 门
+   正则保留该模式纯为防御。
+6. **`REVIEW_AGENT_TIMEOUT_SEC=5400`（§4 边界列/§8）→ 7500**（M13）：外层
+   5400 小于内层最坏（claude 3600s + 解析失败重试 3600s = 7200+）——检视
+   agent 全部死于外层 timeout，审查白跑；7500 覆盖内层最坏并留余量。
+7. **§5「与 main 冲突持续 >2 夜 → ESCALATED」的实现口径**：落地为
+   `conflict_nights` **连续夜计数 ≥2 即升级**（连续第二夜仍冲突即
+   ESCALATED——不自动 rebase 不变，rebase 决策留给人工）；「>2 夜」按
+   夜边界从严读。

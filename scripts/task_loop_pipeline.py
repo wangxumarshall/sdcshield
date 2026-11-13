@@ -227,7 +227,7 @@ def reset_review_tries(state):
     state["review_tries"] = {}
 
 
-def dispatch_review(state, pr_num, head):
+def dispatch_review(state, pr_num, head, node=None):
     """泳道2 派发: 每晚每 (pr,head) ≤REVIEW_PER_HEAD_PER_NIGHT 次;满槽/内存
     不足返回 None。spawn 命令与修复 agent 同形(setsid+timeout),凭据经 agent.env。
 
@@ -236,7 +236,14 @@ def dispatch_review(state, pr_num, head):
     killpg;死槽自释放仍按 R3 只清本 key,不破坏「先 janitor 后派发」序)
     → 每晚上限 → 满槽 → agent.env 存在性(B44 同款: 缺凭据拒绝且不烧预算,
     不拦则第 5 bot 从未启动却烧满 2 次/晚)→ spawn;acquire 失败(仅剩同轮
-    并发竞态)killpg 整组击杀不留孤儿。"""
+    并发竞态)killpg 整组击杀不留孤儿。
+
+    node(Task 6 nodepool,spec 2026-11-13 §4): None → np.pick_node 择优;
+    选中板节点走远程分支(agent.env 上板 refresh→主克隆 heal→板上克隆跑
+    pr_local_review.py --pr N→板上 log→槽 host=板 id),远程任何 NodeError
+    打印后回退本机路径原样(不占远程槽、不烧每晚预算,回退一次成功才
+    tries+1;不递归 pick_node)。检视无 prompt 文件(命令行 --pr 传参),
+    远程分支无 put_file;agent.env 存在性检查查本地源文件——refresh 会传。"""
     if not mem_gate_ok():
         print(f"[mem-gate] MemAvailable 不足({min_mem_gb()}GB 闸),"
               f"本轮不派检视 agent")
@@ -269,6 +276,46 @@ def dispatch_review(state, pr_num, head):
         print(f"[review] agent.env 缺失({env_file})——按 task-loop.md §3.3 "
               f"放置凭据(权限 600)后恢复;本轮不派检视、不烧每晚预算")
         return None
+    # ---- 跨机分载远程分支(Task 6 nodepool,spec 2026-11-13 §4) ----
+    # node=None 由 pick_node 择优;nodepool 任何意外 → 本机兜底,本机路径
+    # (下方)零改动。回退不递归 pick_node(防板上故障循环),tries 只挂在
+    # 成功 return 上(远程失败/回退失败都不烧每晚预算)。
+    import task_loop_nodepool as np
+    if node is None:
+        try:
+            node = np.pick_node("pr_review", state)
+        except Exception as exc:          # nodepool 任何意外 → 本机兜底
+            print(f"[nodepool] pick_node 失败,回退本机: {exc}")
+            node = np.LOCAL_NODE
+    if node is not None and node.get("host_id") != "local":
+        try:
+            np.refresh_env_remote(node, env_file)
+            np.heal_remote(node)      # 板上主克隆 heal——第5bot 跑最新脚本
+            ts_r = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            remote_log = f"{np.REMOTE_STATE_DIR}/review-pr{pr_num}-{ts_r}.log"
+            inner_r = (f"source {np.REMOTE_STATE_DIR}/agent.env && "
+                       f"cd {node['clone_dir']} && "
+                       f"timeout {REVIEW_AGENT_TIMEOUT_SEC} /usr/bin/python3 "
+                       f"{node['clone_dir']}/scripts/pr_local_review.py "
+                       f"--pr {pr_num}")
+            pid = np.spawn_remote(node, inner_r, remote_log)
+            # 占位同本机语义(worktree=None——检视在主克隆跑);boot 照记本机
+            # boot_id(远程槽的 uptime 豁免归收割分流 N7)。
+            if not slot_acquire(state, "pr_review", key, pid, pid, remote_log,
+                                None, _now_local_iso(), boot_id(),
+                                host=node["host_id"]):
+                try:
+                    np.kill_remote(node["host_id"], pid, 9)
+                except np.NodeError as exc:
+                    print(f"[nodepool] {node['host_id']} 占位失败补刀失败"
+                          f"(留次夜): {exc}")
+                raise np.NodeError(f"远程槽占位失败(同 key 竞态),PID {pid}")
+        except np.NodeError as exc:
+            print(f"[nodepool] {node['host_id']} 远程检视派发失败,回退本机: {exc}")
+        else:
+            tries[tk] = tries.get(tk, 0) + 1
+            return pid
+    # ---- 本机路径(原样) ----
     # 顺手修④: 时间戳 naive 本地 → UTC 带 Z(与 tl.dispatch_agent 的
     # _now_iso UTC 口径对齐;文件名模板 review-pr<N>-<ts>.log 不变)。
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

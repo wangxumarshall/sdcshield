@@ -1331,9 +1331,51 @@ def _kill_agent_if_alive(entry: Entry) -> None:
     entry.agent_pid = None
 
 
+def _record_dispatch(entry: Entry, kind: str, fix_branch: str, pid: int,
+                     log: str, wt: str, increment_rounds: bool,
+                     host: str) -> int:
+    """派发成功后的条目记账(local/remote 两分支唯一共用段——防两份漂移)。
+
+    原本机段逐条搬移、副作用一条不漏: agent_pid/agent_log/agent_started_at/
+    fix_branch/lane/worktree/status/rounds|attempts/updated_at/wip 标签/
+    [dispatch] 打印。新增 host 赋值(执行节点——重派时随之更新为当前派发
+    节点;本机分支传 "local",与既有条目默认值等值,零行为差)。dry_run 不达
+    此(两调用点都在 dry_run 提前返回之后,原 `not dry_run` 守卫为死条件)。
+    """
+    entry.agent_pid = pid
+    entry.agent_log = log
+    entry.agent_started_at = _now_iso()
+    entry.fix_branch = fix_branch
+    # Task 4 槽位泳道记账: lane 供收割/泳道统计,worktree 供槽位 janitor
+    # 与 heal 孤儿清理按图索骥(Entry 字段注释: 派发时建,收割时清)。
+    entry.lane = kind
+    entry.worktree = wt
+    entry.host = host
+    # 派发成功即置状态(单一权威): 车道 A → DISPATCHED、车道 B → BOT_FIX。
+    # 不置状态时条目停在 QUEUED,收割/heal 全部失明(Task 4 R2 检视
+    # Critical——生产首跑同轮连派 4 个 agent 的根因)。
+    entry.status = "BOT_FIX" if increment_rounds else "DISPATCHED"
+    if increment_rounds:
+        entry.rounds += 1
+    else:
+        entry.attempts += 1
+    entry.updated_at = _now_iso()
+    # wip 标签(spec §7.2: 派发即认领): 建议性线索,state 为权威——打标
+    # 失败只告警,绝不阻断派发记账
+    if entry.issue_number is not None:
+        try:
+            gh_label_add(entry.issue_number, AGENT_LABEL_WIP)
+        except GhError as exc:
+            print(f"[warn] agent-wip 标签失败(state 为权威,继续): {exc}")
+    print(f"[dispatch] run {entry.run_id} → agent PID {pid},分支 "
+          f"{fix_branch},日志 {log}")
+    return pid
+
+
 def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
                    prompt_override: Optional[str] = None,
-                   increment_rounds: bool = False) -> Optional[int]:
+                   increment_rounds: bool = False,
+                   node: Optional[dict] = None) -> Optional[int]:
     """派修复 agent(nohup 后台,per-entry 隔离 worktree)→ 返回 PID;
     PAUSED/内存不足/同 key 已占用/满槽/同 key 占位(spawn 后竞态)失败
     返回 None。
@@ -1383,6 +1425,14 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     - increment_rounds: 车道 B 传 True——记账 rounds+1 不动 attempts
       (车道 A 缺省 attempts+1 不动 rounds;两车道失败预算分账);
     - dry_run: 只打印意图,零 spawn、零 worktree、零 prompt 落盘,返回 None。
+    - node(Task 6 nodepool,spec 2026-11-13 §4): None → np.pick_node 按泳道
+      择优(本机+注册表板,可用内存/空槽;全不可用返回 None 即落本机);
+      显式传 LOCAL_NODE 或择优本机结果同样落本机路径(原样)。选中板节点走
+      远程分支: refresh_env_remote(agent.env 上板)→prepare_worktree_remote
+      (板上 worktree)→heal_remote(主克隆)→prompt put_file 上板→
+      spawn_remote→slot_acquire(host=板 id);远程任何 NodeError 打印后
+      回退本机路径原样(不占远程槽、不燃 attempts,回退成功才燃一次;不递归
+      pick_node,防板上故障循环回退)。dry_run 在此之前提前返回——远程零动作。
     """
     import task_loop_pipeline as tp        # 懒 import 防循环(pipeline 顶层 import 本模块)
     kind = "pr_repair" if increment_rounds else "issue_fix"
@@ -1451,6 +1501,54 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
               f"日志 {log},worktree key {key}"
               f"(隔离 worktree,detach origin/main),prompt 经 stdin({prompt_path})")
         return None
+    # ---- 跨机分载远程分支(Task 6 nodepool,spec 2026-11-13 §4) ----
+    # node=None 由 pick_node 择优;nodepool 任何意外(pick 抛错/全节点不可用)
+    # → 本机兜底,本机路径(下方)零改动。回退不递归 pick_node(防板上故障
+    # 循环),不燃 attempts(记账段只挂在成功 return 上,回退成功才燃一次)。
+    import task_loop_nodepool as np
+    if node is None:
+        try:
+            node = np.pick_node(kind, state)
+        except Exception as exc:          # nodepool 任何意外 → 本机兜底
+            print(f"[nodepool] pick_node 失败,回退本机: {exc}")
+            node = np.LOCAL_NODE
+    if node is not None and node.get("host_id") != "local":
+        try:
+            np.refresh_env_remote(node, env_file)
+            wt_remote = np.prepare_worktree_remote(node, key)
+            np.heal_remote(node)           # 主克隆 heal(不动 .worktrees/)
+            remote_log = f"{np.REMOTE_STATE_DIR}/{os.path.basename(log)}"
+            np.put_file(node["host_id"], prompt_path,
+                        f"{np.REMOTE_STATE_DIR}/{os.path.basename(prompt_path)}")
+            inner_remote = (f"source {np.REMOTE_STATE_DIR}/agent.env && "
+                            f"cd {wt_remote} && "
+                            f"timeout {AGENT_TIMEOUT_SEC} claude -p "
+                            f"--dangerously-skip-permissions < "
+                            f"{np.REMOTE_STATE_DIR}/{os.path.basename(prompt_path)}")
+            pid = np.spawn_remote(node, inner_remote, remote_log)
+            # 占位同本机语义: 真 PID 才进账本(满槽已由 free_slot_count 上闸
+            # 拦下,此处失败只剩同 key 竞态)——补刀整组击杀再回退本机。
+            # boot 照记本机 boot_id: 收割豁免不依赖它(远程槽的 uptime 豁免
+            # 归收割分流 N7),started/log/worktree 记板上事实。
+            if not tp.slot_acquire(state, kind, key, pid, pgid=pid,
+                                   log=remote_log, worktree=wt_remote,
+                                   started_iso=_now_iso(), boot=tp.boot_id(),
+                                   host=node["host_id"]):
+                try:
+                    np.kill_remote(node["host_id"], pid, 9)
+                except np.NodeError as exc:
+                    print(f"[nodepool] {node['host_id']} 占位失败补刀失败"
+                          f"(留次夜): {exc}")
+                raise np.NodeError(f"远程槽占位失败(同 key 在跑),PID {pid}")
+        except np.NodeError as exc:
+            # 远程任何一步失败: 打印即回退本机路径原样(不占远程槽、不燃
+            # attempts);回退成功后由本机路径正常燃一次。
+            print(f"[nodepool] {node['host_id']} 远程派发失败,回退本机: {exc}")
+        else:
+            return _record_dispatch(entry, kind, fix_branch, pid, remote_log,
+                                    wt_remote, increment_rounds,
+                                    host=node["host_id"])
+    # ---- 本机路径(原样) ----
     try:
         wt = _worktree_prepare(clone_dir, key)
     except RuntimeError as exc:
@@ -1474,33 +1572,10 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
             pass
         print(f"[slots] {kind} 槽 {key} 占位失败(同 key 在跑),已击杀 PID {pid}")
         return None
-    entry.agent_pid = pid
-    entry.agent_log = log
-    entry.agent_started_at = _now_iso()
-    entry.fix_branch = fix_branch
-    # Task 4 槽位泳道记账: lane 供收割/泳道统计,worktree 供槽位 janitor
-    # 与 heal 孤儿清理按图索骥(Entry 字段注释: 派发时建,收割时清)。
-    entry.lane = kind
-    entry.worktree = wt
-    # 派发成功即置状态(单一权威): 车道 A → DISPATCHED、车道 B → BOT_FIX。
-    # 不置状态时条目停在 QUEUED,收割/heal 全部失明(Task 4 R2 检视
-    # Critical——生产首跑同轮连派 4 个 agent 的根因)。
-    entry.status = "BOT_FIX" if increment_rounds else "DISPATCHED"
-    if increment_rounds:
-        entry.rounds += 1
-    else:
-        entry.attempts += 1
-    entry.updated_at = _now_iso()
-    # wip 标签(spec §7.2: 派发即认领): 建议性线索,state 为权威——打标
-    # 失败只告警,绝不阻断派发记账
-    if not dry_run and entry.issue_number is not None:
-        try:
-            gh_label_add(entry.issue_number, AGENT_LABEL_WIP)
-        except GhError as exc:
-            print(f"[warn] agent-wip 标签失败(state 为权威,继续): {exc}")
-    print(f"[dispatch] run {entry.run_id} → agent PID {pid},分支 "
-          f"{fix_branch},日志 {log}")
-    return pid
+    # 记账段两分支共用(_record_dispatch): 此处 dry_run 恒 False(上方已提前
+    # 返回),原 `not dry_run` 守卫为死条件,语义零变化。
+    return _record_dispatch(entry, kind, fix_branch, pid, log, wt,
+                            increment_rounds, host="local")
 
 
 def check_agent_outcome(entry: Entry) -> str:

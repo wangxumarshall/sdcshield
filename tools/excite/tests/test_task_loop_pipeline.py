@@ -351,6 +351,105 @@ def test_dispatch_worktree_prepare_failure_refuses(monkeypatch, tmp_path):
     assert spawned == []
 
 
+# ============ Task 6 nodepool: dispatch_agent 远程分支 ============
+
+
+def test_dispatch_agent_remote_branch(monkeypatch, tmp_path):
+    """远程派发: prompt scp 上板 + 板上 worktree + spawn_remote + 槽 host=0102
+    + Entry.host 记账; 本机零 run_background 调用。
+    (brief 原文外补三处测试卫生桩: mem_gate/heal_remote/kill_remote/run_ssh
+    兜底——否则缺桩处走真 /proc 与真 SSH,单测非密闭)"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    (tmp_path / "st" / "agent.env").write_text("PATH=/usr/bin\n")
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    spawn_local = []
+    monkeypatch.setattr(tp.tl, "run_background",
+                        lambda cmd, cwd, log: spawn_local.append(cmd) or 1)
+    monkeypatch.setattr(tp.tl, "gh_label_add", lambda *a: None)
+    monkeypatch.setattr(tp.tl, "_worktree_prepare",
+                        lambda c, k: spawn_local.append("LOCAL-WT") or "/lw")
+    import task_loop_nodepool as np
+
+    def _no_ssh(host_id, cmd, timeout=45):
+        raise np.NodeError("测试内禁真 SSH(有 np 操作漏桩)")
+    monkeypatch.setattr(np, "run_ssh", _no_ssh)
+    node0102 = np.node_by_host("0102")
+    remote = {"spawned": [], "wts": [], "files": [], "env": [], "killed": []}
+    monkeypatch.setattr(np, "pick_node", lambda k, s: node0102)
+    monkeypatch.setattr(np, "spawn_remote",
+                        lambda n, cmd, log: remote["spawned"].append((n, cmd, log)) or 4242)
+    monkeypatch.setattr(np, "prepare_worktree_remote",
+                        lambda n, key: remote["wts"].append(key) or "/board/wt")
+    monkeypatch.setattr(np, "refresh_env_remote",
+                        lambda n, env: remote["env"].append(env))
+    monkeypatch.setattr(np, "put_file",
+                        lambda h, l, r: remote["files"].append((l, r)))
+    monkeypatch.setattr(np, "heal_remote", lambda n: None)
+    monkeypatch.setattr(np, "kill_remote",
+                        lambda h, p, s: remote["killed"].append((h, p, s)))
+    from task_loop import Entry
+    e = Entry(workflow="w", run_id=1, status="QUEUED", issue_number=7,
+              fix_branch="fix/issue-7", pr_number=None, attempts=0, rounds=0,
+              agent_pid=None, agent_started_at=None, agent_log=None,
+              last_dispatched_head=None, extra_runs=[], created_at="t",
+              updated_at="t", source="audit", kind="bug", audit_hash=None)
+    st = {"entries": [e.to_dict()], "auth_failure_streak": 0}
+    es = tp.tl.StateStore.entries(st)
+    pid = tp.tl.dispatch_agent(es[0], st)
+    assert pid == 4242 and not spawn_local               # 本机零派生
+    assert es[0].host == "0102"
+    assert es[0].worktree == "/board/wt"
+    assert es[0].agent_log.startswith(np.REMOTE_STATE_DIR)   # 板上 log
+    assert remote["wts"] == ["issue-7"]
+    assert any(l.endswith("agent.env") for l in remote["env"])
+    assert len(remote["files"]) == 1                       # prompt 上板
+    assert remote["killed"] == []                          # 占位成功零补刀
+    assert tp.slot_get(st, "issue_fix", "issue-7")["host"] == "0102"
+
+
+def test_dispatch_agent_remote_spawnfail_falls_back_local(monkeypatch, tmp_path):
+    """远程 spawn 失败(NodeError): 不占槽不燃 attempts,回退本机路径。
+    回退成功才燃一次 attempts(controller ruling #4)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    (tmp_path / "st" / "agent.env").write_text("PATH=/usr/bin\n")
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    import task_loop_nodepool as np
+
+    def _no_ssh(host_id, cmd, timeout=45):
+        raise np.NodeError("测试内禁真 SSH(有 np 操作漏桩)")
+    monkeypatch.setattr(np, "run_ssh", _no_ssh)
+    monkeypatch.setattr(np, "pick_node",
+                        lambda k, s: np.node_by_host("0102"))
+    def boom(n, cmd, log):
+        raise np.NodeError("节点 0102 命令失败(rc=255)")
+    monkeypatch.setattr(np, "spawn_remote", boom)
+    monkeypatch.setattr(np, "prepare_worktree_remote",
+                        lambda n, key: "/board/wt")
+    monkeypatch.setattr(np, "refresh_env_remote", lambda n, env: None)
+    monkeypatch.setattr(np, "put_file", lambda h, l, r: None)
+    monkeypatch.setattr(np, "heal_remote", lambda n: None)
+    monkeypatch.setattr(np, "kill_remote", lambda h, p, s: None)
+    spawn_local = []
+    monkeypatch.setattr(tp.tl, "run_background",
+                        lambda cmd, cwd, log: spawn_local.append(cmd) or 77)
+    monkeypatch.setattr(tp.tl, "gh_label_add", lambda *a: None)
+    monkeypatch.setattr(tp.tl, "_worktree_prepare", lambda c, k: "/lw")
+    from task_loop import Entry
+    e = Entry(workflow="w", run_id=1, status="QUEUED", issue_number=7,
+              fix_branch="fix/issue-7", pr_number=None, attempts=0, rounds=0,
+              agent_pid=None, agent_started_at=None, agent_log=None,
+              last_dispatched_head=None, extra_runs=[], created_at="t",
+              updated_at="t", source="audit", kind="bug", audit_hash=None)
+    st = {"entries": [e.to_dict()], "auth_failure_streak": 0}
+    es = tp.tl.StateStore.entries(st)
+    pid = tp.tl.dispatch_agent(es[0], st)
+    assert pid == 77 and es[0].host == "local"        # 回退本机成功
+    assert es[0].attempts == 1                        # 只燃一次(成功派发)
+    assert tp.slot_get(st, "issue_fix", "issue-7")["host"] == "local"
+
+
 def test_worktree_prepare_cleanup_roundtrip(tmp_path):
     """真实 git 集成: prepare 建于 origin/main、可重复 prepare(清残留);
     rmtree 兜底删目录后留 .git/worktrees 注册——cleanup 不 prune 该残留时
@@ -695,6 +794,74 @@ def test_dispatch_review_spawn_command_shape(monkeypatch, tmp_path):
     assert seen["cwd"] == str(tmp_path / "cl")
     assert seen["log"].startswith(str(tmp_path / "st"))
     assert re.fullmatch(r".*review-pr640-\d{8}T\d{6}Z\.log", seen["log"])
+
+
+# ============ Task 6 nodepool: dispatch_review 远程分支 ============
+
+
+def test_dispatch_review_remote_branch(monkeypatch, tmp_path):
+    """检视远程派发: agent.env 上板 + 板上克隆跑 pr_local_review.py --pr N
+    + 板上 log + 槽 host=0102 + tries 计数; 本机零 run_background。
+    (brief 只给了 agent 侧两测试; dispatch_review 远程分支同为本任务交付,
+    按 ruling #5 补测——远程路径不留零覆盖)"""
+    _patch_review_offline(monkeypatch, tmp_path, alive=True)
+    import task_loop_nodepool as np
+
+    def _no_ssh(host_id, cmd, timeout=45):
+        raise np.NodeError("测试内禁真 SSH(有 np 操作漏桩)")
+    monkeypatch.setattr(np, "run_ssh", _no_ssh)
+    node0102 = np.node_by_host("0102")
+    remote = {"spawned": [], "env": [], "killed": []}
+    monkeypatch.setattr(np, "pick_node", lambda k, s: node0102)
+    monkeypatch.setattr(np, "refresh_env_remote",
+                        lambda n, env: remote["env"].append(env))
+    monkeypatch.setattr(np, "heal_remote", lambda n: None)
+    monkeypatch.setattr(np, "spawn_remote",
+                        lambda n, cmd, log: remote["spawned"].append((cmd, log)) or 5150)
+    monkeypatch.setattr(np, "kill_remote",
+                        lambda h, p, s: remote["killed"].append((h, p, s)))
+    spawned_local = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawned_local.append(cmd) or 99)
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") == 5150
+    assert not spawned_local                          # 本机零派生
+    assert remote["env"] and remote["env"][0].endswith("agent.env")
+    assert remote["killed"] == []                     # 占位成功零补刀
+    cmd, log = remote["spawned"][0]
+    assert log.startswith(np.REMOTE_STATE_DIR) and "review-pr640-" in log
+    assert f"source {np.REMOTE_STATE_DIR}/agent.env" in cmd
+    assert f"timeout {tp.REVIEW_AGENT_TIMEOUT_SEC} /usr/bin/python3" in cmd
+    assert f"{node0102['clone_dir']}/scripts/pr_local_review.py" in cmd
+    assert "--pr 640" in cmd
+    assert tp.slot_get(st, "pr_review", "pr-640")["host"] == "0102"
+    assert st["review_tries"]["640:h1"] == 1          # 成功才烧每晚预算
+
+
+def test_dispatch_review_remote_spawnfail_falls_back_local(monkeypatch, tmp_path):
+    """检视远程 spawn 失败(NodeError): 不烧每晚预算、不占远程槽,回退本机;
+    一次成功才 tries+1(与 agent 侧回退测试同构,ruling #4/5)。"""
+    _patch_review_offline(monkeypatch, tmp_path, alive=True)
+    import task_loop_nodepool as np
+
+    def _no_ssh(host_id, cmd, timeout=45):
+        raise np.NodeError("测试内禁真 SSH(有 np 操作漏桩)")
+    monkeypatch.setattr(np, "run_ssh", _no_ssh)
+    monkeypatch.setattr(np, "pick_node", lambda k, s: np.node_by_host("0102"))
+    monkeypatch.setattr(np, "refresh_env_remote", lambda n, env: None)
+    monkeypatch.setattr(np, "heal_remote", lambda n: None)
+    def boom(n, cmd, log):
+        raise np.NodeError("节点 0102 命令失败(rc=255)")
+    monkeypatch.setattr(np, "spawn_remote", boom)
+    monkeypatch.setattr(np, "kill_remote", lambda h, p, s: None)
+    spawned_local = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawned_local.append(cmd) or 88)
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") == 88
+    assert spawned_local and "--pr 640" in spawned_local[0]
+    assert tp.slot_get(st, "pr_review", "pr-640")["host"] == "local"
+    assert st["review_tries"]["640:h1"] == 1          # 回退成功只燃一次
 
 
 def test_pr_local_review_cli_pr_flag_and_mutex(monkeypatch, capsys):

@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 if host_machine.cpu_family() == 'aarch64'
-    arm64_cpp_flags = [
-        '-march=armv8.1-a+crc+crypto',
-    ]
+    arm64_cpp_flags = [march_arm64_neon_crypto]
 
     arm64_files = files(
         'kunpeng920_ecc.cpp',

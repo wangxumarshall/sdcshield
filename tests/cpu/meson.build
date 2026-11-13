@@ -604,6 +604,7 @@ tests_set_sve.add(
         'eigen_svd_jacobi/svd_cdouble_sve.cpp',
         'eigen_svd_jacobi/svd_double_sve.cpp',
         'eigen_svd_jacobi/svd_float_sve.cpp',
+        'eigen_svd_jacobi/svd_float_sve2.cpp',
         'eigen_svd_jacobi/svd_fvectors_sve.cpp',
     )
 )

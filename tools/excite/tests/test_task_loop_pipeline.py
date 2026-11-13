@@ -1,6 +1,7 @@
 """task_loop_pipeline 测试: 槽位常量 / 窗口判定 / 内存闸 / boot_id /
 槽位账本(租约/janitor/启动对账)/ 槽位化派发 + worktree 隔离(Task 4)。"""
 import sys, os, shutil, subprocess
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "..", "scripts"))
 import task_loop_pipeline as tp
@@ -672,7 +673,7 @@ def _gate_entry(fix_branch="fix/issue-1", pr_number=1, issue_number=1):
               fix_branch=fix_branch, status="PR_OPEN")
 
 
-def _gh_stub(rollups, merged=None):
+def _gh_stub(rollups, merged=None, rec=None):
     """tl.gh_json_idem 离线桩(零触网,fix-round 1 基线新形态):
     - `pr view <N> --json statusCheckRollup` → rollups[N](统一存
       (name, conclusion, workflowName) 规范形),列序按 args 的 --jq 过滤器
@@ -682,9 +683,13 @@ def _gh_stub(rollups, merged=None):
       候选 PR(_pr 默认 1 号)与已合入基线 PR 按 args[2] 分派。
     - `pr list --state merged --json number` → merged 原样回放: 多行裸串
       (gh_json JSONDecodeError → 原样)/ int 单值(gh --jq 单号输出裸数字,
-      json.loads 得 int)/ None(gh 空输出契约)/ Exception(抛 GhError)。"""
+      json.loads 得 int)/ None(gh 空输出契约)/ Exception(抛 GhError)。
+    - rec: 可选 list——pr list 分支把 args 原样记入(裁定#2: 基线
+      pr list 形态断言的取证通道)。"""
     def fake(args, input_text=None):
         if args[:2] == ["pr", "list"]:
+            if rec is not None:
+                rec.append(list(args))
             if isinstance(merged, Exception):
                 raise merged
             return merged
@@ -768,13 +773,22 @@ def test_baseline_reds_merged_pr_union_and_degradation(monkeypatch):
                 ("build-arm", "FAILURE", "Pull Request")],   # 同组增并集
         "903": [("zizmor (workflow security)", "FAILURE", "Security")],
     }
+    rec = []
     monkeypatch.setattr(tl, "gh_json_idem",
-                        _gh_stub(rollups, merged="901\n902\n903\n"))
+                        _gh_stub(rollups, merged="901\n902\n903\n", rec=rec))
     # Pull Request 组: 901 lint + 902 build-arm 并集;异 workflow 组不混入
     assert tp.baseline_reds("o/r", "Pull Request") == {"lint", "build-arm"}
     assert tp.baseline_reds("o/r", "Security") == {"zizmor (workflow security)"}
     assert tp.baseline_reds("o/r", "Docs Lint") == {"spell-check"}
     assert tp.baseline_reds("o/r", "不存在的工作流") == set()
+    # 基线 pr list 形态锚(裁定#2,T7 复审遗留 Minor): --state merged +
+    # --limit str(BASELINE_MERGED_DEPTH) + --repo——防漂回 main-run 旧形
+    assert rec, "基线 pr list 调用未被记录"
+    args = rec[0]
+    assert args[:2] == ["pr", "list"]
+    assert args[args.index("--state") + 1] == "merged"
+    assert args[args.index("--limit") + 1] == str(tp.BASELINE_MERGED_DEPTH)
+    assert args[args.index("--repo") + 1] == "o/r"
     # 单个已合入 PR: gh --jq '.[].number' 输出裸数字 → gh_json json.loads
     # 得 int → str().split() 整链可用
     monkeypatch.setattr(tl, "gh_json_idem",
@@ -1099,3 +1113,170 @@ def test_gate_no_auto_merge_and_paused(monkeypatch, tmp_path):
     pr = _pr(); pr.latest_signal = now - timedelta(seconds=1000)
     r = tp.evaluate_merge_gate(_mkstate(), None, pr, ["a.md"], now, True)
     assert r.ok is False and "NO_AUTO_MERGE" in " ".join(r.reasons)
+
+
+def test_gate_mergeable_none_transitional_not_rejected(monkeypatch, tmp_path):
+    """mergeable=None/字段缺失形态不拒(裁定#1 锚形,T7 已裁定的过渡
+    语义): 真实 PRData 无 mergeable,fill_mergeable 拉取失败/gh 空输出
+    时保持 None——门只把显式 False 当冲突拒;后续若把 None 也拒(如
+    is not True)即接线遗漏,本测当场红。checks_ok 走真路径经
+    tl.gh_json_idem 桩离线。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tl, "_paused", lambda: False)
+    monkeypatch.setattr(tl, "repo_slug", lambda: "o/r")
+    monkeypatch.setattr(tl.pr_loop, "classify_state",
+                        lambda pr, q, now: "READY_TO_MERGE")
+    rows = [("lint", "SUCCESS", "Pull Request"),
+            ("git-sanity", "SUCCESS", "Pull Request"),
+            ("Build binary for CPU (Linux)", "SUCCESS", "Pull Request"),
+            ("zizmor (workflow security)", "SUCCESS", "Security")]
+    monkeypatch.setattr(tl, "gh_json_idem", _gh_stub({"1": rows}))
+    now = datetime.now(timezone.utc)
+    r = tp.evaluate_merge_gate(_mkstate(), _gate_entry(), _pr(mergeable=None),
+                               ["a.c"], now, False)
+    assert r.ok is True
+    pr = _pr()
+    del pr.mergeable          # 字段缺失 = 真实 PRData 形态
+    r2 = tp.evaluate_merge_gate(_mkstate(), _gate_entry(), pr, ["a.c"],
+                                now, False)
+    assert r2.ok is True
+
+
+# ============ Task 8: merge 执行 + 记账 + 审计评论 ============
+
+
+def test_execute_merge_records_sha_and_comments(monkeypatch, tmp_path):
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    calls = []
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None: calls.append(args) or
+                        ("abc1234def5678" if "--jq" in args and
+                         "mergeCommit" in " ".join(args) else "{}"))
+    monkeypatch.setattr(tl, "comment_on_issue",
+                        lambda n, b: calls.append(["comment", n]))
+    e = NS(pr_number=42, issue_number=7, fix_branch="fix/issue-7",
+           status="PR_OPEN", merged_at=None, merged_sha=None,
+           updated_at="t")
+    st = {"entries": [e], "auth_failure_streak": 0}
+    gr = tp.GateResult(True, False, ["继承红放行: [X] ⊆ 已合入 PR 基线红"])
+    sha = tp.execute_merge(st, e, _pr(), gr)
+    assert sha == "abc1234def5678" and e.merged_sha == sha and e.merged_at
+    assert e.status == "DONE"
+    assert any("squash" in " ".join(map(str, c)) for c in calls)
+    # 三步序: PR 审计评论 → merge(squash) → 回读 mergeCommit,issue 收尾在后
+    ci = next(i for i, c in enumerate(calls)
+              if c[:2] == ["pr", "comment"])
+    mi = next(i for i, c in enumerate(calls)
+              if c[:2] == ["pr", "merge"])
+    vi = next(i for i, c in enumerate(calls)
+              if "--jq" in c and "mergeCommit" in " ".join(map(str, c)))
+    assert ci < mi < vi
+    assert ["comment", 7] in calls                # issue 收尾评论
+
+
+def test_execute_merge_user_docs_pr_no_entry(monkeypatch, tmp_path):
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: "sha1")
+    monkeypatch.setattr(tl, "comment_on_issue", lambda n, b: None)
+    sha = tp.execute_merge(_mkstate(), None, _pr(),
+                           tp.GateResult(True, True, []))
+    assert sha == "sha1"
+
+
+def test_execute_merge_dry_run_only_prints(monkeypatch, tmp_path, capsys):
+    """dry_run: 只打印拟执行动作——零 gh 写、零记账、条目原样。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    calls = []
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None: calls.append(a) or "x")
+    monkeypatch.setattr(tl, "comment_on_issue",
+                        lambda n, b: calls.append(["comment", n]))
+    e = NS(pr_number=42, issue_number=7, fix_branch="fix/issue-7",
+           status="PR_OPEN", merged_at=None, merged_sha=None,
+           updated_at="t")
+    sha = tp.execute_merge({"entries": [e], "auth_failure_streak": 0}, e,
+                           _pr(), tp.GateResult(True, False, []), dry_run=True)
+    assert sha is None and calls == []
+    assert e.status == "PR_OPEN" and e.merged_sha is None \
+        and e.merged_at is None
+    out = capsys.readouterr().out
+    assert "[dry-run]" in out and "PR #1" in out
+
+
+def test_execute_merge_failure_keeps_entry_open(monkeypatch, tmp_path):
+    """失败路径(三步序半途): 评论成功、merge GhError 原样上抛 → 条目
+    不置 DONE/不记 merged_sha(下轮门复评),issue 不收尾。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    calls = []
+
+    def boom(args, input_text=None):
+        calls.append(list(args))
+        if args[:2] == ["pr", "merge"]:
+            raise tl.GhError("gh pr merge … 失败(exit 1): HTTP 502")
+        return "{}"
+    monkeypatch.setattr(tl, "gh_json_idem", boom)
+    monkeypatch.setattr(tl, "comment_on_issue",
+                        lambda n, b: calls.append(["comment", n]))
+    e = NS(pr_number=42, issue_number=7, fix_branch="fix/issue-7",
+           status="PR_OPEN", merged_at=None, merged_sha=None,
+           updated_at="t")
+    with pytest.raises(tl.GhError):
+        tp.execute_merge({"entries": [e], "auth_failure_streak": 0}, e,
+                         _pr(), tp.GateResult(True, False, []))
+    assert any(c[:2] == ["pr", "comment"] for c in calls)   # 评论已贴
+    assert not any(c[:2] == ["comment"] for c in calls)     # issue 未收尾
+    assert e.status == "PR_OPEN" and e.merged_sha is None \
+        and e.merged_at is None
+
+
+def test_no_auto_merge_active_probe(monkeypatch, tmp_path):
+    """NO_AUTO_MERGE 熔断探测: STATE_DIR 下同名文件存在 → True,缺失 →
+    False;纯存在性掺查幂等(重复调用同结果,零 gh/零变更)。"""
+    st = tmp_path / "st"
+    st.mkdir()
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(st))
+    assert tp.no_auto_merge_active() is False
+    (st / "NO_AUTO_MERGE").write_text("")
+    assert tp.no_auto_merge_active() is True
+    assert tp.no_auto_merge_active() is True        # 幂等重复探测
+    (st / "NO_AUTO_MERGE").unlink()
+    assert tp.no_auto_merge_active() is False
+
+
+def test_fill_mergeable_seam(monkeypatch, tmp_path, capsys):
+    """fill_mergeable 公开接缝(裁定#1): 真实 PRData 无 mergeable 字段,
+    T10 merge_sweep 接线前由调用方补——缺/None 才拉(有值不重复拉);
+    GhError → 保持 None 并 [warn];gh 空输出 None → 保持 None(门按
+    T7 过渡语义不拒)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    calls = []
+    monkeypatch.setattr(tl, "repo_slug", lambda: "o/r")
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda a, input_text=None: calls.append(list(a))
+                        or False)
+    pr = _pr()
+    del pr.mergeable                    # 字段缺失 = 真实 PRData 形态
+    tp.fill_mergeable(pr)
+    assert pr.mergeable is False        # 拉到即写回
+    assert len(calls) == 1
+    a = calls[0]
+    assert a[:3] == ["pr", "view", "1"]            # str(pr.number)
+    assert a[a.index("--repo") + 1] == "o/r"
+    assert a[a.index("--json") + 1] == "mergeable"
+    assert a[a.index("--jq") + 1] == ".mergeable"
+    # 已有值不重复拉
+    tp.fill_mergeable(pr)
+    assert len(calls) == 1
+    # GhError → 保持 None + [warn](只打警告,不炸链)
+    def boom(x, input_text=None):
+        raise tl.GhError("gh pr view … 失败(exit 1): HTTP 502")
+    monkeypatch.setattr(tl, "gh_json_idem", boom)
+    pr2 = _pr(mergeable=None)
+    tp.fill_mergeable(pr2)
+    assert getattr(pr2, "mergeable", None) is None
+    assert "[warn]" in capsys.readouterr().out
+    # gh 空输出(gh_json None 契约)→ 保持 None
+    monkeypatch.setattr(tl, "gh_json_idem", lambda a, input_text=None: None)
+    pr3 = _pr(mergeable=None)
+    tp.fill_mergeable(pr3)
+    assert getattr(pr3, "mergeable", None) is None

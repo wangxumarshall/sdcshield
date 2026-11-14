@@ -5,7 +5,7 @@
 - 生成方式：`matrix-gen.sh` 从本目录已入库工件机械生成（**零手填**，脚本一并入库，重跑即复现本文件）
 - 行定义：`sve-test-list.txt` 190 行（Task 1 枚举：tag∪name 并集 193 − 3 件不在本机默认集）
 - 规模：**190 × 3 = 570 格**（Ruling A：spec 的 564 为 name-grep 估算，被实测枚举取代）
-- 验收判据（brief Step 2）：570 格全绿**或有显式机制性理由**（1 格合法 SKIP + 9 格 gem5 边界，见 §2/§5）
+- 验收判据（brief Step 2）：570 格全绿**或有显式机制性理由**（1 格合法 SKIP + 50 格 native 负载几何边界 + 9 格 gem5 边界，见 §2/§5；native 格的绿 = 默认自适应【设计】几何 `exit: pass`——25 个设计几何超 300 s 预算格 × 128/256 两档计边界格，audit #645 记账口径）
 
 ## 0. 代码基线与二进制身份
 
@@ -62,20 +62,23 @@
 | 格值 | 含义 | 出处 |
 |---|---|---|
 | `pass` | 腿内默认/自适应几何下直绿（native：全核 `-t 2000` 实测；512：1 轮全量 golden 字节比对成立） | 各 summary / verdicts |
-| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128** = 26 项腿内 baked（triage-128 §1：逐字拷贝自 256 腿 seed2，构成同 @256——25 项 clamp 下限 + 1 项 `acl_gemm_sve.dim=512` 标定 baked（Ruling B，dim clamp [64,4096]、512 非下限）；两 seed 腿内有界实测）；**@256** = 25 格 seed1 有界重跑（triage-256 §5：clamp 下限一次通过、零上调——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ seed2 腿内有界 + `acl_gemm_sve.dim=512` 标定 baked（triage-256 §1，Ruling B）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格） | 对应 triage 分节 |
+| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128/@256** = 唯一格 `acl_gemm_sve.dim=512` 标定 baked（Ruling B，dim clamp [64,4096]、512 非下限——缩比 2×线性，与 clamp 下限格的 3~4 个数量级缩比不同量级；证据强度与有界绿同向受限，triage-256 §1/§5）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格；本列声明语义 = 功能性正确性——压力维度由 native 腿承担，triage-512 §0/§2） | 对应 triage 分节 |
+| `BOUNDARY(native: LOAD-GEOM)` | native 负载几何边界（audit #645 记账口径：spec §7 的 native 绿 = 默认自适应【设计】几何 `exit: pass`，不绿走边界格通道，不许缩负载改判绿）：设计几何（默认自适应——600‰/650‰/900‰ 内存比例推导）× 300 s 单轮预算超限，机制见 triage-256 §4（环境/边界类、与 seed 无关）。**@256** = seed1 腿内实测 timed out（§1/§4），clamp 下限有界绿（§5：seed1 腿外单测 + seed2 腿内 baked）= 功能正确性证据（最小激发强度，非满强度——triage-256 §5「证据强度限定」）；**@128** = 设计几何未实测（腿自始 baked 有界、两 seed 腿内绿，triage-128 §1），机制同 256 档、几何输入不含 VL，外推强度「预期」 | triage-256 §4/§5/§7、triage-128 §1/§5 |
 | `SKIP(legal: F64MM UNDEFINED <VL=256)` | 架构性合法 SKIP，唯一格 = (sve512_fmmla_arm, 128)，两 seed 同格同理 | triage-128 §2 + §3 逐字源码引文 |
 | `BOUNDARY(gem5: <标签>)` | gem5 侧限制边界，Ruling I 终局：`PMULL64` = gem5 无该 64-bit PMULL 编码（OpenSSL GHASH `pmull v0.1q`，2 格）；`DC-CIVAC` = SE 模式 `dc civac` 缓存维护路径 raise UndefinedInstruction（3 格）；`SIM-SPEED` = knob 在 clamp 下限或无杠杆，单轮指令量 × ~1400 仿真速超出实用预算（4 格）。native 两腿对应格全绿 | triage-512 §5.1/§5.2 |
 
-- **证据列** = `128s1,128s2 · 256s1,256s2 · rc`。`to` = 该 seed 腿内 timed out（其绿证据 =
-  triage-256 §5 有界重跑，同 seed 单测）；`rc` = gem5 进程退出码（512 列权威判定，
+- **证据列** = `128s1,128s2 · 256s1,256s2 · rc`。`to` = 该 seed 腿内 timed out（其有界绿证据 =
+  triage-256 §5 有界重跑，同 seed 单测；格值计 BOUNDARY(native)，不因有界绿改判）；`rc` = gem5 进程退出码（512 列权威判定，
   triage-512 §0）。工件映射：`128s1/s2` → `native-128-LCG100{1,2}.summary.txt`，
   `256s1/s2` → `native-256-LCG100{1,2}.summary.txt`，`rc` → `gem5-512-verdicts.txt`
   （四份 summary + verdicts 的行名与清单 190 名逐一同序，生成脚本断言守卫）。
-- **种子语义**：native 格 = 任一 seed pass 即 pass；实测两 seed 无分歧绿（128 腿
-  189+1 双 seed 机械一致；256 腿 165 格双 seed 机械一致，唯 seed1 的 25 个超时格
-  （证据列 `to`）的**入库机械证据仅 seed2 单腿**——seed1 侧绿证据 = triage-256
-  §5 的有界重跑散文表（同 seed 单测、clamp 下限一次通过；其原始 /tmp 日志易失
-  未入库，不构成可再生成证据，本矩阵不以再生成能力主张该侧）。
+- **种子语义**：native 直绿/标定格 = 任一 seed pass 即 pass；实测两 seed 无分歧绿
+  （128 腿 163+26+1 双 seed 机械一致；256 腿 165 格双 seed 机械一致）。25 个
+  BOUNDARY(native) 格不因有界绿改判（audit #645 记账口径）：@256 seed1 腿内
+  timed out（证据列 `to`）、seed2 腿内有界绿——其入库机械证据仅 seed2 单腿，
+  seed1 侧绿证据 = triage-256 §5 的有界重跑散文表（同 seed 单测、clamp 下限一次
+  通过；其原始 /tmp 日志易失未入库，不构成可再生成证据，本矩阵不以再生成能力
+  主张该侧）；@128 两 seed 腿内有界绿（设计几何未实测）。
 - **VL 不敏感性注记**：7 个无 tag 的 ipsec 免检件（`ipsec_3des_docsis_aes_cmac_sve_wide` /
   `ipsec_3des_docsis_aes_xcbc_sve_wide` / `ipsec_aes128_cbc_aes_cmac_sve` /
   `ipsec_aes192_cbc_xcbc_96_sve` / `ipsec_aes192_ctr_xcbc_sve` / `ipsec_aes192_gcm_sve` /
@@ -117,17 +120,17 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 7 | adcxlong_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 8 | adox_arm_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 9 | adox_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 10 | agu_stress_2src_sve | pass(bounded: count=1024) | pass(bounded: count=1024) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
-| 11 | agu_stress_store_only_sve | pass(bounded: count=1024) | pass(bounded: count=1024) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
-| 12 | arm0102_fma_f32_sve | pass(bounded: count=1024) | pass(bounded: count=1024) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
-| 13 | arm0102_kreg_logic_sve | pass(bounded: count=1024) | pass(bounded: count=1024) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
-| 14 | arm0102_kreg_mask_sve | pass(bounded: count=1024) | pass(bounded: count=1024) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
-| 15 | arm0102_kreg_not_sve | pass(bounded: count=1024) | pass(bounded: count=1024) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
-| 16 | arm0102_kreg_select_sve | pass(bounded: count=1024) | pass(bounded: count=1024) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
+| 10 | agu_stress_2src_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
+| 11 | agu_stress_store_only_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
+| 12 | arm0102_fma_f32_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
+| 13 | arm0102_kreg_logic_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
+| 14 | arm0102_kreg_mask_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
+| 15 | arm0102_kreg_not_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
+| 16 | arm0102_kreg_select_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
 | 17 | bigint_mulx_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 18 | eigen_gemm_double_max_arm | pass | pass | pass(bounded: mdim=1024) | pass,pass · pass,pass · rc=0 |
-| 19 | eigen_svd_bidiag_sve | pass(bounded: mdim=64) | pass(bounded: mdim=64) | pass(bounded: mdim=64) | pass,pass · to,pass · rc=0 |
-| 20 | eigen_svd_cdouble_sve | pass(bounded: mdim=300) | pass(bounded: mdim=300) | BOUNDARY(gem5: SIM-SPEED) | pass,pass · to,pass · rc=124 |
+| 19 | eigen_svd_bidiag_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: mdim=64) | pass,pass · to,pass · rc=0 |
+| 20 | eigen_svd_cdouble_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(gem5: SIM-SPEED) | pass,pass · to,pass · rc=124 |
 | 21 | fisttp_sve | pass | pass | pass(bounded: num_elements=1024) | pass,pass · pass,pass · rc=0 |
 | 22 | fma_patterns_sve_wide_pd | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 23 | fma_patterns_sve_wide_ps | pass | pass | pass | pass,pass · pass,pass · rc=0 |
@@ -142,12 +145,12 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 32 | fmatail_sve_wide | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 33 | fpu_special_values_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 34 | fsu_byteexact_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 35 | gmp_bigadd_sve | pass(bounded: limbs=256) | pass(bounded: limbs=256) | pass(bounded: limbs=256) | pass,pass · to,pass · rc=0 |
+| 35 | gmp_bigadd_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: limbs=256) | pass,pass · to,pass · rc=0 |
 | 36 | gmp_bignum_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 37 | iex_operand_combo_sve† | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 38 | insert_extract_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 39 | ipsec_3des_docsis_aes_cmac_sve_wide | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
-| 40 | ipsec_3des_docsis_aes_xcbc_sve_wide | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
+| 39 | ipsec_3des_docsis_aes_cmac_sve_wide | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
+| 40 | ipsec_3des_docsis_aes_xcbc_sve_wide | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
 | 41 | ipsec_3des_docsis_hmac_sha1_sve_wide | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 42 | ipsec_3des_docsis_hmac_sha224_sve_wide | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 43 | ipsec_3des_docsis_hmac_sha256_sve_wide | pass | pass | pass | pass,pass · pass,pass · rc=0 |
@@ -158,13 +161,13 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 48 | ipsec_aes128_cbc_sha2_224_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 49 | ipsec_aes192_cbc_sha2_384_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 50 | ipsec_aes192_cbc_sha2_512_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 51 | ipsec_aes192_cbc_xcbc_96_sve | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
+| 51 | ipsec_aes192_cbc_xcbc_96_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
 | 52 | ipsec_aes192_ctr_hmac_sha1_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 53 | ipsec_aes192_ctr_hmac_sha224_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 54 | ipsec_aes192_ctr_hmac_sha256_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 55 | ipsec_aes192_ctr_hmac_sha384_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 56 | ipsec_aes192_ctr_hmac_sha512_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 57 | ipsec_aes192_ctr_xcbc_sve | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
+| 57 | ipsec_aes192_ctr_xcbc_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: data_size=1024) | pass,pass · to,pass · rc=0 |
 | 58 | ipsec_aes192_gcm_sve | pass | pass | BOUNDARY(gem5: PMULL64) | pass,pass · pass,pass · rc=134 |
 | 59 | ipsec_aes192_gcm_sve_wide | pass | pass | BOUNDARY(gem5: PMULL64) | pass,pass · pass,pass · rc=134 |
 | 60 | ipsec_aes256_cbc_hmac_sha1_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
@@ -182,14 +185,14 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 72 | l2c_cross_cache_line_sve | pass | pass | BOUNDARY(gem5: DC-CIVAC) | pass,pass · pass,pass · rc=134 |
 | 73 | libomp_ctx_arm | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 74 | lsu_store_forward_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 75 | mem_disambig_alu_sve | pass(bounded: buffer_bytes=4096) | pass(bounded: buffer_bytes=4096) | pass(bounded: buffer_bytes=4096) | pass,pass · to,pass · rc=0 |
+| 75 | mem_disambig_alu_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: buffer_bytes=4096) | pass,pass · to,pass · rc=0 |
 | 76 | mesh_upi_sve_asymm_distrib_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 77 | mesh_upi_sve_asymm_distrib_write_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 78 | mesh_upi_sve_asymm_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 79 | mesh_upi_sve_asymm_write_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 80 | mesh_upi_sve_read_L3_int | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
 | 81 | mesh_upi_sve_read_only_int | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
-| 82 | mesh_upi_sve_sym | pass(bounded: buffer_bytes=1048576) | pass(bounded: buffer_bytes=1048576) | pass(bounded: buffer_bytes=1048576) | pass,pass · to,pass · rc=0 |
+| 82 | mesh_upi_sve_sym | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: buffer_bytes=1048576) | pass,pass · to,pass · rc=0 |
 | 83 | mesh_upi_sve_symm_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 84 | mesh_upi_sve_wide_asymm_distrib_int | pass | pass | pass(bounded: buffer_bytes=1048576) | pass,pass · pass,pass · rc=0 |
 | 85 | mesh_upi_sve_wide_asymm_distrib_write_int | pass | pass | pass | pass,pass · pass,pass · rc=0 |
@@ -221,7 +224,7 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 111 | movbe_slf_sweep_sve | pass | pass | BOUNDARY(gem5: SIM-SPEED) | pass,pass · pass,pass · rc=124 |
 | 112 | movbe_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 113 | movdq2q_sve | pass | pass | pass(bounded: count=1024) | pass,pass · pass,pass · rc=0 |
-| 114 | movmskpspd_sve | pass(bounded: count=1024) | pass(bounded: count=1024) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
+| 114 | movmskpspd_sve | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: count=1024) | pass,pass · to,pass · rc=0 |
 | 115 | movq2dq_sve | pass | pass | pass(bounded: count=1024) | pass,pass · pass,pass · rc=0 |
 | 116 | mrn_flags_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 117 | mrn_nuke_2src_alu_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
@@ -289,14 +292,14 @@ sve512_fmmla_arm: SVE vector length 128 bits is outside the supported 256..1024-
 | 179 | sve512_stencil_axis_arm | pass | pass | BOUNDARY(gem5: SIM-SPEED) | pass,pass · pass,pass · rc=124 |
 | 180 | sve512_xlswave_ctx_arm | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 | 181 | sve_fpcr_cartesian_arm | pass | pass | pass | pass,pass · pass,pass · rc=0 |
-| 182 | sve_rot_ldr_at_top | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
-| 183 | sve_rot_ldr_at_top_rowmajor | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
-| 184 | sve_rot_ldr_at_top_rowmajor_k3res | pass(bounded: slots=4096) | pass(bounded: slots=4096) | pass(bounded: slots=4096) | pass,pass · to,pass · rc=0 |
-| 185 | sve_rot_ldr_at_top_rowmajor_k5inter_rand | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
-| 186 | sve_rot_ldr_at_top_rowmajor_k7p_hiham | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
-| 187 | sve_rot_ldr_at_top_rowmajor_k7p_one | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
-| 188 | sve_rot_ldr_at_top_rowmajor_k7p_rand | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
-| 189 | sve_rot_ldr_at_top_rowmajor_k7p_zero | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
+| 182 | sve_rot_ldr_at_top | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
+| 183 | sve_rot_ldr_at_top_rowmajor | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
+| 184 | sve_rot_ldr_at_top_rowmajor_k3res | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: slots=4096) | pass,pass · to,pass · rc=0 |
+| 185 | sve_rot_ldr_at_top_rowmajor_k5inter_rand | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
+| 186 | sve_rot_ldr_at_top_rowmajor_k7p_hiham | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
+| 187 | sve_rot_ldr_at_top_rowmajor_k7p_one | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
+| 188 | sve_rot_ldr_at_top_rowmajor_k7p_rand | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
+| 189 | sve_rot_ldr_at_top_rowmajor_k7p_zero | BOUNDARY(native: LOAD-GEOM) | BOUNDARY(native: LOAD-GEOM) | pass(bounded: slots=1024) | pass,pass · to,pass · rc=0 |
 | 190 | swizzle_sve | pass | pass | pass | pass,pass · pass,pass · rc=0 |
 
 † = 该测试在冻结基线上含 PR #316（#312-#315）已修复的越界缺陷：本行
@@ -306,16 +309,16 @@ pass 仅构成「同条件可跑绿」证据，**不构成基线洁净性证据*
 
 ## 5. 汇总算术（生成脚本机械统计，与 §4 表体同一数据源）
 
-| 列 | pass（直绿） | pass(bounded) | SKIP(legal) | BOUNDARY(gem5) | 合计 |
-|---|---|---|---|---|---|
-| 128 | 163 | 26 | 1 | 0 | 190 |
-| 256 | 164 | 26 | 0 | 0 | 190 |
-| 512 | 142 | 39 | 0 | 9 | 190 |
-| **合计** | **469** | **91** | **1** | **9** | **570** |
+| 列 | pass（直绿） | pass(bounded) | SKIP(legal) | BOUNDARY(native) | BOUNDARY(gem5) | 合计 |
+|---|---|---|---|---|---|---|
+| 128 | 163 | 1 | 1 | 25 | 0 | 190 |
+| 256 | 164 | 1 | 0 | 25 | 0 | 190 |
+| 512 | 142 | 39 | 0 | 0 | 9 | 190 |
+| **合计** | **469** | **41** | **1** | **50** | **9** | **570** |
 
-**570 = 560 pass（469 直绿 + 91 有界）+ 1 SKIP(legal) + 9 BOUNDARY(gem5)**，零 FAIL、零非法 SKIP。
+**570 = 510 pass（469 直绿 + 41 有界）+ 1 SKIP(legal) + 50 BOUNDARY(native: 负载几何) + 9 BOUNDARY(gem5)**，零 FAIL、零非法 SKIP。
 
-- **128 列 = 189 pass + 1 SKIP(legal)** —— 对账 triage-128 §5（两 seed 各 189 腿内绿 = 163 默认自适应直绿 + 26 格腿内 baked 有界（= 25 项 clamp 下限 + 1 项 acl 标定，构成同 §2 legend @128；clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）；189 与 26 计数对账 triage-128 §5（该表收口口径未携带限定语义），163/25/1 拆分与限定语义对账 triage-256 §1/§5/§7），另有 1 合法 SKIP：fmmla@128，两 seed 同格同理。
-- **256 列 = 190 pass** —— 对账 triage-256 §7（seed1 165 腿内绿（164 格默认自适应直绿 + 1 格 acl 标定 baked）+ 25 格 §5 有界重跑 = 190/190；seed2 190 格腿内绿（164 默认自适应直绿 + 1 格 acl 标定 baked + 25 格腿内 clamp 下限有界））；26 个有界格 = 25 格 §5 有界重跑（seed1 腿内 to → 同 seed 单测 clamp 下限重跑绿——clamp 下限 = 最小激发强度，语义限定统一见 triage-256 §5「证据强度限定」）+ 1 格 baked 腿内绿（acl dim=512 标定，Ruling B / triage-256 §1——baked 有界几何、证据强度与有界绿同向受限，非默认自适应直绿等同；按下行有界格计法计入 26 有界格之列、亦计入 165 腿内绿之列，两口径两属）。
-- **512 列 = 181 pass + 9 BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；39 个有界格 = baked 26 项中绿 25（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 15（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 1（acl：baked 512 被 extras 覆盖为 128）。
-- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。
+- **128 列 = 164 pass（163 直绿 + 1 acl 标定）+ 1 SKIP(legal) + 25 BOUNDARY(native)** —— 对账 triage-128 §2/§5（验收记账 = spec §7 口径，audit #645：25 个负载几何格计边界格——本档设计几何未实测（腿自始烧入 26 项有界覆盖、两 seed 腿内有界直绿），机制同 256 档（triage-256 §4：几何由物理内存比例与线程数推导、输入不含 VL），外推强度「预期」；有界绿 = 功能正确性证据（clamp 下限，最小激发强度），语义限定统一见 triage-256 §5「证据强度限定」）；另有 1 合法 SKIP：fmmla@128，两 seed 同格同理。
+- **256 列 = 165 pass（164 直绿 + 1 acl 标定）+ 25 BOUNDARY(native)** —— 对账 triage-256 §7（spec §7 口径，audit #645：seed1 腿内 165 绿 + 25 timed out（§1），25 格按负载几何机制（§4：环境/边界类、与 seed 无关）计边界格，其 clamp 下限有界绿（§5：seed1 腿外单测 + seed2 腿内 baked）为功能正确性证据（最小激发强度），不计入绿；acl dim=512 为 Ruling B 标定、缩比 2×线性与 25 格的 3~4 个数量级不同量级，仍计 pass(bounded)，证据强度同向受限）。
+- **512 列 = 181 pass + 9 BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；39 个有界格 = baked 26 项中绿 25（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 15（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 1（acl：baked 512 被 extras 覆盖为 128）；本列声明语义 = 512 档功能性正确性（压力维度由 native 腿承担，triage-512 §0/§2），有界绿计 pass(bounded) 名实相符、不计边界格。
+- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。native 列（128/256）的 25 个 clamp 下限有界格不因有界绿计 pass(bounded) 而计 BOUNDARY(native)（audit #645 记账口径），其有界绿证据仍由同款命令行头与 triage-256 §5 表承担。

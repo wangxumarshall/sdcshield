@@ -83,7 +83,8 @@ SDCSHIELD_ARM64_SPEC_MAX_VL=128 ./builddir/sdcshield --test-list-file $LIST \
 - **交叉证据**：同一测试在 256 腿两 seed 均 pass（seed2：104 块/573.7 ms）——门只挡
   128，不误伤更高档。
 - **矩阵记账**：(sve512_fmmla_arm, 128) 格 = **合法 SKIP（架构下界）**，128 腿证据
-  矩阵 = 189 直绿格 + 1 合法 SKIP 格；其余 189 用例无任何 SKIP——本机 128 档
+  矩阵 = 163 默认自适应直绿 + 26 格腿内有界（= 25 格负载几何边界 + 1 格 acl 标定）
+  + 1 合法 SKIP 格（验收记账 = spec §7 口径，audit #645，见 §5）；其余 189 用例无任何 SKIP——本机 128 档
   SVE1 门（`ARM64_REQUIRES_SVE` + 128..1024 范围门）全开，无 HWCAP 类意外 SKIP。
 - Task 1 枚举未单列此格的 128 档预期（enumeration.md 无 fmmla 条目）——本腿以实测
   补记：该格是**预期内的档位能力边界**，Task 8 汇总矩阵应把它记为 SKIP(legal) 而非
@@ -117,16 +118,26 @@ interrupted|operating system error|timed out` 计数——skip 仅 §2 的 1 条
 
 ## 5. 结论
 
-**native 128 档两腿收口：189/190 直绿 × 2 seed + 1 个架构性合法 SKIP 格（fmmla@128）
-+ mce_check 绿 × 2，`exit: pass` × 2，`--ignore-timeout` 未触发。**
+**native 128 档两腿收口（验收记账 = spec §7 口径，audit #645 同步）：190 格 = 163
+默认自适应直绿 + 1 格 acl 标定 baked（pass(bounded)）+ 25 格负载几何边界格
+（BOUNDARY(native: LOAD-GEOM)）+ 1 个架构性合法 SKIP 格（fmmla@128）；mce_check
+绿 × 2，`exit: pass` × 2，`--ignore-timeout` 未触发。**
 
-- **绿格（矩阵 190 清单格 × 2 seed = 380 格）**：seed1 189 直绿（26 格为腿内有界）；
-  seed2 189 直绿（同）。两 seed 合计 378 绿格。
+- **腿内实测（事实层）**：seed1 189 pass（26 格为腿内有界——25 格 clamp 下限 +
+  1 格 acl 标定）；seed2 同。两 seed 合计 378 腿内绿格。
 - **合法 SKIP 格：2 格**（两 seed 各 1，同一格 sve512_fmmla_arm@128，§2 架构下界）。
-- **边界格 = 0、代码 bug 候选 = 0**：256 腿的 25 个超时格在 128 腿零超时（有界覆盖
-  生效），无 fail/crash；eigen 分发锚点实据 128 变体被执行。
-- **与 256 腿的对照结论**：190 用例中 189 个 VL 敏感执行路径在 128/256 两档全绿；
-  唯一档位差 = fmmla 的 F64MM 架构下界（256 起步）——这正是全 VL 矩阵要刻画的东西。
+- **负载几何边界格 = 25、代码 bug 候选 = 0**：该 25 格**本档设计几何未实测**（腿
+  自始烧入 26 项有界覆盖——控制器裁定，两 seed 腿内有界直绿、零超时）；同几何机制
+  在 256 档实测超时（triage-256 §4：几何由物理内存比例与全机线程数推导、输入不含
+  VL），故同归负载几何边界类——外推强度「预期」非「确定」。有界绿 = 功能正确性
+  证据（clamp 下限，最小激发强度——triage-256 §5「证据强度限定」），不计入绿。
+  旧句「边界格 = 0：256 腿的 25 个超时格在 128 腿零超时（有界覆盖生效）」以腿内
+  零超时论证无边界系循环论证（有界覆盖生效恰是零超时的原因），audit #645 修正。
+  无 fail/crash；eigen 分发锚点实据 128 变体被执行。
+- **与 256 腿的对照结论**：190 用例中 189 个在 128/256 两档均有腿内绿证据（其中
+  25 个负载几何类用例两档均为有界形态、验收记账两档同计边界格——triage-256 §7 /
+  本节，audit #645）；唯一档位差 = fmmla 的 F64MM 架构下界（256 起步）——这正是
+  全 VL 矩阵要刻画的东西。
 - **证据文件**：`native-128-LCG1001.summary.txt` / `native-128-LCG1002.summary.txt`
   （extract-summary.sh 机械提取，各 190 行，exit 行在内）；`native-128-LCG1001.stdout.txt`
   / `native-128-LCG1002.stdout.txt`（腿 stdout，含 `exit: pass`；跑完即时回拷）。

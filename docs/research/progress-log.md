@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-11-15（issue #645：SVE 全 VL 矩阵验收口径改真——25 个负载几何超时格计 native 边界格）
+
+- **现象（audit 复核成立）**：triage-256 §4 将 25 个超时格定性「环境/边界类」，§7 却宣布
+  「190/190 全绿、边界格 = 0」——把「边界格」重定义为「找不到有界值的残留」，偏离
+  spec §7 验收判据（native 格的绿 = 设计几何 `exit: pass`；不绿走边界格通道）。
+  seed1 summary 机械对账：165 pass + 25 timed out = 190（复现）。
+- **修复**：25 格 × 128/256 两 native 列计 `BOUNDARY(native: LOAD-GEOM)`（有界绿保留为
+  功能正确性证据＝最小激发强度，非满强度）；512 列不动（声明语义 = 功能性正确性，
+  压力维度由 native 腿承担）；acl_gemm_sve.dim=512 标定 1 格保留 pass(bounded)
+  （Ruling B 标定、缩比 2×线性，与 3~4 个数量级不同量级——残留判断点，已在 PR 声明）。
+  汇总 560 pass（469+91）→ **510 pass（469 直绿 + 41 有界）+ 1 SKIP + 50 native 边界
+  + 9 gem5 边界**。同步 triage-256/128/512、matrix-gen.sh+matrix.md（机械再生、断言
+  全过）、README；triage-512「四格 native 全绿」隐藏失实（eigen_svd_cdouble 本在 25
+  名单）一并改真。旧收口行（本日志 2026-10-30 条：560 pass 口径）系当时口径，本条
+  即其修正，不回改历史条目。
+- **验证**：`./matrix-gen.sh` 断言全过、基线可复现性先行验证（BASELINE-IDENTICAL）；
+  zstd19 回归 `-t 2000 -n 1` exit: pass；纯文档+脚本、零代码路径改动（x86-64 非回归
+  由零代码改动蕴含）。分支 fix/issue-645。
+
+---
+
 ## 2026-11-08（issue #515：联合求解 node_cpus 折算域改选中设备集——非均匀 --cpuset/-n 不再超分节点内存）
 
 ### 结论

@@ -256,8 +256,10 @@ fmmla-trace2.log（工作区）。
 - **14 格经有界重跑转绿**（§5.2 表上半：fisttp、acl@128、eigen_gemm@1024、
   ipsec_cmac、mesh×8、movdq2q、movq2dq）；
 - **4 格为硬边界**：mrn_rmw_diff_1m、eigen_svd_cdouble、movbe_slf_sweep、
-  sve512_stencil_axis——knob 下限/无杠杆 + gem5 仿真速（四格 native 256 腿
-  全绿，单轮指令量在 ~1400× 减速下超出任何实用仿真预算）。
+  sve512_stencil_axis——knob 下限/无杠杆 + gem5 仿真速（单轮指令量在 ~1400×
+  减速下超出任何实用仿真预算）。native 侧：mrn_rmw_diff_1m、movbe_slf_sweep、
+  sve512_stencil_axis 三格 256 档直绿；eigen_svd_cdouble_sve 为负载几何边界格
+  （256 档设计几何超时、有界 mdim=300 功能绿，triage-256 §4/§5/§7，audit #645）。
 - **预置降容时序（如实）**：干净批量启动时 overrides 仅 3 条——sleef
   （生效，批内绿 @1384 s）、acl dim=256（无效，批量内超时后修订 128）、
   eigen_svd_cdouble mdim=64（无效，clamp 下限 300 静默钳回，条目后删）；
@@ -281,9 +283,9 @@ mce_check 轮）；跑完被误标者 tick 正常。实测分布（gem5-512-verd
   0.41-1.6 s、mesh 族 0.13-0.2 s、ipsec 族 0.06-0.24 s）。
 
 **结论：零 init-skip 嫌疑格**。结合 §2.2 HWCAP 探针（SVE=1、门全开）与
-native 256 腿 190/190 全绿（构成 = 164 格默认自适应直绿 + 1 格 acl 标定 baked +
-25 格 clamp 下限有界绿，两 seed 参数空间不对称——绿格构成与证据强度口径见
-triage-256 §1/§5/§7；无规格门 SKIP），本腿绿格均为真实执行。
+native 256 腿两 seed 腿内零 fail/crash（165/190 与 190/190 腿内绿，构成与验收
+记账口径见 triage-256 §1/§5/§7——25 个负载几何边界格的有界绿为功能正确性证据、
+非满强度，audit #645；无规格门 SKIP），本腿绿格均为真实执行。
 
 ## 6. 结论
 
@@ -297,7 +299,8 @@ triage-256 §1/§5/§7；无规格门 SKIP），本腿绿格均为真实执行�
     `dc civac`（缓存维护路径，l2c_cross_cache_line、movbe_l2、mrn_rmw_l1d）
     ——native 256 腿对应格全绿，失败指令均已定位（§5.1）。
   - 仿真速约束（4）：knob 下限或无杠杆的单轮指令量超出实用预算
-    （§5.2）——native 全绿。
+    （§5.2）——native 侧 3 格直绿、eigen_svd_cdouble_sve 为负载几何边界格
+    （有界 mdim=300 功能绿，triage-256 §7，audit #645）。
 - **矩阵口径（Task 8 引用 §0 头部块）**：512 列 = `-f no` nofork + 26 项
   baked `-O` + 16 项分诊降容（gem5-overrides.txt 为权威）+ gem5 SE（md5
   3f9011f4…）+ sdcshield 12ccda540fd4；判定 = 进程退出码权威 + exit 行

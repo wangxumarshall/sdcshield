@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794573655013,
+  "lastUpdate": 1794657808124,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -3990,6 +3990,82 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 12.297,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "committer": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "id": "060812eaac96048513d2f29cccad5a176d3f3b9d",
+          "message": "fix(pipeline): codespell lint 命中修复——nam 缩写全称化为 no_auto_merge(代码/测试/过程文档)\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-13T12:01:00Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/060812eaac96048513d2f29cccad5a176d3f3b9d"
+        },
+        "date": 1794657806503,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 84152.054,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44845.984,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 68.801,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 30.789,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.865,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.96,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.604,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.715,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21427.42,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.884,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.437,
             "unit": "s"
           }
         ]

@@ -187,9 +187,13 @@ def free_slot_count(state, kind):
 
 def free_slots_on(state, kind, host="local"):
     """指定节点的空槽数(host 维度分账; local=tp 本机, 板=注册表配额)。
-    Task 7: 活判经 _probe_alive——unreachable 计为占用(保守不超发)。"""
+    Task 7: 活判经 _probe_alive——unreachable 计为占用(保守不超发)。
+    fix-round 1(Minor#1): host 空串/None 与 "local" 同口径(参数与槽
+    记录两侧 `or "local"` 归一)——与 _probe_alive/slot_acquire 的守卫
+    统一,畸形 host 槽两处数法一致,不落 node_by_host("") 的 NodeError。"""
+    host = host or "local"
     live = sum(1 for s in _slots(state, kind)
-               if s.get("host", "local") == host
+               if (s.get("host") or "local") == host
                and _probe_alive(s) != "dead")
     return max(0, slot_count_cap(state, kind, host) - live)
 
@@ -1227,27 +1231,35 @@ def cycle_once(state, dry_run, events, now, window_end=9):
     # 只扫 QUEUED 会让这一群永久滞留,scan 旧编排由重派扫消化)。
     import task_loop_nodepool as np
     es = tl.StateStore.entries(state)
-    node1 = np.LOCAL_NODE if dry_run else np.pick_node("issue_fix", state)
-    if node1 is None:
-        print("[nodepool] 全节点无空槽/不可用,泳道1 本轮不派")
+    # PAUSED 守卫对称(fix-round 1 Minor#2,照泳道2 形态): 熔断时不
+    # pick_node——dispatch_agent 自带闸会逐条拒绝,探测白费(夜间 PAUSED
+    # 时省 4 节点探测)。
+    if tl._paused():
+        print("[paused] 泳道1 修复派发被 PAUSED 闸门拦下")
     else:
-        lane1 = sorted(
-            (e for e in es
-             if e.status == "QUEUED"
-             or (e.status == "DISPATCHED" and e.agent_pid is None)),
-            key=lambda e: (e.issue_number is None, e.issue_number or 0))
-        for e in lane1:
-            if not tl._dispatch_gate_ok(e, open_labels):
-                continue
-            if free_slots_on(state, "issue_fix",
-                             host=node1["host_id"]) <= 0:
-                break
-            pid = tl.dispatch_agent(e, state, dry_run=dry_run, node=node1)
-            # 回写+即时落盘(scan 检视#6/Task 4 R2 纪律): Entry 是解析副本,
-            # 不回写则 save 落旧 dict,派发记账全丢 = 每轮重派。
-            state["entries"] = [x.to_dict() for x in es]
-            if pid is not None and not dry_run:
-                _pipeline_save(StateStore(), state)
+        node1 = np.LOCAL_NODE if dry_run else np.pick_node("issue_fix",
+                                                           state)
+        if node1 is None:
+            print("[nodepool] 全节点无空槽/不可用,泳道1 本轮不派")
+        else:
+            lane1 = sorted(
+                (e for e in es
+                 if e.status == "QUEUED"
+                 or (e.status == "DISPATCHED" and e.agent_pid is None)),
+                key=lambda e: (e.issue_number is None, e.issue_number or 0))
+            for e in lane1:
+                if not tl._dispatch_gate_ok(e, open_labels):
+                    continue
+                if free_slots_on(state, "issue_fix",
+                                 host=node1["host_id"]) <= 0:
+                    break
+                pid = tl.dispatch_agent(e, state, dry_run=dry_run,
+                                        node=node1)
+                # 回写+即时落盘(scan 检视#6/Task 4 R2 纪律): Entry 是解析副本,
+                # 不回写则 save 落旧 dict,派发记账全丢 = 每轮重派。
+                state["entries"] = [x.to_dict() for x in es]
+                if pid is not None and not dry_run:
+                    _pipeline_save(StateStore(), state)
     # 泳道2: 检视 × 节点池择优(每轮恰一次 pick_node,Task 8 接线)——
     # PAUSED 熔断同闸(紧急停机覆盖全部派发,spec §1 人工保留点;
     # dispatch_agent/run_audit 自带闸,检视线在编排层拦;PAUSED 时不
@@ -1270,7 +1282,8 @@ def cycle_once(state, dry_run, events, now, window_end=9):
                           f"(head {head[:8]})")
                     continue
                 dispatch_review(state, num, head, node=node2)
-    # 泳道3: 车道 B(其派发已槽位化为 pr_repair)
+    # 泳道3: 车道 B(派发已槽位化 pr_repair;fix-round 1 起经 lane_b 内
+    # 节点池择优——每轮一次 pick_node、显式传 node,饱和态分载与泳道1/2 同款)
     tl.lane_b_advance(state, dry_run=dry_run)
     # audit 后台线
     spawn_audit(state, dry_run, window_end=window_end)

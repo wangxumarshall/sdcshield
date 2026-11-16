@@ -2202,7 +2202,9 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
       READY_TO_FIX → rounds 达动态上限(docs/简单 diff → 2、其余 → 3)
         先 ESCALATED;否则 render_collect 落盘
         <STATE_DIR>/collect-pr<N>.md + dispatch_agent(bot prompt、
-        rounds+1、last_dispatched_head=head_sha、status→BOT_FIX);
+        rounds+1、last_dispatched_head=head_sha、status→BOT_FIX;
+        fix-round 1 起派发经节点池择优——每轮一次 pick_node、显式传
+        node,本机 pr_repair 饱和时照常分载到板,见函数体泳道3 注释);
         同 head 已派过(last_dispatched_head == head_sha)不重派(同 head
         单派——意见没变就再派是浪费,head 变了才允许新一轮);
       READY_TO_MERGE → 不动条目(只打印移交提示)——merge 属主在
@@ -2222,6 +2224,20 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         print("[lane-b] 车道 B 无条目(无 PR_OPEN / BOT_FIX 条目)")
         return
     slug = repo_slug()
+    # 泳道3 节点池择优(fix-round 1 Important#1): 与 cycle 泳道1/2 同款——
+    # 每轮恰一次 pick_node、dispatch 显式传 node(满槽闸按目标节点 host 分
+    # 账)。不接则饱和态不分载: 本机 pr_repair 两槽活满时 dispatch_agent
+    # 的全局满槽闸(不分 host)在 _resolve_dispatch_node 之前就把派发拦死,
+    # 远程分支永不可达;反向板上 2 活时本机派发同样被误拒(全链总容量被
+    # 钉死在单机 cap 2 而非 2+2,spec 决策 1 对 repair 泳道不成立)。
+    # None(全节点无空槽/不可用)→ 本轮不派 bot 处置 agent(条目保持
+    # PR_OPEN 待下轮);lane_b 其余语义(退场归还/CLOSED 收尾/升级/merge
+    # 移交)不受影响——抑制只落在 READY_TO_FIX 派发点。dry_run 恒
+    # LOCAL_NODE(dry 分支只打印意图,派发点不达,零 SSH 零探测)。
+    import task_loop_nodepool as np    # 懒 import(同 dispatch_agent,无环)
+    node_b = np.LOCAL_NODE if dry_run else np.pick_node("pr_repair", state)
+    if node_b is None:
+        print("[nodepool] 全节点无空槽/不可用,泳道3 本轮不派")
     # I2 缺位告警记账(车道 B 本轮拉到的 PR 是否全部缺 local-claude 信号——
     # 单个 PR 缺位不升级,只有「全部缺」才意味着第 5 bot 全局停摆/凭据配额问题)
     any_fetched = False
@@ -2231,7 +2247,6 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             if entry.agent_pid is not None:
                 # Task 7 host 分流: 探活经 host_alive;unreachable 按
                 # 「活着」处理(保守: 不归还、不重派——SSH 断≠进程死)。
-                import task_loop_nodepool as np    # 懒 import(仅 NodeError)
                 try:
                     _bot_alive = host_alive(entry.host, entry.agent_pid)
                 except np.NodeError:
@@ -2363,6 +2378,11 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
             entry.status = "BOT_FIX"
             entry.updated_at = _now_iso()
             continue
+        if node_b is None:
+            # 泳道3 择优全空(上方一次性打印): 本条目本轮不派,保持
+            # PR_OPEN 待下轮——不回落 node=None 内部再 pick(全局闸口径
+            # 且全节点已知无空槽),也不吞其余 lane_b 语义。
+            continue
         collect_md = pr_loop.render_collect(
             pr, slug, pr_loop.DEFAULT_QUIET)
         os.makedirs(_resolve_state_dir(), exist_ok=True)
@@ -2371,7 +2391,7 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
         prompt = build_bot_prompt(entry, pr, collect_path)
         pid = dispatch_agent(entry, state, dry_run=False,
                              prompt_override=prompt,
-                             increment_rounds=True)
+                             increment_rounds=True, node=node_b)
         # 立即回写: dispatch 记账(PID/状态/lane/worktree)落回 state dict——
         # 落盘与同轮后续条目复扫都以 state["entries"] 为准(槽位账本在
         # state["slots"] 上原地突变,不经此)

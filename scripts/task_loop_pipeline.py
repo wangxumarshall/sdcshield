@@ -229,7 +229,9 @@ def reset_review_tries(state):
 
 def dispatch_review(state, pr_num, head, node=None):
     """泳道2 派发: 每晚每 (pr,head) ≤REVIEW_PER_HEAD_PER_NIGHT 次;满槽/内存
-    不足返回 None。spawn 命令与修复 agent 同形(setsid+timeout),凭据经 agent.env。
+    不足返回 None。spawn 命令与修复 agent 同形(setsid+timeout),凭据经
+    tl._pick_env_path 轮换(Task 6b: agent-key-*.env 池按 env_rr 取模,
+    池空回落 agent.env;本机 inner 与远程 refresh 同一选中文件)。
 
     派发序(T10 顺手修①②③④,R3 语义保持): 内存闸 → 同 key **活占位**前置
     早退(先于每晚上限计数——活 agent 在跑不是一次检视尝试,零 spawn 零
@@ -239,7 +241,8 @@ def dispatch_review(state, pr_num, head, node=None):
     并发竞态)killpg 整组击杀不留孤儿。
 
     node(Task 6 nodepool,spec 2026-11-13 §4): None → np.pick_node 择优;
-    选中板节点走远程分支(agent.env 上板 refresh→主克隆 heal→板上克隆跑
+    选中板节点走远程分支(轮换选中的池文件上板 refresh、板上落名恒
+    agent.env→主克隆 heal→板上克隆跑
     pr_local_review.py --pr N→板上 log→槽 host=板 id),远程任何 NodeError
     打印后回退本机路径原样(不占远程槽、不烧每晚预算,回退一次成功才
     tries+1;不递归 pick_node)。检视无 prompt 文件(命令行 --pr 传参),
@@ -269,27 +272,27 @@ def dispatch_review(state, pr_num, head, node=None):
     if free_slot_count(state, "pr_review") <= 0:
         print(f"[slots] pr_review 满槽,拒绝为 {key} 派检视")
         return None
-    env_file = os.path.join(tl._resolve_state_dir(), tl.AGENT_ENV_NAME)
+    state_dir = tl._resolve_state_dir()
+    env_file = os.path.join(state_dir, tl.AGENT_ENV_NAME)
     if not os.path.exists(env_file):
         # 顺手修①(B44 同款前置拒绝): 缺凭据是部署问题——真实派发拒绝且
         # 不烧每晚预算/不占槽,按 task-loop.md §3.3 放置凭据后自动恢复。
         print(f"[review] agent.env 缺失({env_file})——按 task-loop.md §3.3 "
               f"放置凭据(权限 600)后恢复;本轮不派检视、不烧每晚预算")
         return None
+    # 多 key 轮询(Task 6b,与 dispatch_agent 同款): 本机 inner 与远程
+    # refresh 同一选中文件(板上落名恒 agent.env);检视无 dry-run,计数
+    # 随真实派发递增。
+    env_src = tl._pick_env_path(state, state_dir)
     # ---- 跨机分载远程分支(Task 6 nodepool,spec 2026-11-13 §4) ----
     # node=None 由 pick_node 择优;nodepool 任何意外 → 本机兜底,本机路径
     # (下方)零改动。回退不递归 pick_node(防板上故障循环),tries 只挂在
     # 成功 return 上(远程失败/回退失败都不烧每晚预算)。
-    import task_loop_nodepool as np
-    if node is None:
+    node, node_remote = tl._resolve_dispatch_node("pr_review", state, node)
+    if node_remote:
+        import task_loop_nodepool as np
         try:
-            node = np.pick_node("pr_review", state)
-        except Exception as exc:          # nodepool 任何意外 → 本机兜底
-            print(f"[nodepool] pick_node 失败,回退本机: {exc}")
-            node = np.LOCAL_NODE
-    if node is not None and node.get("host_id") != "local":
-        try:
-            np.refresh_env_remote(node, env_file)
+            np.refresh_env_remote(node, env_src)
             np.heal_remote(node)      # 板上主克隆 heal——第5bot 跑最新脚本
             ts_r = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             remote_log = f"{np.REMOTE_STATE_DIR}/review-pr{pr_num}-{ts_r}.log"
@@ -319,8 +322,8 @@ def dispatch_review(state, pr_num, head, node=None):
     # 顺手修④: 时间戳 naive 本地 → UTC 带 Z(与 tl.dispatch_agent 的
     # _now_iso UTC 口径对齐;文件名模板 review-pr<N>-<ts>.log 不变)。
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log = os.path.join(tl._resolve_state_dir(), f"review-pr{pr_num}-{ts}.log")
-    inner = (f"source {shlex.quote(os.path.join(tl._resolve_state_dir(), 'agent.env'))}"
+    log = os.path.join(state_dir, f"review-pr{pr_num}-{ts}.log")
+    inner = (f"source {shlex.quote(env_src)}"
              f" && timeout {REVIEW_AGENT_TIMEOUT_SEC} /usr/bin/python3 "
              f"{shlex.quote(os.path.join(tl._resolve_clone_dir(), 'scripts', 'pr_local_review.py'))}"
              f" --pr {pr_num}")
@@ -913,6 +916,9 @@ def spawn_audit(state, dry_run, window_end=9, now=None):
               f"timeout {AUDIT_LINE_TIMEOUT_SEC}s)")
         return
     log = os.path.join(tl._resolve_state_dir(), "audit.log")
+    # audit 线不接多 key 轮询(Task 6b 控制器裁定): 子进程直接继承本进程
+    # 环境(不 source env 文件),且 audit 槽单实例上限(SLOT_KINDS["audit"]==1)
+    # ——单 key 无并发速率压力,保持现状。
     inner = (f"timeout {AUDIT_LINE_TIMEOUT_SEC} "
              f"/usr/bin/python3 scripts/task_loop.py audit")
     cmd = f"nohup setsid bash -c {shlex.quote(inner)} >> {shlex.quote(log)} 2>&1 & echo $!"

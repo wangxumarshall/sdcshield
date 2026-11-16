@@ -450,6 +450,133 @@ def test_dispatch_agent_remote_spawnfail_falls_back_local(monkeypatch, tmp_path)
     assert tp.slot_get(st, "issue_fix", "issue-7")["host"] == "local"
 
 
+# ============ Task 6b: GLM 三 key round-robin 多 key 轮询 ============
+
+
+def test_env_pool_rotation_and_fallback(tmp_path):
+    """凭据池 round-robin: 池空回落单文件 agent.env(兼容 gen_agent_envs.sh
+    未跑过的现部署);池非空按 env_rr 计数取模轮换,计数入 state 跨派发
+    (跨 cycle)持续递增——8 并发 agent 均摊三 key,单 key 速率压力 1/3。"""
+    sd = tmp_path / "st"
+    sd.mkdir()
+    (sd / "agent.env").write_text("base\n")
+    st = {}
+    p = tl._pick_env_path(st, str(sd))
+    assert p.endswith("agent.env")                    # 池空回落单文件
+    assert st["env_rr"] == 1
+    for i in ("1", "2", "3"):
+        (sd / f"agent-key-{i}.env").write_text(f"k{i}\n")
+    st = {}
+    picks = [tl._pick_env_path(st, str(sd)) for _ in range(7)]
+    order = [p.rsplit("agent-key-", 1)[1][0] for p in picks]
+    assert order == ["1", "2", "3", "1", "2", "3", "1"]   # round-robin
+    assert st["env_rr"] == 7
+
+
+def test_gen_agent_envs_sh_syntax():
+    """gen_agent_envs.sh 只做语法检查(bash -n)——真跑会读本机 ~/.bashrc
+    并写真实 state 目录(控制器裁定#5: 测试零真触网/零真 token);行为
+    冒烟由部署侧 sandbox 真跑承担,不入单测。"""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "..", "..", "..", "scripts", "gen_agent_envs.sh")
+    r = subprocess.run(["bash", "-n", script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_dispatch_local_sources_picked_env(monkeypatch, tmp_path):
+    """本机派发(Task 6b): inner source 的是轮换选中的池文件(agent-key-N.env,
+    非固定 agent.env),env_rr 随派发递增。二连派用两个 entry——同 key 闸会拦
+    同一条目重派(控制器裁定#1)。"""
+    _patch_dispatch_offline(monkeypatch, tmp_path)
+    (tmp_path / "st" / "agent-key-1.env").write_text("k1\n")
+    (tmp_path / "st" / "agent-key-2.env").write_text("k2\n")
+    cmds = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: cmds.append(cmd) or 42)
+
+    def mk(n):
+        return tl.Entry(workflow="w", run_id=n, status="QUEUED", issue_number=n,
+                        fix_branch="", pr_number=None, attempts=0, rounds=0,
+                        agent_pid=None, agent_started_at=None, agent_log=None,
+                        last_dispatched_head=None, extra_runs=[], created_at="t",
+                        updated_at="t", source="audit", kind="bug",
+                        audit_hash=None)
+
+    st = {"entries": [mk(3).to_dict(), mk(4).to_dict()],
+          "auth_failure_streak": 0}
+    es = tl.StateStore.entries(st)
+    tl.dispatch_agent(es[0], st)     # rr=0 → pool[0] = agent-key-1.env
+    tl.dispatch_agent(es[1], st)     # rr=1 → pool[1] = agent-key-2.env
+    assert "agent-key-1.env" in cmds[0]
+    assert "agent-key-2.env" in cmds[1]
+    assert st["env_rr"] == 2         # 计数随派发递增(入 state 跨 cycle 持续)
+
+
+def test_dispatch_agent_remote_refreshes_picked_env(monkeypatch, tmp_path):
+    """远程派发(Task 6b): refresh_env_remote scp 的是轮换选中的池文件,
+    板端 inner 引用恒 REMOTE_STATE_DIR/agent.env(板上落名不变,板端命令
+    零改动)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    (tmp_path / "st" / "agent.env").write_text("PATH=/usr/bin\n")
+    (tmp_path / "st" / "agent-key-1.env").write_text("k1\n")
+    (tmp_path / "st" / "agent-key-2.env").write_text("k2\n")
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    import task_loop_nodepool as np
+
+    def _no_ssh(host_id, cmd, timeout=45):
+        raise np.NodeError("测试内禁真 SSH(有 np 操作漏桩)")
+    monkeypatch.setattr(np, "run_ssh", _no_ssh)
+    remote = {"env": [], "cmds": []}
+    monkeypatch.setattr(np, "pick_node", lambda k, s: np.node_by_host("0102"))
+    monkeypatch.setattr(np, "refresh_env_remote",
+                        lambda n, env: remote["env"].append(env))
+    monkeypatch.setattr(np, "prepare_worktree_remote",
+                        lambda n, key: "/board/wt")
+    monkeypatch.setattr(np, "put_file", lambda h, l, r: None)
+    monkeypatch.setattr(np, "heal_remote", lambda n: None)
+    monkeypatch.setattr(np, "kill_remote", lambda h, p, s: None)
+    monkeypatch.setattr(np, "spawn_remote",
+                        lambda n, cmd, log: remote["cmds"].append(cmd) or 4242)
+    spawn_local = []
+    monkeypatch.setattr(tp.tl, "run_background",
+                        lambda cmd, cwd, log: spawn_local.append(cmd) or 1)
+    monkeypatch.setattr(tp.tl, "gh_label_add", lambda *a: None)
+    monkeypatch.setattr(tp.tl, "_worktree_prepare",
+                        lambda c, k: spawn_local.append("LOCAL-WT") or "/lw")
+    e = tl.Entry(workflow="w", run_id=1, status="QUEUED", issue_number=7,
+                 fix_branch="fix/issue-7", pr_number=None, attempts=0, rounds=0,
+                 agent_pid=None, agent_started_at=None, agent_log=None,
+                 last_dispatched_head=None, extra_runs=[], created_at="t",
+                 updated_at="t", source="audit", kind="bug", audit_hash=None)
+    st = {"entries": [e.to_dict()], "auth_failure_streak": 0}
+    es = tl.StateStore.entries(st)
+    pid = tl.dispatch_agent(es[0], st)
+    assert pid == 4242 and not spawn_local            # 远程派发,本机零派生
+    # scp 的是轮换选中的池文件(rr=0 → pool[0]),不是固定 agent.env
+    assert len(remote["env"]) == 1
+    assert remote["env"][0].endswith("agent-key-1.env")
+    # 板端命令零改动: 板上落名恒 agent.env
+    assert f"{np.REMOTE_STATE_DIR}/agent.env" in remote["cmds"][0]
+    assert st["env_rr"] == 1
+
+
+def test_dispatch_review_sources_picked_env(monkeypatch, tmp_path):
+    """检视派发(Task 6b 同款): dispatch_review 本机 inner source 轮换选中
+    的池文件(远程分支经 refresh_env_remote 上板同源,板上落名恒
+    agent.env——同款接入已由 test_dispatch_agent_remote_refreshes_picked_env
+    覆盖,此处只验本机侧)。"""
+    _patch_review_offline(monkeypatch, tmp_path)
+    (tmp_path / "st" / "agent-key-1.env").write_text("k1\n")
+    cmds = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: cmds.append(cmd) or 4242)
+    st = _mkstate()
+    assert tp.dispatch_review(st, 640, "h1") == 4242
+    assert "agent-key-1.env" in cmds[0]
+    assert st["env_rr"] == 1
+
+
 def test_worktree_prepare_cleanup_roundtrip(tmp_path):
     """真实 git 集成: prepare 建于 origin/main、可重复 prepare(清残留);
     rmtree 兜底删目录后留 .git/worktrees 注册——cleanup 不 prune 该残留时

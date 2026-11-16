@@ -1372,6 +1372,44 @@ def _record_dispatch(entry: Entry, kind: str, fix_branch: str, pid: int,
     return pid
 
 
+def _env_pool(state_dir):
+    """agent 凭据池(多 key 轮询,spec 决策 #9): agent-key-*.env 排序;
+    池空回落单文件 agent.env(兼容现部署——gen_agent_envs.sh 未跑过)。"""
+    import glob as _glob
+    pool = sorted(_glob.glob(os.path.join(state_dir, "agent-key-*.env")))
+    return pool or [os.path.join(state_dir, AGENT_ENV_NAME)]
+
+
+def _pick_env_path(state, state_dir):
+    """round-robin 取一个 env 文件(计数入 state 跨 cycle 持续轮换)。
+
+    只在真实派发路径调用(调用方 dry-run 提前 return——预演零副作用,
+    不递增 env_rr);本机 inner source 与远程 refresh_env_remote 用同一
+    选中文件,远程回退本机同源不漂移。"""
+    pool = _env_pool(state_dir)
+    n = state.get("env_rr", 0)
+    state["env_rr"] = n + 1
+    return pool[n % len(pool)]
+
+
+def _resolve_dispatch_node(kind, state, node):
+    """pick_node→guard 样板共用(N6 审查遗留,Task 6b 顺手修;dispatch_agent
+    与 tp.dispatch_review 两调用点同款 ~10 行抽此防漂移)。
+
+    node=None → np.pick_node 按泳道择优;pick 任何意外打印后本机兜底
+    (不递归 pick_node,防板上故障循环回退)。返回 (node, remote):
+    remote=True 走远程分支;False 落本机路径(node 为 LOCAL_NODE,或
+    None——pick_node 全节点不可用契约,本机路径原样消化)。"""
+    import task_loop_nodepool as np      # 懒 import(np 不反向 import,无环)
+    if node is None:
+        try:
+            node = np.pick_node(kind, state)
+        except Exception as exc:          # nodepool 任何意外 → 本机兜底
+            print(f"[nodepool] pick_node 失败,回退本机: {exc}")
+            node = np.LOCAL_NODE
+    return node, node is not None and node.get("host_id") != "local"
+
+
 def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
                    prompt_override: Optional[str] = None,
                    increment_rounds: bool = False,
@@ -1389,8 +1427,10 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     命令形态(prompt 经 stdin 重定向,spec §9.1——修 ARG_MAX: 超长 prompt
     经 argv 传递会撞内核命令长度上限,先落盘 <STATE_DIR>/prompt-<条目键>-
     <ts>.txt(0600,凭据同级私有)再 `< 文件` 喂给 claude 的 stdin):
-      nohup setsid bash -c 'source <STATE_DIR>/agent.env && timeout <T> claude -p
+      nohup setsid bash -c 'source <轮换选中 env 文件> && timeout <T> claude -p
       --dangerously-skip-permissions < <prompt 文件>' >> <log> 2>&1 & echo $!
+    (env 文件 Task 6b 起按 _pick_env_path 轮换: agent-key-*.env 池取模
+    env_rr,池空回落 agent.env;dry-run 不参与轮换计数)
     (setsid 使内层 bash 成为会话/进程组长——$! 记录的 PID 即 pgid,
     _kill_agent_if_alive 的 killpg 可整树击杀 bash→timeout→claude,
     claude 不再孤儿化;检视#28 轮3)
@@ -1428,7 +1468,8 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     - node(Task 6 nodepool,spec 2026-11-13 §4): None → np.pick_node 按泳道
       择优(本机+注册表板,可用内存/空槽;全不可用返回 None 即落本机);
       显式传 LOCAL_NODE 或择优本机结果同样落本机路径(原样)。选中板节点走
-      远程分支: refresh_env_remote(agent.env 上板)→prepare_worktree_remote
+      远程分支: refresh_env_remote(轮换选中的池文件上板,板上落名恒
+      agent.env 不变)→prepare_worktree_remote
       (板上 worktree)→heal_remote(主克隆)→prompt put_file 上板→
       spawn_remote→slot_acquire(host=板 id);远程任何 NodeError 打印后
       回退本机路径原样(不占远程槽、不燃 attempts,回退成功才燃一次;不递归
@@ -1463,7 +1504,8 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     log = _agent_log_path(entry.run_id if entry.source == "ci"
                           else entry.issue_number)
     clone_dir = _resolve_clone_dir()
-    env_file = os.path.join(_resolve_state_dir(), AGENT_ENV_NAME)
+    state_dir = _resolve_state_dir()
+    env_file = os.path.join(state_dir, AGENT_ENV_NAME)
     if not os.path.exists(env_file):
         # 轮5 B44: 凭据文件缺失不再假记账——source 短路下 claude 从未
         # 启动,却会记 DISPATCHED/attempts+1/打 wip,烧满预算后以「agent
@@ -1481,19 +1523,13 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     # prompt 经 stdin(spec §9.1,修 ARG_MAX): 写 0600 临时文件后重定向——
     # run_background 的 `echo $!` PID 回显契约保持不变。
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    prompt_path = os.path.join(_resolve_state_dir(),
+    prompt_path = os.path.join(state_dir,
                                f"prompt-{entry.issue_number or entry.run_id}-{ts}.txt")
     if not dry_run:
-        os.makedirs(_resolve_state_dir(), exist_ok=True)
+        os.makedirs(state_dir, exist_ok=True)
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(prompt)
         os.chmod(prompt_path, 0o600)
-    inner = (f"source {shlex.quote(env_file)} && "
-             f"timeout {AGENT_TIMEOUT_SEC} claude -p "
-             f"--dangerously-skip-permissions < {shlex.quote(prompt_path)}")
-    cmd = (f"nohup setsid bash -c {shlex.quote(inner)} "
-           f">> {shlex.quote(log)} 2>&1 "
-           f"& echo $!")
     if dry_run:
         # 只打 key 不打拼好的 worktree 全路径(控制器裁定#4): 路径公式单一
         # 真源在 _worktree_prepare,预演打印重复公式会随重构双漂移。
@@ -1501,20 +1537,26 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
               f"日志 {log},worktree key {key}"
               f"(隔离 worktree,detach origin/main),prompt 经 stdin({prompt_path})")
         return None
+    # 多 key 轮询(Task 6b,spec 决策 #9): dry-run 提前 return 之后才选——
+    # 预演零副作用(不递增 env_rr)。本机 inner source 与远程 refresh 同一
+    # 选中文件(远程失败回退本机同源);池空回落 agent.env(兼容未生成池
+    # 的现部署)。audit 线不接轮询(继承环境,单实例无并发压力)。
+    env_src = _pick_env_path(state, state_dir)
+    inner = (f"source {shlex.quote(env_src)} && "
+             f"timeout {AGENT_TIMEOUT_SEC} claude -p "
+             f"--dangerously-skip-permissions < {shlex.quote(prompt_path)}")
+    cmd = (f"nohup setsid bash -c {shlex.quote(inner)} "
+           f">> {shlex.quote(log)} 2>&1 "
+           f"& echo $!")
     # ---- 跨机分载远程分支(Task 6 nodepool,spec 2026-11-13 §4) ----
     # node=None 由 pick_node 择优;nodepool 任何意外(pick 抛错/全节点不可用)
     # → 本机兜底,本机路径(下方)零改动。回退不递归 pick_node(防板上故障
     # 循环),不燃 attempts(记账段只挂在成功 return 上,回退成功才燃一次)。
-    import task_loop_nodepool as np
-    if node is None:
+    node, node_remote = _resolve_dispatch_node(kind, state, node)
+    if node_remote:
+        import task_loop_nodepool as np
         try:
-            node = np.pick_node(kind, state)
-        except Exception as exc:          # nodepool 任何意外 → 本机兜底
-            print(f"[nodepool] pick_node 失败,回退本机: {exc}")
-            node = np.LOCAL_NODE
-    if node is not None and node.get("host_id") != "local":
-        try:
-            np.refresh_env_remote(node, env_file)
+            np.refresh_env_remote(node, env_src)
             wt_remote = np.prepare_worktree_remote(node, key)
             np.heal_remote(node)           # 主克隆 heal(不动 .worktrees/)
             remote_log = f"{np.REMOTE_STATE_DIR}/{os.path.basename(log)}"

@@ -190,3 +190,34 @@ def test_pick_node_env_valves(monkeypatch):
     monkeypatch.delenv("PIPELINE_FORCE_NODE", raising=False)
     monkeypatch.setenv("PIPELINE_FORCE_NODE", "0201")
     assert np.pick_node("pr_review", {})["host_id"] == "0201"  # 强制不探测
+
+
+def test_alive_remote_unreachable_raises(monkeypatch):
+    """N5 遗留上抛半边: rc≠1 一律上抛 NodeError(SSH 断 rc=255/超时无 rc/
+    命令异常 rc=12)——调用方按 unreachable 定性(槽保留不燃 attempts),
+    绝不把「连不上」当「进程死」(spec §5/§6)。"""
+    def boom(host_id, cmd, timeout=45):
+        raise np.NodeError({"0102": "节点 0102 命令失败(rc=255): x",
+                            "0101": "节点 0101 命令失败(rc=12): y"}[host_id])
+    monkeypatch.setattr(np, "run_ssh", boom)
+    with pytest.raises(np.NodeError):
+        np.alive_remote("0102", 4242)
+    with pytest.raises(np.NodeError):
+        np.alive_remote("0101", 4242)
+
+
+def test_cleanup_worktree_remote_unlocks_first(monkeypatch):
+    """生产修复(同 tl.worktree_cleanup): 板上 cleanup 命令串前置
+    `git worktree unlock`(missing-but-locked 僵尸令 remove --force 挂死),
+    remove --force/prune/rm -rf 兜底序保持,单次 run_ssh 45s 短超时不变。"""
+    sent = []
+    monkeypatch.setattr(np, "run_ssh",
+                        lambda h, cmd, t=45: sent.append((h, cmd)) or "")
+    wt = "/home/sdc/wangxu/sdcshield-autoci/.worktrees/issue-7"
+    np.cleanup_worktree_remote("0102", wt)
+    h, cmd = sent[0]
+    assert h == "0102"
+    assert cmd.index("unlock") < cmd.index("remove")      # unlock 前置
+    assert f"worktree unlock {wt}" in cmd
+    assert "worktree remove --force" in cmd and "worktree prune" in cmd
+    assert f"rm -rf {wt}" in cmd

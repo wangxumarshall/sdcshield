@@ -229,10 +229,15 @@ def prepare_worktree_remote(node, key):
 
 
 def cleanup_worktree_remote(host_id, path):
+    """板上 worktree 清理。unlock 前置(2026-11-16 生产修复,同 tl.worktree_
+    cleanup): missing-but-locked 僵尸 worktree 令 remove --force 挂死
+    (2026-11-13/14 两夜软停段实测)——先 unlock(未锁时失败即忽略)再
+    remove --force/prune/rm 兜底;单次 run_ssh(45s 短超时)已足以判死。"""
+    clone = node_by_host(host_id)["clone_dir"]
     run_ssh(host_id,
-            f"git -C {node_by_host(host_id)['clone_dir']} worktree remove "
-            f"--force {path} 2>/dev/null; git -C "
-            f"{node_by_host(host_id)['clone_dir']} worktree prune; "
+            f"git -C {clone} worktree unlock {path} 2>/dev/null; "
+            f"git -C {clone} worktree remove --force {path} 2>/dev/null; "
+            f"git -C {clone} worktree prune; "
             f"rm -rf {path}")
 
 

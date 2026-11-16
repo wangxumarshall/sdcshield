@@ -115,6 +115,22 @@ def _slots(state, kind):
     return state.setdefault("slots", {}).setdefault(kind, [])
 
 
+def _probe_alive(slot):
+    """槽活判三态(Task 7 host 分流): "alive"|"dead"|"unreachable"。
+    local=tl.agent_alive(os.kill);remote=np.alive_remote(ssh kill -0)。
+    unreachable=SSH 断/超时——调用方一律按占用/活着保守处理(槽保留不
+    回收、不超发、不燃 attempts),绝不把「连不上」当「进程死」(spec
+    §5/§6)。"""
+    if slot.get("host", "local") == "local":
+        return "alive" if tl.agent_alive(slot["pid"]) else "dead"
+    import task_loop_nodepool as np    # 懒 import(同 slot_count_cap)
+    try:
+        return "alive" if np.alive_remote(slot["host"], slot["pid"]) \
+            else "dead"
+    except np.NodeError:
+        return "unreachable"
+
+
 def slot_get(state, kind, key):
     for s in _slots(state, kind):
         if s["key"] == key:
@@ -151,15 +167,19 @@ def free_slot_count(state, kind):
     """空槽数 = 槽上限 − 活 PID 占用数(死槽即时回收)。
 
     本机闸口径: 不分 host,数全部活槽(过渡期兼容行为,N8 cycle 接线时
-    再按需切 free_slots_on;既有闸与测试零破坏)。"""
-    live = sum(1 for s in _slots(state, kind) if tl.agent_alive(s["pid"]))
+    再按需切 free_slots_on;既有闸与测试零破坏)。
+    Task 7: 活判经 _probe_alive——远程槽 unreachable 计为占用(保守
+    不超发: SSH 断≠进程死,绝不因探不着就放行超发)。"""
+    live = sum(1 for s in _slots(state, kind) if _probe_alive(s) != "dead")
     return max(0, SLOT_KINDS.get(kind, 0) - live)
 
 
 def free_slots_on(state, kind, host="local"):
-    """指定节点的空槽数(host 维度分账; local=tp 本机, 板=注册表配额)。"""
+    """指定节点的空槽数(host 维度分账; local=tp 本机, 板=注册表配额)。
+    Task 7: 活判经 _probe_alive——unreachable 计为占用(保守不超发)。"""
     live = sum(1 for s in _slots(state, kind)
-               if s.get("host", "local") == host and tl.agent_alive(s["pid"]))
+               if s.get("host", "local") == host
+               and _probe_alive(s) != "dead")
     return max(0, slot_count_cap(state, kind, host) - live)
 
 
@@ -170,20 +190,73 @@ def slot_count_cap(state, kind, host):
     return np.node_by_host(host)["slots"].get(kind, 0)
 
 
+def _board_rebooted(slot):
+    """远程死槽的板重启豁免(Task 7): 板上 `uptime -s` 晚于槽 started_at
+    (板在派发后重启过)→ 环境性死亡。本机 boot_id 豁免的同族语义——远程
+    槽的 boot 字段记的是**本机** boot(派发时写),本机重启与板上 agent
+    生死无关,故远程槽只看板 uptime。
+    started_at 缺/不可解析(历史/异常数据)→ 保守豁免(数据缺陷不惩罚
+    条目,#611 attempts 假性升级同向);uptime 查询/解析失败 → 不豁免
+    (探活刚判死说明板通,失败属瞬时抖动,次夜 janitor 再收敛——无证据
+    不豁免,真实失败诚实计 attempts)。"""
+    import task_loop_nodepool as np
+    try:
+        boot = np.run_ssh(slot.get("host", "local"), "uptime -s")
+    except np.NodeError:
+        return False
+    try:
+        boot_dt = datetime.strptime(boot.strip(), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    started = None
+    try:
+        started = datetime.fromisoformat(slot.get("started_at") or "")
+    except ValueError:
+        return True                      # started_at 不可解析 → 保守豁免
+    if started.tzinfo is not None:
+        # 板上 uptime -s 是板本地墙钟(无时区);started_at 带偏移时换算
+        # 到本机墙钟再比(三板与本机同区,换算仅为口径归一)。
+        started = started.astimezone().replace(tzinfo=None)
+    return boot_dt > started
+
+
+def _cleanup_worktree_by_host(slot):
+    """按槽 host 清 worktree(Task 7): local=本机 git(worktree_cleanup);
+    remote=np.cleanup_worktree_remote(板上 unlock→remove→prune→rm)。
+    NodeError 打印留次夜——清残局不为清残局崩(janitor/软停同口径)。"""
+    if slot.get("host", "local") == "local":
+        tl.worktree_cleanup(slot["worktree"])
+        return
+    import task_loop_nodepool as np
+    try:
+        np.cleanup_worktree_remote(slot["host"], slot["worktree"])
+    except np.NodeError as exc:
+        print(f"[janitor] {slot['host']} 远程 worktree 清理失败"
+              f"(留次夜): {exc}")
+
+
 def slot_janitor(state, now_iso):
-    """清死槽并回收其 worktree;返回被清清单(boot 变化 → environmental=True,
-    供启动对账做 attempts 豁免;软停/正常退场走 slot_release 不经此)。"""
+    """清死槽并回收其 worktree;返回被清清单(环境性死亡 → environmental=
+    True: local=boot 变化,remote=板 uptime -s 晚于 started_at;供启动对账
+    做 attempts 豁免;软停/正常退场走 slot_release 不经此)。
+    Task 7 host 分流: 活判经 _probe_alive——unreachable(SSH 断)槽保留
+    不回收不豁免,次夜 SSH 恢复再判(绝不把「连不上」当「进程死」);
+    远程死槽的环境性豁免看板 uptime,worktree 清理走板上 ssh。"""
     released = []
     for kind in SLOT_KINDS:
         alive = []
         for s in _slots(state, kind):
-            if tl.agent_alive(s["pid"]):
-                alive.append(s)
+            if _probe_alive(s) != "dead":
+                alive.append(s)          # alive 保留;unreachable 同样保留
                 continue
+            if s.get("host", "local") == "local":
+                environmental = s.get("boot") != boot_id()
+            else:
+                environmental = _board_rebooted(s)
             released.append({"kind": kind, **s,
-                             "environmental": s.get("boot") != boot_id()})
+                             "environmental": environmental})
             if s.get("worktree"):
-                tl.worktree_cleanup(s["worktree"])
+                _cleanup_worktree_by_host(s)
         state["slots"][kind] = alive
     return released
 
@@ -191,16 +264,24 @@ def slot_janitor(state, now_iso):
 def startup_reconcile(state):
     """pipeline 启动对账: 重启(boot_id 变)期间死亡的 agent 条目干净回队、
     不计 attempts(#611 attempts=4 假性升级教训);其余死槽只清槽,条目判档
-    仍交 tl.reap_or_advance(单飞语义外的正常 dead/timeout 记账)。"""
+    仍交 tl.reap_or_advance(单飞语义外的正常 dead/timeout 记账)。
+    Task 7: 只处理本机槽×本机条目——远程槽的板重启豁免只入 released/
+    夜报记账,远程条目由 janitor 的 unreachable 保留语义 + reap 的
+    unreachable 跳过次夜收敛,对账不误触(本机 boot 变化不证明板重启,
+    板 uptime 豁免也不回队远程条目——其结局归 reap 诚实记账)。"""
     entries = None
     for info in slot_janitor(state, _now_local_iso()):
         if not info["environmental"]:
             continue
+        if info.get("host", "local") != "local":
+            continue      # 远程槽的环境性释放: 记账已入 released,条目不动
         if entries is None:
             # StateStore.entries 每次 from_dict 出新副本——只解析一次,
             # 推进在循环外统一回写,否则下一轮解析即丢。
             entries = tl.StateStore.entries(state)
         for e in entries:
+            if e.host != "local":
+                continue    # 远程条目永不归对账处置
             keys = (f"issue-{e.issue_number or e.run_id}",)
             if e.pr_number is not None:
                 keys = keys + (f"pr-{e.pr_number}",)
@@ -253,9 +334,11 @@ def dispatch_review(state, pr_num, head, node=None):
         return None
     key = f"pr-{pr_num}"
     existing = slot_get(state, "pr_review", key)
-    if existing is not None and tl.agent_alive(existing["pid"]):
+    if existing is not None and _probe_alive(existing) != "dead":
         # 顺手修②: 活占位早退——旧形态 spawn 后 acquire 同 key 互斥拒再
         # killpg,白白起落一次进程;击杀网只保留给 acquire 竞态兜底。
+        # Task 7: 活判经 _probe_alive——远程在跑/不可达同样早退(本地
+        # os.kill 对板 PID 恒 False,不判就会对在跑 reviewer 重复 spawn)。
         print(f"[review] pr_review 槽 {key} 活 agent 在跑,本轮跳过")
         return None
     # R3(控制器裁定): 同 PR 重试先释放自身 key 的死槽——janitor 每轮才跑,
@@ -1042,9 +1125,9 @@ def merge_sweep(state, events, dry_run, now=None):
     for e in es:
         if e.status != "PR_OPEN" or e.pr_number is None:
             continue
-        if any(s["key"] == f"pr-{e.pr_number}" and tl.agent_alive(s["pid"])
+        if any(s["key"] == f"pr-{e.pr_number}" and _probe_alive(s) != "dead"
                for s in state.get("slots", {}).get("pr_repair", [])):
-            continue                      # 修复 agent 在跑,等它退场
+            continue                      # 修复 agent 在跑(或节点不可达),等它退场
         if slug is None:
             slug = tl.repo_slug()
         try:
@@ -1181,11 +1264,20 @@ def soft_stop(state, grace_sec=SOFT_STOP_GRACE_SEC):
     BOT_FIX 条目误降 QUEUED、或把 pr_repair 臂刚写的 PR_OPEN 再抹掉——
     pr_review/audit 槽只击杀清槽,条目归其所属泳道的槽处置。自然退场的槽
     只清槽/worktree,条目不动(真实结局归下一轮/次夜 reap 记账,软停不冒充
-    收割)。报告由调用方写(run_pipeline)。"""
+    收割)。报告由调用方写(run_pipeline)。
+
+    Task 7 host 分流(击杀段活判经 _probe_alive,本机路径零变化):
+      alive      → 本机 os.killpg / 远程 np.kill_remote(TERM→KILL,整组
+                   pgid,绝不本地 os.kill 板 PID——撞号误杀防线);
+      unreachable→ 跳过击杀只打印,槽照清、条目不动(留次夜 janitor/reap
+                   收敛;agent 自带 timeout 有界自灭,spec §6);
+      dead       → 只清(自然退场,同本机语义,条目归次夜 reap 记账);
+    远程槽的 worktree 清理走板上 ssh(cleanup_worktree_remote)。"""
+    import task_loop_nodepool as np    # 懒 import(远程击杀/清理面)
     deadline = time.time() + grace_sec
     while time.time() < deadline:
         live = [s for lst in (state.get("slots") or {}).values()
-                for s in lst if tl.agent_alive(s["pid"])]
+                for s in lst if _probe_alive(s) == "alive"]
         if not live:
             break
         print(f"[soft-stop] 等待 {len(live)} 个 agent 自然退出"
@@ -1198,12 +1290,27 @@ def soft_stop(state, grace_sec=SOFT_STOP_GRACE_SEC):
     # 路径对称,否则同 head 单派规则把重派拦到死)。
     for kind, lst in list((state.get("slots") or {}).items()):
         for s in lst:
-            if not tl.agent_alive(s["pid"]):
+            cls = _probe_alive(s)
+            if cls == "unreachable":
+                print(f"[soft-stop] 槽 {s['key']} 节点 {s.get('host', 'local')}"
+                      f" 不可达,跳过击杀(留次夜收敛)")
                 continue
-            try:
-                os.killpg(s.get("pgid") or s["pid"], 15)
-            except OSError:
-                pass
+            if cls == "dead":
+                continue
+            if s.get("host", "local") == "local":
+                try:
+                    os.killpg(s.get("pgid") or s["pid"], 15)
+                except OSError:
+                    pass
+            else:
+                try:
+                    np.kill_remote(s["host"], s.get("pgid") or s["pid"], 15)
+                except np.NodeError as exc:
+                    # TERM 失败=节点抖成不可达: 不回队条目(留次夜),本轮
+                    # 只跳过该槽(agent 自带 timeout 有界自灭)。
+                    print(f"[soft-stop] 槽 {s['key']} 远程击杀失败"
+                          f"(留次夜): {exc}")
+                    continue
             killed.append(s["key"])
             # 泳道过滤(fix-round 1 Important#2): 检视/audit 槽只击杀清槽,
             # 不动条目——pr_review 槽 key 与 pr_repair 槽同形 f"pr-<N>",
@@ -1227,17 +1334,34 @@ def soft_stop(state, grace_sec=SOFT_STOP_GRACE_SEC):
         time.sleep(SOFT_STOP_KILL_GRACE_SEC)
         for kind, lst in list((state.get("slots") or {}).items()):
             for s in lst:
-                if tl.agent_alive(s["pid"]):
+                if _probe_alive(s) != "alive":
+                    continue
+                if s.get("host", "local") == "local":
                     try:
                         os.killpg(s.get("pgid") or s["pid"], 9)
                     except OSError:
                         pass
+                else:
+                    try:
+                        np.kill_remote(s["host"], s.get("pgid") or s["pid"], 9)
+                    except np.NodeError as exc:
+                        print(f"[soft-stop] 槽 {s['key']} 远程补刀失败"
+                              f"(留次夜): {exc}")
     # 槽清 + worktree 清(自然退场者同样清: worktree 是易耗品,软停是
     # 确定性收尾点;槽不清则明晚启动对账前 janitor 还得替软停收尾)。
+    # 远程槽条目是单飞锚: 槽账本照清,条目归次夜 janitor/reap 收敛。
     for kind in list((state.get("slots") or {}).keys()):
         for s in state["slots"][kind]:
-            if s.get("worktree"):
+            if not s.get("worktree"):
+                continue
+            if s.get("host", "local") == "local":
                 tl.worktree_cleanup(s["worktree"])
+            else:
+                try:
+                    np.cleanup_worktree_remote(s["host"], s["worktree"])
+                except np.NodeError as exc:
+                    print(f"[soft-stop] 槽 {s['key']} 远程 worktree 清理"
+                          f"失败(留次夜): {exc}")
         state["slots"][kind] = []
     # 记账回写: Entry 是解析副本,不回写则调用方 save 落旧 dict(软停推进全丢)。
     state["entries"] = [e.to_dict() for e in entries]

@@ -1285,13 +1285,48 @@ def agent_alive(pid: Optional[int]) -> bool:
         return True
 
 
+def host_alive(host: Optional[str], pid: Optional[int]) -> bool:
+    """按 host 探活(Task 7 nodepool): local=os.kill(同 agent_alive);
+    remote=np.alive_remote(ssh kill -0)。NodeError 上抛——调用方必须把
+    SSH 断定性为 unreachable(槽保留不燃 attempts),绝不判死。pid=None
+    与本机语义一致直接 False(免一次无谓 SSH)。"""
+    if pid is None:
+        return False
+    if host == "local" or host is None:
+        return agent_alive(pid)
+    import task_loop_nodepool as np      # 懒 import(同 dispatch_agent,无环)
+    return np.alive_remote(host, pid)
+
+
+def _agent_log_tail_by(entry: Entry, nbytes: int = 4000) -> str:
+    """按 entry.host 读 agent 日志尾(local 直读;remote=np.read_log_tail
+    即 ssh tail -c)。收割/认证失败判定(check_agent_outcome)只消费此文本
+    ——判定正则零改动,远程本地同构。local 分支 OSError 照旧由调用方
+    兜底(日志缺失=无特征);remote 的 NodeError 由调用方定性 unreachable。"""
+    if entry.host == "local" or not entry.host:
+        with open(entry.agent_log, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - nbytes))
+            return f.read().decode("utf-8", errors="replace")
+    import task_loop_nodepool as np
+    return np.read_log_tail(entry.host, entry.agent_log, nbytes)
+
+
 def has_running_agent(state: dict) -> bool:
     """观测: 任一条目持有活 PID 且状态 ∈ {DISPATCHED, BOT_FIX}。
     Task 4 起派发闸门已槽位化(dispatch_agent 内 slots/mem/PAUSED),本函数
-    保留给 status/运维观测,不再是派发依据。"""
+    保留给 status/运维观测,不再是派发依据。
+    Task 7 host 分流: 探活经 host_alive;unreachable 按「活着」处理
+    (保守: 不重派不升级——SSH 断≠进程死)。"""
+    import task_loop_nodepool as np    # 懒 import(仅 NodeError 定性)
     for e in StateStore.entries(state):
-        if e.status in AGENT_STATES and agent_alive(e.agent_pid):
-            return True
+        if e.status not in AGENT_STATES:
+            continue
+        try:
+            if host_alive(e.host, e.agent_pid):
+                return True
+        except np.NodeError:
+            return True    # unreachable 按活着
     return False
 
 
@@ -1304,8 +1339,22 @@ def _kill_agent_if_alive(entry: Entry) -> None:
     escalate),宁可补一刀 SIGKILL 也不留无主活进程。
     pid=0 守卫(M2): state 被外部改写成 agent_pid:0 时,os.kill(0, SIGKILL)
     会杀掉 scan 自身整个进程组——0 视为「无 agent」,直接清引用。
+    Task 7 host 分流: 远程条目绝不本地 os.kill——板 PID 与本机 PID 撞号
+    会误杀本机无关进程组;击杀走 np.kill_remote(整组,setsid 派发形态
+    pgid==pid),探活先证活着(rc=1 已死即免击杀),NodeError 打印留次夜。
     """
     pid = entry.agent_pid
+    host = entry.host or "local"
+    if host != "local":
+        import task_loop_nodepool as np
+        try:
+            if pid and np.alive_remote(host, pid):
+                np.kill_remote(host, pid, 9)
+        except np.NodeError as exc:
+            print(f"[reap] run {entry.run_id}: 节点 {host} 击杀失败"
+                  f"(留次夜): {exc}")
+        entry.agent_pid = None
+        return
     if pid and agent_alive(pid):
         # 检视#28(轮3): 优先整组击杀——SIGKILL 不波及子孙,单杀 bash 会
         # 把 timeout/claude 孤儿化(最长继续跑 AGENT_TIMEOUT_SEC,期间可
@@ -1622,7 +1671,8 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
 
 def check_agent_outcome(entry: Entry) -> str:
     """判定 agent 结局:
-      "running"|"success"|"escalated_reported"|"auth_fail"|"dead"|"timeout"。
+      "running"|"success"|"escalated_reported"|"auth_fail"|"dead"|"timeout"
+      |"unreachable"。
 
     判定顺序(先具体后兜底;终审 C1 重排——结束语标记最优先):
       success            — 日志含结束语契约 `task-loop: done` 或(过渡双轨)
@@ -1637,7 +1687,11 @@ def check_agent_outcome(entry: Entry) -> str:
                            复述 CI 日志中的认证字样不再触发熔断);
       timeout            — started_at + AGENT_TIMEOUT_SEC 已过;
       dead               — PID 已死且无上述特征;
-      running            — 其余(PID 活着、尚无结论特征)。
+      running            — 其余(PID 活着、尚无结论特征);
+      unreachable        — 远程条目 SSH 断(日志尾或探活任一 NodeError):
+                           结局判定失明,reap 原样跳过(不燃 attempts、
+                           不推进状态,下轮/次夜再判)——绝不把「连不上」
+                           当「进程死」(spec §5/§6)。
 
     标记先于时钟的理由(终审 C1): cron tick 间隔可远大于 agent 时限(本机
     2026-10-15 重启实证多小时 tick 间断)——已 done/escalated 的 agent 晚
@@ -1645,25 +1699,33 @@ def check_agent_outcome(entry: Entry) -> str:
     或假 ESCALATED 让 PR 永不进车道 B)、把诚实自报升级误判 timeout。
     谎报 done 由 reap 的 gh pr list 核实兜底(spec §9 信任但核实);每次
     派发日志独立文件(agent-<条目键>-<时间戳>.log)无陈旧标记污染。
+
+    Task 7 host 分流: 日志尾经 _agent_log_tail_by(远程=ssh tail -c,判定
+    正则零改动只消费文本);PID 探活经 host_alive(远程=ssh kill -0)——
+    两次本地 agent_alive 合并为一次 host_alive,本机判定序与结果逐位
+    等价(同一 PID 的两次纯函数调用间无状态变化)。
     """
+    import task_loop_nodepool as np    # 懒 import(仅 NodeError 定性)
     tail = ""
     if entry.agent_log:
         try:
-            with open(entry.agent_log, "rb") as f:
-                f.seek(0, os.SEEK_END)
-                size = f.tell()
-                f.seek(max(0, size - 4000))
-                tail = f.read().decode("utf-8", errors="replace")
+            tail = _agent_log_tail_by(entry)
         except OSError:
             tail = ""    # 日志缺失/不可读: 视为无特征,交给后续判档
+        except np.NodeError:
+            return "unreachable"    # 远程日志读不到=SSH 断,判定失明
     if any(m in tail for m in AGENT_DONE_MARKS):
         return "success"
     if any(m in tail for m in AGENT_ESCALATED_MARKS):
         return "escalated_reported"
+    try:
+        alive = host_alive(entry.host, entry.agent_pid)
+    except np.NodeError:
+        return "unreachable"        # 探活 SSH 断: 绝不判死
     # 轮5 B43: auth_fail 双条件——PID 已死(真认证失败必致进程退出,活着
     # 的 agent 尾部复述 CI 日志不算)+ 限制到末尾 AUTH_FAIL_TAIL_CHARS
     # 字符(claude 自身错误必是临终输出;转写中部复述被排除)。
-    if not agent_alive(entry.agent_pid) and \
+    if not alive and \
             AUTH_FAIL_PATTERN.search(tail[-AUTH_FAIL_TAIL_CHARS:]):
         return "auth_fail"
     started = _parse_created_at(entry.agent_started_at or "")
@@ -1671,44 +1733,49 @@ def check_agent_outcome(entry: Entry) -> str:
             datetime.now(timezone.utc) - started > timedelta(
                 seconds=AGENT_TIMEOUT_SEC):
         return "timeout"
-    if not agent_alive(entry.agent_pid):
+    if not alive:
         return "dead"
     return "running"
 
 
-def _log_tail(path: Optional[str], limit: int = 800) -> str:
+def _log_tail(entry: Entry, limit: int = 800) -> str:
     """升级评论用的日志尾部摘录(失败现场留存;读不到给占位说明)。
     轮5(E6): seek 到末尾回读 limit 字节——agent 日志来自至多 1 小时的
     claude 运行、可达 MB 级,不再为 800 字符摘录全量读入(与
-    _escalated_reason_from_log 同模式)。"""
-    if not path or not os.path.exists(path):
+    _escalated_reason_from_log 同模式)。
+    Task 7: 读经 _agent_log_tail_by——远程条目读板上日志尾(本地直读板
+    路径必空,失败现场会静默丢失);本机路径结果逐位等价(缺文件/空文件/
+    读失败三态占位不变)。"""
+    import task_loop_nodepool as np    # 懒 import(仅 NodeError 兜底)
+    if not entry.agent_log:
         return "(日志缺失)"
     try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - limit))
-            return f.read().decode("utf-8", errors="replace") \
-                .strip() or "(日志为空)"
+        text = _agent_log_tail_by(entry, limit)
+    except FileNotFoundError:
+        return "(日志缺失)"
     except OSError:
         return "(日志读取失败)"
+    except np.NodeError:
+        return "(节点不可达,日志未取到)"
+    return text.strip() or "(日志为空)"
 
 
-def _escalated_reason_from_log(path: Optional[str],
-                               limit: int = 4000) -> str:
+def _escalated_reason_from_log(entry: Entry, limit: int = 4000) -> str:
     """提取 agent 自报升级的理由尾巴: 日志尾部最后一行结束语契约行
     `task-loop: escalated <reason>`(或过渡双轨的 `ci-triage: escalated
     <reason>`)中 mark 之后的部分(与 check_agent_outcome 同一 4000 字符
-    窗口,取最后一处——最末状态即最终结论)。"""
+    窗口,取最后一处——最末状态即最终结论)。
+    Task 7: 读经 _agent_log_tail_by(远程条目=板上日志尾——本地直读板
+    路径必空,升级理由会静默丢失);读失败按无特征兜底(升级本身已由
+    结束语标记采信,理由缺失不阻断升级)。"""
+    import task_loop_nodepool as np    # 懒 import(仅 NodeError 兜底)
     tail = ""
-    if path:
+    if entry.agent_log:
         try:
-            with open(path, "rb") as f:
-                f.seek(0, os.SEEK_END)
-                size = f.tell()
-                f.seek(max(0, size - limit))
-                tail = f.read().decode("utf-8", errors="replace")
+            tail = _agent_log_tail_by(entry, limit)
         except OSError:
+            tail = ""
+        except np.NodeError:
             tail = ""
     for line in reversed(tail.splitlines()):
         for mark in AGENT_ESCALATED_MARKS:
@@ -1723,7 +1790,7 @@ def _escalate(entry: Entry, state: dict, reason: str,
     """条目升级人工: 状态 ESCALATED + 一条 @wangxumarshall 评论。"""
     entry.status = "ESCALATED"
     body = (f"@wangxumarshall ci-triage 升级：{reason}。"
-            f"证据：{_log_tail(entry.agent_log)}。"
+            f"证据：{_log_tail(entry)}。"
             f"建议人工介入：{next_step}。\n\n{UNTRUSTED_BANNER}")
     if dry_run:
         print(f"[dry-run] 将评论 issue #{entry.issue_number}: {body[:120]}…")
@@ -1793,6 +1860,13 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
         outcome = check_agent_outcome(entry)
         if outcome == "running":
             continue
+        if outcome == "unreachable":
+            # Task 7: 节点不可达——条目原样跳过(不燃 attempts、不推进
+            # 状态、不释放槽),下一轮/次夜 SSH 恢复后再判。绝不把
+            # 「连不上」当「进程死」(spec §5/§6)。
+            print(f"[reap] run {entry.run_id}: 节点 {entry.host} 不可达,"
+                  f"条目原样跳过(留待下轮)")
+            continue
         entry.updated_at = _now_iso()
         # Task 5(控制器裁定#1)reap 路径槽释放: agent 退场判档后、归还/重派
         # 之前,顺手释放槽位账本(幂等——找不到 key 即 no-op,Task 4 前旧
@@ -1844,7 +1918,7 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
                 # 同口径)——此前只 print 会让升级理由不达人工,须靠 rounds≥4
                 # 兜底多烧最多 4 轮派发;文档 §4 状态机表「agent 自报
                 # escalated」进入条件本就未限定车道。
-                reason = _escalated_reason_from_log(entry.agent_log)
+                reason = _escalated_reason_from_log(entry)
                 print(f"[reap] run {entry.run_id}(BOT_FIX): agent 自报升级"
                       f"({reason})")
                 _escalate(entry, state, f"agent 自报升级：{reason}",
@@ -1894,7 +1968,7 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
             # agent 按契约自报升级: 采信,直接 ESCALATED——不重派、不计
             # attempts(诚实上报不是失败重试),升级理由取日志结束语行的
             # 尾巴随 @ 评论带给人工
-            reason = _escalated_reason_from_log(entry.agent_log)
+            reason = _escalated_reason_from_log(entry)
             print(f"[reap] run {entry.run_id}: agent 自报升级({reason})")
             _escalate(entry, state, f"agent 自报升级：{reason}",
                       "查看 agent 日志与其贴在 issue 下的报告,决定后续处置",
@@ -2118,10 +2192,18 @@ def lane_b_advance(state: dict, dry_run: bool = False) -> None:
     all_missing_local = True
     for entry in entries:
         if entry.status == "BOT_FIX":
-            if entry.agent_pid is not None and agent_alive(entry.agent_pid):
-                print(f"[lane-b] run {entry.run_id}: bot 处置 agent(PID "
-                      f"{entry.agent_pid})仍在跑,本轮跳过")
-                continue
+            if entry.agent_pid is not None:
+                # Task 7 host 分流: 探活经 host_alive;unreachable 按
+                # 「活着」处理(保守: 不归还、不重派——SSH 断≠进程死)。
+                import task_loop_nodepool as np    # 懒 import(仅 NodeError)
+                try:
+                    _bot_alive = host_alive(entry.host, entry.agent_pid)
+                except np.NodeError:
+                    _bot_alive = True
+                if _bot_alive:
+                    print(f"[lane-b] run {entry.run_id}: bot 处置 agent(PID "
+                          f"{entry.agent_pid})仍在跑,本轮跳过")
+                    continue
             if entry.agent_pid is not None:
                 # agent 已退场: 归还单飞配额,回到 PR_OPEN 重新判定。
                 # 一并清 head 锚(与 reap 的 auth_fail 归还路径对称,检视
@@ -2342,14 +2424,24 @@ def worktree_cleanup(path: str) -> None:
     下一次 `git worktree add` 以 exit 128「丢失但已注册」炸派发(2026-11-12
     /tmp 实测)。agent worktree 恒在 <clone>/.worktrees/<key>,主仓即
     dirname(dirname(path));目录已不存在(上次兜底已删)时更须 prune 清
-    注册残留,故不以 exists 早退。"""
+    注册残留,故不以 exists 早退。
+
+    unlock 前置(2026-11-16 生产修复): 「丢失但锁定」(missing-but-locked)
+    僵尸 worktree 令 remove --force 挂死——2026-11-13/14 两夜软停段实测
+    5 处 TimeoutExpired Traceback(pipeline.log),每处挂满旧超时 135s
+    (GIT_TIMEOUT_SEC*3),进程挂死夜报丢失(06 个 locked 僵尸已手清)。
+    修法: remove 前先 unlock(锁定态解它;未锁时该命令失败即忽略),remove
+    超时缩到 GIT_TIMEOUT_SEC(45s——remove 本身秒级,足以判死);顺序
+    unlock(容错) → remove --force(短超时) → prune → rmtree 兜底。"""
     if not path:
         return
     repo = os.path.dirname(os.path.dirname(os.path.abspath(path)))
     try:
+        subprocess.run(["git", "-C", repo, "worktree", "unlock", path],
+                       capture_output=True, timeout=GIT_TIMEOUT_SEC)
         subprocess.run(["git", "-C", repo, "worktree", "remove", "--force",
                         path], capture_output=True,
-                       timeout=GIT_TIMEOUT_SEC * 3)
+                       timeout=GIT_TIMEOUT_SEC)
         subprocess.run(["git", "-C", repo, "worktree", "prune"],
                        capture_output=True, timeout=GIT_TIMEOUT_SEC)
     finally:

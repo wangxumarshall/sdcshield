@@ -1289,10 +1289,13 @@ def host_alive(host: Optional[str], pid: Optional[int]) -> bool:
     """按 host 探活(Task 7 nodepool): local=os.kill(同 agent_alive);
     remote=np.alive_remote(ssh kill -0)。NodeError 上抛——调用方必须把
     SSH 断定性为 unreachable(槽保留不燃 attempts),绝不判死。pid=None
-    与本机语义一致直接 False(免一次无谓 SSH)。"""
+    与本机语义一致直接 False(免一次无谓 SSH)。
+    Task 8(controller 2a): host 空串/None 与 "local" 同走本机路径(与
+    _agent_log_tail_by 的 not entry.host 口径统一)——畸形/历史数据不
+    触发远程分支(未知节点 → NodeError)。"""
     if pid is None:
         return False
-    if host == "local" or host is None:
+    if not host or host == "local":
         return agent_alive(pid)
     import task_loop_nodepool as np      # 懒 import(同 dispatch_agent,无环)
     return np.alive_remote(host, pid)
@@ -1543,7 +1546,19 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     if tp.slot_get(state, kind, key) is not None:
         print(f"[slots] {kind} 槽 {key} 已占用(含未清死槽),本轮跳过")
         return None
-    if tp.free_slot_count(state, kind) <= 0:
+    # 满槽闸 host 分账(Task 8 接线): node 显式传入(cycle 泳道接线后的
+    # 常态)→ 按目标节点空槽判(free_slots_on: 本机=SLOT_KINDS、板=注册
+    # 表配额;unreachable 计占用,保守不超发)。旧全局 free_slot_count 不
+    # 分 host——本机满载或板连派第 2 发时全局计数即归零,远程派发被误拒,
+    # 「选中节点连派至满槽」结构性失效(free_slot_count docstring 预告的
+    # 「N8 接线时切」即此)。node=None(lane_b 内部择优路径)保持全局旧
+    # 口径: pick_node 自身已滤无空槽节点,闸只防同轮连派超发;纯本机
+    # state 两口径逐位等价(既有测试零破坏)。
+    if node is not None:
+        gate_free = tp.free_slots_on(state, kind, host=node["host_id"])
+    else:
+        gate_free = tp.free_slot_count(state, kind)
+    if gate_free <= 0:
         print(f"[slots] {kind} 满槽,拒绝为 {key} 派发")
         return None
     fix_branch = _default_fix_branch(entry)
@@ -1883,6 +1898,27 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
             print(f"[reap] run {entry.run_id}: 释放 {_lane_kind} 槽 "
                   f"{_slot_key}(agent 退场)")
         entry.worktree = None
+        # 板重启豁免(Task 8 补全,N7 审查 Important): 远程条目
+        # dead/timeout 且板 uptime -s 晚于 agent_started_at(板在派发后
+        # 重启)→ 环境性死亡——干净回队不计 attempts(#611 假性升级同向;
+        # 软停同款口径: DISPATCHED→QUEUED / BOT_FIX→PR_OPEN,清 agent
+        # 引用与 head 锚,rounds/attempts 都不动)。板重启作证进程必死
+        # (重启消灭派发前的全部进程),无需补刀。板没重启过/uptime 查询
+        # 失败 → 落回既有判档(照常燃 attempts——无证据不豁免)。本机
+        # 条目的同族豁免走 startup_reconcile(boot_id 对比),不在此。
+        if outcome in ("dead", "timeout") and entry.host \
+                and entry.host != "local" \
+                and tp._board_rebooted_since(entry.host,
+                                             entry.agent_started_at):
+            _to = "PR_OPEN" if entry.status == "BOT_FIX" else "QUEUED"
+            print(f"[reap] run {entry.run_id}: 板 {entry.host} 在派发后"
+                  f"重启(环境性死亡)——干净回队 {_to},不计 attempts")
+            entry.status = _to
+            entry.agent_pid = None
+            entry.agent_started_at = None
+            entry.last_dispatched_head = None
+            entry.updated_at = _now_iso()
+            continue
         if entry.status == "BOT_FIX":
             if outcome == "auth_fail":
                 # 裁定 7: auth_fail 熔断跨车道统一——BOT_FIX 条目同样计入

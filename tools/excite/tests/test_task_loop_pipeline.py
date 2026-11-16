@@ -2151,8 +2151,11 @@ def test_cycle_once_lane2_paused_blocks_and_dry_run_no_spawn(monkeypatch,
     _patch_cycle_offline(monkeypatch, tmp_path)
     monkeypatch.setattr(tp, "needs_review_list", lambda: [(640, "h1")])
     calls = []
+    # Task 8: cycle 泳道2 起显式传 node=——桩签名同步吸收(node=
+    # LOCAL_NODE,PIPELINE_NODEPOOL=0 会话阀下 pick_node 恒本机零 SSH)
     monkeypatch.setattr(tp, "dispatch_review",
-                        lambda st, num, head: calls.append(num) or 4242)
+                        lambda st, num, head, node=None:
+                        calls.append(num) or 4242)
     st = _mkstate()
     tp.cycle_once(st, True, [], datetime.now())          # dry: 零派发
     assert calls == []
@@ -2210,6 +2213,258 @@ def test_cycle_once_absorbed_runs_skip_forward_triage(monkeypatch, tmp_path):
                         lambda st, runs, dry_run=False: ([], set()))
     tp.cycle_once(st, False, events, datetime.now())
     assert len(seen_runs[0]) == 2
+
+
+# ============ Task 8: cycle_once 泳道接节点池(派发点择优) ============
+
+
+def _patch_cycle_nodepool_common(monkeypatch, tmp_path):
+    """N8 cycle 接线离线夹具: state 目录+凭据就位、派发引擎缝打桩
+    (mem 闸读真 /proc、资格门/wip 标签走真 gh——单测须密闭,先例
+    _patch_dispatch_offline)。"""
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path / "st"))
+    os.makedirs(tmp_path / "st")
+    (tmp_path / "st" / "agent.env").write_text("PATH=/usr/bin\n")
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "_dispatch_gate_ok", lambda e, ol: True)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+
+
+def _stub_np_remote(monkeypatch):
+    """np 远程五操作全打桩(零 SSH,漏桩处 run_ssh 守卫抛错);spawn PID
+    递增(4242/4243/…)并记录 (node, cmd, log)。"""
+    import task_loop_nodepool as np
+
+    def _no_ssh(host_id, cmd, timeout=45):
+        raise np.NodeError(f"测试内禁真 SSH(有 np 操作漏桩): {cmd}")
+    monkeypatch.setattr(np, "run_ssh", _no_ssh)
+    spawned = []
+    monkeypatch.setattr(np, "spawn_remote",
+                        lambda n, cmd, log: spawned.append((n, cmd, log))
+                        or 4241 + len(spawned))
+    monkeypatch.setattr(np, "prepare_worktree_remote",
+                        lambda n, key: "/board/wt")
+    monkeypatch.setattr(np, "refresh_env_remote", lambda n, env: None)
+    monkeypatch.setattr(np, "put_file", lambda h, l, r: None)
+    monkeypatch.setattr(np, "heal_remote", lambda n: None)
+    monkeypatch.setattr(np, "kill_remote", lambda h, p, s: None)
+    return spawned
+
+
+def _offline_cycle_seams(monkeypatch, order=None):
+    """cycle 其余步骤全打桩(编排序断言用 order 列表,intake/reap/recon
+    三步入序;其余步骤零回归只需不炸)。"""
+    monkeypatch.setattr(tl, "scan_red_runs", lambda: [])
+    monkeypatch.setattr(tl, "triage_new_red_runs",
+                        lambda s, r, dry_run=False:
+                        (order.append("intake") if order is not None
+                         else None))
+    monkeypatch.setattr(tl, "reap_or_advance",
+                        lambda s, dry_run=False:
+                        (order.append("reap") if order is not None
+                         else None))
+    monkeypatch.setattr(tl, "reconcile_issues",
+                        lambda s, dry_run=False:
+                        ((order.append("recon") or set())
+                         if order is not None else set()))
+    monkeypatch.setattr(tl, "heal_clone", lambda s, dry_run=False: None)
+    monkeypatch.setattr(tl, "lane_b_advance", lambda s, dry_run=False: None)
+    monkeypatch.setattr(tp, "needs_review_list", lambda: [])
+    monkeypatch.setattr(tp, "spawn_audit", lambda *a, **k: None)
+    monkeypatch.setattr(tp, "merge_sweep", lambda *a, **k: None)
+
+
+def _queued_entry(n):
+    return dict(workflow="w", run_id=n, status="QUEUED", issue_number=n,
+                fix_branch="", pr_number=None, attempts=0, rounds=0,
+                agent_pid=None, agent_started_at=None, agent_log=None,
+                last_dispatched_head=None, extra_runs=[], created_at="t",
+                updated_at="t", source="audit", kind="bug", audit_hash=None)
+
+
+def test_cycle_once_dispatches_to_remote_node(monkeypatch, tmp_path):
+    """端到端(brief 步骤1主测): 泳道1 QUEUED 条目在 pick_node=0102 时经
+    远程分支派发,cycle 其余步骤(stub)零回归——编排序、条目记账
+    (DISPATCHED/host/PID)、槽位账本 host 维度三面齐验。"""
+    _patch_cycle_nodepool_common(monkeypatch, tmp_path)
+    import task_loop_nodepool as np
+    monkeypatch.setattr(np, "pick_node",
+                        lambda k, s: np.node_by_host("0102"))
+    _stub_np_remote(monkeypatch)
+    order = []
+    _offline_cycle_seams(monkeypatch, order)
+    st = {"entries": [_queued_entry(12)], "auth_failure_streak": 0}
+    tp.cycle_once(st, False, [], datetime.now(timezone.utc), window_end=9)
+    assert order == ["intake", "reap", "recon"]          # 编排序零回归
+    e = tl.StateStore.entries(st)[0]
+    assert e.status == "DISPATCHED" and e.host == "0102" and e.agent_pid == 4242
+    assert tp.slot_get(st, "issue_fix", "issue-12")["host"] == "0102"
+
+
+def test_cycle_once_pick_none_skips_lane(monkeypatch, tmp_path):
+    """pick_node 恒 None(全节点不可用): 泳道1 不派、条目原样(现行
+    「本轮不派」,spec §6 兜底)。"""
+    _patch_cycle_nodepool_common(monkeypatch, tmp_path)
+    import task_loop_nodepool as np
+    monkeypatch.setattr(np, "pick_node", lambda k, s: None)
+    spawn = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawn.append(1) or 1)
+    _offline_cycle_seams(monkeypatch)
+    st = {"entries": [_queued_entry(12)], "auth_failure_streak": 0}
+    tp.cycle_once(st, False, [], datetime.now(timezone.utc), window_end=9)
+    assert spawn == []                                    # 零派发
+    assert tl.StateStore.entries(st)[0].status == "QUEUED"
+
+
+def test_cycle_once_lane1_fills_picked_node_until_full(monkeypatch, tmp_path):
+    """每轮一次 pick_node、选中节点连派至**其**满槽(host 分账): 本机
+    issue_fix 两槽已满(活)时 pick_node=0102 → 泳道1 仍连派 2 发到板
+    (板注册表配额 2)后 free_slots_on(0102) 归零 break,第 3 条目留队
+    零 attempts。旧全局 free_slot_count 口径在本机满载时把远程派发一并
+    误拒(分载结构性失效)——本测锁 host 维度闸,对旧实现 RED。
+    slot_acquire 活计数对远程槽走 _probe_alive(controller 验收 2b):
+    alive_remote 桩恒活,已占远程槽如实计满。"""
+    _patch_cycle_nodepool_common(monkeypatch, tmp_path)
+    import task_loop_nodepool as np
+    monkeypatch.setattr(np, "pick_node",
+                        lambda k, s: np.node_by_host("0102"))
+    spawned = _stub_np_remote(monkeypatch)
+    monkeypatch.setattr(np, "alive_remote", lambda h, p: True)
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: True)   # 本机两槽活
+    _offline_cycle_seams(monkeypatch)
+    st = {"entries": [_queued_entry(n) for n in (1, 2, 3)],
+          "auth_failure_streak": 0}
+    tp.slot_acquire(st, "issue_fix", "issue-L1", 101, 101, "/l", "/w",
+                    "t", "b", host="local")
+    tp.slot_acquire(st, "issue_fix", "issue-L2", 102, 102, "/l", "/w",
+                    "t", "b", host="local")
+    tp.cycle_once(st, False, [], datetime.now(timezone.utc), window_end=9)
+    es = tl.StateStore.entries(st)
+    assert [e.status for e in es] == ["DISPATCHED", "DISPATCHED", "QUEUED"]
+    assert es[0].host == "0102" and es[1].host == "0102"
+    assert es[2].host == "local" and es[2].attempts == 0   # 留队零记账
+    assert len(spawned) == 2                               # 恰两发远程派生
+    assert tp.slot_count_cap(st, "issue_fix", "0102") == 2  # 注册表配额
+    assert tp.free_slots_on(st, "issue_fix", "0102") == 0   # 板槽已满
+    assert tp.free_slots_on(st, "issue_fix", "local") == 0  # 本机仍满(分账)
+
+
+def test_cycle_once_dry_run_local_node_zero_ssh(monkeypatch, tmp_path, capsys):
+    """dry-run 零 SSH 契约(brief Step 4 测试锁形): 全程 LOCAL_NODE——
+    pick_node 不调、np 远程面零触达(任一 np 接缝被碰即 AssertionError);
+    条目留队、检视只打印意图零派发。"""
+    _patch_cycle_nodepool_common(monkeypatch, tmp_path)
+    import task_loop_nodepool as np
+    for name in ("pick_node", "run_ssh", "put_file", "alive_remote",
+                 "probe_node", "spawn_remote", "kill_remote",
+                 "prepare_worktree_remote", "refresh_env_remote"):
+        monkeypatch.setattr(
+            np, name,
+            lambda *a, _n=name, **k: (_ for _ in ()).throw(
+                AssertionError(f"dry-run 禁 np.{_n}")))
+    _offline_cycle_seams(monkeypatch)
+    monkeypatch.setattr(tp, "needs_review_list", lambda: [(640, "h1")])
+    st = {"entries": [_queued_entry(12)], "auth_failure_streak": 0}
+    tp.cycle_once(st, True, [], datetime.now(timezone.utc), window_end=9)
+    out = capsys.readouterr().out
+    assert "[dry-run] 将派 agent 修 run 12" in out        # 泳道1 预演
+    assert "将派第 5 bot 检视 PR #640" in out             # 泳道2 预演
+    assert tl.StateStore.entries(st)[0].status == "QUEUED"
+
+
+def test_cycle_once_lane2_dispatches_to_remote_node(monkeypatch, tmp_path):
+    """泳道2 接线: pick_node(pr_review)=0102 → dispatch_review(node=板)走
+    远程分支(第5bot 在板上克隆跑),本机零 run_background;槽 host 记账、
+    每晚预算只挂在成功派发上;每泳道恰一次 pick_node。"""
+    _patch_cycle_nodepool_common(monkeypatch, tmp_path)
+    import task_loop_nodepool as np
+    picked = []
+    monkeypatch.setattr(np, "pick_node",
+                        lambda k, s: picked.append(k)
+                        or np.node_by_host("0102"))
+    spawned = _stub_np_remote(monkeypatch)
+    spawned_local = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawned_local.append(cmd) or 99)
+    _offline_cycle_seams(monkeypatch)
+    monkeypatch.setattr(tp, "needs_review_list", lambda: [(640, "h1")])
+    st = _mkstate()
+    tp.cycle_once(st, False, [], datetime.now(timezone.utc), window_end=9)
+    assert picked == ["issue_fix", "pr_review"]     # 每泳道恰一次 pick_node
+    assert not spawned_local                        # 检视派生在板上
+    assert spawned and "--pr 640" in spawned[0][1]
+    assert tp.slot_get(st, "pr_review", "pr-640")["host"] == "0102"
+    assert st["review_tries"]["640:h1"] == 1
+
+
+def test_merge_sweep_remote_repair_unreachable_skips_pr(monkeypatch, tmp_path):
+    """merge_sweep repair 槽活判(N8 贯通): 远程 repair 槽 SSH 断
+    (unreachable)→ 视为占用保守跳过该 PR——fetch 都不发生(宁等不误
+    merge,绝不把「连不上」当「进程死」)。"""
+    _patch_merge_offline(monkeypatch, tmp_path)
+    import task_loop_nodepool as np
+    fetched = []
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr",
+                        lambda slug, n: fetched.append(n) or NS(number=n))
+    st = _mkstate()
+    st["entries"] = [_entry(status="PR_OPEN", pr_number=88,
+                           fix_branch="fix/issue-7")]
+    tp.slot_acquire(st, "pr_repair", "pr-88", 4242, 4242, "/l", None,
+                    "t", "b", host="0102")
+
+    def boom(h, p):
+        raise np.NodeError("断")
+    monkeypatch.setattr(np, "alive_remote", boom)
+    events = []
+    tp.merge_sweep(st, events, False, datetime.now(timezone.utc))
+    assert fetched == [] and events == []
+
+
+def test_slot_acquire_remote_live_count_uses_probe(monkeypatch):
+    """slot_acquire 活计数换 _probe_alive(controller 验收 2b): 远程槽活判
+    走 np.alive_remote——板上在跑的槽如实计满(旧实现对板 PID 本地
+    os.kill 恒 False,活槽被当空位 → 超发缺口);unreachable 计占用
+    (保守不超发)。tl.agent_alive 钉死 False 钉住缺口: 旧实现 RED。"""
+    import task_loop_nodepool as np
+    monkeypatch.setattr(tl, "agent_alive",
+                        lambda pid: False)   # 板 PID 在本机必「死」(缺口根源)
+    monkeypatch.setattr(np, "alive_remote", lambda h, p: True)  # 板上在跑
+    st = _mkstate()
+    assert tp.slot_acquire(st, "issue_fix", "issue-1", 555, 555, "/l", "/w",
+                           "t", "b", host="0102") is True
+    assert tp.slot_acquire(st, "issue_fix", "issue-2", 556, 556, "/l", "/w",
+                           "t", "b", host="0102") is True
+    assert tp.slot_acquire(st, "issue_fix", "issue-3", 557, 557, "/l", "/w",
+                           "t", "b", host="0102") is False   # 板活槽计满(cap2)
+    # unreachable 同样计占用: 第二发起每次探活都断 → 逐发累积至满
+    def boom(h, p):
+        raise np.NodeError("断")
+    monkeypatch.setattr(np, "alive_remote", boom)
+    st2 = _mkstate()
+    assert tp.slot_acquire(st2, "issue_fix", "issue-9", 555, 555, "/l", "/w",
+                           "t", "b", host="0102") is True
+    assert tp.slot_acquire(st2, "issue_fix", "issue-10", 556, 556, "/l", "/w",
+                           "t", "b", host="0102") is True   # live=1(unreachable)
+    assert tp.slot_acquire(st2, "issue_fix", "issue-11", 558, 558, "/l", "/w",
+                           "t", "b", host="0102") is False  # live=2 → 满拒
+
+
+def test_host_and_probe_alive_empty_string_guard(monkeypatch):
+    """空串守卫统一(controller 验收 2a): host_alive/_probe_alive 对 ""/None
+    一律走本机路径(与 _agent_log_tail_by 的 not entry.host 同口径)——
+    畸形/历史数据不触发远程分支(未知节点 → NodeError/unreachable)。"""
+    import task_loop_nodepool as np
+    monkeypatch.setattr(np, "alive_remote",
+                        lambda h, p: (_ for _ in ()).throw(
+                            AssertionError("空 host 不应走远程探活")))
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: pid != 999999999)
+    assert tl.host_alive("", os.getpid()) is True
+    assert tl.host_alive(None, os.getpid()) is True      # 原已覆盖
+    assert tl.host_alive("", None) is False              # 无 PID=无 agent
+    assert tp._probe_alive({"host": "", "pid": os.getpid()}) == "alive"
+    assert tp._probe_alive({"host": None, "pid": 999999999}) == "dead"
+    assert tp._probe_alive({"pid": os.getpid()}) == "alive"   # 缺 host 键
 
 
 def test_write_report(tmp_path, monkeypatch):
@@ -3220,6 +3475,57 @@ def test_reap_remote_dead_requeues_via_remote_kill(monkeypatch):
         and e.agent_pid is None           # ≤MAX 重派,同本机 dead 口径
     assert e.worktree is None
     assert tp.slot_get(st, "issue_fix", "issue-9") is None  # 槽照常释放
+
+
+def test_reap_remote_dead_board_reboot_requeues_without_attempts(monkeypatch):
+    """板重启豁免补全(N7 审查 Important,Task 8 落地): 远程条目
+    dead/timeout 且板 uptime -s 晚于 agent_started_at(板在派发后重启)→
+    环境性死亡,干净回队不计 attempts(软停同款口径: DISPATCHED→QUEUED /
+    BOT_FIX→PR_OPEN,清 agent 引用与 head 锚,rounds 也不动);板没重启
+    (uptime 早于 started)→ 照常燃 attempts 走既有判档。"""
+    import task_loop_nodepool as np
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: False)   # 旧实现钉死
+    monkeypatch.setattr(np, "read_log_tail",
+                        lambda h, p, n=4000: "")
+    monkeypatch.setattr(np, "alive_remote", lambda h, p: False)  # 板上进程死
+    killed = []
+    monkeypatch.setattr(np, "kill_remote",
+                        lambda h, p, s: killed.append((h, p, s)))
+
+    def _reap(entry, uptime):
+        monkeypatch.setattr(np, "run_ssh",
+                            lambda h, cmd, t=45: uptime)
+        st = _mkstate()
+        st["entries"] = [entry]
+        tl.reap_or_advance(st, dry_run=True)
+        return tl.StateStore.entries(st)[0]
+
+    # 臂① dead + 板重启(uptime 晚于 started 10 分钟)→ QUEUED 不计 attempts
+    started = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    boot = (datetime.now().astimezone()
+            + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    e = _reap(_entry(issue_number=9, host="0102", agent_pid=555,
+                     agent_started_at=started, agent_log="/rl/x.log",
+                     attempts=1), boot)
+    assert e.status == "QUEUED" and e.attempts == 1 and e.agent_pid is None \
+        and e.agent_started_at is None and e.last_dispatched_head is None
+    # 臂② BOT_FIX + timeout + 板重启 → PR_OPEN,rounds/attempts 都不动
+    e = _reap(_entry(status="BOT_FIX", pr_number=88, host="0102",
+                     agent_pid=556, rounds=1, attempts=1,
+                     agent_started_at="2026-11-15T02:00:00+08:00",
+                     agent_log="/rl/x.log"),
+              "2026-11-15 03:00:00")
+    assert e.status == "PR_OPEN" and e.rounds == 1 and e.attempts == 1 \
+        and e.agent_pid is None
+    # 臂③ 板没重启(uptime 早于 started)→ 照常燃 attempts(≤MAX 保持
+    # DISPATCHED 待重派);板重启豁免不吞真实失败(无证据不豁免)
+    e = _reap(_entry(issue_number=9, host="0102", agent_pid=555,
+                     agent_started_at="2026-11-15T02:00:00+08:00",
+                     agent_log="/rl/x.log", attempts=1),
+              "2026-11-14 01:00:00")
+    assert e.status == "DISPATCHED" and e.attempts == 2
+    # 环境性死亡有板重启作证,无需补刀;臂③已死(rc=1)同样免击杀
+    assert killed == []
 
 
 def test_janitor_remote_unreachable_keeps_slot(monkeypatch):

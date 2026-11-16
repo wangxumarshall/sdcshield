@@ -41,7 +41,15 @@ SSH_TIMEOUT_DEFAULT = 45
 
 
 class NodeError(RuntimeError):
-    """节点操作失败(SSH 不通/命令非零)。调用方按 spec §6 降级,不炸 cycle。"""
+    """节点操作失败(SSH 不通/命令非零/超时)。调用方按 spec §6 降级,不炸
+    cycle。rc: 结构化退出码(Task 8,N5 Minor 顺手)——run_ssh/put_file
+    失败时赋远程命令退出码,超时/无码为 None;alive_remote 判死优先读它
+    (消息文本是人读的,不再当机器接口解析)。直接构造缺省 rc=None,
+    既有单参 raise 调用点零改动。"""
+
+    def __init__(self, msg, rc=None):
+        super().__init__(msg)
+        self.rc = rc
 
 
 def node_by_host(host_id):
@@ -75,7 +83,8 @@ def run_ssh(host_id, cmd, timeout=SSH_TIMEOUT_DEFAULT):
                         ) from exc
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", errors="replace")[:200]
-        raise NodeError(f"节点 {host_id} 命令失败(rc={proc.returncode}): {err}")
+        raise NodeError(f"节点 {host_id} 命令失败(rc={proc.returncode}): {err}",
+                        rc=proc.returncode)
     return proc.stdout.decode("utf-8", errors="replace").strip()
 
 
@@ -96,7 +105,8 @@ def put_file(host_id, local_path, remote_path):
                         ) from exc
     if proc.returncode != 0:
         raise NodeError(f"scp → {host_id} 失败(rc={proc.returncode}): "
-                        f"{proc.stderr.decode(errors='replace')[:200]}")
+                        f"{proc.stderr.decode(errors='replace')[:200]}",
+                        rc=proc.returncode)
 
 
 MEMINFO_PATH = "/proc/meminfo"
@@ -197,14 +207,17 @@ def alive_remote(host_id, pid):
     SSH 断/超时(rc=255 或超时无 rc)上抛 NodeError——调用方按 unreachable
     保留槽,绝不把「连不上」当「进程死」(spec §5)。
 
-    run_ssh 把退出码嵌进 NodeError 文本, 故按其中的 rc 区分两种失败:
-    kill -0 对已死/无权限进程返回 1, ssh 连接失败固定 255, subprocess
-    超时则无 rc 字段。"""
+    判死优先读 NodeError.rc 结构化属性(Task 8);消息正则解析保留为
+    兜底——覆盖不经 run_ssh 构造、无 rc 属性的 NodeError(直接 raise 的
+    调用点与测试桩)。kill -0 对已死/无权限进程返回 1, ssh 连接失败固定
+    255, subprocess 超时无码(rc=None)。"""
     try:
         run_ssh(host_id, f"kill -0 {pid}")
     except NodeError as exc:
+        if exc.rc == 1:                 # 结构化退出码: 进程不存在
+            return False
         m = re.search(r"\(?rc=(\d+)\)?", str(exc))
-        if m and m.group(1) == "1":     # 进程不存在
+        if m and m.group(1) == "1":     # 兜底: 无 rc 属性的旧构造形态
             return False
         raise
     return True          # 走到这里=活着

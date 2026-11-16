@@ -206,6 +206,45 @@ def test_alive_remote_unreachable_raises(monkeypatch):
         np.alive_remote("0101", 4242)
 
 
+def test_nodeerror_rc_structured(monkeypatch):
+    """NodeError.rc 结构化(controller N5 Minor,Task 8 落地): run_ssh/
+    put_file 失败带退出码,超时无码 rc=None;直接构造缺省 None。"""
+    monkeypatch.setattr(np.subprocess, "run",
+                        lambda a, **k: type("R", (), {
+                            "returncode": 3, "stdout": b"",
+                            "stderr": b"boom"})())
+    with pytest.raises(np.NodeError) as ei:
+        np.run_ssh("0102", "uptime")
+    assert ei.value.rc == 3
+    monkeypatch.setattr(np.subprocess, "run",
+                        lambda a, **k: type("R", (), {
+                            "returncode": 255, "stdout": b"",
+                            "stderr": b"refused"})())
+    with pytest.raises(np.NodeError) as ei:
+        np.put_file("0102", "/l", "/r")
+    assert ei.value.rc == 255
+
+    def timeboom(a, **k):
+        raise subprocess.TimeoutExpired("ssh", 55)
+    monkeypatch.setattr(np.subprocess, "run", timeboom)
+    with pytest.raises(np.NodeError) as ei:
+        np.run_ssh("0201", "sleep 999")
+    assert ei.value.rc is None                    # 超时无码
+    assert np.NodeError("x").rc is None           # 直接构造缺省
+    assert np.NodeError("x", rc=12).rc == 12
+
+
+def test_alive_remote_uses_rc_attribute(monkeypatch):
+    """alive_remote 判死优先读 NodeError.rc 属性(Task 8): 消息不含
+    rc= 字样、rc=1 → 判死(不再靠消息正则解析);rc 缺位的直接构造形态
+    回落旧正则兜底(既有 N5 回归 rc=255/rc=12 上抛不受影响,见
+    test_alive_remote_unreachable_raises / test_alive_remote_dead_pid)。"""
+    def boom_rc1(host_id, cmd, timeout=45):
+        raise np.NodeError("节点 0102 kill: 无此进程", rc=1)
+    monkeypatch.setattr(np, "run_ssh", boom_rc1)
+    assert np.alive_remote("0102", 4242) is False    # 属性路径,消息无 rc=
+
+
 def test_cleanup_worktree_remote_unlocks_first(monkeypatch):
     """生产修复(同 tl.worktree_cleanup): 板上 cleanup 命令串前置
     `git worktree unlock`(missing-but-locked 僵尸令 remove --force 挂死),

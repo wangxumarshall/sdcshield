@@ -1,37 +1,46 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * fp64_rowmajor_ldp_stp.c — neon_rot_ldr_at_top_rowmajor_fp64 的
- * ldp/stp 内核模块 (ko) 版本
+ * fp64_rowmajor_ldp_stp.c — neon_rot_ldr_at_top_rowmajor 的 fp64 变体
+ * (ldp/stp 内核模块 (ko) 版本)
  *
- * 改造说明 (相对原 sandstone 测试 neon_rot_ldr_at_top_rowmajor_fp64_dump):
+ * 骨架来自框架测试 tests/cpu/misc/neon_rot_ldr_at_top_rowmajor(整数 slot
+ * add/eor/and/orr + 标量 golden)。本模块是 fp64 变体, 其算术映射
+ * (fadd/fsub/fmul/fmaxnm) 为**新写**, 并非对某个「fp64 父测试」的等价改写
+ * (仓库中不存在 *_fp64* 族文件)。本变体的检验对象是**访存通路**: 把 ldr q/
+ * str q 替换成 ldp/stp 双寄存器对, 并核验两套访存序列逐位一致。
  *
- * 1. 指令替换 — 原 NEON 单寄存器访存全部改为双寄存器对:
+ * 1. 指令替换 — NEON 单寄存器访存改为双寄存器对:
  *        load_vec:  "ldr %q0, [%1]"    (ldr qN, [addr], 16B)
  *        store_vec: vst1q_u64()        (str qN, [addr], 16B)
  *    =>  load_vec:  "ldp %0,%1,[%2]"   (ldp xA,xB, [addr], 8B+8B)
  *        store_vec: "stp %0,%1,[%2]"   (stp xA,xB, [addr], 8B+8B)
  *    语义等价性: 小端 AArch64 下 ldr q 的 v.d[0]/v.d[1] 通道分别对应
  *    16 字节窗口的前/后 8 字节, 与 ldp xA,xB 的装入顺序一一对应;
- *    stp 与 vst1q_u64 同理。计算逻辑 (fp64_rot 旋转 slot 合成) 未变。
+ *    stp 与 vst1q_u64 同理。
  *
  * 2. 内核化约束:
  *    - NEON/FPSIMD: arm64 内核使用 NEON 必须处于 kernel_neon_begin/end
  *      区间; 所有 V 寄存器操作限制在两个 noinline 函数内
  *      (fp64_golden_init / fp64_run_sweeps), 便于反汇编核验;
  *    - 编译: 内核全局 -mgeneral-regs-only, 通过 CFLAGS_REMOVE 移除
- *      (与内核 lib/xor-neon.o 同一做法, 见 Makefile);
+ *      (与内核 lib/xor-neon.o 同一做法, 见 Makefile); 另加 -std=gnu11
+ *      (5.10 kbuild 默认 gnu89, 本模块为 C11 风格);
  *    - 内存: __get_free_pages 页对齐分配 (满足原 64B 对齐要求),
  *      GFP_KERNEL|__GFP_ZERO;
- *    - 数据转储: 内核态不直接写文件, 原 movbe_log 二进制 dump 改为
- *      dmesg 报告 — 逐 sweep memcmp, 失败时冷路径打印 nbad 与前 2 个
- *      差异元素的 A/B/T/G/E/X (格式与原 report_fail_msg 一致, 保留
- *      "miscompare" 关键字以兼容 grep);
+ *    - 数据转储: 内核态不直接写文件, 逐 sweep memcmp, 失败时冷路径打印
+ *      nbad 与前 2 个差异元素的 A/B/T/G/E/X (格式保留 "miscompare" 关键字
+ *      以兼容 grep);
  *    - 验证接口: 与用户态参考 (userspace_ref.c) 共用同一 xorshift64*
  *      种子与 FNV-1a 哈希, 输出 "HASH srcA=.. srcB=.. scratch=..
  *      expected=.. temp=.. dst=.." 供逐位一致性比对。
+ *    - golden (issue #373): 标量独立重算 (标量 fadd/fsub/fmul/fmaxnm +
+ *      标量 ldr/str), 绝不走被测的 ldp/stp 通路与 128 位向量 FP 单元。
+ *    - 激发强度: 默认定时 2s 持续压测 + 每核 (per-CPU) 全核覆盖。
  *
- * 3. 模块参数: seed (ullong, 默认 0x12345678DEADBEEF)
- *    用法: insmod fp64_rowmajor_ldp_stp.ko seed=0x12345678DEADBEEF
+ * 3. 模块参数: seed (ullong), sweeps (uint, 显式次数上限, 0=关),
+ *    duration_ms (uint, 每核时间预算, 默认 2000, 0=关)。
+ *    用法: insmod fp64_rowmajor_ldp_stp.ko seed=0x12345678DEADBEEF \
+ *             [sweeps=N] [duration_ms=M]
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt

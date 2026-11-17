@@ -1,11 +1,14 @@
 /*
  * userspace_ref.c — 验证参考实现 (oracle)
  *
- * 来源: sandstone 测试 neon_rot_ldr_at_top_rowmajor_fp64_dump.cpp 的
- * 用户态 C 转换, 保留原始 NEON 单寄存器访存路径:
+ * 骨架来自框架测试 tests/cpu/misc/neon_rot_ldr_at_top_rowmajor 的用户态 C
+ * 转换 (fp64 算术映射 fadd/fsub/fmul/fmaxnm 为**新写**, 仓库中无 *_fp64*
+ * 族父文件), 保留 NEON 单寄存器访存路径:
  *     load_vec:  "ldr %q0, [%1]"   (ldr qN, [addr], 16B)
  *     store_vec: vst1q_u64()       (str qN, [addr], 16B)
  * 用于与 ldp/stp 内核模块版本 (fp64_rowmajor_ldp_stp.c) 做逐位结果比对。
+ * golden 同为标量独立重算 (issue #373): 标量 fadd/fsub/fmul/fmaxnm, 绝不走
+ * 被测的向量 FP 单元与 ldr q/str q 通路。
  *
  * 与内核模块保持同步的约定:
  *   - 同一 xorshift64* 随机源 (同一种子 => 逐位相同的 srcA/srcB/scratch);

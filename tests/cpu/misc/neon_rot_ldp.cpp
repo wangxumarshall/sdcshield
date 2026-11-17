@@ -65,13 +65,17 @@
  * each core may implement the both-NaN selection differently; on a
  * heterogeneous SoC (big.LITTLE-class) that would surface as deterministic
  * miscompares. The deployment target is homogeneous fleets (Kunpeng 920).
- * Coverage trade-off, stated honestly: a persistent NEON-datapath fault
- * that computes deterministic wrong bits can corrupt golden and actual
- * identically here and go unnoticed by THIS test; that fault class is
- * covered by the integer siblings' scalar goldens (issue #373). What this
- * test targets — like the ko — is the LSU pair-form excitation: any
- * misgrafted load delivers wrong inputs to a correctly-computed golden and
- * fails the memcmp.
+ * Coverage trade-off, stated honestly: because the golden is a same-path
+ * NEON recomputation, a persistent fault in the FP64 vector execution units
+ * (fadd/fsub/fmul/fmax) that computes deterministic wrong bits corrupts
+ * golden and actual identically here and goes unnoticed by THIS test. That
+ * blind spot is NOT covered elsewhere either: the integer siblings (issue
+ * #373 scalar golden) exercise only integer vector ALUs (vaddq_u64/veorq/
+ * vandq/vorrq) and execute no FP64 vector instruction, so the FP64 vector
+ * units carry no independent golden anywhere in the family. What this test
+ * targets — like the ko — is the LSU pair-form excitation: any misgrafted
+ * load delivers wrong inputs to a correctly-computed golden and fails the
+ * memcmp.
  *
  * Failure report: cold path only, out-of-line (noinline) so its frame never
  * enters the hot function's codegen. Message carries the first two bad

@@ -109,10 +109,13 @@ else
     log "  REF : $REF_HASH"
     log "  KERN: $KERN_HASH"
 fi
-NCPU="$(nproc)"
+# 内核侧 fp64_run_sweeps 经 for_each_online_cpu 对全网在线 CPU 各打印一行
+# PASS, 不受 insmod 进程 affinity/cpuset 限制; 故用 nproc --all (全网在线
+# CPU 数) 对齐, 而非 nproc (受 sched_getaffinity/cpuset 限制, 会 false-FAIL)。
+NCPU="$(nproc --all)"
 NPASS="$(printf '%s\n' "$KLOG" | grep -c "$MOD: PASS")"
 NFAIL="$(printf '%s\n' "$KLOG" | grep -c "$MOD: FAIL")"
-log "模块自检覆盖: $NPASS PASS / $NFAIL FAIL, 在线 CPU=$NCPU"
+log "模块自检覆盖: $NPASS PASS / $NFAIL FAIL, 全网在线 CPU=$NCPU"
 [ "$NFAIL" -eq 0 ] && [ "$NPASS" -eq "$NCPU" ]
 stage $? "模块内自检 (逐位 memcmp): 每个在线 CPU 各 PASS 一次, 无 FAIL"
 

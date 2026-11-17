@@ -4,7 +4,7 @@
 
 **Goal:** 把 `tools/fp64_rowmajor_ko/fp64_rowmajor_ldp_stp.c`（内核模块形态的 fp64 row-major 旋转测试，访存已换 `ldp x,x`/`stp x,x`）改造成本树 sandstone 用例 `tests/cpu/misc/neon_rot_ldp.cpp` 并验证。
 
-**Architecture:** 单文件新增 + meson aarch64 块内注册一行。骨架 = 本树 `neon_rot_ldr_at_top_rowmajor.cpp`（升/降序交替 sweep、top 丢弃 load、双 store、memcmp 冷路径），数据通路 = ko 的 pair 形态（`ldp xA,xB`/`stp xA,xB`，16B/条，lo/hi ↔ `v.d[0]/v.d[1]` 小端一一对应）+ `fp64_rot`（fadd/fsub/fmul/fmax，slot = i%4）。黄金 = **同路径 NEON 重算**（Task 1 探针实证裁决：C `fmax` 是 maxNum 语义与 FMAX 的 NaN 传播语义架构级不同；本机鲲鹏 920 的标量 FP 管道与 NEON 向量管道在双 NaN 输入的 payload 选择上分歧——双 NaN lane 无位等标量基准，任何标量黄金 = 舰队级假阳性；同路径 NEON 黄金构造上位可复现，与 ko `fp64_golden_init` 及主树 fp64 父测试约定一致；持续性 NEON 数据通路损坏由整数兄弟用例的 issue #373 标量黄金覆盖）。失败报告 = ko 的冷路径 A/B/T/G/E/X 紧凑消息（noinline 助手 + `report_fail_msg`，保留 "miscompare" grep 关键字）。
+**Architecture:** 单文件新增 + meson aarch64 块内注册一行。骨架 = 本树 `neon_rot_ldr_at_top_rowmajor.cpp`（升/降序交替 sweep、top 丢弃 load、双 store、memcmp 冷路径），数据通路 = ko 的 pair 形态（`ldp xA,xB`/`stp xA,xB`，16B/条，lo/hi ↔ `v.d[0]/v.d[1]` 小端一一对应）+ `fp64_rot`（fadd/fsub/fmul/fmax，slot = i%4）。黄金 = **同路径 NEON 重算**（Task 1 探针实证裁决：C `fmax` 是 maxNum 语义与 FMAX 的 NaN 传播语义架构级不同；本机鲲鹏 920 的标量 FP 管道与 NEON 向量管道在双 NaN 输入的 payload 选择上分歧——双 NaN lane 无位等标量基准，任何标量黄金 = 舰队级假阳性；同路径 NEON 黄金构造上位可复现，与 ko `fp64_golden_init` 及主树 fp64 父测试约定一致；持续性 FP64 向量单元损坏无独立黄金覆盖——整数兄弟用例的 issue #373 标量黄金只覆盖其整数向量 ALU（vaddq_u64/veorq/vandq/vorrq），不执行任何 FP64 向量指令）。失败报告 = ko 的冷路径 A/B/T/G/E/X 紧凑消息（noinline 助手 + `report_fail_msg`，保留 "miscompare" grep 关键字）。
 
 **Tech Stack:** C++20 / aarch64 内联 asm（ko 逐字移植）/ meson ARM64-only 块 / GCC 12（本机构建器）。
 
@@ -66,7 +66,7 @@ ko 逐字移植（u64→uint64_t、snprintf %llx→%016"PRIx64" 或 C++ 风格 s
 
 - [ ] **Step 3: init/run/cleanup + DECLARE_TEST**
 
-init：4×`aligned_alloc(64, ...)`（NULL → `log_skip(RuntimeSkipCategory, ...)` + `EXIT_SKIP`）；3×`memset_random`；黄金（Task 1 裁决：同路径 NEON 重算，ko `fp64_golden_init` 形态）：`for i ∈ [0,COUNT): store_pair_vec(&expected[i], fp64_rot(i%4, load_pair_vec(&srcA[i]), load_pair_vec(&srcB[i])))`——与 run 同 slot 映射、同助手、同 `fp64_rot`。docstring 诚实记录：标量黄金为何不可行（探针证据）+ 本用例不覆盖的故障类由整数兄弟用例覆盖。run：per-thread `temp/dst` `aligned_alloc`（NULL → `report_fail_msg`）；`TEST_LOOP(test, 1 << 13)`：升/降序交替、每迭代 top 丢弃 `load_pair_vec(scratch[i])`（`(void)` 压制）→ 2 源 pair load → `fp64_rot(i%4)` → `store_pair_vec(temp[i])` + `store_pair_vec(dst[i])`；每 sweep 后 `memcmp(dst, expected)`，失败只进 noinline 报告助手。cleanup：4×free + `free(data)`。`DECLARE_TEST(neon_rot_ldp, "<家族风格描述串：ldp/stp pair 形态 + fp64 旋转 + ko 背书>")`，`.quality_level = TEST_QUALITY_PROD`。
+init：4×`aligned_alloc(64, ...)`（NULL → `log_skip(RuntimeSkipCategory, ...)` + `EXIT_SKIP`）；3×`memset_random`；黄金（Task 1 裁决：同路径 NEON 重算，ko `fp64_golden_init` 形态）：`for i ∈ [0,COUNT): store_pair_vec(&expected[i], fp64_rot(i%4, load_pair_vec(&srcA[i]), load_pair_vec(&srcB[i])))`——与 run 同 slot 映射、同助手、同 `fp64_rot`。docstring 诚实记录：标量黄金为何不可行（探针证据）+ 本用例 FP64 向量单元确定性故障类无独立黄金覆盖（整数兄弟只执行整数向量 ALU、不覆盖 FP64 单元）。run：per-thread `temp/dst` `aligned_alloc`（NULL → `report_fail_msg`）；`TEST_LOOP(test, 1 << 13)`：升/降序交替、每迭代 top 丢弃 `load_pair_vec(scratch[i])`（`(void)` 压制）→ 2 源 pair load → `fp64_rot(i%4)` → `store_pair_vec(temp[i])` + `store_pair_vec(dst[i])`；每 sweep 后 `memcmp(dst, expected)`，失败只进 noinline 报告助手。cleanup：4×free + `free(data)`。`DECLARE_TEST(neon_rot_ldp, "<家族风格描述串：ldp/stp pair 形态 + fp64 旋转 + ko 背书>")`，`.quality_level = TEST_QUALITY_PROD`。
 
 - [ ] **Step 4: meson 注册**
 
@@ -84,7 +84,7 @@ Expected: 空输出。
 
 - [ ] **Step 2: objdump 点验 pair 形态（ko verify.sh 同款门禁）**
 
-Run: `objdump -d builddir/sdcshield | awk '/<neon_rot_ldp_run>:/,/ret/'` 逐条点验数据通路：每内层迭代 3×`ldp x` + 2×`stp x`，无 `ldr q`/`str q` 残留；黄金循环同理无向量访存（标量黄金）。
+Run: `objdump -d builddir/sdcshield | awk '/<neon_rot_ldp_run>:/,/ret/'` 逐条点验数据通路：每内层迭代 3×`ldp x` + 2×`stp x`，无 `ldr q`/`str q` 残留；黄金循环（`neon_rot_ldp_init`）同理 2×`ldp x` + 1×`stp x`、无 `ldr q`/`str q` 残留（同路径 NEON 重算，非标量黄金）。
 Expected: 清单引用进最终回复。
 
 - [ ] **Step 3: 实跑（单线程 + 全核 + 多 seed）**

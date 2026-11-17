@@ -156,6 +156,7 @@ abort），第三方库里的随机数也因此可复现。复现失败：`-s 'A
 - 每线程每测试默认最多 5 条日志 / 128 字节二进制数据（`--max-messages 0 --max-logdata 0` 解除）
 - 测试**只允许在错误路径打日志**（log_debug 除外，release 编译掉）
 - stdout 直接丢弃（printf 无效）；stderr 会进日志但请用框架 log_* 函数
+- stderr 超 1 MiB 时只转储前 1 MiB，并追加 `[stderr truncated: N bytes total, first 1048576 bytes shown]` 注记（防 GB 级 stderr 拖垮日志）
 
 ### Test knob（`-O`）
 `-O <testid>.<key>=<value>`。现有旋钮：

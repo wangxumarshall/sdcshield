@@ -102,10 +102,25 @@ static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b) {
 
 static int neon_rot_ldr_at_top_rowmajor_fp64_dump_init(struct test *test) {
     auto *data = static_cast<NeonRotLdrAtTopRowMajorFp64DumpData *>(malloc(sizeof(NeonRotLdrAtTopRowMajorFp64DumpData)));
+    if (!data) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_rowmajor_fp64_dump: state allocation failed");
+        return EXIT_SKIP;
+    }
     data->srcA = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
     data->srcB = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
     data->scratch = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
     data->expected = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
+    if (!data->srcA || !data->srcB || !data->scratch || !data->expected) {
+        free(data->srcA);
+        free(data->srcB);
+        free(data->scratch);
+        free(data->expected);
+        free(data);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_rowmajor_fp64_dump: buffer allocation failed");
+        return EXIT_SKIP;
+    }
 
     memset_random(data->srcA, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
@@ -195,6 +210,13 @@ static int neon_rot_ldr_at_top_rowmajor_fp64_dump_run(struct test *test, int cpu
 
     uint64x2_t *temp = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
     uint64x2_t *dst  = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
+    if (!temp || !dst) {
+        free(temp);
+        free(dst);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_rowmajor_fp64_dump: per-thread buffer allocation failed");
+        return EXIT_SKIP;
+    }
 
     uint64_t sweep = 0;
     TEST_LOOP(test, 1 << 8) {

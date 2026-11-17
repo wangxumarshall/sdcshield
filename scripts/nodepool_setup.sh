@@ -204,7 +204,11 @@ ninja -C builddir -j 32
 n=$(./builddir/sdcshield --list-tests | wc -l)
 echo "list-tests: $n 行"
 [ "$n" -ge 439 ] || { echo "list-tests $n < 439"; exit 1; }
-out=$(timeout 60 ./builddir/sdcshield -e zstd19 -t 2000 -n 1 2>&1); rc=$?
+if out=$(timeout 60 ./builddir/sdcshield -e zstd19 -t 2000 -n 1 2>&1); then
+  rc=0
+else
+  rc=$?
+fi
 echo "zstd19 冒烟: $(echo "$out" | tail -1) (rc=$rc)"
 [ "$rc" -eq 0 ] || exit "$rc"
 REMOTE

@@ -42,20 +42,32 @@
 #include <linux/mm.h>
 #include <linux/string.h>
 #include <linux/smp.h>
+#include <linux/jiffies.h>
 #include <linux/utsname.h>
 #include <asm/neon.h>
 /* 内核规范的 NEON 内建函数包装头 (统一 u64/s64 与 arm_neon.h 的类型),
  * 见 arch/arm64/include/asm/neon-intrinsics.h */
 #include <asm/neon-intrinsics.h>
 
-#define FP64_COUNT        1024
-#define FP64_SWEEPS       256
-#define FP64_BUF_SZ       (FP64_COUNT * sizeof(uint64x2_t))
-#define FP64_DEFAULT_SEED 0x12345678DEADBEEFULL
+#define FP64_COUNT                  1024
+#define FP64_BUF_SZ                 (FP64_COUNT * sizeof(uint64x2_t))
+#define FP64_DEFAULT_SEED           0x12345678DEADBEEFULL
+#define FP64_DEFAULT_DURATION_MS    2000
 
 static u64 seed = FP64_DEFAULT_SEED;
 module_param(seed, ullong, 0444);
 MODULE_PARM_DESC(seed, "xorshift64* seed for srcA/srcB/scratch (same value as userspace_ref argv[1])");
+
+/* 定时持续压测 (仓库规则: 不得固定迭代次数短跑) — duration_ms 为时间预算,
+ * sweeps 为显式次数上限 (verify 用确定性), 两者可叠加 (先到先止); 全 0 回退
+ * 到默认 2s。 */
+static unsigned int duration_ms = FP64_DEFAULT_DURATION_MS;
+module_param(duration_ms, uint, 0444);
+MODULE_PARM_DESC(duration_ms, "per-CPU run time budget in ms (0 = disabled, use sweeps)");
+
+static unsigned int sweeps = 0;
+module_param(sweeps, uint, 0444);
+MODULE_PARM_DESC(sweeps, "per-CPU explicit sweep cap (0 = disabled, use duration_ms)");
 
 struct fp64_ctx {
     uint64x2_t *srcA;
@@ -269,7 +281,20 @@ static noinline int fp64_run_sweeps(struct fp64_ctx *ctx)
     if (!temp || !dst)
         goto nomem;
 
-    for (int iter = 0; iter < FP64_SWEEPS; iter++) {
+    /* 定时持续压测: duration_ms 时间预算 + sweeps 显式上限, 先到先止;
+     * 全 0 回退到默认时长 (绝不固定 256 次短跑)。 */
+    unsigned int budget_ms = duration_ms;
+    unsigned int cap = sweeps;
+    if (!budget_ms && !cap)
+        budget_ms = FP64_DEFAULT_DURATION_MS;
+    const unsigned long deadline = budget_ms ? jiffies + msecs_to_jiffies(budget_ms) : 0;
+
+    for (;;) {
+        if (cap && sweep >= cap)
+            break;
+        if (budget_ms && time_after(jiffies, deadline))
+            break;
+
         const bool ascending = (sweep & 1) == 0;
 
         kernel_neon_begin();
@@ -304,9 +329,9 @@ static noinline int fp64_run_sweeps(struct fp64_ctx *ctx)
             (unsigned long long)fnv1a64(ctx->expected, FP64_BUF_SZ),
             (unsigned long long)fnv1a64(temp, FP64_BUF_SZ),
             (unsigned long long)fnv1a64(dst, FP64_BUF_SZ));
-    pr_info("%s cpu=%d sweeps=%d seed=0x%016llx\n",
-            failing ? "FAIL" : "PASS", raw_smp_processor_id(), FP64_SWEEPS,
-            (unsigned long long)seed);
+    pr_info("%s cpu=%d sweeps=%llu seed=0x%016llx\n",
+            failing ? "FAIL" : "PASS", raw_smp_processor_id(),
+            (unsigned long long)sweep, (unsigned long long)seed);
 
     buf_free(temp);
     buf_free(dst);
@@ -324,9 +349,9 @@ static int __init fp64_rowmajor_ldp_stp_init(void)
     int ret;
 
     rng_seed_init(seed);
-    pr_info("init: kernel=%s cpu=%d count=%d sweeps=%d seed=0x%016llx\n",
+    pr_info("init: kernel=%s cpu=%d count=%d sweeps=%u duration_ms=%u seed=0x%016llx\n",
             init_utsname()->release, raw_smp_processor_id(),
-            FP64_COUNT, FP64_SWEEPS, (unsigned long long)seed);
+            FP64_COUNT, sweeps, duration_ms, (unsigned long long)seed);
 
     ctx.srcA     = buf_alloc();
     ctx.srcB     = buf_alloc();

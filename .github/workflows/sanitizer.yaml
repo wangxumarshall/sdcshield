@@ -48,7 +48,16 @@ jobs:
           PKG_CONFIG_PATH="$PWD/third-party/eigen5" meson setup builddir \
             --buildtype=debugoptimized -Db_sanitize=address,undefined \
             -Dcpp_args=-fno-sanitize=alignment
-          ninja -C builddir sdcshield unittests
+          # -j2 (= nproc/2, 同 scripts/build.sh 惯例): ARM runner(4 vCPU /
+          # 16GB RAM)下 ninja 默认 -j4 并行编译 SVE/Eigen 模板重目标时,
+          # 内存峰值越线——内存耗尽后 VM 先失联、OOM 日志写不出,job 以
+          # "runner received a shutdown signal" / exit 143 终止且零编译
+          # 错误输出(机制 = runner-images #15202 官方确认)。2026-10-31
+          # head 构建 614 目标通过;11-01 起合入 eigen_svd_cdouble_sve
+          # 1024-bit 复数档(PR #416)等后,617 目标即触线,nightly 16 连红
+          # + 手动触发 3 次全灭(旧镜像同款复现,与镜像无关;issue #547)。
+          # -j2 以 ~2x 构建时长换内存余量,构建产物不变。
+          ninja -C builddir -j2 sdcshield unittests
       - name: unittests (ASan+UBSan)
         run: |
           ./builddir/unittests \

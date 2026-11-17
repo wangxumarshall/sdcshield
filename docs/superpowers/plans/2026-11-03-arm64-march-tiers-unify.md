@@ -36,7 +36,7 @@
 
 **无需库级 march 的特例**：`zpclmul{,_rep}` 用函数级 `__attribute__((target("+crypto")))`（PMULL），无库级 march；`zpclmul` 注释明示。
 
-**编译器探测剔除（不阻断）**：`sve_mm_march`/`sve2_march`/`sme_march` 三档用 `cpp.has_argument()` 探测，不支持时 message 提示并跳过（本机 GCC 12.3 无 SME，预期见 "Compiler lacks SME support"）。
+**编译器探测剔除（不阻断）**：`sve_mm_march`/`sve2_march`/`sme_march` 三档用 `cpp.has_argument()` 探测，不支持时 message 提示并跳过（vanilla GCC <14 不认 SME 档；本机 openEuler gcc 12.3.1 backport 实测接受该 march 串，六档全建——见下方 Step 3 勘误记录）。
 
 **统一后**：6 个变量在根 `meson.build` 定义，16 处字面量全部改为引用（含生成器 1 处 + 生成物 1 处）。
 
@@ -333,7 +333,7 @@ Expected: 三者全 pass（引用真实输出）。
 > | `march_arm64_sve2` | `-march=armv9-a+sve2+bf16+f32mm+f64mm` | `tests_arm64_sve2`（`sve2_cross_precision_arm`） |
 > | `march_arm64_sme` | `-march=armv9-a+sve+sme+sme-f64f64` | `tests_arm64_sme`（ZA tile 族） |
 >
-> NEON 基线无需任何 `-march`（armv8-a 即含 ASIMD）；`zpclmul{,_rep}` 用函数级 `target("+crypto")`，无库级 march。**Eigen 特例**：Eigen 的 SVE packet 编译期定宽，故按 128/256/512/1024 四档各实例化一个库（`march_arm64_sve` + `-msve-vector-bits=<tier>` + `-DEIGEN_ARM64_SVE_VL=<tier> -DEigen=EigenSVE<tier> -DEIGEN_ARM64_USE_SVE`），运行时分发 TU 按工人 pinned VL 选档。SVE-FMMLA/SVE2/SME 档编译器不支持时探测剔除（message 提示、不阻断；本机 GCC 12.3 即剔除了 SME 档）。新写 SVE 测试选库规则见 [docs/research/adding-tests.md](docs/research/adding-tests.md) §4。
+> NEON 基线无需任何 `-march`（armv8-a 即含 ASIMD）；`zpclmul{,_rep}` 用函数级 `target("+crypto")`，无库级 march。**Eigen 特例**：Eigen 的 SVE packet 编译期定宽，故按 128/256/512/1024 四档各实例化一个库（`march_arm64_sve` + `-msve-vector-bits=<tier>` + `-DEIGEN_ARM64_SVE_VL=<tier> -DEigen=EigenSVE<tier> -DEIGEN_ARM64_USE_SVE`），运行时分发 TU 按工人 pinned VL 选档。SVE-FMMLA/SVE2/SME 档编译器不支持时探测剔除（message 提示、不阻断；vanilla GCC <14 不认 SME 档——本机 openEuler gcc 12.3.1 backport 实测接受，六档全建）。新写 SVE 测试选库规则见 [docs/research/adding-tests.md](docs/research/adding-tests.md) §4。
 ````
 
 - [ ] **Step 2: CLAUDE.md「Build & run」节，在 `Meson changes need` 段之前插入（紧凑版）：**

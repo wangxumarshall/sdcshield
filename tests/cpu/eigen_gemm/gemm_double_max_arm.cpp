@@ -16,7 +16,13 @@
  * product x as measured, not modelled), n_run caps the full-core single
  * iteration (same-lineage fill + one multiply, probed per tier in the body
  * TU) at a 200 s table-AR budget via the two-point power-law fit — clamped
- * to [1024, 4096]. The preinit no longer sizes the matrix at all: it only
+ * to [MDIM_MIN, MDIM_MAX] = [200, 4096] (this sentence had stayed at the
+ * pre-4c6297ab "[1024, 4096]" — that commit lowered MDIM_MIN but missed
+ * this line. The _sve2 companion genuinely keeps [1024, 4096]: 4c6297ab
+ * did not carry the floor over, so the twins' clamp floors differ — a
+ * divergence recorded here; the CI param scan pins only this test's
+ * mdim, scripts/gha/verify-params.py). The preinit no longer sizes the
+ * matrix at all: it only
  * writes a desired_duration UPPER bound from the same memory ceiling —
  * or from the explicit knob/env, which the child applies VERBATIM and
  * therefore must scale the duration too (issue #352) — and

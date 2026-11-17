@@ -1373,11 +1373,12 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
     /* issue #607 同源封堵: lo<1 与 NULL 同为「调用方编程错误」——lo=0 时
      * 退化区间(hi<=lo 返回 a->lo)/quick(返回 a->lo)/尾部钳底(n<a->lo 钳到
      * a->lo)/n_mem 兜底(c_bytes<=0 或 avail<=0 时为 0)都会静默交还 0(0 维
-     * = 0×0 矩阵空转 PASS), 上文「0 唯一来源就是本 NULL 分支」即失去 lo>0
-     * 前提。lo 是矩阵维度下限, 现全部调用方硬编码 lo≥16, 属防御性封堵
-     * (非现行 bug)。无独立死亡单测——NULL 用例能折叠靠字面 nullptr(!a
-     * 编译期恒真), 而 lo<1 需对非 const 局部结构体字段做常量传播, -O2
-     * 不可证明, 会打破 unittests 链接(#420 边界, 见单测文件头注)。 */
+     * = 0×0 矩阵空转 PASS), 0 的第二来源见上文 NULL 注释。lo 是矩阵维度
+     * 下限, 现全部调用方硬编码 lo≥16, 属防御性封堵(非现行 bug)。死亡单测
+     * 锁定见单测文件 LoLessThanOneFailsLoudInsteadOfSilentZero 用例——static
+     * const 全初始化 struct 令 a->lo 编译期常量 0, -O2+ 下指针常量传播使
+     * a->lo<1 恒真、_exit 之后全死代码被 DCE 折叠(比 NULL 用例的 -O1 折叠
+     * 高一档: !a 是字面量、a->lo 需指针传播), 与 NULL 用例同构地零链接成本。 */
     if (a->lo < 1) {
         fprintf(stderr, "%s: sdc_joint_dim_slice(\"%s\"): 非法 lo=%d(<1, "
                 "0 维 = 空转 PASS) — 调用方编程错误, 拒绝返回静默哨兵 0 "

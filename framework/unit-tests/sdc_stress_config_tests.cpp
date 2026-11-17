@@ -22,11 +22,13 @@
  * log_message(sandstone.h 声明)——在此提供 unittests 域定义, 与
  * sandstone_unittests_utils.cpp 的 dummy 模式同款。
  *
- * 联合层的唯一例外是下方 NULL-args 契约用例(issue #607): 调用点四实参
- * 全常量(!a 编译期恒真), 任何 -O≥1 构建(-O2 的 debugoptimized / -O3 的
- * release, 二者都定义 __OPTIMIZE__)下内联+死代码消除把联合层函数体连同
- * 其 numa/反馈符号引用折叠干净(链接零边际成本, /tmp harness 实证), 故以
- * __OPTIMIZE__ 门住——debug(-O0, 无 __OPTIMIZE__/无 DCE)下该语句会把
+ * 联合层的例外是下方两个 issue #607 契约用例(NULL args 与 lo<1): 调用点
+ * 实参全编译期常量(!a 恒真 / static const 全初始化 struct 的 a->lo==0 恒
+ * 真), 在 -O2+ 构建(-O2/-O3; 本仓库 debugoptimized/release 实际都落 -O3,
+ * 二者都定义 __OPTIMIZE__)下内联+死代码消除把联合层函数体连同其 numa/反
+ * 馈符号引用折叠干净(链接零边际成本, 本机 nm -u 实测 NULL 用例 -O1 即折叠
+ * ——!a 是字面量; lo<1 用例需 -O2+——a->lo 要指针常量传播, -O1 不折叠), 故
+ * 以 __OPTIMIZE__ 门住——debug(-O0, 无 __OPTIMIZE__/无 DCE)下该语句会把
  * sdc_numa_* 符号引进单测链接(#420 记录的链接边界, 维持原判定)。不用
  * NDEBUG: meson b_ndebug=if-release 下仅 release 定义 NDEBUG, 而执行单测
  * 的两条 CI lane(pr.yaml / sanitizer.yaml)均为 debugoptimized——用 NDEBUG
@@ -121,6 +123,29 @@ TEST(SdcCalibratedDim, HealthyProbeUnchanged)
 TEST(SdcJointDimSlice, NullArgsFailsLoudInsteadOfSilentZero)
 {
     EXPECT_EXIT(sdc_joint_dim_slice(nullptr, "mdim", nullptr, nullptr),
+                ::testing::ExitedWithCode(EX_SOFTWARE), "issue #607");
+}
+
+/* issue #607 同源封堵: lo<1 与 NULL 同为「调用方编程错误」——lo=0 时退化
+ * 区间/quick/尾部钳底/n_mem 兜底都会静默交还 0(0 维 = 0×0 矩阵空转 PASS),
+ * 修复后必须 fail-loud: _exit(EX_SOFTWARE) + stderr 消息。死亡断言双重锁:
+ * 退出码 EX_SOFTWARE + stderr 含 issue 标识。与 NULL 用例同构地折叠:
+ * static const 全初始化 struct 令 a->lo 为编译期常量 0, -O2+ 下 a->lo<1
+ * 恒真、_exit 之后联合层函数体与 numa/反馈符号引用全部死代码被 DCE 折叠
+ * (链接零边际成本, 见文件头注释)。 */
+TEST(SdcJointDimSlice, LoLessThanOneFailsLoudInsteadOfSilentZero)
+{
+    static const struct sdc_joint_args a = {
+        0,                     /* lo: <1 → fail-loud */
+        0,                     /* hi */
+        SDC_RSS_INVALID,       /* fam: 传统三元组 */
+        0, 0, 0.0,             /* bytes_per_elem, matrices_per_thread, rss_ratio */
+        0.0,                   /* shared_bytes_per_slice */
+        0,                     /* mem_fraction_permille */
+        SDC_FAM_MEM_BOUND,     /* ar_fam */
+        0,                     /* run_budget_ms */
+    };
+    EXPECT_EXIT(sdc_joint_dim_slice(nullptr, "mdim", &a, nullptr),
                 ::testing::ExitedWithCode(EX_SOFTWARE), "issue #607");
 }
 #endif

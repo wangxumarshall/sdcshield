@@ -8,8 +8,9 @@
  * Cold-path dump variant of neon_rot_ldr_at_top_rowmajor_fp64 (2026-11-06).
  * (The fp64 parent was a 2026-11-06 campaign working-tree file and was
  * never carried in-tree; this variant is self-contained — test_init
- * regenerates its own golden on the same NEON units, so the byte-identity
- * rationale below is the design record, not a build-time dependency.)
+ * regenerates its own golden with scalar (d-register) FP64 ops instead of
+ * the vector (v-register) units under test, so the byte-identity rationale
+ * below is the design record, not a build-time dependency.)
  *
  * Purpose: bit-position statistics for the FP64 rotation trigger. The
  * parent only reports a generic "data miscompare" (manual memcmp +
@@ -126,9 +127,30 @@ static int neon_rot_ldr_at_top_rowmajor_fp64_dump_init(struct test *test) {
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
     memset_random(data->scratch, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
 
-    /* golden: same FP64 rotating composition, computed on the same NEON units */
-    for (int i = 0; i < NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT; i++) {
-        data->expected[i] = fp64_rot(i % 4, data->srcA[i], data->srcB[i]);
+    /* golden (issue #373): scalar independent recomputation — scalar FP64
+     * (d-register) instructions, never the vector (v-register) units under
+     * test. The scalar ops carry the same IEEE semantics as the vector ones
+     * (FADD/FSUB/FMUL/FMAX, NaN-propagating included), so a persistent
+     * vector-lane fault (stuck lane computing deterministic wrong bits) can
+     * no longer corrupt golden and actual identically; it now surfaces as a
+     * byte difference at the memcmp. (Scalar and vector FP share the FP
+     * execution units, so this narrows — but does not fully close — the
+     * whole-unit blind spot; a stuck whole-unit fault is where the sibling
+     * scalar integer test family fills in.) */
+    {
+        const float64x1_t *sa = reinterpret_cast<const float64x1_t *>(data->srcA);
+        const float64x1_t *sb = reinterpret_cast<const float64x1_t *>(data->srcB);
+        float64x1_t *ex = reinterpret_cast<float64x1_t *>(data->expected);
+        for (int i = 0; i < 2 * NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT; i++) {
+            float64x1_t r;
+            switch ((i / 2) % 4) {
+                case 0: r = vadd_f64(sa[i], sb[i]); break;
+                case 1: r = vsub_f64(sa[i], sb[i]); break;
+                case 2: r = vmul_f64(sa[i], sb[i]); break;
+                default: r = vmax_f64(sa[i], sb[i]); break;
+            }
+            ex[i] = r;
+        }
     }
 
     mkdir("movbe_log", 0755); /* mkdir creates only the last component */

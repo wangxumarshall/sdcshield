@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794913158245,
+  "lastUpdate": 1794918586513,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4297,6 +4297,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 12.996,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "7c1f0da71c5492c89a432a2e3621b8539cc0a5a0",
+          "message": "fix(docs): arm0102 基础 10 项退册与 no-SVE 920 计数同步——README 迁移组 121→111 + CLAUDE.md/README no-SVE 实测刷新 439→458 (#832)\n\nissue #483 遗留的两个文档计数漂移(2026-11-03 CI 修复报告标记为独立单元):\n\n1. README.md 迁移组表格仍把 arm0102_*（10）计在 121 用例迁移组内——\n   该 10 个基础文件(fma/ins_ext/kreg×6/swizzle)已由 ff74f226 删源、\n   418e4e09 清 meson 引用退册;_sve 变体仍在 sve/kreg/ 注册\n   (tests/cpu/sve/meson.build:96, :250-253)。行改为 111 用例,\n   测试列表去掉该项,描述格补退役注记。\n\n2. CLAUDE.md 计数块 no-SVE 920 行(439/547/551, 2026-11-02 实测)过期。\n   本机即 no-SVE 鲲鹏 920(0xd01, 192 核),2026-11-17 于 main d50ceee0\n   按 README 规范流程(vendored 5 库 install/ 全在位)构建实测:\n   458 PROD / 566 q0 / 570 q-1。README:348 同句与 :394 时序链同步追\n   加 2026-11-17 实测链。\n\n验证(全部真实输出, 本机 no-SVE 920):\n- 5 个 vendored build.sh 全部构建成功; meson setup --reconfigure 识别\n  vendored OpenSSL/ACL; ./scripts/build.sh → [960/960] exit 0, 唯一\n  warning 为预存豁免 mesh_upi_sse_sym.cpp:202(b1b5fcca 同款), 零新警告。\n- --list-tests 实测: PROD 458 / q0 566 / q-1 570(依赖降级口径 450/558/562,\n  差 8 = acl_gemm+fisttp_arm+openblas×5+sleef_neon, 依赖门控所致——已在\n  文档中注明口径)。\n- 机判 tests section: 138160B/176 = 785 实例(418e4e09 对照构建 760,\n  +25 = +14 SVE2 配套 +12 eigen SVE −1 bidiag, 全部门控不可见)。\n- 418e4e09 scratch 全依赖对照构建: 458/566/570 与当前 main q-1 清单\n  diff 为空——复现 issue #483 报告的实测, 证明 418e4e09→d50ceee0\n  no-SVE 可见集零变化。\n- 退役行为: -e arm0102_kreg_mask → \"Cannot find matching tests\"(已退册);\n  -e arm0102_fma_f32_sve → 注册诚实运行(exit: pass, SVE 门控)。\n- 回归: -e zstd19 -t 2000 -n 1 → exit: pass (rc=0)。\n- 纯文档改动(2 文件 +10/−7), x86-64 非回归目检: 无源文件触碰。\n\nSigned-off-by: wangxumarshall <wangxumarshall@qq.com>\nCo-authored-by: wangxumarshall <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-17T12:29:17Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/7c1f0da71c5492c89a432a2e3621b8539cc0a5a0"
+        },
+        "date": 1794918584474,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 83100.596,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 43829.553,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 28.148,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 31.267,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.114,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.106,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.766,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.775,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21642.758,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.043,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.304,
             "unit": "s"
           }
         ]

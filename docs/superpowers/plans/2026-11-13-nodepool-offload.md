@@ -1177,7 +1177,7 @@ git commit -s -m "feat(nodepool): cycle_once 三泳道接节点池——每轮�
 # 用法: bash scripts/nodepool_setup.sh [板号...]   # 缺省 = 0102 0101 0201
 set -euo pipefail
 BOARDS="${*:-0102 0101 0201}"
-PASS='SDC@2026'
+PASS='<板卡密码,经 boards.conf 读取,绝不明文入库>'
 SSH_KEY=~/.ssh/id_ed25519_nodepool
 KEY_IP_0101=172.168.177.97; KEY_IP_0102=172.168.160.42; KEY_IP_0201=172.168.178.81
 ip_of() { case "$1" in 0101) echo $KEY_IP_0101;; 0102) echo $KEY_IP_0102;; 0201) echo $KEY_IP_0201;; esac; }
@@ -1201,7 +1201,7 @@ for B in $BOARDS; do
   NPSSH "$B" "command -v gh >/dev/null || {
     curl -fsSL -o /tmp/gh.tgz https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_linux_arm64.tar.gz &&
     tar -C /tmp -xzf /tmp/gh.tgz &&
-    echo 'SDC@2026' | sudo -S install -m 755 /tmp/gh_2.97.0_linux_arm64/bin/gh /usr/local/bin/gh; }"
+    echo "$PASS" | sudo -S install -m 755 /tmp/gh_2.97.0_linux_arm64/bin/gh /usr/local/bin/gh; }"
   NPSSH "$B" "gh auth status >/dev/null 2>&1 || echo '$TOKEN' | gh auth login --with-token >/dev/null && gh auth setup-git"
   NPSSH "$B" "mkdir -p ~/sdcshield-autoci-state ~/wangxu && chmod 700 ~/sdcshield-autoci-state"
   NPSSH "$B" "[ -d /home/sdc/wangxu/sdcshield-autoci/.git ] || git clone https://github.com/wangxumarshall/sdcshield.git /home/sdc/wangxu/sdcshield-autoci"

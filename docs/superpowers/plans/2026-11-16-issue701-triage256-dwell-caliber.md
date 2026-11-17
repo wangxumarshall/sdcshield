@@ -35,7 +35,7 @@
 
 ### Task 2: 验证（CLAUDE.md 规则 2，全部真实输出）
 
-- [ ] **Step 1: 机器消费者自验**：仓库根 `LC_ALL=C ./docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh > /tmp/matrix.md.new && diff /tmp/matrix.md.new docs/superpowers/inventory/sve-all-vl-campaign/matrix.md` → 期望逐字节一致（编辑不在机器解析节界内、不触碰表体）；matrix.md 不重新入库（无漂移即无再生成义务）。
+- [ ] **Step 1: 机器消费者自验**：仓库根 `LC_ALL=C ./docs/superpowers/inventory/sve-all-vl-campaign/matrix-gen.sh > /tmp/matrix.md.new && diff /tmp/matrix.md.new docs/superpowers/inventory/sve-all-vl-campaign/matrix.md` → 期望逐字节一致（§5 块尾追加虽落 §5 节界之内，但系无竖线散文、不匹配 awk 表格行过滤、不触碰表体）；matrix.md 不重新入库（无漂移即无再生成义务）。
 - [ ] **Step 2: 工件数字对账**：awk 复核两份 summary——164 直绿格三桶分布（seed1 74/43/47、seed2 65/49/50，加总=164）、2.0~2.5 s 桶 iterations 分布（seed1 25×iters1+17×iters2+1×iters3、seed2 25×iters1+24×iters2——即"循环打满"桶实含 25 个单遍格，仅 18/24 格真正循环）、>2.5 s 桶 iterations 全为 1、极值（fma_sve 90.7 ms、power_virus_dit_sve_arm 359.7 ms、ipsec_aes128_cbc_aes_cmac_sve 206.8/206.7 s）与正文引用一致。
 - [ ] **Step 3: codespell**：对 triage-256.md 跑 `codespell`（PR CI lint 门，scripts 已实证该门存在）→ 零命中。
 - [ ] **Step 4: 构建零新警告**：vendored install/ symlink（复用 CI 克隆 third-party/*/install 静态库产物，只读）→ `PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release` → `./scripts/build.sh -j 16`（共享服务器内存纪律）→ 零新警告。

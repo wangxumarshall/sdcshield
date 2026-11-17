@@ -47,9 +47,9 @@
    merge 前旧值，与同文分级表自相矛盾。
 2. **L182**：cn23154「默认 quality 320 用例」补注「同日『用例质量分级』
    脚注的复现分支口径为 322，两口径未对账（progress-log #10 跟踪）」。
-3. **L363**：锁/原子族「（31）」→「（47 = 31 x86 命名基础 + 14 `_neon`
-   变体 + 2 `spinlock_stale_read{,_xchg}`）」——与同表 mesh 行「46 含
-   SVE 变体」统一为运行时全量口径。
+3. **L363**：锁/原子族「（31）」→「（47 = 30 双架构基础 + 17 aarch64-only：12 `_neon`
+   变体 + 2 `spinlock_stale_read{,_xchg}` + 2 `spinlock_stress_cmpxchg_even_n/_odd_n` + 1
+   `spinlock_unaligned`）」——与同表 mesh 行「46 含 SVE 变体」统一为运行时全量口径。
 
 ## 验证边界
 

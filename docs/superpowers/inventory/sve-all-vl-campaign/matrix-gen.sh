@@ -24,6 +24,8 @@
 #   triage-256.md                        §4 clamp 列（25 个 TIMEOUT 格下限 → 值锁）
 #   tests/cpu/arm64/sve512_fmmla_arm.cpp :209-212（fmmla@128 SKIP 的逐字源码引文，
 #                                        T3 minor fix：triage-128 曾意译丢句，此处补逐字）
+#   enumeration.md                       §5.3 acl_gemm_sve 设计几何超时证据（loadgeom 前提守卫）
+#   tests/cpu/sve/arithmetic/acl_gemm_sve.cpp  600‰ 自适应模型源码锚（loadgeom 前提守卫）
 #
 # 纪律（brief Step 1）：每一格的值都由本脚本从上述工件机械推导，**不许手填**。
 # 脚本内嵌的字面量只有五类，均为对已入库文档/工件的引用或守护而非数据编造：
@@ -84,8 +86,10 @@ GOVR="$DIR/gem5-overrides.txt"
 TRI512="$DIR/triage-512.md"
 TRI256="$DIR/triage-256.md"
 FMMLA_SRC="$REPO/tests/cpu/arm64/sve512_fmmla_arm.cpp"
+ENUM="$DIR/enumeration.md"
+ACL_SRC="$REPO/tests/cpu/sve/arithmetic/acl_gemm_sve.cpp"
 
-for f in "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$GOVR" "$TRI512" "$TRI256" "$FMMLA_SRC"; do
+for f in "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$GOVR" "$TRI512" "$TRI256" "$FMMLA_SRC" "$ENUM" "$ACL_SRC"; do
     [ -f "$f" ] || { echo "ERROR: input not found: $f" >&2; exit 2; }
 done
 
@@ -153,6 +157,22 @@ grep -q 'raises SIGILL (measured 2026-10-27 on silicon' "$TMP/fmmla.quote" || qu
 [ "$(wc -l < "$TMP/fmmla.quote")" -eq 4 ] || quote_ok=0
 [ "$quote_ok" -eq 1 ] \
     || { echo "ERROR: fmmla quote drift: $FMMLA_SRC:209-212 no longer holds the expected 4 lines (gate call 'arm64_require_sve_vl(test, 256, 1024)' + measured-SIGILL sentence) — re-anchor the sed range" >&2; exit 2; }
+
+# ---- loadgeom 前提守卫（检视 #4597805701）：loadgeom["acl_gemm_sve"]=1 的分类前提 =
+#      acl 设计几何（内存自适应 600‰、全核 dim=3113）在 enumeration §5.3 全核 -t 2000
+#      实测 timed out（与 §4 25 格同机制）。此前该前提纯靠散文引用、无机器断言——
+#      enumeration.md 证据被改/删，或 acl_gemm_sve.cpp 的 600‰ 自适应模型漂移（主机
+#      RAM 变化使设计几何不再是 3113）时，脚本仍照旧静默产出印着「enumeration §5.3
+#      全核实测超时」与 BOUNDARY 标签的 matrix.md、无任何 FATAL。本段把前提钉死在两处
+#      机器可验证事实：源码仍走 600‰ 自适应模型、enumeration §5.3 仍引设计几何
+#      dim=3113 与全核实测 timed out——任一漂移即 exit 2。
+grep -qF 'sdc_auto_square_dim(4, 4, 2.0, 600,' "$ACL_SRC" \
+    || { echo "ERROR: acl_gemm_sve load-geometry premise drift: $ACL_SRC no longer uses the 600‰ auto-dim model (sdc_auto_square_dim(4, 4, 2.0, 600, …))" >&2; exit 2; }
+sed -n '/^### 5\.3/,/^## 6\./p' "$ENUM" > "$TMP/enu53.md"
+grep -qF 'acl_gemm_sve.dim = 3113' "$TMP/enu53.md" \
+    || { echo "ERROR: acl_gemm_sve load-geometry premise drift: enumeration.md §5.3 no longer quotes design-geometry dim=3113" >&2; exit 2; }
+grep -qF 'result: timed out' "$TMP/enu53.md" \
+    || { echo "ERROR: acl_gemm_sve load-geometry premise drift: enumeration.md §5.3 no longer evidences the full-core timed out" >&2; exit 2; }
 
 # ---- triage-256 §4 clamp 列（25 个 TIMEOUT 格的 knob clamp [lo,hi]）→ 下限值锁
 #      输入（检视 #4462912949 的重要增强）：「有界值 = clamp 下限 = 最小激发强度」

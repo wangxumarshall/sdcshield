@@ -41,7 +41,6 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/string.h>
-#include <linux/atomic.h>
 #include <linux/smp.h>
 #include <linux/utsname.h>
 #include <asm/neon.h>
@@ -171,9 +170,6 @@ static noinline void fp64_miscompare_report(
     /* cpu is NOT a parameter: fetch it cold — the actual core residency
      * at report time (raw_smp_processor_id: 冷路径允许在可抢占上下文). */
     const int cpu = raw_smp_processor_id();
-    static atomic_t g_seq = ATOMIC_INIT(0); /* cold-only: unique seq */
-    const int seq = atomic_inc_return(&g_seq) - 1;
-    (void)seq;
 
     int bad[8];
     int nbad = 0;

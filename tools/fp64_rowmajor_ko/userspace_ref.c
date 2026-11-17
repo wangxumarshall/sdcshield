@@ -140,9 +140,6 @@ __attribute__((noinline)) static void miscompare_report(
         const uint64x2_t *dst, uint64_t sweep)
 {
     const int cpu = sched_getcpu();
-    static int g_seq; /* cold-only: unique seq across calls */
-    const int seq = __atomic_fetch_add(&g_seq, 1, __ATOMIC_RELAXED);
-    (void)seq;
 
     int bad[8];
     int nbad = 0;

@@ -84,7 +84,9 @@ static inline uint64x2_t load_vec(const void *addr)
 }
 
 /* FP64 rotation, slot order mirrors the integer parent: 0=fadd 1=fsub
- * 2=fmul 3=fmax. 与原版完全一致, 未做任何改动。 */
+ * 2=fmul 3=fmaxnm. Slot 3 用 FMAXNM (IEEE maxNum, NaN 忽略) 而非 FMAX
+ * (NaN 传播): FMAX 的 NaN 传播在标量 C 无对应表达式, 会破坏 issue #373
+ * 的标量独立 golden 逐位一致性; FMAXNM 与 C fmax/__builtin_fmax 逐位一致。 */
 static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b)
 {
     const float64x2_t fa = vreinterpretq_f64_u64(a);
@@ -94,7 +96,7 @@ static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b)
     case 0: fres = vaddq_f64(fa, fb); break;
     case 1: fres = vsubq_f64(fa, fb); break;
     case 2: fres = vmulq_f64(fa, fb); break;
-    default: fres = vmaxq_f64(fa, fb); break;
+    default: fres = vmaxnmq_f64(fa, fb); break;
     }
     return vreinterpretq_u64_f64(fres);
 }
@@ -212,16 +214,50 @@ static noinline void fp64_miscompare_report(
     pr_err("%s\n", msg);
 }
 
-/* ===== 黄金值计算 + 热循环: 所有 NEON 使用限制在这两个 noinline
- * 函数内 (kernel_neon_begin/end 保护), 便于反汇编核验 ===== */
+/* ===== 黄金值计算 (标量独立重算) + 热循环: 所有 FPSIMD 使用限制在
+ * 这两个 noinline 函数内 (kernel_neon_begin/end 保护), 便于反汇编核验 ===== */
+
+static inline u64 f64_bits(double d)
+{
+    u64 v;
+    memcpy(&v, &d, sizeof(v));
+    return v;
+}
+
+static inline double f64_from_bits(u64 v)
+{
+    double d;
+    memcpy(&d, &v, sizeof(d));
+    return d;
+}
 
 static noinline void fp64_golden_init(struct fp64_ctx *ctx)
 {
+    /* golden (issue #373): scalar independent recomputation — scalar fp64
+     * fadd/fsub/fmul/fmax (d-register) + scalar ldr/str, never the 128-bit
+     * vector faddq/fsubq/fmulq/fmaxq units nor the ldp/stp pair path under
+     * test. A persistent vector-lane or pair-instruction fault can no longer
+     * corrupt golden and actual identically; it surfaces as a byte difference
+     * at the hot-loop memcmp. kernel_neon_begin/end still required for ANY
+     * FPSIMD use in kernel context. */
+    const u64 *sa = (const u64 *)ctx->srcA;
+    const u64 *sb = (const u64 *)ctx->srcB;
+    u64 *ex = (u64 *)ctx->expected;
+
     kernel_neon_begin();
     for (int i = 0; i < FP64_COUNT; i++) {
-        const uint64x2_t a = load_vec(&ctx->srcA[i]);        /* ldp */
-        const uint64x2_t b = load_vec(&ctx->srcB[i]);        /* ldp */
-        store_vec(&ctx->expected[i], fp64_rot(i % 4, a, b)); /* stp */
+        for (int l = 0; l < 2; l++) {
+            const double a = f64_from_bits(sa[2 * i + l]);
+            const double b = f64_from_bits(sb[2 * i + l]);
+            double r;
+            switch (i % 4) {
+            case 0: r = a + b; break;
+            case 1: r = a - b; break;
+            case 2: r = a * b; break;
+            default: r = __builtin_fmax(a, b); break;
+            }
+            ex[2 * i + l] = f64_bits(r);
+        }
     }
     kernel_neon_end();
 }

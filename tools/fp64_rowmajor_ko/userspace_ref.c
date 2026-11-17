@@ -56,7 +56,9 @@ static inline uint64x2_t load_vec(const void *addr)
 }
 
 /* FP64 rotation, slot order mirrors the integer parent: 0=fadd 1=fsub
- * 2=fmul 3=fmax. Reinterpretations are compile-time no-ops. */
+ * 2=fmul 3=fmaxnm. Slot 3 用 FMAXNM (IEEE maxNum, NaN 忽略) 而非 FMAX
+ * (NaN 传播): FMAX 的 NaN 传播在标量 C 无对应表达式, 会破坏 issue #373
+ * 的标量独立 golden 逐位一致性; FMAXNM 与 C fmax/__builtin_fmax 逐位一致。 */
 static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b)
 {
     const float64x2_t fa = vreinterpretq_f64_u64(a);
@@ -66,9 +68,23 @@ static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b)
     case 0: fres = vaddq_f64(fa, fb); break;
     case 1: fres = vsubq_f64(fa, fb); break;
     case 2: fres = vmulq_f64(fa, fb); break;
-    default: fres = vmaxq_f64(fa, fb); break;
+    default: fres = vmaxnmq_f64(fa, fb); break;
     }
     return vreinterpretq_u64_f64(fres);
+}
+
+static uint64_t f64_bits(double d)
+{
+    uint64_t v;
+    memcpy(&v, &d, sizeof(v));
+    return v;
+}
+
+static double f64_from_bits(uint64_t v)
+{
+    double d;
+    memcpy(&d, &v, sizeof(d));
+    return d;
 }
 
 /* ===== 与内核模块完全一致的 xorshift64* 随机源 ===== */
@@ -188,10 +204,30 @@ int main(int argc, char **argv)
     memset_random(ctx.srcB,    FP64_COUNT * sizeof(uint64x2_t));
     memset_random(ctx.scratch, FP64_COUNT * sizeof(uint64x2_t));
 
-    /* golden: same FP64 rotating composition, computed on the same NEON
-     * units — 原始形态: 直接数组下标访问 (编译为 ldr q / str q) */
-    for (int i = 0; i < FP64_COUNT; i++)
-        ctx.expected[i] = fp64_rot(i % 4, ctx.srcA[i], ctx.srcB[i]);
+    /* golden (issue #373): scalar independent recomputation — scalar fp64
+     * fadd/fsub/fmul/fmax (d-register) + scalar ldr/str, never the 128-bit
+     * vector faddq/fsubq/fmulq/fmaxq units nor the ldr q/str q path under
+     * test. A persistent vector-lane fault can no longer corrupt golden and
+     * actual identically. */
+    {
+        const uint64_t *sa = (const uint64_t *)ctx.srcA;
+        const uint64_t *sb = (const uint64_t *)ctx.srcB;
+        uint64_t *ex = (uint64_t *)ctx.expected;
+        for (int i = 0; i < FP64_COUNT; i++) {
+            for (int l = 0; l < 2; l++) {
+                const double a = f64_from_bits(sa[2 * i + l]);
+                const double b = f64_from_bits(sb[2 * i + l]);
+                double r;
+                switch (i % 4) {
+                case 0: r = a + b; break;
+                case 1: r = a - b; break;
+                case 2: r = a * b; break;
+                default: r = __builtin_fmax(a, b); break;
+                }
+                ex[2 * i + l] = f64_bits(r);
+            }
+        }
+    }
 
     int failing = 0;
     uint64_t sweep = 0;

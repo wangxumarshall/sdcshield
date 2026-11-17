@@ -13,7 +13,7 @@
   `arm64_min_vl_bits`(:437)、`log_platform_message`(:507)、`memcmp_or_fail`(:747)；
   `workspaceSymbol` 实证 `arm64_spec_get`（`framework/device/cpu/arm64/arm64_vl.h:289`）、
   `arm64_require_sve_vl`（同文件 :391）——README 引用的框架符号全部实存。
-- **运行时**：本机（cortex x3b / 0xd02，SVE1 VL=256，无 SME）以 PR #518 树
+- **运行时**：本机（Kunpeng 0xd02，HiSilicon implementer 0x48，SVE1 VL=256，无 SME）以 PR #518 树
   构建的二进制实测 `--list-tests` 三档 565/675/683（与 README 2026-11-03
   记录一致），并在 `--quality=-1` 全量名单上逐族 grep 计数。
 - **源码**：`tests/cpu/openblas_gemm/dgemm.cpp`（分配结构）、

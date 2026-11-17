@@ -93,6 +93,21 @@ def test_probe_truncated_output_degrades(monkeypatch):
     assert np.probe_node("0101") == _ZERO_PROBE
 
 
+def test_probe_banner_polluted_output_degrades(monkeypatch):
+    """N20: 5 行但首行是 .bashrc banner(sshd 登录 shell 现实形态)——解析
+    int/float/split 的 ValueError/IndexError 必须归一为 NodeError →
+    probe_node 零值降级,不得裸异常穿透「调用方只捕 NodeError」契约。"""
+    out = "\n".join([
+        "Last login: Tue Nov 17 00:00:00 2026 from 0103",   # banner 顶掉 nproc 位
+        "0.92, 0.48, 0.35",
+        "MemAvailable:  651304200 kB",
+        "2026-01-02 03:04:05",
+        "inactive",
+    ])
+    monkeypatch.setattr(np, "run_ssh", lambda h, cmd, t=45, **kw: out)
+    assert np.probe_node("0101") == _ZERO_PROBE
+
+
 def test_probe_local_reads_proc(monkeypatch, tmp_path):
     fake = tmp_path / "meminfo"
     fake.write_text("MemAvailable:  1048576 kB\n")

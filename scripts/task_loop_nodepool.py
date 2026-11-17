@@ -124,9 +124,15 @@ def _parse_probe(out):
     lines = [l.strip() for l in out.splitlines() if l.strip()]
     if len(lines) < 5:
         raise NodeError(f"探测输出不足5行: {out[:80]!r}")
-    cores = int(lines[0])
-    load15 = float(lines[1].split()[2])
-    mem_kb = int(lines[2].split()[1])
+    try:
+        cores = int(lines[0])
+        load15 = float(lines[1].split()[2])
+        mem_kb = int(lines[2].split()[1])
+    except (ValueError, IndexError) as exc:
+        # 板 stdout 被污染(如登录 shell source .bashrc 打印 banner)时,
+        # int/float/split 抛裸异常会逃出「调用方只捕 NodeError」契约——
+        # 归一为 NodeError 交 probe_node 零值降级,不裸炸 cycle 泳道。
+        raise NodeError(f"探测输出解析失败: {out[:80]!r}") from exc
     boot = lines[3]
     excite = lines[4] == "active"
     return {"reachable": True, "mem_avail_mb": mem_kb // 1024,

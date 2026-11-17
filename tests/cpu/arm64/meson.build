@@ -302,9 +302,9 @@ if host_machine.cpu_family() == 'aarch64'
     )
 
     # SVE2 matrix-multiply (FMMLA) SDC stress tests. Separate library
-    # because FMMLA requires -march=armv9-a+sve2+f32mm+f64mm — stronger
-    # than the tests_arm64_sve library's armv8.2-a+sve, and keeping the
-    # SVE2-only instructions out of the SVE1 library means SVE1-only
+    # because FMMLA requires -march=armv8.2-a+sve+f32mm+f64mm — a superset
+    # of the tests_arm64_sve library's armv8.2-a+sve, and keeping the
+    # F32MM/F64MM instructions out of the SVE1 library means SVE1-only
     # machines can still run every other SVE test. test_init probes
     # HWCAP2 (SVE2 + F32MM + F64MM) and returns a clean EXIT_SKIP when
     # absent. Compiler-support guard follows the SME pattern below (the

@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794657808124,
+  "lastUpdate": 1794890660156,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4066,6 +4066,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.437,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "98286caabfdcf50a37680602fe9d497440e3e332",
+          "message": "Merge pull request #815 from wangxumarshall/fix/multi-os-verify-full-log\n\nfix(ci): Multi-OS Verify 每日红——GHA 逐条 YAML 解析消费者 opt-in --full-log",
+          "timestamp": "2026-11-17T03:38:15Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/98286caabfdcf50a37680602fe9d497440e3e332"
+        },
+        "date": 1794890658406,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 83416.256,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44058.385,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 5.066,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 83.067,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.088,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.13,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.955,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 4.13,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21818.335,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.098,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.437,
             "unit": "s"
           }
         ]

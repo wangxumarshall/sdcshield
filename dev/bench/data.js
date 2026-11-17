@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794922799590,
+  "lastUpdate": 1794927117954,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4451,6 +4451,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.247,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "a2b6971e1e4a99766f9cdc48138c253352130763",
+          "message": "docs(readme): 256 腿 25 有界格披露两 seed 证据不对称——seed1 腿外重跑日志易失未入库仅存转写 (#624) (#841)\n\naudit #624 四条指控对 31f6a99e^ 历史版 triage-256.md 逐条独立核实属实：\nseed1 的 25 个有界重跑日志按 §5 协议写易失 /tmp/bounded1001/（终版 :230，\nissue 引 :131 为初版 76482b8b 同一命令——滞后审计），未列入 §7 证据文件清\n单、从未入库（31f6a99e^ campaign 目录实存文件与清单吻合，无 bounded1001\n日志；.gitignore 屏蔽 *.log；git 全历史 4675 commit 亦无该工件）；入库的\nnative-256-LCG1001.summary.txt 同 25 格全部仅记录 timed out（25/25 程序化\n核验），seed1 侧绿与逐格迭代块数/runtime 数字只存在于 §5 markdown 转写；\nseed2 腿内 25 格则有 summary 逐格机械证据（26 项 -O baked 命令行 + 25/25\npass 行）。「各 2 seeds」证据链的 seed1 半边降级为纯叙述。\n\n锚点文件已随 31f6a99e（2026-11-17）清理出库且该断言在 main 的唯一幸存载体\n是 README「SVE 用例全 VL 验证矩阵」段——该段同 commit 已补文件出库披露、\n#838（#751）已补 seed2 首跑重启范围限定，均缺这条 seed1 降级披露。补齐：\n256 腿括注内明示两 seed 证据不对称、seed2 机械证据可于 git 历史 31f6a99e^\n取回、seed1 半边无任何工件可复核。\n\n本 issue 曾由 PR #830 处理（同一单行披露，agent 会话超时被回收，PR 关闭未\n合并、远程分支已删）；本 commit 将该披露重落到含 #838 的当前 main。\n\n验证：纯文档改动（+1/−1，未触源文件，构建/x86 回归不适用），按纯文档契约\n断言逐条核实（上行号与 grep/awk 计数即证据）；括号配对 20/20 未破坏段落\n结构。\n\nSigned-off-by: wangxumarshall <wangxumarshall@qq.com>\nCo-authored-by: wangxumarshall <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-17T14:21:14Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/a2b6971e1e4a99766f9cdc48138c253352130763"
+        },
+        "date": 1794927115993,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 84360.052,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 46028.175,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 5.655,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 32.492,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.633,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.56,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.425,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.882,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 22454.416,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.475,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.815,
             "unit": "s"
           }
         ]

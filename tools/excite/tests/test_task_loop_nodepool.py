@@ -174,8 +174,7 @@ def test_alive_and_logtail_and_kill_forms(monkeypatch):
                         lambda h, cmd, t=45: sent.append((h, cmd))
                         or ("0" if "kill -0" in cmd else "TAIL"))
     assert np.alive_remote("0102", 4242) is True
-    assert sent[-1][1].strip() == "kill -0 4242 || echo 1; kill -0 4242 2>/dev/null || exit 1" \
-        or "kill -0 4242" in sent[-1][1]
+    assert sent[-1][1].strip() == "kill -0 4242"
     assert np.read_log_tail("0102", "~/a.log") == "TAIL"
     assert "tail -c 4000" in sent[-1][1] and "a.log" in sent[-1][1]
     np.kill_remote("0102", 4242, 15)

@@ -32,13 +32,18 @@
 #   (c) SKIP(legal) 的理由短标签（内容引自 triage-128 §2 + 上述源码 :209-212）；
 #   (d) §4 表体的 † 弱证据行标记集合 = 5 个 PR #316 已修复越界缺陷测试
 #       （名单机械对齐 §0.1 delta 表 #316 行，oob_marked==5 断言守卫）；
-#   (f) BOUNDARY(native: LOAD-GEOM) 分类（audit #645 口径：spec §7 的 native 绿 =
-#       默认自适应【设计】几何 exit: pass，不绿走边界格通道）——25 个 §4 超时格
-#       × 128/256 两列计边界格、不因有界绿改判；标签与归类引自 triage-256
-#       §4/§5/§7 与 triage-128 §1/§5（非数据编造）。
-#   (e) §5 对账行叙述数字的期望值（活锁：128 列 163/26、256 列 25/1、512 列
-#       5+4 分量/25/15/1/16、唯一非超时 baked 身份 acl_gemm_sve=dim=512；
-#       164/181/39/9/190 等和值为代数传递蕴含，派生链见 END 段断言块注释）——
+#   (f) BOUNDARY(native: LOAD-GEOM) 分类（issue #645 记账口径——spec §7 原文：
+#       每格 exit: pass + 允许机制性边界格；#645 细化 = native 绿 = 默认自适应
+#       【设计】几何 exit: pass、不绿走边界格通道、不许缩负载改判绿）——25 个 §4
+#       超时格 + acl_gemm_sve（设计几何 dim=3113 在 enumeration §5.3 全核实测超时，
+#       同机制，仅因 256 腿自始烧入 Ruling B 标定 dim=512 未腿内超时）× 128/256
+#       两列计边界格、不因有界绿改判；标签与归类引自 triage-256 §4/§5/§7、
+#       triage-128 §1/§5 与 enumeration §5.3（非数据编造）。
+#   (e) §5 对账行叙述数字的期望值（活锁：128 列 163 直绿/26 边界、256 列 164 直绿/26
+#       边界、512 列 5+4 分量/25/15/1/16；acl_gemm_sve 为第 26 个负载几何边界格——
+#       baked 集合里唯一非 §4 腿内超时项，其设计几何 dim=3113 在 enumeration §5.3
+#       全核实测超时（dim=512 系 Ruling B 标定）；164/181/39/9/190 等和值为代数传递
+#       蕴含，派生链见 END 段断言块注释）——
 #       数量与身份均与叙述锁死，工件漂移即 FATAL（见 END 段断言块）。守护边界
 #       （如实声明，检视 #4462912949/#4463822593 后收窄）：值锁 = 25 项非 acl
 #       baked 的 -O 值与 triage-256 §4 clamp 列下限双向锁死（含集合相等；单位
@@ -271,6 +276,13 @@ END {
     # 都不许静默套用该标签——FATAL 交人工分诊。
     legal_skip["sve512_fmmla_arm"] = "F64MM UNDEFINED <VL=256"
 
+    # 负载几何边界格的 acl 特例（audit #645）：acl_gemm_sve 的设计几何（内存自适应
+    # 600‰、全核 dim=3113，enumeration §5.3）在 Task 1 全核 -t 2000 实测 timed out
+    # （与 §4 25 格同机制），仅因 256 腿自始烧入 Ruling B 标定（dim=512）而未在腿内
+    # 超时——按 §7 判据（设计几何 exit: pass 才算绿、不许缩负载改判绿）同计
+    # BOUNDARY(native: LOAD-GEOM)，128/256 两列各 +1（第 26 格）。
+    loadgeom["acl_gemm_sve"] = 1
+
     # PR #316 已修复越界缺陷测试（#312-#315；冻结基线上含缺陷——弱证据
     # 行标记，PR #307 #22）。名单 = §0.1 delta 表 #316 行；oob_marked==5
     # 断言守卫（清单漂移丢名即 FATAL，防标记静默失配）。
@@ -313,26 +325,28 @@ END {
         } else if (a1 == "skip" || a2 == "skip") {
             printf "FATAL: seed-disagreement skip (non-architectural, manual triage): %s (%s/%s)\n", t, a1, a2 > "/dev/stderr"; fatal = 1; c128 = "FAIL"
         } else {
-            # 负载几何边界格（audit #645 记账口径）：设计几何（默认自适应）超 300 s
-            # 预算的格计 BOUNDARY(native)，不因有界绿改判。128 档该 25 格设计几何
+            # 负载几何边界格（issue #645 记账口径）：设计几何（默认自适应）超 300 s
+            # 预算的格计 BOUNDARY(native)，不因有界绿改判。128 档这 26 格设计几何
             # 未实测（腿自始 baked 有界、两 seed 腿内绿），机制同 256 档（几何输入
-            # 不含 VL），外推强度「预期」（triage-128 §1/§5）。
-            if (t in clamplo) c128 = "BOUNDARY(native: LOAD-GEOM)"
+            # 不含 VL），外推强度「预期」（triage-128 §1/§5）；acl 的设计几何超时
+            # 实测于 enumeration §5.3（见 loadgeom 注）。
+            if (t in clamplo || t in loadgeom) c128 = "BOUNDARY(native: LOAD-GEOM)"
             else              c128 = (t in knob) ? "pass(bounded: " knob[t] ")" : "pass"
         }
 
         # ---- 256 列：设计几何（默认自适应）超 300 s 预算的格 = BOUNDARY(native)
-        #      （audit #645 记账口径：spec §7 的 native 绿 = 设计几何 exit: pass，
-        #      不绿走边界格通道，不许缩负载改判绿）。其有界绿证据保留：seed1 =
-        #      triage-256 §5 腿外单测（clamp 下限一次通过），seed2 = 腿内 baked
-        #      直绿（b2 必须 pass，下方断言）；其余格任一 seed pass 即绿。
-        #      断言：timed out ⟺ §4 clamp 表（集合双向相等，§5 表全覆盖）。
+        #      （issue #645 记账口径：native 绿 = 设计几何 exit: pass，不绿走边界格
+        #      通道，不许缩负载改判绿）。其有界绿证据保留：seed1 = triage-256 §5
+        #      腿外单测（clamp 下限一次通过），seed2 = 腿内 baked 直绿（b2 必须 pass，
+        #      下方断言）；其余格任一 seed pass 即绿。断言：timed out ⟺ §4 clamp 表
+        #      （集合双向相等，§5 表全覆盖）；acl 的设计几何超时实测于 enumeration
+        #      §5.3（见 loadgeom 注），不属 §4 腿内 timed out 集合。
         b1 = res[4 "," t]; b2 = res[5 "," t]
         if (b1 != "pass" && b1 != "timed out") { printf "FATAL: 256s1 bad result [%s] %s\n", b1, t > "/dev/stderr"; fatal = 1 }
         if (b2 != "pass")                    { printf "FATAL: 256s2 bad result [%s] %s\n", b2, t > "/dev/stderr"; fatal = 1 }
         if (b1 == "timed out" && !(t in knob)) { printf "FATAL: 256s1 timeout without knob: %s\n", t > "/dev/stderr"; fatal = 1 }
         if ((b1 == "timed out") != (t in clamplo)) { printf "FATAL: 256s1 timeout set != triage-256 §4 clamp set: %s (timed out=%s)\n", t, b1 > "/dev/stderr"; fatal = 1 }
-        if (b1 == "timed out")
+        if (b1 == "timed out" || t in loadgeom)
             c256 = "BOUNDARY(native: LOAD-GEOM)"
         else if (b1 == "pass" || b2 == "pass")
             c256 = (t in knob) ? "pass(bounded: " knob[t] ")" : "pass"
@@ -391,18 +405,18 @@ END {
     # 断言：p+q+s+bn+bg≡190 已由上方 c128n/c256n 列和断言覆盖。p256==164、s128==1
     # 仍为派生值不单列断言（派生断言=虚假覆盖，#4439046566 先例；#4441098832、
     # #4462912942 同款处置）：s256≡0 ∧ c256「bgem5」无赋值路径 ∧ c256n==190
-    # ∧ q256==1 ∧ bn256==25（三活锁）⟹ p256≡164，其 FATAL 必伴随列和/q256/bn256
+    # ∧ q256==0 ∧ bn256==26（三活锁）⟹ p256≡164，其 FATAL 必伴随列和/q256/bn256
     # 断言之先触发；s128≡c128n−p128−q128−bn128（c128「bgem5」无赋值路径），
     # p128/q128/bn128 均已活锁 ⟹ s128≠1 必伴随三者或列和断言之先触发，无独立
     # 捕获场景。audit #645 记账口径改真后 c128/c256 均有 BOUNDARY(native) 赋值
     # 路径，旧「256 列格值结构性无 SKIP()/BOUNDARY() ⟹ p256+q256 恒 190」论证
     # 已不成立，按新类目重写如上。
     if (p128 != 163)        { printf "FATAL: 128 narrative expects 163 default-adaptive (got %d)\n", p128 > "/dev/stderr"; fatal = 1 }
-    if (q128 != 1)          { printf "FATAL: 128 narrative expects 1 acl calibration bounded (got %d)\n", q128 > "/dev/stderr"; fatal = 1 }
-    if (cnt128["bnative"] != 25) { printf "FATAL: 128 narrative expects 25 native LOAD-GEOM boundary (got %d)\n", cnt128["bnative"] > "/dev/stderr"; fatal = 1 }
+    if (q128 != 0)          { printf "FATAL: 128 narrative expects 0 bounded (acl is now a LOAD-GEOM boundary) (got %d)\n", q128 > "/dev/stderr"; fatal = 1 }
+    if (cnt128["bnative"] != 26) { printf "FATAL: 128 narrative expects 26 native LOAD-GEOM boundary (got %d)\n", cnt128["bnative"] > "/dev/stderr"; fatal = 1 }
     if (n_to != 25)         { printf "FATAL: 256 narrative expects 25 load-geometry timeout cells (got %d)\n", n_to > "/dev/stderr"; fatal = 1 }
-    if (q256 != 1)          { printf "FATAL: 256 narrative expects 1 acl calibration bounded (got %d)\n", q256 > "/dev/stderr"; fatal = 1 }
-    if (cnt256["bnative"] != 25) { printf "FATAL: 256 narrative expects 25 native LOAD-GEOM boundary (got %d)\n", cnt256["bnative"] > "/dev/stderr"; fatal = 1 }
+    if (q256 != 0)          { printf "FATAL: 256 narrative expects 0 bounded (acl is now a LOAD-GEOM boundary) (got %d)\n", q256 > "/dev/stderr"; fatal = 1 }
+    if (cnt256["bnative"] != 26) { printf "FATAL: 256 narrative expects 26 native LOAD-GEOM boundary (got %d)\n", cnt256["bnative"] > "/dev/stderr"; fatal = 1 }
     # 身份断言：唯一非超时 baked 必须是 acl_gemm_sve dim=512（计数断言只锁数量，
     # 身份漂移——baked 清单里那 1 项换成别的测试——时计数全过而「acl 标定」叙述
     # 静默失实，恰是本断言块要防住的模式）。
@@ -456,10 +470,10 @@ END {
     printf "| **合计** | **%d** | **%d** | **%d** | **%d** | **%d** | **%d** |\n", P, Q, S, BN, YG, P + Q + S + BN + YG > M
     printf "\n" > M
     printf "**%d = %d pass（%d 直绿 + %d 有界）+ %d SKIP(legal) + %d BOUNDARY(native: 负载几何) + %d BOUNDARY(gem5)**，零 FAIL、零非法 SKIP。\n\n", P + Q + S + BN + YG, P + Q, P, Q, S, BN, YG > M
-    printf "- **128 列 = %d pass（%d 直绿 + %d acl 标定）+ %d SKIP(legal) + %d BOUNDARY(native)** —— 对账 triage-128 §2/§5（验收记账 = spec §7 口径，audit #645：25 个负载几何格计边界格——本档设计几何未实测（腿自始烧入 26 项有界覆盖、两 seed 腿内有界直绿），机制同 256 档（triage-256 §4：几何由物理内存比例与线程数推导、输入不含 VL），外推强度「预期」；有界绿 = 功能正确性证据（clamp 下限，最小激发强度），语义限定统一见 triage-256 §5「证据强度限定」）；另有 1 合法 SKIP：fmmla@128，两 seed 同格同理。\n", p128 + q128, p128, q128, s128, cnt128["bnative"] > M
-    printf "- **256 列 = %d pass（%d 直绿 + %d acl 标定）+ %d BOUNDARY(native)** —— 对账 triage-256 §7（spec §7 口径，audit #645：seed1 腿内 165 绿 + 25 timed out（§1），25 格按负载几何机制（§4：环境/边界类、与 seed 无关）计边界格，其 clamp 下限有界绿（§5：seed1 腿外单测 + seed2 腿内 baked）为功能正确性证据（最小激发强度），不计入绿；acl dim=512 为 Ruling B 标定、缩比 2×线性与 25 格的 3~4 个数量级不同量级，仍计 pass(bounded)，证据强度同向受限）。\n", p256 + q256, p256, q256, cnt256["bnative"] > M
+    printf "- **128 列 = %d pass（%d 直绿）+ %d SKIP(legal) + %d BOUNDARY(native)** —— 对账 triage-128 §2/§5（issue #645 记账口径——spec §7 原文：每格 exit: pass + 允许机制性边界格；#645 细化 = native 绿 = 默认自适应【设计】几何 exit: pass、不许缩负载改判绿——26 个负载几何格计边界格：本档设计几何未实测（腿自始烧入 26 项有界覆盖、两 seed 腿内有界直绿），机制同 256 档（triage-256 §4：几何由物理内存比例与线程数推导、输入不含 VL），acl 标定 dim=512 的设计几何 3113 在 enumeration §5.3 全核实测超时（同机制），外推强度「预期」；有界绿 = 功能正确性证据（最小激发强度），语义限定统一见 triage-256 §5「证据强度限定」）；另有 1 合法 SKIP：fmmla@128，两 seed 同格同理。\n", p128, p128, s128, cnt128["bnative"] > M
+    printf "- **256 列 = %d pass（%d 直绿）+ %d BOUNDARY(native)** —— 对账 triage-256 §7（issue #645 记账口径——spec §7 原文：每格 exit: pass + 允许机制性边界格；#645 细化 = native 绿 = 默认自适应【设计】几何 exit: pass、不许缩负载改判绿——seed1 腿内 165 绿 + 25 timed out（§1），26 格按负载几何机制（§4：环境/边界类、与 seed 无关）计边界格：25 格 clamp 下限有界绿（§5：seed1 腿外单测 + seed2 腿内 baked）为功能正确性证据（最小激发强度）、不计入绿；acl dim=512 为 Ruling B 标定，其设计几何 3113 在 enumeration §5.3 全核实测超时（同机制）、缩比（维数 ≈×6.08、工作集 ∝dim² ≈×37）与 dense SVD 族同量级，同计边界格、不计入绿）。\n", p256, p256, cnt256["bnative"] > M
     printf "- **512 列 = %d pass + %d BOUNDARY** —— 对账 triage-512 §6（181 绿 + 9 边界[5 crash + 4 timeout] + 0 fail）；%d 个有界格 = baked 26 项中绿 %d（eigen_svd_cdouble 转边界格除外）+ gem5-overrides 16 条中绿 %d（mrn_rmw_diff_1m 无效仍边界除外）− 两处重叠 %d（acl：baked 512 被 extras 覆盖为 128）；本列声明语义 = 512 档功能性正确性（压力维度由 native 腿承担，triage-512 §0/§2），有界绿计 pass(bounded) 名实相符、不计边界格。\n", p512 + q512, y512, q512, bg, eg, bo > M
-    printf "- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。native 列（128/256）的 25 个 clamp 下限有界格不因有界绿计 pass(bounded) 而计 BOUNDARY(native)（audit #645 记账口径），其有界绿证据仍由同款命令行头与 triage-256 §5 表承担。\n" > M
+    printf "- **有界格计法**：该格绿证据的产生命令里带该测试的几何 knob 覆盖——native 三处命令行头（机械提取）+ gem5-overrides.txt（键唯一契约：一测试一行，重复即被双消费者拒绝）。native 列（128/256）的 26 个负载几何边界格（25 clamp 下限 + acl 标定）不因有界绿计 pass(bounded) 而计 BOUNDARY(native)（issue #645 记账口径），其有界绿证据仍由同款命令行头与 triage-256 §5 表承担。\n" > M
 }
 ' "$LIST" "$N128S1" "$N128S2" "$N256S1" "$N256S2" "$G512" "$TMP/knob_baked.tsv" "$TMP/knob_extra.tsv" "$TMP/clamp_lo.tsv" \
   || { echo "ERROR: matrix generation assertions failed" >&2; exit 1; }
@@ -473,7 +487,7 @@ cat <<'HDR'
 - 生成方式：`matrix-gen.sh` 从本目录已入库工件机械生成（**零手填**，脚本一并入库，重跑即复现本文件）
 - 行定义：`sve-test-list.txt` 190 行（Task 1 枚举：tag∪name 并集 193 − 3 件不在本机默认集）
 - 规模：**190 × 3 = 570 格**（Ruling A：spec 的 564 为 name-grep 估算，被实测枚举取代）
-- 验收判据（brief Step 2）：570 格全绿**或有显式机制性理由**（1 格合法 SKIP + 50 格 native 负载几何边界 + 9 格 gem5 边界，见 §2/§5；native 格的绿 = 默认自适应【设计】几何 `exit: pass`——25 个设计几何超 300 s 预算格 × 128/256 两档计边界格，audit #645 记账口径）
+- 验收判据（brief Step 2）：570 格全绿**或有显式机制性理由**（1 格合法 SKIP + 52 格 native 负载几何边界 + 9 格 gem5 边界，见 §2/§5；native 格的绿 = 默认自适应【设计】几何 `exit: pass`——26 个设计几何超 300 s 预算格 × 128/256 两档计边界格，issue #645 记账口径）
 
 ## 0. 代码基线与二进制身份
 
@@ -515,8 +529,8 @@ cat <<'HDR2'
 | 格值 | 含义 | 出处 |
 |---|---|---|
 | `pass` | 腿内默认/自适应几何下直绿（native：全核 `-t 2000` 实测；512：1 轮全量 golden 字节比对成立） | 各 summary / verdicts |
-| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128/@256** = 唯一格 `acl_gemm_sve.dim=512` 标定 baked（Ruling B，dim clamp [64,4096]、512 非下限——缩比 2×线性，与 clamp 下限格的 3~4 个数量级缩比不同量级；证据强度与有界绿同向受限，triage-256 §1/§5）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格；本列声明语义 = 功能性正确性——压力维度由 native 腿承担，triage-512 §0/§2） | 对应 triage 分节 |
-| `BOUNDARY(native: LOAD-GEOM)` | native 负载几何边界（audit #645 记账口径：spec §7 的 native 绿 = 默认自适应【设计】几何 `exit: pass`，不绿走边界格通道，不许缩负载改判绿）：设计几何（默认自适应——600‰/650‰/900‰ 内存比例推导）× 300 s 单轮预算超限，机制见 triage-256 §4（环境/边界类、与 seed 无关）。**@256** = seed1 腿内实测 timed out（§1/§4），clamp 下限有界绿（§5：seed1 腿外单测 + seed2 腿内 baked）= 功能正确性证据（最小激发强度，非满强度——triage-256 §5「证据强度限定」）；**@128** = 设计几何未实测（腿自始 baked 有界、两 seed 腿内绿，triage-128 §1），机制同 256 档、几何输入不含 VL，外推强度「预期」 | triage-256 §4/§5/§7、triage-128 §1/§5 |
+| `pass(bounded: <knob>=<v>)` | 以有界几何 knob 覆盖后绿。**@128/@256** = 无（`acl_gemm_sve` 标定 dim=512 已改计 `BOUNDARY(native: LOAD-GEOM)`，见下行）；**@512** = 26 项 baked + `gem5-overrides.txt` 16 条中生效的 15 条（triage-512 §1.1/§5.2；`mrn_rmw_diff_1m` 那条无效，见其边界格；本列声明语义 = 功能性正确性——压力维度由 native 腿承担，triage-512 §0/§2） | 对应 triage 分节 |
+| `BOUNDARY(native: LOAD-GEOM)` | native 负载几何边界（issue #645 记账口径——spec §7 原文：每格 exit: pass + 允许机制性边界格；#645 细化 = native 绿 = 默认自适应【设计】几何 `exit: pass`、不绿走边界格通道、不许缩负载改判绿）：设计几何（默认自适应——600‰/650‰/900‰ 内存比例推导）× 300 s 单轮预算超限，机制见 triage-256 §4（环境/边界类、与 seed 无关），共 26 格 = 25 个 §4 clamp 下限项 + `acl_gemm_sve`（设计几何 dim=3113 在 enumeration §5.3 全核实测超时、同机制）。**@256** = 25 格 seed1 腿内实测 timed out（§1/§4）+ acl 系 enumeration §5.3 实测超时、腿自始烧入标定；clamp 下限有界绿（§5：seed1 腿外单测 + seed2 腿内 baked）= 功能正确性证据（最小激发强度，非满强度——triage-256 §5「证据强度限定」）；**@128** = 设计几何未实测（腿自始 baked 有界、两 seed 腿内绿，triage-128 §1），机制同 256 档、几何输入不含 VL，外推强度「预期」 | triage-256 §4/§5/§7、triage-128 §1/§5、enumeration §5.3 |
 | `SKIP(legal: F64MM UNDEFINED <VL=256)` | 架构性合法 SKIP，唯一格 = (sve512_fmmla_arm, 128)，两 seed 同格同理 | triage-128 §2 + §3 逐字源码引文 |
 | `BOUNDARY(gem5: <标签>)` | gem5 侧限制边界，Ruling I 终局：`PMULL64` = gem5 无该 64-bit PMULL 编码（OpenSSL GHASH `pmull v0.1q`，2 格）；`DC-CIVAC` = SE 模式 `dc civac` 缓存维护路径 raise UndefinedInstruction（3 格）；`SIM-SPEED` = knob 在 clamp 下限或无杠杆，单轮指令量 × ~1400 仿真速超出实用预算（4 格）。native 两腿对应格全绿 | triage-512 §5.1/§5.2 |
 
@@ -526,12 +540,13 @@ cat <<'HDR2'
   `256s1/s2` → `native-256-LCG100{1,2}.summary.txt`，`rc` → `gem5-512-verdicts.txt`
   （四份 summary + verdicts 的行名与清单 190 名逐一同序，生成脚本断言守卫）。
 - **种子语义**：native 直绿/标定格 = 任一 seed pass 即 pass；实测两 seed 无分歧绿
-  （128 腿 163+26+1 双 seed 机械一致；256 腿 165 格双 seed 机械一致）。25 个
-  BOUNDARY(native) 格不因有界绿改判（audit #645 记账口径）：@256 seed1 腿内
+  （128 腿 163+26+1 双 seed 机械一致；256 腿 165 格双 seed 机械一致）。26 个
+  BOUNDARY(native) 格不因有界绿改判（issue #645 记账口径）：@256 的 25 格 seed1 腿内
   timed out（证据列 `to`）、seed2 腿内有界绿——其入库机械证据仅 seed2 单腿，
   seed1 侧绿证据 = triage-256 §5 的有界重跑散文表（同 seed 单测、clamp 下限一次
   通过；其原始 /tmp 日志易失未入库，不构成可再生成证据，本矩阵不以再生成能力
-  主张该侧）；@128 两 seed 腿内有界绿（设计几何未实测）。
+  主张该侧）；另 1 格 acl（设计几何 3113 在 enumeration §5.3 全核实测超时）两 seed
+  腿内 baked 有界绿（标定 dim=512）；@128 两 seed 腿内有界绿（设计几何未实测）。
 - **VL 不敏感性注记**：7 个无 tag 的 ipsec 免检件（`ipsec_3des_docsis_aes_cmac_sve_wide` /
   `ipsec_3des_docsis_aes_xcbc_sve_wide` / `ipsec_aes128_cbc_aes_cmac_sve` /
   `ipsec_aes192_cbc_xcbc_96_sve` / `ipsec_aes192_ctr_xcbc_sve` / `ipsec_aes192_gcm_sve` /

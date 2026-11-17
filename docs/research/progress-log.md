@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-11-17（PR #748 检视轮：issue #645 记账残留——acl_gemm_sve 亦计 native 负载几何边界格 + spec 归因改真）
+
+- **现象（local-claude 检视成立）**：上一轮把 25 个设计几何超时格改计 `BOUNDARY(native)`，
+  却把 `acl_gemm_sve` 以「缩比 2×线性、与 3~4 个数量级不同量级」辩护留在 pass(bounded)——
+  算术错误：acl 设计几何（自适应 600‰、全核 dim=3113，enumeration.md:191-192）在 Task 1
+  全核 `-t 2000` 实测 timed out（enumeration.md:184，同 triage-256 §4 机制），缩比
+  3113→512 ≈ ×6.08（旧「2×」以标定探针 dim=1024 为基线、非设计几何）；「3~4 个数量级」
+  分界对 25 格中缩比最小的 eigen_svd_cdouble（维数 ×4.3，triage-256 §5 缩比表）不成立。
+  按 PR 自立判据（不许缩负载改判绿）acl 与 25 格结构等价，128/256 列各含 1 格双重标准绿。
+- **修复**：acl_gemm_sve 于 native 128/256 两列同计 `BOUNDARY(native: LOAD-GEOM)`（第
+  26 格），汇总 510 pass（469+41）→ **508 pass（469 直绿 + 39 有界）+ 1 SKIP + 52
+  native 边界 + 9 gem5 边界**；「验收记账 = spec §7 口径」系假归因——spec §7 原文
+  （design.md:95-100）无「设计几何」「不许缩负载」二句，改标 issue #645 记账口径。
+  同步 triage-256/128、matrix-gen.sh（loadgeom 集 + 断言 25→26/1→0 + 叙述文案）、
+  matrix.md（机械再生）、README。上一轮条目（本日志 2026-11-15）的 acl 残留判断点即本
+  条处置，不并入改写（不回改历史条目）。
+- **验证**：`./matrix-gen.sh` 断言全过、matrix.md 机械再生（重跑即复现）；纯文档+脚本、
+  零 C/C++ 改动（x86-64 非回归由零代码改动蕴含）。分支 fix/issue-645。
+
+---
+
 ## 2026-11-15（issue #645：SVE 全 VL 矩阵验收口径改真——25 个负载几何超时格计 native 边界格）
 
 - **现象（audit 复核成立）**：triage-256 §4 将 25 个超时格定性「环境/边界类」，§7 却宣布

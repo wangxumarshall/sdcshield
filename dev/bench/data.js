@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794902929629,
+  "lastUpdate": 1794913158245,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4220,6 +4220,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 12.437,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "5a8b8eabd1293373e38f14d2923cfc980b55aa2c",
+          "message": "fix(meson): _sve2 配套双目标补 cpp.has_argument 编译器门——GCC10 镜像 Build 红 (#773) (#828)\n\n根因: 81b30b8 (PR #661 feat/eigen-sve2-companion, 2026-11-17 合入) 之后,\ntests/cpu/meson.build 的 eigen_sve_body_specs 双目标循环无条件为 14 个\n_sve2 配套用例编 40 个 per-tier 目标库 (-march=armv9-a+sve2)。该 march\nGCC 12 起才认识;Multi-OS Verify 的 openEuler 20.03 (gcc-toolset-10) 与\n22.03 (系统 GCC 10.3) 镜像 valid -march 只到 armv8.6-a,cc1plus\n'unknown value armv9-a+sve2' 硬错,10 个 GCC10 镜像 Build 步骤全红\n(run 43998000729 @81b30b8 与 44058809774 @e60f1219 实证)。\n\n修复: 仿 tests/cpu/arm64/meson.build tests_arm64_sve2/_sve_mm 既有惯例,\n用 cpp.has_argument('-march=armv9-a+sve2') 门控 (1) 双目标循环的 _sve2\n行 (2) tests_set_sve 里 14 个 _sve2 dispatch TU 的注册——二者必须同步:\ndispatch TU 硬链接 <pfx>_sve2_vl<t> 逐档符号,payload 缺席即断链。老编译\n器上配套用例如 FMMLA/SME 库一样整体缺席 (meson message 披露),不伪造\nSKIP。README 计数脚注同步披露 GCC 12+ 门槛。x86-64 不动:tests_set_sve\n仅在 aarch64 块 apply,门在 x86 恒 false。\n\n验证 (本机 GCC 12.3.1, SVE1-256):\n- 全量构建 954/954 exit 0,零新警告 (唯一 warning 为 main 既有\n  mesh_upi_sse_sym -Wformat,与 CI 日志同款);40 个 sve2 目标库 +\n  28 个 dispatch TU 照常构建。\n- 回归: -e zstd19 -t 2000 -n 1 → exit: pass;-e 显式注册\n  eigen_svd_double_sve2 / eigen_gemm_double_max_arm_sve2 →\n  CpuNotSupported 诚实 SKIP (SVE1 主机 spec 政策,与文档口径一致)。\n- gate=false 分支: 构造仅拒绝 armv9/+sve2 march 的编译器 wrapper,\n  对最小输入复现 CI 同款 cc1plus 错;meson setup 打印降级 message,\n  构建 854/854 exit 0。目标级 diff 对账: 恰好摘除 14 个 dispatch TU\n  对象 + 80 个 sve2 payload 目标 (其余 6 个为 arm64/meson.build 既有\n  守卫目标,真 GCC10 镜像同样降级),零误伤;--list-tests 450 与 gate=true\n  构建一致 (本机 SVE1 spec 过滤口径);-e eigen_svd_double_sve2 →\n  'Cannot find matching tests' 诚实缺席;zstd19 回归 exit: pass。\n  真镜像终验待合入后 Multi-OS Verify 对 20.03/22.03 的下一次运行。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\nSigned-off-by: wangxumarshall <wangxumarshall@qq.com>\nCo-authored-by: wangxumarshall <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-17T10:32:35Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/5a8b8eabd1293373e38f14d2923cfc980b55aa2c"
+        },
+        "date": 1794913156395,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 29715.836,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 28384,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.878,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 31.124,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.059,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.021,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.029,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.793,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21752.605,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.965,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.996,
             "unit": "s"
           }
         ]

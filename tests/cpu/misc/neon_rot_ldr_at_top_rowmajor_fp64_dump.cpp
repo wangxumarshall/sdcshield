@@ -202,6 +202,8 @@ __attribute__((noinline)) static void fp64_dump_report(
         for (int k = 0; k < nbad; k++) fprintf(f, "%s%d", k ? "," : "", bad[k]);
         fprintf(f, "\n");
         fclose(f);
+    } else {
+        log_error("neon_rot_ldr_at_top_rowmajor_fp64_dump: failed to open dump log %s", path);
     }
 
     /* compact per-element summary in the failure message itself:

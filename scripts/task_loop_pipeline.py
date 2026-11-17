@@ -336,12 +336,12 @@ def dispatch_review(state, pr_num, head, node=None):
     tl._pick_env_path 轮换(Task 6b: agent-key-*.env 池按 env_rr 取模,
     池空回落 agent.env;本机 inner 与远程 refresh 同一选中文件)。
 
-    派发序(T10 顺手修①②③④,R3 语义保持): 内存闸 → 同 key **活占位**前置
+    派发序(T10 顺手修①②③④,R3 语义保持): 同 key **活占位**前置
     早退(先于每晚上限计数——活 agent 在跑不是一次检视尝试,零 spawn 零
     killpg;死槽自释放仍按 R3 只清本 key,不破坏「先 janitor 后派发」序)
     → 每晚上限 → 满槽 → agent.env 存在性(B44 同款: 缺凭据拒绝且不烧预算,
-    不拦则第 5 bot 从未启动却烧满 2 次/晚)→ spawn;acquire 失败(仅剩同轮
-    并发竞态)killpg 整组击杀不留孤儿。
+    不拦则第 5 bot 从未启动却烧满 2 次/晚)→ 内存闸(node 定稿后只拦本机
+    路径)→ spawn;acquire 失败(仅剩同轮并发竞态)killpg 整组击杀不留孤儿。
 
     node(Task 6 nodepool,spec 2026-11-13 §4): None → np.pick_node 择优;
     选中板节点走远程分支(轮换选中的池文件上板 refresh、板上落名恒
@@ -350,10 +350,6 @@ def dispatch_review(state, pr_num, head, node=None):
     打印后回退本机路径原样(不占远程槽、不烧每晚预算,回退一次成功才
     tries+1;不递归 pick_node)。检视无 prompt 文件(命令行 --pr 传参),
     远程分支无 put_file;agent.env 存在性检查查本地源文件——refresh 会传。"""
-    if not mem_gate_ok():
-        print(f"[mem-gate] MemAvailable 不足({min_mem_gb()}GB 闸),"
-              f"本轮不派检视 agent")
-        return None
     key = f"pr-{pr_num}"
     existing = slot_get(state, "pr_review", key)
     if existing is not None and _probe_alive(existing) != "dead":
@@ -404,6 +400,13 @@ def dispatch_review(state, pr_num, head, node=None):
     # (下方)零改动。回退不递归 pick_node(防板上故障循环),tries 只挂在
     # 成功 return 上(远程失败/回退失败都不烧每晚预算)。
     node, node_remote = tl._resolve_dispatch_node("pr_review", state, node)
+    # 内存闸只拦本机派发(node 定稿后,与 dispatch_agent 同款): 分载到板时
+    # 本机内存与板上检视 agent 无关(板内存由 pick_node per-node 闸把守),
+    # spec §0「本机资源不足→分载到板」才真正可达;本机路径仍受闸。
+    if not node_remote and not mem_gate_ok():
+        print(f"[mem-gate] MemAvailable 不足({min_mem_gb()}GB 闸),"
+              f"本轮不派检视 agent")
+        return None
     if node_remote:
         import task_loop_nodepool as np
         try:

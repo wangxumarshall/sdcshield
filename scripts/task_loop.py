@@ -1498,12 +1498,10 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
       fix|feat/issue-<N> 按 kind;
     - wip 标签: 派发成功即 gh_label_add(issue, agent-wip)(建议性线索,
       state 为权威;GhError 仅告警不阻断);
-    - 槽位闸门(Task 4,取代全局单飞): 四道前置闸 _paused() →
-      tp.mem_gate_ok()(MemAvailable 与 cgroup 限额取小,阈值
-      PIPELINE_MIN_MEM_GB 默认 8GB,宁慢勿爆)→ 同 key 占位早退(Task 5
-      控制器裁定#2: 槽位账本已有同 key 记录即直接拒派,不判活、零 spawn
-      ——消过渡期「spawn 后 acquire 拒再 killpg」churn;死槽的真正清
-      理归 slot_janitor,此处不破坏「先 janitor 后 acquire」序)→
+    - 槽位闸门(Task 4,取代全局单飞): 前置闸 _paused() → 同 key 占位早退
+      (Task 5 控制器裁定#2: 槽位账本已有同 key 记录即直接拒派,不判活、
+      零 spawn——消过渡期「spawn 后 acquire 拒再 killpg」churn;死槽的
+      真正清理归 slot_janitor,此处不破坏「先 janitor 后 acquire」序)→
       tp.free_slot_count(该泳道满槽早退);spawn 之后 slot_acquire 写
       槽位账本(kind = pr_repair if increment_rounds else issue_fix,
       key = issue-<N>/pr-<N>;真 PID 才进账本,防哨兵 PID 被 janitor
@@ -1526,6 +1524,11 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
       spawn_remote→slot_acquire(host=板 id);远程任何 NodeError 打印后
       回退本机路径原样(不占远程槽、不燃 attempts,回退成功才燃一次;不递归
       pick_node,防板上故障循环回退)。dry_run 在此之前提前返回——远程零动作。
+    - 内存闸(Task 4): tp.mem_gate_ok()(MemAvailable 与 cgroup 限额取小,
+      阈值 PIPELINE_MIN_MEM_GB 默认 8GB,宁慢勿爆)在 node 定稿后、**只拦
+      本机路径**——分载到板时本机内存与板上 agent 无关(板内存由 pick_node
+      的 per-node 闸把守),不拦则 spec §0「本机资源不足→分载到板」动机
+      在代码路径上不可达;本机路径(含 pick_node 落本机/回退)仍受闸。
     """
     import task_loop_pipeline as tp        # 懒 import 防循环(pipeline 顶层 import 本模块)
     kind = "pr_repair" if increment_rounds else "issue_fix"
@@ -1534,10 +1537,6 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     if _paused():
         print(f"[paused] PAUSED 熔断生效,拒绝为 run {entry.run_id} 派发"
               f"(更新 agent.env 后删除 PAUSED 恢复)")
-        return None
-    if not tp.mem_gate_ok():
-        print(f"[mem-gate] MemAvailable 不足({tp.min_mem_gb()}GB 闸),"
-              f"本轮不派新 agent")
         return None
     # 同 key 占位早退(Task 5 控制器裁定#2): 账本已有同 key 记录(活 agent
     # 或未清死槽)即直接拒派——不判活(判活就把「先 janitor 后 acquire」
@@ -1617,6 +1616,13 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
     # → 本机兜底,本机路径(下方)零改动。回退不递归 pick_node(防板上故障
     # 循环),不燃 attempts(记账段只挂在成功 return 上,回退成功才燃一次)。
     node, node_remote = _resolve_dispatch_node(kind, state, node)
+    # 本机内存闸只拦本机派发(node 定稿后): 分载到板时本机内存与板上 agent
+    # 无关(板内存由 pick_node 的 per-node 闸把守),spec §0「本机资源不足→
+    # 分载到板」才真正可达;本机路径(含 pick_node 落本机/全不可用回退)仍受闸。
+    if not node_remote and not tp.mem_gate_ok():
+        print(f"[mem-gate] MemAvailable 不足({tp.min_mem_gb()}GB 闸),"
+              f"本轮不派新 agent")
+        return None
     if node_remote:
         import task_loop_nodepool as np
         try:

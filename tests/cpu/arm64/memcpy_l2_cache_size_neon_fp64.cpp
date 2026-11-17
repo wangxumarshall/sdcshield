@@ -19,8 +19,10 @@
  *      compared byte-exact against a scalar libm fma() golden block. The
  *      add, multiply and fused multiply-add exercise the FP64 ALU while
  *      the L2-sized block exercises the NEON load/store path.
- *   3. A small IEEE-754 special-value check (NaN/Inf/finite, byte-exact)
- *      for the same FP64 operation.
+ *   3. A small IEEE-754 special-value check (NaN/Inf/finite: byte-exact for
+ *      non-NaN, NaN propagation category-checked — the NaN payload/sign is
+ *      implementation-defined and not byte-comparable) for the same FP64
+ *      operation.
  *
  * Data are double (FP64) and all finite comparisons are bit-exact. Inputs
  * are generated with the framework RNG in test_init, so failures replay
@@ -220,6 +222,11 @@ static bool tail_self_check()
     return true;
 }
 
+static inline bool is_nan_bits(uint64_t bits)
+{
+    return (bits & 0x7FFFFFFFFFFFFFFFULL) > 0x7FF0000000000000ULL;
+}
+
 static bool special_values_check()
 {
     static const uint64_t kSpecial[] = {
@@ -246,6 +253,23 @@ static bool special_values_check()
             const uint64_t hw = bits_of_double(lanes[0]);
             const uint64_t sw = bits_of_double(std::fma(a, b, c));
 
+            /* NaN payload/sign is implementation-defined (IEEE-754 §6.2.1):
+             * hardware FMLA and a software std::fma may quiet an sNaN to
+             * different bit patterns, so byte-comparing two NaNs would tie
+             * init to an implementation coincidence and can false-FAIL on
+             * healthy silicon. Assert NaN-vs-non-NaN agreement (the real
+             * propagation signal) and byte-compare only the non-NaN results,
+             * which IEEE-754 fully specifies for fma. */
+            if (is_nan_bits(hw) != is_nan_bits(sw)) {
+                log_warning("memcpy_l2_cache_size_neon_fp64: special-value "
+                            "NaN/non-NaN mismatch a=0x%016" PRIx64
+                            " b=0x%016" PRIx64 " hw=0x%016" PRIx64
+                            " sw=0x%016" PRIx64,
+                            kSpecial[i], kSpecial[j], hw, sw);
+                return false;
+            }
+            if (is_nan_bits(hw))
+                continue; // both NaN: payload not byte-comparable
             if (hw != sw) {
                 log_warning("memcpy_l2_cache_size_neon_fp64: special-value "
                             "mismatch a=0x%016" PRIx64 " b=0x%016" PRIx64

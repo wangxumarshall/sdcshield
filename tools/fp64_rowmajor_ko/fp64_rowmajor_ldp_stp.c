@@ -349,6 +349,13 @@ out:
     buf_free(ctx.srcB);
     buf_free(ctx.scratch);
     buf_free(ctx.expected);
+
+    /* 透传 SDC 检出结果: failing>0 (已发现数据损坏) 必须让 insmod 失败,
+     * 否则以 insmod 退出码作门禁的自动化会把失效硬件当通过。 */
+    if (ret > 0) {
+        pr_err("SDC miscompare detected in %d sweep(s) — failing module load\n", ret);
+        return -EIO;
+    }
     return ret < 0 ? ret : 0;
 }
 

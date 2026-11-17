@@ -23,11 +23,15 @@
  * sandstone_unittests_utils.cpp 的 dummy 模式同款。
  *
  * 联合层的唯一例外是下方 NULL-args 契约用例(issue #607): 调用点四实参
- * 全常量, release(-O3, b_ndebug=if-release → NDEBUG)下内联+死代码消除把
- * 联合层函数体连同其 numa/反馈符号引用折叠干净(链接零边际成本, /tmp
- * harness 实证), 故以 NDEBUG 门住——debug(-O0, 无 NDEBUG/无 DCE)下该
- * 语句会把 sdc_numa_* 符号引进单测链接(#420 记录的链接边界, 维持原判
- * 定)。真实求解路径的联合层行为仍不进本 TU, 边界不变。
+ * 全常量(!a 编译期恒真), 任何 -O≥1 构建(-O2 的 debugoptimized / -O3 的
+ * release, 二者都定义 __OPTIMIZE__)下内联+死代码消除把联合层函数体连同
+ * 其 numa/反馈符号引用折叠干净(链接零边际成本, /tmp harness 实证), 故以
+ * __OPTIMIZE__ 门住——debug(-O0, 无 __OPTIMIZE__/无 DCE)下该语句会把
+ * sdc_numa_* 符号引进单测链接(#420 记录的链接边界, 维持原判定)。不用
+ * NDEBUG: meson b_ndebug=if-release 下仅 release 定义 NDEBUG, 而执行单测
+ * 的两条 CI lane(pr.yaml / sanitizer.yaml)均为 debugoptimized——用 NDEBUG
+ * 门会让回归锁在 CI 里从未编译执行。真实求解路径的联合层行为仍不进本
+ * TU, 边界不变。
  */
 
 #include <gtest/gtest.h>
@@ -105,14 +109,15 @@ TEST(SdcCalibratedDim, HealthyProbeUnchanged)
     EXPECT_DOUBLE_EQ(fit.p, 3.0);
 }
 
-#ifdef NDEBUG
+#if defined(__OPTIMIZE__)
 /* issue #607: sdc_joint_dim_slice 的 NULL args 是调用方编程错误, 修复前
  * 契约返回 0 —— 0 是不可用维度, 调用方模式 `d->n = sdc_joint_dim_slice
  * (...)` 直通赋值后即 0×0 矩阵、0 字节比对的静默 PASS(no-op-pass,
  * CLAUDE.md rule 6); 修复后必须 fail-loud: _exit(EX_SOFTWARE) + stderr
  * 消息(退出码 70 → parent 侧 OperatingSystemError 分类, issue #396
  * 同型裁定)。死亡断言双重锁: 退出码 EX_SOFTWARE + stderr 含 issue 标识。
- * NDEBUG 门的原因见文件头注释(release 常量折叠使链接零成本)。 */
+ * __OPTIMIZE__ 门的原因见文件头注释(-O≥1 常量折叠使链接零成本, 且两条
+ * 单测 CI lane 均 debugoptimized/-O2, 定义 __OPTIMIZE__ 而非 NDEBUG)。 */
 TEST(SdcJointDimSlice, NullArgsFailsLoudInsteadOfSilentZero)
 {
     EXPECT_EXIT(sdc_joint_dim_slice(nullptr, "mdim", nullptr, nullptr),

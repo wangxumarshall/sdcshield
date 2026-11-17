@@ -64,18 +64,28 @@ log "反汇编统计: ldr q=$QLDR  str q=$QSTR  ldp x=$LDPN  stp x=$STPN"
 [ "$QLDR" -eq 0 ] && [ "$QSTR" -eq 0 ] && [ "$LDPN" -gt 0 ] && [ "$STPN" -gt 0 ]
 stage $? "指令替换完整 (数据通路无 ldr q/str q, 已用 ldp/stp)"
 
-FPSIMD_RE='[[:space:]](fadd|fsub|fmul|fdiv|fmax|fmin|fmaxnm|fminnm|fabs|fneg|fsqrt|frint|fmov|fcvt|fcvtz|scvtf|ucvtf|fcmp|fcmpe|fccmp|fccmpe|fcmeq|fcmgt|fcmge|fcmle|fcmlt|fcsel|frecp|frsqr|fmla|fmls|fmadd|fmsub|fnmadd|fnmsub|ld1|st1|ld2|st2|ld3|st3|ld4|st4|movi|mvni|dup|ins|umov|smov|zip[12]|uzp[12]|trn[12]|tbl|tbx|xtn2?|shll|shrn|addv|addp|faddp|maxv|minv|fmaxv|fminv|saddl|uaddl)([[:space:]]|$)|[[:space:]](ldr|str)[[:space:]]+[qds]|[[:space:]]mov[[:space:]]+v[0-9]'
-BAD_FUNCS="$(printf '%s\n' "$OBJDUMP" | awk -v re="$FPSIMD_RE" '
+# FPSIMD 收容 — 按寄存器类检测而非枚举助记符: 任何触碰 V/D/S/Q/H/B 数据
+# 寄存器的指令 (不论 ldp/stp q/d、fmlal/sdot/... 等形态) 都会被捕获; 保护区
+# 外出现即破坏用户态 FPSIMD 状态。mrs/msr fpcr/fpsr 只碰控制寄存器、不碰数据
+# 寄存器, 正确地不计入。--no-show-raw-insn 去掉十六进制编码列, 避免编码/地址
+# 里的 a-f 数字与寄存器名混淆。
+OBJDUMP_NORAW="$(objdump -d --no-show-raw-insn "$DIR/$MOD.o" 2>/dev/null)"
+BAD_FUNCS="$(printf '%s\n' "$OBJDUMP_NORAW" | awk '
     /^[0-9a-f]+ <[A-Za-z_][A-Za-z0-9_.]*>:/ {
         fn = $2; sub(/^</, "", fn); sub(/>:$/, "", fn); next
     }
-    /^[[:space:]]+[0-9a-f]+:/ && fn != "" && $0 ~ re &&
-        fn != "fp64_golden_init" && fn != "fp64_run_sweeps" {
-        print fn
+    fn != "" && NF >= 2 {
+        line = ""
+        for (i = 2; i <= NF; i++) line = line (i == 2 ? "" : " ") $i
+        sub(/\/\/.*$/, "", line)                              # 去 "// imm" 注释
+        gsub(/[0-9a-f]+[[:space:]]*<[^>]*>/, "", line)        # 去分支目标 hex+<sym>
+        if (line ~ /[[:space:]][vdqshb][0-9]+/ &&
+            fn != "fp64_golden_init" && fn != "fp64_run_sweeps")
+            print fn
     }
 ' | sort -u)"
 if [ -z "$BAD_FUNCS" ]; then
-    stage 0 "FPSIMD 收容 (FP/NEON 指令仅出现在 fp64_golden_init/fp64_run_sweeps 内)"
+    stage 0 "FPSIMD 收容 (FP/NEON 寄存器仅出现在 fp64_golden_init/fp64_run_sweeps 内)"
 else
     stage 1 "FPSIMD 收容 — 保护区外出现 FP/NEON 指令的函数: $BAD_FUNCS"
 fi

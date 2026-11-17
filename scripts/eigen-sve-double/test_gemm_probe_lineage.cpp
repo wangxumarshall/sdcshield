@@ -172,6 +172,24 @@ static std::uint64_t matrix_fnv(const Mat &m)
     return fnv1a(m.data(), matrix_bytes(m));
 }
 
+/* NaN poison per scalar type. std::numeric_limits<std::complex<T>> has no
+ * libstdc++ specialization (is_specialized=0), so its quiet_NaN() returns
+ * T() == 0+0i — a legal fill_pair value, not an out-of-domain sentinel; a
+ * c128 under-fill could then hide behind a stale old-leg 0+0i. Build the
+ * complex NaN explicitly from the element NaN so the poison stays
+ * out-of-domain for every leg. */
+template <typename T>
+struct scalar_poison {
+    static T value() { return std::numeric_limits<T>::quiet_NaN(); }
+};
+template <typename T>
+struct scalar_poison<std::complex<T>> {
+    static std::complex<T> value() {
+        return std::complex<T>(std::numeric_limits<T>::quiet_NaN(),
+                               std::numeric_limits<T>::quiet_NaN());
+    }
+};
+
 /* channel A finiteness leg: all elements finite ([-1,1) by construction). */
 static bool all_finite(const MatD &m)
 {
@@ -214,8 +232,8 @@ static void compare(const char *name, OldFn old_fill, int n)
      * (loop-bound drift) must surface as an [a/b MISMATCH], not hide as
      * stale old-leg bytes that shadow happens to match. Dimensions are
      * unchanged (no realloc), so the same-address property is preserved. */
-    a.setConstant(std::numeric_limits<typename Mat::Scalar>::quiet_NaN());
-    b.setConstant(std::numeric_limits<typename Mat::Scalar>::quiet_NaN());
+    a.setConstant(scalar_poison<typename Mat::Scalar>::value());
+    b.setConstant(scalar_poison<typename Mat::Scalar>::value());
     gemm_probe::fill_pair(a, b);        /* template fill, SAME a/b buffers */
     const bool ok_ab = bytes_equal(a_shadow, a) && bytes_equal(b_shadow, b);
     c = a * b;                          /* second product, INTO SAME C */

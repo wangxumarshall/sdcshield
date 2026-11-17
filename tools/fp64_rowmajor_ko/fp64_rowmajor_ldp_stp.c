@@ -416,7 +416,11 @@ static int __init fp64_rowmajor_ldp_stp_init(void)
             INIT_WORK(w, fp64_sweep_work);
             queue_work_on(cpu, system_wq, w);
         }
-        flush_workqueue(system_wq);
+        /* 只等本模块自己的 per-CPU work (逐项 flush), 不等 system_wq 上其它
+         * 子系统排队的无关 work (flush_workqueue(system_wq) 会把 insmod
+         * 耗时耦合到全系统无关负载)。 */
+        for_each_online_cpu(cpu)
+            flush_work(per_cpu_ptr(&fp64_sweep_work_item, cpu));
         fp64_active_ctx = NULL;
         for_each_online_cpu(cpu) {
             int r = per_cpu(fp64_sweep_fail, cpu);

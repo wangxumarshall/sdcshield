@@ -44,7 +44,7 @@ BOARDS="${*:-0102 0101 0201}"
 BOARDS_CONF="${BOARDS_CONF:-$HOME/.claude/skills/accessing-sdc-boards/scripts/boards.conf}"
 SSH_KEY=~/.ssh/id_ed25519_nodepool
 SSH_CFG=~/.ssh/config
-AGENT_ENV="$HOME/.local/state/sdcshield-task-loop/agent.env"
+AGENT_ENV="${TASKLOOP_STATE_DIR:-$HOME/.local/state/sdcshield-task-loop}/agent.env"
 CLONE_DIR=/home/sdc/wangxu/sdcshield-autoci
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }

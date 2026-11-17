@@ -1688,6 +1688,30 @@ def test_timeout_outcome_kills_live_agent_before_requeue(monkeypatch, tmp_path):
     assert e.attempts == 2 and e.agent_pid is None   # 走重派记账
 
 
+def test_reap_cleans_remote_worktree_on_slot_release(monkeypatch, tmp_path):
+    """N25: 远程条目退场(reap 释放远程槽)时板上 worktree 就地清——reap
+    释放即出账本,janitor 不再触及,成功/升级/超时退场不重派会留板上 GB 级
+    孤儿 checkout;仅同 key 重派由 prepare_worktree_remote 的 cleanup 兜底。"""
+    import task_loop_nodepool as np
+    import task_loop_pipeline as tp
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    cleaned = []
+    monkeypatch.setattr(np, "cleanup_worktree_remote",
+                        lambda h, p: cleaned.append((h, p)))
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "dead")
+    monkeypatch.setattr(tl, "_kill_agent_if_alive", lambda e: None)
+    monkeypatch.setattr(tl, "_requeue_or_escalate", lambda e, s, r, n, d: None)
+    monkeypatch.setattr(tp, "_board_rebooted_since", lambda h, t: False)
+    entry = _task_entry(status="DISPATCHED", agent_pid=555,
+                        agent_started_at="2026-01-01T00:00:00Z",
+                        host="0102")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+    tp.slot_acquire(state, "issue_fix", "issue-33", 555, 555, "/r.log",
+                    "/board/wt", "2026-01-01T00:00:00Z", "boot", host="0102")
+    tl.reap_or_advance(state, dry_run=False)
+    assert cleaned == [("0102", "/board/wt")]
+
+
 def test_audit_search_finding_issue_checks_closed_too(monkeypatch):
     """检视#35(轮4): audit 幂等查重双态搜索——创建轮中途崩溃+人工驳回
     关闭的组合窗口下,不得重建人工已驳回的 issue。"""

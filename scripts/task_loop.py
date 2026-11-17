@@ -1625,6 +1625,7 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
         return None
     if node_remote:
         import task_loop_nodepool as np
+        wt_remote = None
         try:
             np.refresh_env_remote(node, env_src)
             wt_remote = np.prepare_worktree_remote(node, key)
@@ -1654,8 +1655,15 @@ def dispatch_agent(entry: Entry, state: dict, dry_run: bool = False,
                 raise np.NodeError(f"远程槽占位失败(同 key 在跑),PID {pid}")
         except np.NodeError as exc:
             # 远程任何一步失败: 打印即回退本机路径原样(不占远程槽、不燃
-            # attempts);回退成功后由本机路径正常燃一次。
+            # attempts);回退成功后由本机路径正常燃一次。已建好的板上
+            # worktree 就地清(prepare 已过才可能失败,同 key 重派才由
+            # prepare 的 cleanup 兜底,失败即回退不再重派 → 孤儿 checkout)。
             print(f"[nodepool] {node['host_id']} 远程派发失败,回退本机: {exc}")
+            if wt_remote:
+                try:
+                    np.cleanup_worktree_remote(node["host_id"], wt_remote)
+                except np.NodeError:
+                    pass
         else:
             return _record_dispatch(entry, kind, fix_branch, pid, remote_log,
                                     wt_remote, increment_rounds,
@@ -1899,10 +1907,21 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
         _lane_kind = "pr_repair" if entry.status == "BOT_FIX" else "issue_fix"
         _slot_key = f"pr-{entry.pr_number}" if _lane_kind == "pr_repair" \
             else f"issue-{entry.issue_number or entry.run_id}"
-        if tp.slot_get(state, _lane_kind, _slot_key) is not None:
+        _slot = tp.slot_get(state, _lane_kind, _slot_key)
+        if _slot is not None:
             tp.slot_release(state, _lane_kind, _slot_key)
             print(f"[reap] run {entry.run_id}: 释放 {_lane_kind} 槽 "
                   f"{_slot_key}(agent 退场)")
+            # 远程槽的板上 worktree 就地清(reap 释放即出账本,janitor 不再
+            # 触及;同 key 重派才由 prepare_worktree_remote 的 cleanup 兜底,
+            # 成功/升级/超时退场不重派 → 板上 GB 级孤儿 checkout 永久累积)。
+            if _slot.get("host") not in (None, "local") and _slot.get("worktree"):
+                import task_loop_nodepool as np
+                try:
+                    np.cleanup_worktree_remote(_slot["host"], _slot["worktree"])
+                except np.NodeError as exc:
+                    print(f"[reap] run {entry.run_id}: 板上 worktree 清理失败"
+                          f"(留次夜): {exc}")
         entry.worktree = None
         # 板重启豁免(Task 8 补全,N7 审查 Important): 远程条目
         # dead/timeout 且板 uptime -s 晚于 agent_started_at(板在派发后

@@ -66,14 +66,14 @@
 #define NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT 1024
 #define FP64_DUMP_DIR "movbe_log/fp64_rowmajor"
 
+#if defined(__aarch64__)
+
 struct NeonRotLdrAtTopRowMajorFp64DumpData {
     uint64x2_t *srcA;
     uint64x2_t *srcB;
     uint64x2_t *scratch;
     uint64x2_t *expected;
 };
-
-#if defined(__aarch64__)
 
 static inline void store_vec(void *addr, uint64x2_t val) {
     vst1q_u64(static_cast<uint64_t *>(addr), val);
@@ -99,8 +99,6 @@ static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b) {
     }
     return vreinterpretq_u64_f64(fres);
 }
-
-#endif
 
 static int neon_rot_ldr_at_top_rowmajor_fp64_dump_init(struct test *test) {
     auto *data = static_cast<NeonRotLdrAtTopRowMajorFp64DumpData *>(malloc(sizeof(NeonRotLdrAtTopRowMajorFp64DumpData)));
@@ -241,6 +239,31 @@ static int neon_rot_ldr_at_top_rowmajor_fp64_dump_cleanup(struct test *test) {
     }
     return EXIT_SUCCESS;
 }
+
+#else // !__aarch64__
+
+static int neon_rot_ldr_at_top_rowmajor_fp64_dump_init(struct test *test)
+{
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): aarch64 NEON FP64 required");
+    return EXIT_SKIP;
+}
+
+static int neon_rot_ldr_at_top_rowmajor_fp64_dump_run(struct test *test, int cpu)
+{
+    (void)test;
+    (void)cpu;
+    return EXIT_SKIP;
+}
+
+static int neon_rot_ldr_at_top_rowmajor_fp64_dump_cleanup(struct test *test)
+{
+    (void)test;
+    return EXIT_SUCCESS;
+}
+
+#endif // __aarch64__
 
 DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_fp64_dump, "Cold-path dump variant of neon_rot_ldr_at_top_rowmajor_fp64: hot loop byte-identical, failure branch dumps got/expected/xor + full buffer context for bit-position and field-graft analysis")
     .test_init    = neon_rot_ldr_at_top_rowmajor_fp64_dump_init,

@@ -92,7 +92,8 @@ git push -u origin fix/issue-615
 
 > 完整内容不在此内嵌——本 PR 的初心正是消灭逐字副本漂移, 内嵌一份副本即再造一个漂移面。
 > 单一事实源 = 已提交文件 `scripts/eigen-sve-double/test_gemm_probe_lineage.cpp`
-> (V2 同缓冲区形态, commit `0d7faf1d`: 含 f64/f32/c128 三变体逐字旧副本 +
+> (V2 同缓冲区形态, commit `0d7faf1d`, 后经 `c7a14cbe` 加 refill 前 NaN 毒化、
+> `59fdd280` 修正 c128 毒化为真 NaN 复数: 含 f64/f32/c128 三变体逐字旧副本 +
 > 同缓冲区 compare + new/old 双通道 FNV checksum)。V1 两缓冲区初版见 commit
 > `fa208070`(VL512 目的对齐伪差异后重构为 V2, 详见「VL512 红灯事件与处置」执行记录)。
 
@@ -368,7 +369,23 @@ git checkout main && git status    # 期望 clean
 ## 执行记录(2026-11-13,全部勾选依据)
 
 commits: `30f34993`(计划)→ `fa208070`(双 kernel v1, native 21/21)→
-`ee0e1ce9`(探针收口, +42/−77)→ `0d7faf1d`(harness 同缓冲区重构)。
+`ee0e1ce9`(探针收口, +42/−77)→ `0d7faf1d`(harness 同缓冲区重构)→
+`a12656f0`(勾选完成)→ `c7a14cbe`(harness refill 前 NaN 毒化)→
+`a6b227e4`(docs 消除内嵌 harness 双源漂移 + 补 -I.)→
+`59fdd280`(c128 毒化改真 NaN 复数)。
+
+### NaN 毒化与 c128 哨兵修正(harness 修补记录)
+
+同缓冲区重构(`0d7faf1d`)使 harness 对 fill_pair 欠填充(循环界漂移)类
+缺陷结构性失明, `c7a14cbe` 以 refill 前 quiet_NaN 毒化 a/b 修复——欠填充
+残留 NaN 必触发 [a/b MISMATCH]。但该毒化对 c128 腿实为**零毒化**:
+`std::numeric_limits<std::complex<double>>::quiet_NaN()` 在 libstdc++ 未
+特化(is_specialized=0), 返回 T()=(0,0), 恰落于 fill_pair 输出域
+[-1,1)×[-1,1) 内, 非 out-of-domain 哨兵(实测 /tmp/nan_test:
+is_specialized=0 real=0 imag=0)。`59fdd280` 经 `scalar_poison` 结构特化
+显式构造 `std::complex<double>(nan, nan)`, 使毒化对 f64/f32/c128 三腿均
+为 out-of-domain 真 NaN。native 复跑 21/21 ALL PASS;该修正是取证工具
+自身的哨兵正确性, 不改变所验证的收口命题(填充字节等价)。
 
 ### 基线勘误(执行中发现的计划偏差)
 

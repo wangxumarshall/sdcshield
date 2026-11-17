@@ -200,13 +200,16 @@ def pick_node(kind, state):
 # ---------------------------------------------------------------------------
 
 def spawn_remote(node, inner_cmd, log_path):
-    """远程派生,与本机 run_background 同契约(PID 回显唯一行)。"""
+    """远程派生,与本机 run_background 同契约(PID 回显唯一行)。
+
+    sshd 启动的登录 shell 可能 source ~/.bashrc 打印 banner 混入 stdout——
+    `echo $!` 恒为命令最后输出,只取末尾第一个纯数字行,banner 前置不影响。"""
     cmd = (f"nohup setsid bash -c {inner_cmd!r} >> {log_path} 2>&1 & echo $!")
     out = run_ssh(node["host_id"], cmd)
-    try:
-        return int(out)
-    except ValueError:
-        raise NodeError(f"{node['host_id']} 未回显后台 PID(实际 {out!r})")
+    for line in reversed([l.strip() for l in out.splitlines() if l.strip()]):
+        if line.isdigit():
+            return int(line)
+    raise NodeError(f"{node['host_id']} 未回显后台 PID(实际 {out!r})")
 
 
 def alive_remote(host_id, pid):

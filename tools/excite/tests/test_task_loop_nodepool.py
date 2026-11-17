@@ -159,6 +159,15 @@ def test_spawn_remote_pid_contract(monkeypatch):
     assert "sdcshield-autoci-state/agent-x.log" in cmd
 
 
+def test_spawn_remote_pid_parses_banner_noise(monkeypatch):
+    """N21: sshd 登录 shell source .bashrc 打印 banner 混入 stdout——PID
+    回显取末尾第一个纯数字行,不得 ValueError 静默回退本机。"""
+    monkeypatch.setattr(np, "run_ssh",
+                        lambda h, cmd, t=45: "welcome banner\n4242")
+    pid = np.spawn_remote(np.node_by_host("0102"), "echo hi", "~/x.log")
+    assert pid == 4242
+
+
 def test_alive_and_logtail_and_kill_forms(monkeypatch):
     sent = []
     monkeypatch.setattr(np, "run_ssh",

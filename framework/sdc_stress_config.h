@@ -1346,9 +1346,11 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
      * 调用方模式 `d->n = sdc_joint_dim_slice(...)` 直通赋值无校验, 0 是
      * 不可用维度, 产出 0×0 矩阵、0 字节比对的空转 PASS(实测本机 glibc
      * aligned_alloc(64,0) 返回非 NULL、memcmp 0 字节恒 0), 即 CLAUDE.md
-     * rule 6 定性为 bug 的 no-op-pass 形态; 且 a 非 NULL 时本函数全部出口
-     * 恒 ≥ lo(退化区间/knob clamp/quick/尾部钳底), 0 与任何正常语义
-     * 无法区分, 唯一来源就是本 NULL 分支。NULL 情形取不到安全出口值:
+     * rule 6 定性为 bug 的 no-op-pass 形态; 且 a 非 NULL 且 lo ≥ 1 时本函数
+     * 全部出口恒 ≥ lo(退化区间/knob clamp/quick/尾部钳底), 0 与任何正常
+     * 语义无法区分——0 的来源仅两类: 本 NULL 分支, 与 lo<1 的非法调用
+     * (后者由紧随其后的 lo<1 守卫独立 fail-loud 封堵)。NULL 情形取不到
+     * 安全出口值:
      * 退化区间 hi<=lo 尚可 return a->lo, a 缺失则 lo 不可得, 契约只剩
      * fail-loud。处置逐项裁定:
      *   - 非 assert(): meson b_ndebug=if-release 下 release 构建定义

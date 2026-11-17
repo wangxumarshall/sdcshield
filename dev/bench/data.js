@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794890660156,
+  "lastUpdate": 1794902929629,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4088,6 +4088,83 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/wangxumarshall/sdcshield/commit/98286caabfdcf50a37680602fe9d497440e3e332"
         },
         "date": 1794890658406,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 83416.256,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44058.385,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 5.066,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 83.067,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.088,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.13,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.955,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 4.13,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21818.335,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.098,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.437,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "2bfa00bfdb8dd7c6a5d42ce7d54553ec277cd895",
+          "message": "docs(arch): x86-64 GEMM sizing 口径精确化——T9 结构改动按 rule 5 惯例披露 (#798) (#825)\n\naudit #798 核实结论(先核实后修): T9 (61c92613, 2026-10-28) 把 7 个\nGEMM 文件 (gemm_{double,float,cdouble}_dynamic_square{,_dump} +\ndouble14) 的 sizing 从「每 worker run() 入口重解」改为「init 单次\n求解缓存 eigen_test_data::dim」, 该结构改动无架构门控, 两架构生效\n——x86-64 的运行时观感实际改变, 方向良性(与 SVD 族既有 init 求解\n结构统一)。\n\n两处引文核实为陈旧/不实, 如实报告:\n- issue 引用的 architecture.md:241「byte-identical」措辞是陈旧引文:\n  该句 2026-10-28 14:41 由 8a126521 引入, 同日 23:57 已被 214e8b9c\n  (PR#302 检视处置) 移除, 早于 audit 提出(2026-11-15)18 天;\n- issue 的「以调用时刻的 MemAvailable 现算, 各 worker 可得不同\n  dim」机制描述对 x86 旧链不成立——sdc_auto_square_dim 只读\n  sysconf(_SC_PHYS_PAGES) 物理内存(确定性), 函数体 0 处 MemAvailable,\n  各 worker 解值恒同。本补丁的披露句按代码事实写, 不沿用该机制。\n\n残留缺陷成立并修复(仅 docs/architecture.md, 1 文件): 后继措辞\n「x86-64 keeps the old sizing behavior」仍然过强——只对求解器公式\n成立, 对求解时机/日志节奏不成立, 且未按 rule 5 惯例披露为跨架构\n行为变更。口径精确化:\n- behavior → **solvers**, 显式限定 \"Keeps\" 只覆盖求解器公式;\n- 新增披露: T9 结构改动两架构共有(无门控), x86-64 dim 值不变\n  (确定性物理内存链), 变的是求解+[压力映射]日志节奏——每 worker\n  run 入口一次(旧 init 每次M_DIM展开亦各一次)→ 每 child init 一次;\n  落在本文既有 rule-5 例外披露处(同段 probe 阈值例外先例)。\n\n验证(纯文档契约: 断言逐条对代码核实, 无源文件改动免构建):\n- 7 文件 worker 读缓存: grep \"init 缓存值——worker 不重算\"\n  tests/cpu/eigen_gemm/*.cpp → 7/7 命中;\n- init 单点求解: sandstone_gemm_common.h:76 唯一 mdim() 调用;\n- 确定性物理内存: framework/sdc_stress_config.h:84-91\n  sysconf(_SC_PHYS_PAGES); sdc_auto_square_dim(:721-789) 0 处\n  MemAvailable;\n- [压力映射] 日志: sdc_stress_config.h:537/546/550/596/623/776;\n- SVD 族 init 求解先在: tests/cpu/eigen_svd/svd.cpp:53,\n  svd_double.cpp:51;\n- T9 旧代码形态(每 worker run 入口重解 + init M_DIM 4 次展开):\n  git show 61c92613^ 七文件逐一核对。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\nCo-authored-by: wangxumarshall <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-17T08:07:45Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/2bfa00bfdb8dd7c6a5d42ce7d54553ec277cd895"
+        },
+        "date": 1794902928697,
         "tool": "customSmallerIsBetter",
         "benches": [
           {

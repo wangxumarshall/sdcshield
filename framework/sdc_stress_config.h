@@ -1368,6 +1368,22 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                 knob ? knob : "?");
         _exit(EX_SOFTWARE);
     }
+    /* issue #607 同源封堵: lo<1 与 NULL 同为「调用方编程错误」——lo=0 时
+     * 退化区间(hi<=lo 返回 a->lo)/quick(返回 a->lo)/尾部钳底(n<a->lo 钳到
+     * a->lo)/n_mem 兜底(c_bytes<=0 或 avail<=0 时为 0)都会静默交还 0(0 维
+     * = 0×0 矩阵空转 PASS), 上文「0 唯一来源就是本 NULL 分支」即失去 lo>0
+     * 前提。lo 是矩阵维度下限, 现全部调用方硬编码 lo≥16, 属防御性封堵
+     * (非现行 bug)。无独立死亡单测——NULL 用例能折叠靠字面 nullptr(!a
+     * 编译期恒真), 而 lo<1 需对非 const 局部结构体字段做常量传播, -O2
+     * 不可证明, 会打破 unittests 链接(#420 边界, 见单测文件头注)。 */
+    if (a->lo < 1) {
+        fprintf(stderr, "%s: sdc_joint_dim_slice(\"%s\"): 非法 lo=%d(<1, "
+                "0 维 = 空转 PASS) — 调用方编程错误, 拒绝返回静默哨兵 0 "
+                "(issue #607)\n",
+                (test && test->id) ? test->id : "(global)",
+                knob ? knob : "?", a->lo);
+        _exit(EX_SOFTWARE);
+    }
     /* permille/c 提前到 knob/quick 早退之前(T11): knob 早退的预期内存
      * 警告需要 c; 纯计算无副作用, 相对退化区间/quick 检查的顺序提升
      * 零行为差(两条早退路径原本就不读这两个值)。 */

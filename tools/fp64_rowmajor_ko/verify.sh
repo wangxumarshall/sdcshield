@@ -6,6 +6,7 @@
 #       [3] insmod 加载 (无内核报错/oops)
 #       [4] 计算结果一致性 (内核 vs 用户态参考, 六缓冲 FNV 哈希)
 #       [5] rmmod 安全卸载
+#       [6] 定时持续压测路径 (sweeps=0 duration_ms, 生产默认; 反 no-op 门禁)
 #
 # 需 root 运行: sudo bash verify.sh
 
@@ -139,6 +140,32 @@ printf '%s\n' "$(dmesg | tail -n +$((DMESG_N0 + 1)))" | grep -E 'Oops|BUG:|Call 
 [ $? -ne 0 ]; stage $? "全程 (加载-运行-卸载) 无内核异常"
 dmesg | tail -n +$((DMESG_N0 + 1)) | grep "$MOD: unloaded" >/dev/null
 stage $? "卸载日志确认 (fp64_rowmajor_ldp_stp: unloaded)"
+
+# ---------- [6] 定时持续压测路径 (生产默认; 反 no-op 门禁) ----------
+# [3/4] 用 sweeps=256 duration_ms=0 确定性快跑; 生产默认是无参数
+# (sweeps=0 duration_ms=2000, time_after(jiffies, deadline) 定时终止)。该定时
+# 路径若出现「0 次 sweep 假通过」在 [3/4] 抓不到, 故单独加载一次并断言每个
+# 在线 CPU 至少跑出 1 个 sweep。
+log ""
+log "---- [6/6] 定时持续压测路径 (sweeps=0 duration_ms=2000, 生产默认) ----"
+DMESG_N1=$(dmesg | wc -l)
+insmod "$DIR/$MOD.ko" seed="$SEED" sweeps=0 duration_ms=2000 >>"$LOG" 2>&1
+stage $? "insmod 加载成功 (定时路径: sweeps=0 duration_ms=2000)"
+KLOG2="$(dmesg | tail -n +$((DMESG_N1 + 1)))"
+log "模块 dmesg 输出 (定时路径):"
+printf '%s\n' "$KLOG2" | grep "$MOD:" | sed 's/^/    /' | tee -a "$LOG"
+printf '%s\n' "$KLOG2" | grep -qE 'Oops|BUG:|Call trace|kernel fault'
+[ $? -ne 0 ]; stage $? "无内核 Oops/BUG/Call trace (定时路径)"
+NPASS2="$(printf '%s\n' "$KLOG2" | grep -c "$MOD: PASS")"
+NFAIL2="$(printf '%s\n' "$KLOG2" | grep -c "$MOD: FAIL")"
+MINSWEEP="$(printf '%s\n' "$KLOG2" | grep "$MOD: PASS" | grep -o 'sweeps=[0-9]*' | cut -d= -f2 | sort -n | head -1)"
+log "定时路径覆盖: $NPASS2 PASS / $NFAIL2 FAIL, 全网在线 CPU=$NCPU, 最小 sweep 数=${MINSWEEP:-0}"
+[ "$NFAIL2" -eq 0 ] && [ "$NPASS2" -eq "$NCPU" ]
+stage $? "定时路径: 每个在线 CPU 各 PASS 一次, 无 FAIL"
+[ -n "$MINSWEEP" ] && [ "$MINSWEEP" -gt 0 ]
+stage $? "定时路径确实执行了 sweep (反 no-op: 最小 sweep 数 > 0)"
+rmmod "$MOD" >>"$LOG" 2>&1
+stage $? "rmmod 卸载成功 (定时路径)"
 
 log ""
 log "================================================================"

@@ -1712,6 +1712,42 @@ def test_reap_cleans_remote_worktree_on_slot_release(monkeypatch, tmp_path):
     assert cleaned == [("0102", "/board/wt")]
 
 
+def test_unreachable_escalates_after_two_nights(monkeypatch, tmp_path):
+    """N26: 节点连续不可达达 2 个 pipeline 夜 → 升级人工(有界告警),不再
+    永久冻结零盲区;计数按 host 逐夜、同夜不重复 +1。"""
+    import task_loop_pipeline as tp
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    escalated = []
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "unreachable")
+    monkeypatch.setattr(tl, "_escalate",
+                        lambda e, s, r, n, d: escalated.append(r))
+    monkeypatch.setattr(tp, "_pipeline_night", lambda now: "2026-11-16")
+    entry = _task_entry(status="DISPATCHED", agent_pid=555, host="0102")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0,
+             "unreachable_nights": {"0102": {"night": "2026-11-15",
+                                             "count": 1}}}
+    tl.reap_or_advance(state, dry_run=False)
+    assert escalated == [
+        "节点 0102 已连续 2 个 pipeline 夜不可达"
+        "(条目冻结未计 attempts)——请检查板供电/网络/是否退网"]
+
+
+def test_unreachable_counter_clears_on_reachable(monkeypatch, tmp_path):
+    """N26: 节点任何非 unreachable 判档(如 running=探活 SSH 成功)即清零,
+    只数连续夜——板抖一晚不会假性升级。"""
+    import task_loop_pipeline as tp
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "running")
+    monkeypatch.setattr(tl, "_escalate", lambda e, s, r, n, d: None)
+    monkeypatch.setattr(tp, "_pipeline_night", lambda now: "2026-11-16")
+    entry = _task_entry(status="DISPATCHED", agent_pid=555, host="0102")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0,
+             "unreachable_nights": {"0102": {"night": "2026-11-15",
+                                             "count": 1}}}
+    tl.reap_or_advance(state, dry_run=False)
+    assert state["unreachable_nights"] == {}   # 恢复可达即清零
+
+
 def test_audit_search_finding_issue_checks_closed_too(monkeypatch):
     """检视#35(轮4): audit 幂等查重双态搜索——创建轮中途崩溃+人工驳回
     关闭的组合窗口下,不得重建人工已驳回的 issue。"""

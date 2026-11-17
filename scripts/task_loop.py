@@ -149,6 +149,11 @@ AUTH_FAIL_TAIL_CHARS = 500
 # 认证熔断阈值: 连续 N 次 auth_fail → 全局暂停(PAUSED 文件)
 AUTH_FAILURE_STREAK_LIMIT = 3
 
+# 节点不可达升级阈值: 连续 N 个 pipeline 夜 unreachable → 升级人工
+# (spec §5 只约束「绝不判死」,不给无界冻结的告警——连断是瞬时,连断多夜
+# 是板故障/退网,无人值守须有上限;恢复可达即清零,只数连续夜)。
+UNREACHABLE_ESCALATE_NIGHTS = 2
+
 # 条目状态机中需要「收割」agent 结局的两个状态:
 #   DISPATCHED = 已派 agent、正在修(本工具的派发目标态)
 #   BOT_FIX    = 修复 PR 已开、pr_loop 接管(agent 结局只记录不推进)
@@ -1840,6 +1845,35 @@ def _escalate(entry: Entry, state: dict, reason: str,
     print(f"[escalate] run {entry.run_id} → ESCALATED({reason})")
 
 
+def _track_unreachable(entry: Entry, state: dict, dry_run: bool,
+                       outcome: str) -> None:
+    """节点不可达的夜计数与升级(spec §5 补全): unreachable 按 spec 不判死、
+    不燃 attempts,但也绝不无界冻结——按 host 逐 pipeline 夜计数,连续 ≥
+    UNREACHABLE_ESCALATE_NIGHTS 夜升级第一条受影响条目(@人工,检查板供电/
+    网络/是否退网);节点任何非 unreachable 判档(含 running=探活 SSH 成功)
+    即清零,只数连续夜。计数存 state["unreachable_nights"]{host: {night,
+    count}},不扩建 Entry 字段——节点级运维态,非条目终身态。"""
+    host = entry.host
+    if not host or host == "local":
+        return          # 本机条目 ping 不判 unreachable(host_alive 走 os.kill)
+    nights = state.setdefault("unreachable_nights", {})
+    if outcome != "unreachable":
+        nights.pop(host, None)          # 恢复可达即清零(只数连续夜)
+        return
+    import task_loop_pipeline as tp
+    night = tp._pipeline_night(datetime.now().astimezone())
+    rec = nights.get(host)
+    if rec and rec.get("night") == night:
+        return                          # 同夜多条目/多轮不重复 +1
+    count = (rec.get("count", 0) + 1) if rec else 1
+    nights[host] = {"night": night, "count": count}
+    if count >= UNREACHABLE_ESCALATE_NIGHTS:
+        _escalate(entry, state,
+                  f"节点 {host} 已连续 {count} 个 pipeline 夜不可达"
+                  f"(条目冻结未计 attempts)——请检查板供电/网络/是否退网",
+                  "恢复板可达后自动续跑,或人工关闭该条目", dry_run)
+
+
 def reap_or_advance(state: dict, dry_run: bool = False) -> None:
     """收割 agent 结局并推进状态机(就地更新 state dict)。
 
@@ -1887,6 +1921,7 @@ def reap_or_advance(state: dict, dry_run: bool = False) -> None:
         if entry.agent_pid is None and entry.status == "DISPATCHED":
             continue          # 尚未派发,无结局可收割
         outcome = check_agent_outcome(entry)
+        _track_unreachable(entry, state, dry_run, outcome)
         if outcome == "running":
             continue
         if outcome == "unreachable":

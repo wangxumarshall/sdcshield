@@ -110,9 +110,12 @@ endif
 
 # ---------------------------------------------------------------------------
 # ARM64 ISA march tiers — single source of truth. Every aarch64-specific
-# -march in the tree references one of these variables (never a scattered
-# literal): subdir() shares this scope, so every tests/ and framework/
-# subdirectory sees them. Tier -> test-family table: README "从源码构建" and
+# -march that the Meson build passes to the compiler references one of these
+# variables (never a scattered literal): subdir() shares this scope, so every
+# tests/ and framework/ subdirectory sees them. (The only -march literals left
+# in the tree are g++ command lines in the comments of manually-built
+# standalone scripts/ verifiers — human instructions outside the Meson build.)
+# Tier -> test-family table: README "从源码构建" and
 # docs/research/adding-tests.md §4. NEON itself needs no -march (the armv8-a
 # baseline already has ASIMD); these tiers exist only where intrinsics demand
 # a specific extension. Untouched on x86-64 (inert string data there).

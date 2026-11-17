@@ -111,7 +111,7 @@ reconfigure，plain ninja 感知不到），`./builddir/sdcshield --quality=0 --
 | `tests_set_base` | 基线 march | 通用测试（绝大多数） |
 | `tests_set_hsw`（仅x86） | `-march=haswell` + `-DEigen=EigenAVX2` | x86 AVX2 |
 | `tests_set_skx`（仅x86） | `-march=skylake-avx512` + `-DEigen=EigenAVX512` | x86 AVX512 |
-| `tests_set_sve`（仅aarch64） | `march_arm64_sve`（无 `-msve-vector-bits`） | Eigen SVE **分发 TU**（all-VL Phase 2 后仅剩 eigen×2——Eigen packet 编译期定宽，payload 在 `tests/cpu/meson.build` 的 `eigen_sve_body_specs`（路径/前缀/栈限 三元组，共 10 项：svd/gemm/gemm_f64/gemm_f32/gemm_c128/svd_f64/svd_f32/svd_j_c128/svd_j_f64/svd_j_f32）内层 `foreach tier : ['128','256','512','1024']` 循环按四档各实例化为 `tests_eigen_<前缀>_vl<N>` 库（10×4=40 库）：每档 `march_arm64_sve` + `-msve-vector-bits=<tier>` + `-DEIGEN_ARM64_SVE_VL`/`-DEigen=EigenSVE<tier>` 命名空间改名；分发 TU 读 worker pinned VL 运行时选档，自身无 Eigen 宏） |
+| `tests_set_sve`（仅aarch64） | `march_arm64_sve`（无 `-msve-vector-bits`） | Eigen SVE **分发 TU**（共 14 个：2 pre-existing + 12 新增 2026-11-03——Eigen packet 编译期定宽，payload 在 `tests/cpu/meson.build` 的 `eigen_sve_body_specs`（路径/前缀/栈限 三元组，共 10 项：svd/gemm/gemm_f64/gemm_f32/gemm_c128/svd_f64/svd_f32/svd_j_c128/svd_j_f64/svd_j_f32）内层 `foreach tier : ['128','256','512','1024']` 循环按四档各实例化为 `tests_eigen_<前缀>_vl<N>` 库（10×4=40 库）：每档 `march_arm64_sve` + `-msve-vector-bits=<tier>` + `-DEIGEN_ARM64_SVE_VL`/`-DEigen=EigenSVE<tier>` 命名空间改名；分发 TU 读 worker pinned VL 运行时选档，自身无 Eigen 宏） |
 | `tests_set_sve_vla`（仅aarch64） | `march_arm64_sve`（无 `-msve-vector-bits`） | 真 VLA SVE 测试（sleef_sve + sve_rot×5，all-VL 128..1024-bit；all-VL Phase 2 P5） |
 
 全部 march 档位变量统一定义于根 `meson.build`（单一事实来源，`meson setup`

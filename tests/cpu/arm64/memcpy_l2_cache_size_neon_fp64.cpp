@@ -19,8 +19,8 @@
  *      compared byte-exact against a scalar libm fma() golden block. The
  *      add, multiply and fused multiply-add exercise the FP64 ALU while
  *      the L2-sized block exercises the NEON load/store path.
- *   3. A small IEEE-754 special-value check (NaN/Inf category, finite
- *      byte-exact) for the same FP64 operation.
+ *   3. A small IEEE-754 special-value check (NaN/Inf/finite, byte-exact)
+ *      for the same FP64 operation.
  *
  * Data are double (FP64) and all finite comparisons are bit-exact. Inputs
  * are generated with the framework RNG in test_init, so failures replay
@@ -154,16 +154,6 @@ static double scalar_reference(double x)
     return std::fma(input, t, u);
 }
 
-static inline bool is_nan_bits(uint64_t bits)
-{
-    return (bits & 0x7FFFFFFFFFFFFFFFULL) > 0x7FF0000000000000ULL;
-}
-
-static inline bool is_inf_bits(uint64_t bits)
-{
-    return (bits & 0x7FFFFFFFFFFFFFFFULL) == 0x7FF0000000000000ULL;
-}
-
 static inline void neon_copy_fp64(double *dst, const double *src, size_t count)
 {
     size_t i = 0;
@@ -256,13 +246,7 @@ static bool special_values_check()
             const uint64_t hw = bits_of_double(lanes[0]);
             const uint64_t sw = bits_of_double(std::fma(a, b, c));
 
-            const bool category_ok =
-                (is_nan_bits(hw) && is_nan_bits(sw))
-                || (is_inf_bits(hw) && is_inf_bits(sw) && hw == sw)
-                || (!is_nan_bits(hw) && !is_inf_bits(hw)
-                    && !is_nan_bits(sw) && !is_inf_bits(sw)
-                    && hw == sw);
-            if (!category_ok) {
+            if (hw != sw) {
                 log_warning("memcpy_l2_cache_size_neon_fp64: special-value "
                             "mismatch a=0x%016" PRIx64 " b=0x%016" PRIx64
                             " hw=0x%016" PRIx64 " sw=0x%016" PRIx64,

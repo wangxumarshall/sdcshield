@@ -27,7 +27,7 @@
 | SVE1 host 565/675/683（L348） | 今日实测同值 | ✓ |
 | 分级表 8/110/569/687（L387-394） | 683=687−4（SME/SVE2-only PROD）；565+110+8=683；表头原写「0xd02 SVE1 主机实测，选择期过滤后」与脚注「源码全量口径」互斥（过滤后 PROD 应为 565）——**修表头为源码全量口径** | ✓（修） |
 | mesh_upi 46 含 18 SVE（L362） | 运行时 grep 46/18 | ✓ |
-| lock 族（31）（L363） | 运行时 grep **47** = 31 x86 基础 + 14 `_neon` + 2 `spinlock_stale_read{,_xchg}` | ✗ **修** |
+| lock 族（31）（L363） | 运行时 grep **47** = 30 双架构基础 + 17 aarch64-only（12 `_neon` + 2 `spinlock_stale_read{,_xchg}` + 2 `spinlock_stress_cmpxchg_even_n/_odd_n` + 1 `spinlock_unaligned`） | ✗ **修** |
 | PROD 源码全量上界「现值 499」（L126） | 分级表机判 569；今日 565+4=569 | ✗ **修** |
 | cn23154 320 用例（L182） | progress-log #10 已挂「同日 320 vs 322 矛盾、无复现口径」 | ✗ **补如实标注** |
 | ipsec 70（46 NEON + 24 SVE）（L258/L373） | 源文本 DECLARE 140=条件编译 2×；`tests/cpu/sve/ipsec` 24 文件 | ✓（本机构建无 SSL 故运行时为 0，源码口径成立） |

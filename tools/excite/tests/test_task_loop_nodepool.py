@@ -30,7 +30,7 @@ def test_run_ssh_argv_and_success(monkeypatch):
     assert out == "OK"
     a = calls[0]
     assert a[0] == "ssh" and a[1] == "-o" and a[2] == "ConnectTimeout=8"
-    assert a[3] == "-o" and "StrictHostKeyChecking=no" in a[4]
+    assert a[3] == "-o" and "StrictHostKeyChecking=accept-new" in a[4]
     assert "sdc@172.168.160.42" in a
 
 

@@ -93,6 +93,19 @@ else
   log "~/.ssh/config nodepool Host 块已在,跳过"
 fi
 
+# 1c) 主机密钥固定(运行时 StrictHostKeyChecking=accept-new 的验证前提):
+#     ssh-keyscan 一次性摘三板公钥入 ~/.ssh/known_hosts——之后 MITM 改钥即被
+#     拒(TOFU 引导,后续逐次校验);Phase 4 的 agent.env token scp 与每晚
+#     refresh_env_remote 运行时通道同享这一 known_hosts 验证网。
+KNOWNS=~/.ssh/known_hosts
+for _ip in 172.168.160.42 172.168.177.97 172.168.178.81; do
+  if ! ssh-keygen -F "$_ip" -f "$KNOWNS" >/dev/null 2>&1; then
+    ssh-keyscan "$_ip" 2>/dev/null >> "$KNOWNS" || {
+      echo "ssh-keyscan $_ip 失败(先确认板可达再跑)"; exit 1; }
+  fi
+done
+log "~/.ssh/known_hosts 三板主机密钥已固定"
+
 # ------------------------------------------------------- 2) 免密自验(失败即止)
 log "=== Phase 2/5 密钥免密自验(运行时全靠它) ==="
 for B in $BOARDS; do
@@ -159,7 +172,7 @@ done
 log "=== Phase 4/5 agent.env 就位(板上初始凭据 0600;refresh_env_remote 每派发前刷新) ==="
 [ -f "$AGENT_ENV" ] || { echo "缺 $AGENT_ENV(见 task-loop.md §3.3 凭据部署)"; exit 1; }
 for B in $BOARDS; do
-  scp -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  scp -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
       "$AGENT_ENV" "sdc@$(ip_of "$B"):sdcshield-autoci-state/agent.env"
   NPSSH "$B" "chmod 600 ~/sdcshield-autoci-state/agent.env && stat -c '%a %n' ~/sdcshield-autoci-state/agent.env"
 done

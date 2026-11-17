@@ -65,8 +65,8 @@ def node_by_host(host_id):
 def _ssh_argv(host_id, cmd):
     node = node_by_host(host_id)
     user_host, _, port = node["ssh"].rpartition(":")
-    return ["ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null", "-p", port, user_host, cmd]
+    return ["ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new",
+            "-p", port, user_host, cmd]
 
 
 def run_ssh(host_id, cmd, timeout=SSH_TIMEOUT_DEFAULT):
@@ -94,8 +94,8 @@ def put_file(host_id, local_path, remote_path):
     超时同 run_ssh 归一为 NodeError。"""
     node = node_by_host(host_id)
     user_host, _, port = node["ssh"].rpartition(":")
-    argv = ["scp", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null", "-P", port,
+    argv = ["scp", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new",
+            "-P", port,
             local_path, f"{user_host}:{remote_path}"]
     try:
         proc = subprocess.run(argv, capture_output=True, timeout=60)

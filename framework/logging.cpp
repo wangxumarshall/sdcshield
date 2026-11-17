@@ -1686,17 +1686,31 @@ AbstractLogger::print_one_thread_messages_tdata(int fd, PerThreadData::Common *d
 
 void AbstractLogger::print_child_stderr_common(std::function<void(int)> header)
 {
-    LogMessagesFile f(stderr_fd);
-    if (f.size_bytes() == 0)
+    struct stat st;
+    if (fstat(stderr_fd, &st) == -1 || st.st_size == 0)
         return;
 
     /* A runaway test can write gigabytes to stderr (observed 2026-11-11:
      * memcpy1_neon filled a 4.14 GB memfd in one 5-minute round).  Dumping
-     * all of it is useless and slow; keep the head and report the cut. */
+     * all of it is useless and slow; keep the head and report the cut.
+     * Read just that head with pread() so we never mmap a memfd that has
+     * grown to hundreds of GiB: the full mapping served no purpose once the
+     * dump was clamped, and an mmap failure here used to exit(EX_OSERR) and
+     * take the whole parent down. */
     static constexpr size_t MaxStderrDumpSize = 1024 * 1024;
-    const size_t total = f.size_bytes();
+    const size_t total = size_t(st.st_size);
     const size_t shown = total < MaxStderrDumpSize ? total : MaxStderrDumpSize;
-    std::string_view contents(f.bytes(), shown);
+
+    std::string contents(size_t(shown), '\0');
+    ssize_t nread = pread(stderr_fd, contents.data(), shown, 0);
+    if (nread <= 0) {
+        /* could not read (or the file vanished): drop the dump, but do not
+         * kill the parent over child stderr */
+        truncate_log_internal(stderr_fd);
+        return;
+    }
+    contents.resize(size_t(nread));
+
     std::string truncation_note;
     if (total > shown)
         truncation_note = "    ... [stderr truncated: " + std::to_string(total)
@@ -1713,7 +1727,6 @@ void AbstractLogger::print_child_stderr_common(std::function<void(int)> header)
         if (!truncation_note.empty())
             writeln(AbstractLogger::real_stdout_fd, truncation_note);
     }
-    f.unmap();
 
     /* reset it for the next iteration */
     truncate_log_internal(stderr_fd);

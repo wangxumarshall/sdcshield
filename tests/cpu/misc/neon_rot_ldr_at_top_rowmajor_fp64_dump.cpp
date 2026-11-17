@@ -128,16 +128,23 @@ static int neon_rot_ldr_at_top_rowmajor_fp64_dump_init(struct test *test) {
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
     memset_random(data->scratch, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
 
-    /* golden (issue #373): scalar independent recomputation — scalar FP64
-     * (d-register) instructions, never the vector (v-register) units under
-     * test. The scalar ops carry the same IEEE semantics as the vector ones
-     * (FADD/FSUB/FMUL/FMAX, NaN-propagating included), so a persistent
-     * vector-lane fault (stuck lane computing deterministic wrong bits) can
-     * no longer corrupt golden and actual identically; it now surfaces as a
-     * byte difference at the memcmp. (Scalar and vector FP share the FP
-     * execution units, so this narrows — but does not fully close — the
-     * whole-unit blind spot; a stuck whole-unit fault is where the sibling
-     * scalar integer test family fills in.) */
+    /* golden (issue #373): scalar recomputation — scalar FP64 (d-register)
+     * instructions, never the vector (v-register) units under test. The
+     * scalar ops carry the same IEEE semantics as the vector ones
+     * (FADD/FSUB/FMUL/FMAX, NaN-propagating included), and every one of the
+     * 2*COUNT lanes is recomputed on the d-register scalar path (which lands
+     * on the low 64-bit lane only). Because the golden derives BOTH lanes
+     * from that single scalar path, a stuck bit in either lane (low or high)
+     * makes one lane of the golden diverge from the healthy lane of the
+     * vector result, so a per-lane stuck-at fault now surfaces as a byte
+     * difference at the memcmp — the #373 lane-level blind spot is closed.
+     * What remains open is a fault in the FP unit's shared
+     * control/rounding/exponent logic that corrupts every lane identically:
+     * scalar and vector FP64 dispatch to the same F0/F1 pipes, so no FP64
+     * arithmetic (scalar or vector) can serve as a fully independent golden
+     * (the only such path would be integer emulation of IEEE-754, out of
+     * scope); that whole-unit fault class is where the sibling
+     * scalar-integer test family fills in. */
     {
         const float64x1_t *sa = reinterpret_cast<const float64x1_t *>(data->srcA);
         const float64x1_t *sb = reinterpret_cast<const float64x1_t *>(data->srcB);

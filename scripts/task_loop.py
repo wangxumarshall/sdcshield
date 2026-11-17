@@ -2230,22 +2230,37 @@ def worktree_cleanup(path: str) -> None:
     每轮撞上即挂满旧超时 135s(GIT_TIMEOUT_SEC*3) 后抛 TimeoutExpired,
     2026-11-13/14 两夜软停段因此夜报丢失(pipeline.log 5 处实测;06 个
     locked 僵尸手清存证)。修法: remove 前先 unlock(纯元数据操作,锁定态
-    解它;未锁时该命令失败即忽略),remove 超时缩到 GIT_TIMEOUT_SEC(45s
-    ——remove 本身秒级,足以判死);顺序 unlock(容错)→ remove --force
-    (短超时)→ prune → rmtree 兜底。nodepool 分支同修经真实 git 验证:
-    锁定僵尸 0.005s 清除 + 同 key 重加成功 + 未锁容错。"""
+    解它;未锁时该命令失败即忽略),顺序 unlock(容错)→ remove --force →
+    prune → rmtree 兜底。
+
+    不抛异常契约(2026-11-17 检视#5/#6/#7 收口): 本函数被 slot_janitor /
+    heal_clone / 软停 / _worktree_prepare 四处裸调,均假定「清理绝不外
+    抛」——remove 超时/挂死若把 TimeoutExpired 抛出去,软停段会跳过
+    write_report(夜报丢失,复现 #811)、slot_janitor 会滞留死槽阻断重派。
+    故每个子命令的失败/超时一律吞掉;remove 保留 3× 预算(递归删 GB 级
+    worktree,「remove 本身秒级」假设在生产体量不成立,45s 会把慢而成功的
+    删除误判成超时);prune 移到 finally 保底——remove 半途抛异常时 rmtree
+    兜底删目录后仍须注销注册,否则同 key 下次 add exit 128。nodepool 分支
+    同修经真实 git 验证: 锁定僵尸 0.005s 清除 + 同 key 重加成功 + 未锁
+    容错。"""
     if not path:
         return
     repo = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+
+    def _git_quiet(args, timeout=GIT_TIMEOUT_SEC):
+        """清残局子命令: 失败/超时仅忽略——cleanup 绝不外抛。"""
+        try:
+            subprocess.run(["git", "-C", repo, *args],
+                           capture_output=True, timeout=timeout)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
     try:
-        subprocess.run(["git", "-C", repo, "worktree", "unlock", path],
-                       capture_output=True, timeout=GIT_TIMEOUT_SEC)
-        subprocess.run(["git", "-C", repo, "worktree", "remove", "--force",
-                        path], capture_output=True,
-                       timeout=GIT_TIMEOUT_SEC)
-        subprocess.run(["git", "-C", repo, "worktree", "prune"],
-                       capture_output=True, timeout=GIT_TIMEOUT_SEC)
+        _git_quiet(["worktree", "unlock", path])
+        _git_quiet(["worktree", "remove", "--force", path],
+                   timeout=GIT_TIMEOUT_SEC * 3)
     finally:
+        _git_quiet(["worktree", "prune"])
         shutil.rmtree(path, ignore_errors=True)
 
 

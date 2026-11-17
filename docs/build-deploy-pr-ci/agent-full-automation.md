@@ -131,7 +131,7 @@ gantt
     section Phase 3: Production
     Full Release Launch     :2027-04-01, 60d
     Training & Handover     :2027-04-01, 30d
-    ```
+```
 *Timeline: Phased deployment of the agent-full-automation system with overlapping tasks from late 2026 through mid-2027.*
 
 ## Citations

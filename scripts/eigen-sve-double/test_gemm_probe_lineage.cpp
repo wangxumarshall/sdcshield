@@ -15,7 +15,8 @@
 //       then the SAME buffers refilled with gemm_probe::fill_pair (checksums
 //       must match — that is the collapsed unit) → `c_new = a*b` at the SAME
 //       addresses; every element finite (catches NaN-payload divergence);
-//   B — FNV-1a 64-bit checksums printed per matrix for log quoting;
+//   B — FNV-1a 64-bit checksums printed per matrix (both the refilled new
+//       leg a/b/c and the old-leg shadows ao/bo/co) for log quoting;
 //   C — VL identity echo: prints the runtime SVE vector length so every
 //       tier run self-certifies its tier.
 //
@@ -54,7 +55,7 @@
 #include <cstdio>
 #include <cstring>
 #include <complex>
-#include <vector>
+#include <limits>
 
 #include "tests/cpu/eigen_gemm/gemm_solve_probe.h"
 
@@ -209,6 +210,12 @@ static void compare(const char *name, OldFn old_fill, int n)
     c = a * b;                          /* first product, into buffer C */
     Mat a_shadow(a), b_shadow(b), c_shadow(c);
 
+    /* NaN-poison a/b before the template refill: a fill_pair under-fill
+     * (loop-bound drift) must surface as an [a/b MISMATCH], not hide as
+     * stale old-leg bytes that shadow happens to match. Dimensions are
+     * unchanged (no realloc), so the same-address property is preserved. */
+    a.setConstant(std::numeric_limits<typename Mat::Scalar>::quiet_NaN());
+    b.setConstant(std::numeric_limits<typename Mat::Scalar>::quiet_NaN());
     gemm_probe::fill_pair(a, b);        /* template fill, SAME a/b buffers */
     const bool ok_ab = bytes_equal(a_shadow, a) && bytes_equal(b_shadow, b);
     c = a * b;                          /* second product, INTO SAME C */
@@ -218,11 +225,15 @@ static void compare(const char *name, OldFn old_fill, int n)
     const bool ok_fin = all_finite(c_shadow) && all_finite(c);
     const bool ok = ok_ab && ok_c && ok_fin;
     if (!ok) failures++;
-    std::printf("%s %-5s n=%-3d a=%016llx b=%016llx c=%016llx %s%s%s\n",
+    std::printf("%s %-5s n=%-3d a=%016llx b=%016llx c=%016llx "
+                "ao=%016llx bo=%016llx co=%016llx %s%s%s\n",
                 ok ? "ok" : "FAIL", name, n,
                 (unsigned long long)matrix_fnv(a),
                 (unsigned long long)matrix_fnv(b),
                 (unsigned long long)matrix_fnv(c),
+                (unsigned long long)matrix_fnv(a_shadow),
+                (unsigned long long)matrix_fnv(b_shadow),
+                (unsigned long long)matrix_fnv(c_shadow),
                 ok_ab ? "" : " [a/b MISMATCH]",
                 ok_c ? "" : " [c MISMATCH]",
                 ok_fin ? "" : " [NON-FINITE]");

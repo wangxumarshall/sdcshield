@@ -59,6 +59,7 @@
 #include <sched.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -187,8 +188,8 @@ __attribute__((noinline)) static void fp64_dump_report(
     }
 
     char path[256];
-    snprintf(path, sizeof(path), "%s/fp64dump_fail_cpu%d_sweep%lu_seq%d.bin",
-             FP64_DUMP_DIR, cpu, static_cast<unsigned long>(sweep), seq);
+    snprintf(path, sizeof(path), "%s/fp64dump_fail_cpu%d_sweep%lu_seq%d_pid%d.bin",
+             FP64_DUMP_DIR, cpu, static_cast<unsigned long>(sweep), seq, getpid());
     FILE *f = fopen(path, "wb");
     if (f) {
         fwrite(data->srcA, sizeof(uint64x2_t), NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT, f);

@@ -123,7 +123,7 @@ run 模式需 root（sudo）、幂等可重入（已安装/活跃服务自动跳
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
-预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（PROD 源码全量上界，随源码演进、现值 569，2026-11-03 机判口径），少的是镜像内未含的 vendored 计算库测试组；用例计数口径见「用例质量分级」。
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（PROD 源码全量上界，随源码演进、现值 569，2026-11-03 机判口径）。差额既含镜像未打包的 vendored 计算库测试组，也含 2026-09-12 二进制冻结后进源码的非 vendored 探针（冻结后增量 58 PROD：opendcdiag 迁移 21 + arm_add 7 + `_neon` 14 + cache 9 + eigen-SVE 8 − 退役 1，其中 vendored 关联至多 11 个，≥47 个为纯 C++/NEON 探针）；用例计数口径见「用例质量分级」。
 
 > **旧二进制判读警示**：2026-09-12 预构建二进制是 eigen 满核假阳修复（2026-10-24）**之前**的构建——其上 `eigen_svd_double`/`eigen_sparse` 的满核 FAIL 按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；"满核挂 = SDC 嫌疑"的判读规则仅适用于含修复的构建。用旧二进制跑 24h 战役脚本须显式恢复旧白名单（含修复的源码构建不需要、也不应设置）：
 >

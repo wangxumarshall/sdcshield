@@ -34,7 +34,10 @@
  *      种子与 FNV-1a 哈希, 输出 "HASH srcA=.. srcB=.. scratch=..
  *      expected=.. temp=.. dst=.." 供逐位一致性比对。
  *    - golden (issue #373): 标量独立重算 (标量 fadd/fsub/fmul/fmaxnm +
- *      标量 ldr/str), 绝不走被测的 ldp/stp 通路与 128 位向量 FP 单元。
+ *      标量 ldr/str), 独立于被测的 ldp/stp 访存通路与 128 位向量数据通路
+ *      (高 lane); 但不独立于 ARMv8 上与 NEON 共享的 FP 算术 ALU——标量
+ *      fadd d 与向量 fadd v.2d 发往同一条 FP 流水线, 持续型 FP 算术单元
+ *      故障仍会让 golden 与 dst 同步出错 (该缺陷类由整数 slot 父测试覆盖)。
  *    - 激发强度: 默认定时 2s 持续压测 + 每核 (per-CPU) 全核覆盖。
  *
  * 3. 模块参数: seed (ullong), sweeps (uint, 显式次数上限, 0=关),
@@ -254,12 +257,16 @@ static inline double f64_from_bits(u64 v)
 static noinline void fp64_golden_init(struct fp64_ctx *ctx)
 {
     /* golden (issue #373): scalar independent recomputation — scalar fp64
-     * fadd/fsub/fmul/fmax (d-register) + scalar ldr/str, never the 128-bit
-     * vector faddq/fsubq/fmulq/fmaxq units nor the ldp/stp pair path under
-     * test. A persistent vector-lane or pair-instruction fault can no longer
-     * corrupt golden and actual identically; it surfaces as a byte difference
-     * at the hot-loop memcmp. kernel_neon_begin/end still required for ANY
-     * FPSIMD use in kernel context. */
+     * fadd/fsub/fmul/fmax (d-register) + scalar ldr/str, independent of the
+     * ldp/stp pair-instruction memory path under test AND of the 128-bit
+     * vector datapath (high lane). NOT independent of the FP arithmetic unit:
+     * on ARMv8 scalar fadd d and vector fadd v.2d issue to the SAME FP
+     * pipeline, so a persistent FP add/mul/max ALU fault corrupts golden and
+     * actual identically — that fault class is the integer-slot parent test's
+     * coverage, not this module's. A persistent vector-lane or pair-instruction
+     * fault, by contrast, surfaces as a byte difference at the hot-loop memcmp.
+     * kernel_neon_begin/end still required for ANY FPSIMD use in kernel
+     * context. */
     const u64 *sa = (const u64 *)ctx->srcA;
     const u64 *sb = (const u64 *)ctx->srcB;
     u64 *ex = (u64 *)ctx->expected;

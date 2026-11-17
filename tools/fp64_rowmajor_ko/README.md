@@ -22,8 +22,12 @@
 ## 关键设计
 
 - **标量独立 golden（issue #373）**：`expected` 由标量 `fadd/fsub/fmul/fmaxnm`
-  （d 寄存器）+ 标量 `ldr/str` 重算，绝不走被测的 `ldp`/`stp` 通路与 128 位
-  向量 FP 单元。持续型向量通路故障不再让 golden 与 dst 同步出错。
+  （d 寄存器）+ 标量 `ldr/str` 重算，独立于被测的 `ldp`/`stp` 访存通路与
+  128 位向量数据通路（高 lane）——持续型向量通路故障不再让 golden 与 dst
+  同步出错。**边界须如实界定**：ARMv8 上标量 `fadd d` 与向量 `fadd v.2d`
+  发往同一条 FP 流水线，golden 并不独立于 FP 算术 ALU；持续型 FP 加/乘/
+  取最大算术单元故障会让 golden 与 dst 同步出错（该缺陷类由整数 slot 父
+  测试的标量整数 golden 覆盖）。
 - **slot 3 用 FMAXNM 而非 FMAX**：`vmaxq_f64`（FMAX）的 NaN 传播语义在标量 C
   无对应表达式，会破坏标量 golden 的逐位一致性；`vmaxnmq_f64`（FMAXNM）与
   C `fmax`/`__builtin_fmax` 逐位一致。

@@ -4,8 +4,9 @@
 
 nightly pipeline 的远程执行面: 板注册表 + SSH 单点运行器 + 健康探测 +
 pick_node 择优 + 远程五操作(spawn/探活/日志尾/击杀/worktree)。本机编排器
-(task_loop_pipeline/task_loop) 经懒 import 使用本模块; nodepool 不反向
-import 它们(锁死依赖方向: tl → tp → np)。
+(task_loop_pipeline/task_loop) 经懒 import 使用本模块; 反向依赖仅
+pick_node 一处——函数体内懒 import task_loop_pipeline 取 free_slots_on
+(模块顶层零 import,加载期无环;调用期单向借 tp 的只读空槽计数)。
 
 零第三方: SSH 一律系统 ssh/scp 子进程, ConnectTimeout=8(探测语义:
 连不通=该节点本轮不可选,绝不长时间挂住 cycle)。凭据走 setup 分发的密钥

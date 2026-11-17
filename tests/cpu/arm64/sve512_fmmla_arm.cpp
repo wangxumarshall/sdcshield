@@ -202,7 +202,7 @@ static int sve512_fmmla_arm_init(struct test *test)
 #else
     /* All-VL Phase 2 P6 split gate: the pure SVE capability + 128..1024-bit
        range check moves to the framework layer (arm64_require_sve_vl —
-       returns the VL in BYTES), while the composite SVE2|F32MM|F64MM
+       returns the VL in BYTES), while the F32MM|F64MM
        HWCAP2 conjunction stays a getauxval hand-probe: it is this test's
        own semantic gate (FEAT_F32MM + FEAT_F64MM matrix-multiply
        instructions), which the generic require helper does not cover. */

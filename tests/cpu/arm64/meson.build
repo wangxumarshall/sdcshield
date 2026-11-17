@@ -301,12 +301,12 @@ if host_machine.cpu_family() == 'aarch64'
         ],
     )
 
-    # SVE2 matrix-multiply (FMMLA) SDC stress tests. Separate library
+    # FMMLA matrix-multiply (FEAT_F32MM / FEAT_F64MM) SDC stress tests. Separate library
     # because FMMLA requires -march=armv8.2-a+sve+f32mm+f64mm — a superset
     # of the tests_arm64_sve library's armv8.2-a+sve, and keeping the
     # F32MM/F64MM instructions out of the SVE1 library means SVE1-only
     # machines can still run every other SVE test. test_init probes
-    # HWCAP2 (SVE2 + F32MM + F64MM) and returns a clean EXIT_SKIP when
+    # HWCAP2 (F32MM + F64MM) and returns a clean EXIT_SKIP when
     # absent. Compiler-support guard follows the SME pattern below (the
     # gmp/acl/openblas graceful-degradation convention); the library is
     # also exempt from sanitizer instrumentation like every SVE library
@@ -318,8 +318,8 @@ if host_machine.cpu_family() == 'aarch64'
     # FEAT_F32MM+F64MM and HWCAP2_SVE2=0 executes them correctly). Compiling
     # this TU with +sve2 made the framework's compiler_minimum_device gate
     # skip it on such hardware even though every instruction it uses works.
-    # The test's own init still requires SVE2|F32MM|F64MM ... — narrowed
-    # here to F32MM|F64MM, which is what the code actually uses.
+    # The test's own init gates on F32MM|F64MM, which is what the code
+    # actually uses.
     sve_mm_march = march_arm64_sve_mm
     if cpp.has_argument(sve_mm_march)
         arm64_sve_mm_lib = static_library(

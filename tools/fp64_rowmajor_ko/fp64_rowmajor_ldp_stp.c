@@ -43,6 +43,9 @@
 #include <linux/string.h>
 #include <linux/smp.h>
 #include <linux/jiffies.h>
+#include <linux/workqueue.h>
+#include <linux/percpu.h>
+#include <linux/cpumask.h>
 #include <linux/utsname.h>
 #include <asm/neon.h>
 /* 内核规范的 NEON 内建函数包装头 (统一 u64/s64 与 arm_neon.h 的类型),
@@ -343,6 +346,23 @@ nomem:
     return -ENOMEM;
 }
 
+/* per-CPU 结果聚合: 每个在线 CPU 各自跑主循环并把失败 sweep 数写回自己的槽位。
+ * 5.10 的 schedule_on_each_cpu 未 EXPORT 且只接受 work_func_t (无数据参数),
+ * 故用模块全局指针传 ctx + 每核一个 work_struct 经 queue_work_on 派发。
+ * fp64_active_ctx 在 flush 等待返回前只读、不会并发修改。 */
+static DEFINE_PER_CPU(int, fp64_sweep_fail);
+static DEFINE_PER_CPU(struct work_struct, fp64_sweep_work_item);
+static struct fp64_ctx *fp64_active_ctx;
+
+static void fp64_sweep_work(struct work_struct *work)
+{
+    (void)work;
+    int failing = fp64_run_sweeps(fp64_active_ctx);
+    int cpu = get_cpu();
+    per_cpu(fp64_sweep_fail, cpu) = failing;
+    put_cpu();
+}
+
 static int __init fp64_rowmajor_ldp_stp_init(void)
 {
     struct fp64_ctx ctx = { NULL, NULL, NULL, NULL };
@@ -367,7 +387,32 @@ static int __init fp64_rowmajor_ldp_stp_init(void)
     memset_random(ctx.scratch, FP64_BUF_SZ);
 
     fp64_golden_init(&ctx);
-    ret = fp64_run_sweeps(&ctx);
+
+    /* per-CPU 覆盖: 在每个在线 CPU 上各跑一遍主循环 (per-cpu workqueue 的
+     * kworker 进程上下文 — kernel_neon_begin/end 安全), 任一 CPU 分配失败则
+     * 整个加载失败, 否则聚合所有 CPU 的 miscompare 数。 */
+    {
+        int cpu, total_fail = 0;
+        ret = 0;
+        fp64_active_ctx = &ctx;
+        for_each_online_cpu(cpu) {
+            struct work_struct *w = per_cpu_ptr(&fp64_sweep_work_item, cpu);
+            INIT_WORK(w, fp64_sweep_work);
+            queue_work_on(cpu, system_wq, w);
+        }
+        flush_workqueue(system_wq);
+        fp64_active_ctx = NULL;
+        for_each_online_cpu(cpu) {
+            int r = per_cpu(fp64_sweep_fail, cpu);
+            if (r < 0) {
+                ret = r;
+                break;
+            }
+            total_fail += r;
+        }
+        if (ret == 0)
+            ret = total_fail;
+    }
 
 out:
     buf_free(ctx.srcA);

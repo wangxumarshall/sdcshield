@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794918586513,
+  "lastUpdate": 1794922799590,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4374,6 +4374,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.304,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "bfb4e9644b6b05b70aef80e499c20ac8a5851641",
+          "message": "fix(docs): README SVE 矩阵收口句补 seed2 首跑整机重启未取证未决范围限定 (#751) (#838)\n\n审计 #751 的行号锚点(:17-27/:205/:208-209)精确匹配 triage-256.md 原始版\n76482b8b(2026-10-29);其描述的缺陷已被 13445067(audit #395/PR #405)修掉\n——SIGQUIT 迟滞窗口因果叙事删除、「代码 bug 候选 = 0」加范围限定明确不\n覆盖该重启、重启列候选稳定性信号、事后 SEL/pstore/journalctl 取证列为\n待办。该文件复被 31f6a99e(2026-11-17)清理出库。\n\n残缺口: README.md:357 是 31f6a99e 之后唯一存活的运动收口结论承载处,\n携带 PR #316 弱证据与有界几何限定,却不携带重启披露——matrix.md 从未\n有过、triage-128.md:12 仅 boot 对齐注记,该一级异常从全部存活文档消失,\n正是审计关切「被绕开收口」的存活实例。\n\n改动(最小,单行): 零缺陷断言后插入范围限定句,全部断言逐字/逐义取自\ntriage-256 最终版(31f6a99e^ 可取回): 重启时刻(:17-22)、未取证(:62-63)、\n候选稳定性信号(:66-67)、不属结论覆盖面(§7 :353-359)、进程层结局未证\n(:34-44/:74-75)、重跑证据力折损(:71-74)、持久取证面未实测(:62-65)。\n\n验证: 纯文档改动,断言逐条对 31f6a99e^ 历史版本核实(上行号即证据);\n无脚本/CI 解析 README 结构(grep 证据);主机侧事后取证(SEL/journalctl)\n超出仓库补丁范围,按已收口口径保持未决并如实注明取证面未实测。\n\nSigned-off-by: wangxumarshall <wangxumarshall@qq.com>\nCo-authored-by: wangxumarshall <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-17T13:33:19Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/bfb4e9644b6b05b70aef80e499c20ac8a5851641"
+        },
+        "date": 1794922797133,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 82870.212,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 43751.203,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.726,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 30.848,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.927,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 1.893,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.012,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.677,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21571.722,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.049,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.247,
             "unit": "s"
           }
         ]

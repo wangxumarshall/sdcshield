@@ -1701,20 +1701,51 @@ void AbstractLogger::print_child_stderr_common(std::function<void(int)> header)
     const size_t total = size_t(st.st_size);
     const size_t shown = total < MaxStderrDumpSize ? total : MaxStderrDumpSize;
 
+    /* Read `shown` bytes with a retry loop.  A single pread() can be
+     * interrupted by a signal (EINTR) when the parent's handler lacks
+     * SA_RESTART, and a short read would silently drop the tail — with no
+     * truncation note at all when total <= MaxStderrDumpSize.  Keep asking
+     * until we have `shown` bytes, hit EOF, or a real error. */
     std::string contents(size_t(shown), '\0');
-    ssize_t nread = pread(stderr_fd, contents.data(), shown, 0);
-    if (nread <= 0) {
-        /* could not read (or the file vanished): drop the dump, but do not
-         * kill the parent over child stderr */
+    size_t nread = 0;
+    int read_error = 0;
+    while (nread < shown) {
+        ssize_t r = pread(stderr_fd, contents.data() + nread, shown - nread, off_t(nread));
+        if (r > 0) {
+            nread += size_t(r);
+            continue;
+        }
+        if (r == 0)
+            break;                          /* EOF: keep what we read so far */
+        if (errno == EINTR)
+            continue;                       /* interrupted: try again */
+        read_error = errno;
+        break;                              /* real error: report below */
+    }
+
+    if (nread == 0) {
+        /* nothing readable (error before any byte, or the file vanished):
+         * record the loss instead of silently discarding the only diagnostic
+         * field there is, but do not kill the parent over child stderr */
+        if (read_error) {
+            std::string msg = "    ... [stderr dump unreadable: ";
+            msg += strerror(read_error);
+            msg += "; " + std::to_string(total) + " bytes dropped]";
+            writeln(AbstractLogger::file_log_fd, msg);
+        }
         truncate_log_internal(stderr_fd);
         return;
     }
-    contents.resize(size_t(nread));
+    contents.resize(nread);
 
     std::string truncation_note;
-    if (total > shown)
+    if (total > nread) {
         truncation_note = "    ... [stderr truncated: " + std::to_string(total)
-                + " bytes total, first " + std::to_string(shown) + " bytes shown]";
+                + " bytes total, first " + std::to_string(nread) + " bytes shown";
+        if (read_error)
+            truncation_note += "; read error: " + std::string(strerror(read_error));
+        truncation_note += "]";
+    }
 
     char indent[] = "    ";
     header(AbstractLogger::file_log_fd);

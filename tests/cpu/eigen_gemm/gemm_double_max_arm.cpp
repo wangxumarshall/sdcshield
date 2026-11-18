@@ -16,7 +16,13 @@
  * product x as measured, not modelled), n_run caps the full-core single
  * iteration (same-lineage fill + one multiply, probed per tier in the body
  * TU) at a 200 s table-AR budget via the two-point power-law fit — clamped
- * to [1024, 4096]. The preinit no longer sizes the matrix at all: it only
+ * to [MDIM_MIN, MDIM_MAX] = [200, 4096] (this sentence had stayed at the
+ * pre-4c6297ab "[1024, 4096]" — that commit lowered MDIM_MIN but missed
+ * this line. The _sve2 companion genuinely keeps [1024, 4096]: 4c6297ab
+ * did not carry the floor over, so the twins' clamp floors differ — a
+ * divergence recorded here; the CI param scan pins only this test's
+ * mdim, scripts/gha/verify-params.py). The preinit no longer sizes the
+ * matrix at all: it only
  * writes a desired_duration UPPER bound from the same memory ceiling —
  * or from the explicit knob/env, which the child applies VERBATIM and
  * therefore must scale the duration too (issue #352) — and
@@ -25,10 +31,35 @@
  * run at the un-initialised 1024. The old parent-side formula
  * (sqrt(ram_per_worker / (6.0 * 8)) with a 1/cbrt(workers/8) concurrency
  * cap, which held this 127-thread reference host at N=1630 / ~10 GiB) is
- * superseded: the per-node budget divides the same 650‰ ceiling among the
- * node's workers, so the aggregate-footprint protection the concurrency
- * cap used to approximate (N=4096 x 608 workers once wedged init for
- * 17+ min) now falls out of the memory term directly.
+ * superseded BY DESIGN, not by equivalence — issue #706 corrects this
+ * passage's earlier claim that the cap's aggregate-footprint protection
+ * "now falls out of the memory term directly": the cap throttled the
+ * 608-worker class to N=1024 (~20 GB machine-wide, ~4% of a 512 GB-class
+ * host) precisely because N=4096 x 608 workers (311 GB of first-touch
+ * faults + DRAM-bandwidth thrash) once wedged init for 17+ min, while the
+ * per-node budget deliberately buys that pressure back: every
+ * memory-bearing node sizes to its MemFree share of the four-source
+ * ceiling (up to ~65% machine-wide), an envelope the measured wedge point
+ * sits INSIDE, not outside. Model arithmetic (reference probe fit,
+ * c = 32.3 B/n²/thread): on a 4-node x 152-worker 512 GB class the node
+ * slice ≈ 83 GB → n_mem ≈ 4120 → hi 4096 — 4x the old floor, ~329 GB
+ * aggregate, 16x the old cap — and n_run ≈ 6300 does NOT bind there
+ * (the 2/4-node AR rows are TODO guesses, sdc_numa.cpp), unlike the
+ * 608-worker single-node class itself, where the #506-calibrated AR 15
+ * caps n at n_run ≈ 3730 < n_mem. The belts that actually replace the
+ * cap: n_run (one full-core iteration pinned to the 200 s AR budget),
+ * the probe-failure→lo fallback (issue #420), and the parent's poll
+ * window covering test_init too (sandstone_run.cpp wait_for_children
+ * → SIGQUIT at test_timeout = 5×dur+30 s, 300 s floor) — a wedge can
+ * no longer hang silently; worst case it surfaces as a loud
+ * exit-timeout. Honest boundary: the 608-worker class is unexercised —
+ * the sizing record's hosts are node0-only (per-node degenerates to
+ * the global model there, sdc_numa.cpp), the no-SVE 8-node host that
+ * does run the per-node split (SVD family; measured node budget 61.7
+ * GiB = 1/8 MemFree share, AR row 4.0) cannot run this SVE-gated TU,
+ * and slice→node attribution stays the m4 min-cpu approximation
+ * (sdc_joint_dim_slice) — exact under the default per-node slicing,
+ * approximate for cross-node affinity sets.
  *
  * The working set overflows L2 and L3 and pressures the TLB — the
  * cache-overflow trigger path validated by the sve512_*_svd family —
@@ -104,8 +135,17 @@
 
 /* Memory-safe dimension bounds: joint-solver lo/hi AND knob clamp.
  * 全部可通过统一配置层覆盖: -O eigen_gemm_double_max_arm.mdim=N /
- * 配置文件 / 环境变量, 见 sdc_stress_config.h。 */
-#define MDIM_MIN 1024
+ * 配置文件 / 环境变量, 见 sdc_stress_config.h。
+ * MDIM_MIN 1024→200 (2026-11-17, 用户决策): CI 全量参数扫描
+ * (scripts/gha/verify-params.py) 对矩阵用例统一 -O 钉 mdim=200 以适配
+ * --timeout=60s 的每测试墙钟预算(run 44011713221: 自适应大维度单迭代即
+ * 超时); 原下限 1024 会把 200 静默钳到 1024。行为面: 自适应路径不变——
+ * n_mem/n_run 在任何真实主机上都远超 1024, 联合层 n = max(lo, min(...))
+ * 的 lo 只是兜底; 变化仅两处兜底/钳位档: probe 失败退守与 quick 模式
+ * 收缩档 1024→200(更保守), 显式 -O/env 200..1023 由"钳到 1024"变为
+ * 原值接受(本变更的目的)。body 对维度无假设(动态 Eigen 矩阵, issue
+ * #410 scatter 形任意 N/NC 均界内)。 */
+#define MDIM_MIN 200
 #define MDIM_MAX 4096
 
 /* Tier recorded at init (from the framework-pinned control thread, whose
@@ -292,7 +332,9 @@ static int eigen_gemm_double_max_arm_preinit(struct test *test)
     double budget_kb = (double)sdc_budget_bytes(650) / 1024.0;
     /* GEMM_F64 表值引用表函数而非字面量(09c94fc6 遗留项收口): T9 重标定
      * 0.0290→0.0315 后字面量静默陈旧; 引用后 n_hi 随 1/sqrt(c) 收缩 ~4%,
-     * 上界性质不变且更紧(child 同表同预算精算, node0-only 时恰等)。 */
+     * 上界性质不变且更紧(child 同表同预算精算; node0-only 且 VmHWM 反馈
+     * 未采信时恰等——反馈采信时 child c 经 0.7×锚下限可低于表值, n 膨胀
+     * 至 1/sqrt(0.7)≈1.2× n_hi, 即上方 n_hi bullet 第二机制, issue #638)。 */
     double c_kb = sdc_rss_table_c(SDC_RSS_GEMM_F64);
     int workers = sdc_total_threads();
     if (workers < 1)

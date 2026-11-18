@@ -2,6 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+（merge 后勘误，2026-11-18：本计划成文于 merge-base 957691e4，其后 main 有两处
+演化使文中陈述过时——(a) main 31f6a99e（2026-11-17）删除了 docs/research/
+整目录（含 adding-tests.md），Task 6 的 adding-tests.md 部分随文件消亡，本 PR
+merge 时接受删除，档位表唯一存活副本在 README；(b) main 的 feat/eigen-sve2-
+companion（2026-11-13）为 14 个 `_sve2` 配套新增 armv8.2-a+sve2 编译目标，merge
+时将其字面量统一为根新增第七档 `march_arm64_sve2_compat`（GCC-10 可编最小 SVE2
+档，刻意不同于全量 `march_arm64_sve2`）——「6 个变量/六档」的旧计数按此 +1，
+本文其余部分保留为当时事实。）
+
 **Goal:** 把全仓散落的 16 处 aarch64 专属 `-march=` 字面量统一为根 `meson.build` 的 6 个 `march_arm64_*` 命名变量（单一事实来源，构建前后编译命令逐字节不变），并在 README.md、CLAUDE.md、docs/research/adding-tests.md 写清楚「哪些用例需要 NEON/SVE/SVE2 等什么编译选项、在哪儿统一指定」。
 
 **Architecture:** meson 的 `subdir()` 共享变量作用域——根 `meson.build`（现有 `march_flags` 定义处，L78–109 之后）定义 6 个档位变量，所有 tests/framework 子目录直接引用；`tests/cpu/arm64/sdc_fuzzing/meson.build` 是自动生成的，改生成器 `scripts/generate_sdc_fuzz_cases.py` 后重新生成。不新增 meson option（档位与运行期 HWCAP 门控强耦合，做成可覆盖旋钮反而制造分叉风险）。

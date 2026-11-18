@@ -51,6 +51,7 @@
 #include <chrono>
 #include <map>
 #include <string>
+#include <sysexits.h>
 #include <unistd.h>
 
 /* NUMA 探测/AR 与联合求解的 per-node 分支仅 ARM64-Linux(spec §5 rule 5)。
@@ -1187,6 +1188,24 @@ inline std::map<std::string, struct sdc_joint_ctx> &sdc_joint_cache()
     return cache;
 }
 
+/* issue #747: 联合口径查询回调 —— 配置层把它注册给框架(sdc_numa.h 的
+ * sdc_register_joint_ctx_lookup, 登记处调用), 框架反馈写入点经回调取
+ * 口径, 调度 TU 不再 include 本头。impl 可用 static inline(每 TU 一份
+ * 副本无害: 各副本查的都是同一份外部链接 map, 框架经指针调用不内联);
+ * x86 编译存在但无人注册、无人经指针调用(框架写入点在 arm64 门控内),
+ * 与 inline map 同为「编译存在、无行为」现状。 */
+static inline bool sdc_joint_ctx_lookup_impl(const char *test_id, int *n,
+                                             int *threads, int *elem_bytes)
+{
+    auto it = sdc_joint_cache().find(test_id);
+    if (it == sdc_joint_cache().end())
+        return false;
+    *n = it->second.n;
+    *threads = it->second.threads;
+    *elem_bytes = it->second.elem_bytes;
+    return true;
+}
+
 /* T10 降档路径的反馈口径失效(issue #545; 取代 PR#302 检视 #25 的
  * 『同步分母』修复): init 期 bad_alloc 降档到 kInitRetryLo 重试成功后,
  * run_one_test_inner 尾部的反馈写入点按 ctx.n 折算 eff_ratio
@@ -1245,13 +1264,34 @@ struct sdc_joint_args {
  * sdc_knob_int_clamped(def=0) 一致: 0 = 未显式配置(-O/配置文件通道)。
  * env 兜底通道不经过本函数(sdc_env_knob_int_clamped 不写 cache), 由
  * sdc_joint_dim_slice 的 knob 早退块自行补查。
+ *
+ * issue #692: cache 键(test->id+"."+key)不含边界——命中值是按首次查询
+ * 调用点的边界 clamp 的结果, 不保证在本次调用的 [lo, hi] 内; 边界不同
+ * 的二次查询会静默拿到按旧边界 clamp 的越界值。故命中后按本次边界重
+ * clamp(0 = 未显式配置哨兵, 原样透传, 不参与 clamp), 越界时有声告警
+ * ——调用方边界分歧是缺陷信号, 不静默截断; 重 clamp 结果不回写 cache
+ * (缓存的是首次查询口径, 回写会让另一边界口径的读者失真)。现状核实
+ * (2026-11-17): 全部调用方预热边界与 ja.lo/hi 一致, 且显式值都在调用
+ * 方 init 短路——命中路径今天只返回 0, 本重 clamp 是对未来调用方形态
+ * 的防御, 既有行为逐位不变。
  */
 static inline int64_t sdc_joint_knob_value(struct test *test, const char *key,
                                            int64_t lo, int64_t hi)
 {
     auto it = sdc_knob_cache().find(sdc_knob_cache_key(test, key));
-    if (it != sdc_knob_cache().end())
-        return it->second;
+    if (it != sdc_knob_cache().end()) {
+        int64_t v = it->second;
+        if (v != 0 && (v < lo || v > hi)) {
+            int64_t clamped = v < lo ? lo : hi;
+            log_warning("%s: %s=%ld 越界 (有效 %ld..%ld; cache 键不含边界, "
+                        "与首次查询调用点的边界分歧, issue #692), "
+                        "已重 clamp 为 %ld",
+                        test ? test->id : "(global)", key, (long)v,
+                        (long)lo, (long)hi, (long)clamped);
+            return clamped;
+        }
+        return v;
+    }
     return sdc_knob_int_clamped(test, key, 0, lo, hi);
 }
 
@@ -1341,8 +1381,42 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                                       const struct sdc_joint_args *a,
                                       int solve_once(int))
 {
-    if (!a)
-        return 0;
+    /* issue #607: NULL args 与 lo<1 都是调用方编程错误, 不得返回静默
+     * 哨兵 0——调用方模式 `d->n = sdc_joint_dim_slice(...)` 直通赋值无
+     * 校验, 而 0 是不可用维度: 0×0 矩阵 + 0 字节 memcmp + 0 次迭代即
+     * 空转 PASS(实测本机 glibc aligned_alloc(64,0) 返回非 NULL), 即
+     * CLAUDE.md rule 6 定性为 bug 的 no-op-pass 形态。a 非 NULL 且
+     * lo ≥ 1 时全部出口恒 ≥ lo(退化区间/quick/尾部钳底, ARM 另有 knob
+     * clamp 早退)——0 的来源仅 NULL 分支与 lo<1 非法调用两类, 由下方
+     * 两守卫分别 fail-loud 封堵; NULL 情形取不到安全出口值(退化区间
+     * hi<=lo 尚可 return a->lo, a 缺失则 lo 不可得)。处置逐项裁定:
+     * 非 assert(b_ndebug=if-release 下 release 定义 NDEBUG, 防线被
+     * 编译掉); 非 abort(调用点均在 forked child 的 test_init, SIGABRT
+     * 被 parent 分类 "crash" 与真实测试崩溃混淆; _exit(EX_SOFTWARE)=70
+     * → OperatingSystemError 才是编程错误的准确分类, issue #396
+     * thread_stack_setup_failed 同型); fprintf(stderr) 而非 log_warning
+     * (no_output 日志模式下编译为 (void)0, 致命消息须直达终端)。
+     * lo<1 属防御性封堵: 现全部调用方硬编码 lo≥16, 非现行 bug, 无独立
+     * 死亡单测——本机 GCC 12 -O3 实测, 与 NULL 用例共存时 ipa-cp 按公共
+     * 常量(test/knob/solve_once)合并克隆、a 留运行期参数, 主体存活越
+     * #420 单测链接边界(见单测文件头注); 机制级验证走本 issue harness。
+     * NULL 用例死亡单测锁定: unit-tests/sdc_stress_config_tests.cpp
+     * SdcJointDimSlice(__OPTIMIZE__ 门)。 */
+    if (!a) {
+        fprintf(stderr, "%s: sdc_joint_dim_slice(\"%s\"): NULL sdc_joint_args"
+                        " — 调用方编程错误, 拒绝返回静默哨兵 0 (issue #607)\n",
+                (test && test->id) ? test->id : "(global)",
+                knob ? knob : "?");
+        _exit(EX_SOFTWARE);
+    }
+    if (a->lo < 1) {
+        fprintf(stderr, "%s: sdc_joint_dim_slice(\"%s\"): 非法 lo=%d(<1, "
+                        "0 维 = 空转 PASS) — 调用方编程错误, 拒绝返回静默"
+                        "哨兵 0 (issue #607)\n",
+                (test && test->id) ? test->id : "(global)",
+                knob ? knob : "?", a->lo);
+        _exit(EX_SOFTWARE);
+    }
     /* permille/c 提前到 knob/quick 早退之前(T11): knob 早退的预期内存
      * 警告需要 c; 纯计算无副作用, 相对退化区间/quick 检查的顺序提升
      * 零行为差(两条早退路径原本就不读这两个值)。 */
@@ -1612,10 +1686,13 @@ static inline int sdc_joint_dim_slice(struct test *test, const char *knob,
                 n_mem, n_run, ar, c_bytes, n, (double)node_budget / 1073741824.0);
     /* 口径登记(T7): run_one_test_inner 尾部的反馈写入点据此折算
      * eff_ratio = VmHWM/(n²·elem·threads)。threads 用本 slice 的
-     * thread_count()(child_run 已改写为 slice 口径)。 */
+     * thread_count()(child_run 已改写为 slice 口径)。同步把查询回调
+     * 注册给框架(issue #747, 幂等: 重复登记重注册同一 map 的查询路径),
+     * 框架写入点经回调取数, 不再直接查本账本。 */
     if (test && test->id) {
         struct sdc_joint_ctx ctx = { n, slice_thr, a->bytes_per_elem, c_bytes };
         sdc_joint_cache()[test->id] = ctx;
+        sdc_register_joint_ctx_lookup(sdc_joint_ctx_lookup_impl);
     }
     return n;
 #else

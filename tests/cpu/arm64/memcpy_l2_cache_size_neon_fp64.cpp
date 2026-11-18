@@ -213,8 +213,18 @@ static inline void neon_fma_fp64(double *dst, size_t count)
                                         x, vaddq_f64(x, c1));
         vst1q_f64(dst + i, y);
     }
-    for (; i < count; ++i)
-        dst[i] = scalar_reference(dst[i]);
+    /* 1-wide tail: same formula on the d-register NEON form (FMLA d-form)
+     * so the tail stays on the datapath under test. Reviewed 2026-11-11:
+     * calling scalar_reference() here made tail_self_check compare the
+     * scalar golden against itself — a tautology with zero NEON coverage.
+     * In production count is a multiple of 8 (bytes rounded down to 64 B),
+     * so the tail runs only under tail_self_check's kTailCount=7. */
+    for (; i < count; ++i) {
+        const float64x1_t x = vld1_f64(dst + i);
+        const float64x1_t y = vfma_f64(vmul_f64(x, vdup_n_f64(kC2)),
+                                        x, vadd_f64(x, vdup_n_f64(kC1)));
+        vst1_f64(dst + i, y);
+    }
 }
 
 static bool tail_self_check()

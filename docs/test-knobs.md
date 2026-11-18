@@ -71,4 +71,4 @@
 | `spinlock_add_neon` | `.logverif` / `.logverif_retain` / `.selftest` | 0\|1 / 0\|1 / off\|stall\|data（错值 fail-loudly） | 0 / 0 / off | 逐次验证日志开关 / 绿跑日志保留 / 部署自检注入（stall=看门狗停顿，data=数据通路） |
 | `memcpy_rewr` / `memcpy_rewr_neon` | 环境变量 `SANDSTONE_STRATEGY_INDEX` / `SANDSTONE_STRATEGY_CONF` | 0..2 / conf 路径 | — | MPSC 策略选择（env 而非 `-O` 机制） |
 
-仍无 knob 的测试（`isal_crc*`×10 等）参数为编译期常量——参数审查（`docs/research/third-party-sdc-param-critique.md`）记录的已知状态（该文档已随 31f6a99e 清理出库，git 历史 `31f6a99e^` 可取回）。
+仍无 knob 的测试（`isal_crc*`×10 等）参数为编译期常量——参数审查记录的已知状态（该文档已随 31f6a99e 清理出库，git 历史 `31f6a99e^` 可取回）。

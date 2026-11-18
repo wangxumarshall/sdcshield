@@ -128,8 +128,8 @@ END_DECLARE_TEST
   jointly sized via `sdc_joint_dim_slice` (2026-10-27,
   feat/eigen-p0-p3-fix; explicit `-O <test>.mdim/n` bypasses sizing; the
   `[内存越界]`/`[欠压力]` expected-memory warning covers only the ten SVD
-  template-family users) — the algorithm (four-source memory budget ×
-  RSS_RATIO_TABLE, probe fit × AR slowdown, VmHWM EMA loop) and the dated
+  template-family users) — the algorithm (four-source memory budget,
+  probe fit × AR slowdown, VmHWM EMA loop) and the dated
   T11/T11b coverage chain: `docs/coding/eigen-tests-internals.md`. The
   pre-fix "ULP-level sporadic failure under full-core multithreading" advice
   is obsolete.

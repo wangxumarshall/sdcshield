@@ -366,7 +366,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 | 算术 / 大整数 | `adcx`、`adox`、`adcxlong`、`adcx_arm`、`bigint_mulx_arm`、`gmp_big*` | 进位/溢出链、GMP 大整数乘加、高汉明距离操作数压满加法器 |
 | CRC / 校验 | `crc32`、`isal_crc{32,64}_*`、`zpclmul*` | `crc32` 指令、isa-l CRC32/CRC64 各标准、zlib PCLMUL 折叠 |
 | 压缩 | `zlib*`、`zstd*`、`zfuzz`、`isal_igzip` | zlib/zstd 压缩-解压往返、各级别、fuzz、isa-l deflate/inflate 往返（`-O isal_igzip.level=0..3` 扫四套 match-finder 数据结构） |
-| 线性代数（Eigen） | `eigen_gemm_*`、`eigen_sparse`、`eigen_svd*`（含 `_cdouble_sve`；14 个 SVE 用例各有 `_sve2` 配套——armv8.2-a+sve2 编译目标（GCC 10+ 可编；march 切换与 objdump A/B 审计链见[SVE2 配套审计](docs/evidence/sve2-companion-objdump-audit.md)），门控 SVE2 | GEMM、稀疏 Cholesky、SVD（BDCSVD/Jacobi）施压 FMA/向量 |
+| 线性代数（Eigen） | `eigen_gemm_*`、`eigen_sparse`、`eigen_svd*`（含 `_cdouble_sve`；14 个 SVE 用例各有 `_sve2` 配套——armv8.2-a+sve2 编译目标（GCC 10+ 可编；march 切换与 objdump A/B 审计链见[SVE2 配套审计](docs/evidence/sve2-companion-objdump-audit.md)），门控 SVE2） | GEMM、稀疏 Cholesky、SVD（BDCSVD/Jacobi）施压 FMA/向量 |
 | 线性代数（OpenBLAS） | `openblas_dgemm`、`openblas_sgemm`、`openblas_zgemm`、`openblas_cgemm`、`openblas_lu` | NEON FMA 微内核 GEMM 四种 lane 组织，每迭代 copy/compute/verify；`openblas_lu` = LAPACK dgesv 主元分支 + 三重 golden 比对；knob 语义见「Test knob」总表 |
 | 超越函数（SLEEF） | `sleef_neon`、`sleef_sve` | 多项式 FMA 依赖链 × 宽向量，逐字节 golden 比对；u10 + u35 双精度档 + asin/atan/cbrt/log10/sinh/tanh/pow 函数族；`sleef_sve` 需 SVE 硬件（无则干净 skip），all-VL 128..1024-bit 真 VLA；足迹旋钮见「Test knob」总表 |
 | FFT（pocketfft） | `pocketfft_fft` | 复数 FFT + 实数 rfft 前向 golden 比对：位反转抽取重排 + 旋转因子 FMA 蝶形链；`-O pocketfft_fft.n=N` 扫因子谱系（pow2 / Bluestein 质数 / 混合 radix） |

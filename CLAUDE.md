@@ -223,9 +223,9 @@ END_DECLARE_TEST
   `31f6a99e^` 可取回); gem5+CHAOS fault injection: `docs/gem5-doc/`.
 - **Literature rationale** (why these workloads/libs — 31-paper synthesis):
   `docs/paper/SDC_RESEARCH_for_SDCShield-负载设计.md`; the fault-injection
-  experiment plan `docs/paper/SDC_FAULT_INJECTION_EXPERIMENT_PLAN_CN.md` was
-  removed 38ffee5b (git history `38ffee5b^` 可取回); see also
-  `docs/paper/SDC_RESEARCH_for_FI.md`.
+  experiment plan was renamed in 38ffee5b to
+  `docs/paper/SDC_RESEARCH_for_FI.md` (pre-rename name
+  `docs/paper/SDC_FAULT_INJECTION_EXPERIMENT_PLAN_CN.md`; history at `38ffee5b^`).
 - **Academic survey** (53-paper full-read taxonomy report, 2026-09):
   `docs/paper/SDC_ACADEMIC_SURVEY_CN.md` — SDC core-characteristics /
   root-cause / fault-mode / detection / handling taxonomies,

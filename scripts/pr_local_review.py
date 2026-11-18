@@ -15,6 +15,10 @@
 # 上一已审 head 之后的 delta + 上轮 findings 复核(rebase 等四情形自动回退
 # 全量);P2 失败加固——claude 输出落盘取证(review-debug/)+ 解析失败带修复
 # 后缀进程内重试一次。
+# 2026-11-12 Task 6(nightly pipeline 泳道2,docs/superpowers/specs/
+# 2026-11-12-full-auto-pipeline-design.md): CLI 增 --pr <N> 派发形态(与
+# --all-open 互斥;与位置参数 <PR> 共用单 PR 路径)——pipeline 检视派发器
+# task_loop_pipeline.dispatch_review 的 spawn 目标。
 #
 # 依赖: Python 3 标准库 + gh/claude 子进程,零第三方运行时依赖(与 pr_loop.py
 # 同策略,本脚本不管理 token;claude 凭据 source agent.env——新 state 目录
@@ -917,7 +921,8 @@ def publish_review(pr_number: int, head_sha: str, findings: list[dict]) -> None:
                       "event": "COMMENT", "comments": []})
 
 
-# ============ CLI 入口(Task 5: 单 PR + --all-open 时间触发线) ============
+# ============ CLI 入口(Task 5: 单 PR + --all-open 时间触发线;
+# Task 6: --pr 泳道2 派发形态) ============
 
 def _open_pr_heads() -> list:
     """`gh pr list --state open --json number,headRefOid` → [(number, head_sha)]。
@@ -1004,6 +1009,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-open", action="store_true",
         help="枚举仓库全部 open PR,对尚无第 5 bot 信号的 head 跑审查"
              "(幂等: 同 head 已审跳过)")
+    # dest 拆分 pr_opt: 位置参数 <PR> 已占 dest="pr",--pr 再同名会令
+    # argparse 对零匹配 nargs="?" 位置参数的默认值回写覆盖 --pr 的值
+    # (两动作共享 dest 互相踩),拆 dest 后 --pr 优先、位置参数兼容并存。
+    p.add_argument(
+        "--pr", type=int, default=None, dest="pr_opt", metavar="N",
+        help="只检视指定 PR 的当前 head(与 --all-open 互斥)")
     p.add_argument(
         "pr", nargs="?", type=int,
         help="单个 PR 编号——只审查该 PR 当前 head")
@@ -1011,15 +1022,28 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.pr_opt is not None and args.all_open:
+        parser.error("--pr 与 --all-open 互斥")
     if args.all_open:
         review_all_open()
         return 0
-    if args.pr is None:
-        build_parser().print_usage(sys.stderr)
-        print("错误: 需指定 <PR> 位置参数或 --all-open", file=sys.stderr)
+    pr_num = args.pr_opt if args.pr_opt is not None else args.pr
+    if pr_num is None:
+        parser.print_usage(sys.stderr)
+        print("错误: 需指定 <PR> 位置参数、--pr <N> 或 --all-open",
+              file=sys.stderr)
         return 2
-    review_one_pr(args.pr)
+    # --pr(流水线泳道2 派发形态,task_loop_pipeline.dispatch_review 的
+    # spawn 目标)与位置参数 <PR> 共用单 PR 路径 review_one_pr: 取 head
+    # sha → 同 head 幂等门禁 → run_review → publish_review。spec
+    # 2026-11-12-full-auto-pipeline-design §4 泳道2 动作即「本地对抗检视
+    # → 发布检视」——只 run_review 不发布会令 findings 无处落地、merge
+    # 门(READY_TO_FIX 五 bot 判据)永等不到第 5 bot 信号;brief Step 3
+    # 片段的裸 run_review 形态按 spec 校正(progress.md 预检规则: 冲突时
+    # 以 spec 为准)。
+    review_one_pr(pr_num)
     return 0
 
 

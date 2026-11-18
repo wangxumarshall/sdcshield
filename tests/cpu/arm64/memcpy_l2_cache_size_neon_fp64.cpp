@@ -76,6 +76,23 @@ static size_t round_down(size_t value, size_t align)
 
 static size_t detect_l2_bytes()
 {
+    /* Same first source as the base test memcpy_l2_cache_size
+     * (device_info[].cache[], filled by the framework's sysfs probe), so
+     * both "L2-sized" tests pick the same block on one machine. Reviewed
+     * 2026-11-11: a private chain that started at sysconf made the two
+     * tests disagree on one host (framework 1.25 MB vs sysconf 512 KiB).
+     * sysconf, sysfs and the 256 KiB default remain as robustness
+     * fallbacks for hosts where the framework table is empty. */
+    const int ndev = device_count();
+    for (int i = 0; i < ndev; ++i) {
+        int sz = device_info[i].cache[1].cache_data;   /* cache[1] = L2 */
+        if (sz > 0) {
+            const size_t bytes = round_down(static_cast<size_t>(sz), kCacheLine);
+            if (bytes >= kMinBlockBytes)
+                return bytes;
+        }
+    }
+
     const long reported = sysconf(_SC_LEVEL2_CACHE_SIZE);
     if (reported > 0) {
         const size_t bytes =
@@ -105,6 +122,10 @@ static size_t detect_l2_bytes()
         }
     }
 
+    /* Nothing detected: say so instead of silently shrinking the block. */
+    log_warning("memcpy_l2_cache_size_neon_fp64: no L2 size detected "
+                "(device_info/sysconf/sysfs), falling back to %zu bytes",
+                kDefaultL2Bytes);
     return kDefaultL2Bytes;
 }
 

@@ -53,7 +53,7 @@ profiles:
     agent: claude
     model: sonnet
     effort: high
-    flags: [--permission-mode, acceptEdits]
+    flags: [--dangerously-skip-permissions]
     text: workflow:builder
 roles:
   pr-neon:
@@ -80,7 +80,7 @@ roles:
     agent: claude
     model: opus
     effort: high
-    flags: [--permission-mode, acceptEdits]
+    flags: [--dangerously-skip-permissions]
     goal: "Review each branch as it lands"
     touches: []
     reviews: [pr-neon, pr-feature, pr-docs, issues-audit, issues-gap]

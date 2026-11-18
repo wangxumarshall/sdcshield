@@ -18,4 +18,4 @@ Honesty boundary (corrected 2026-11-17): the stress kernels are an SVE1 subset, 
 
 （源：CLAUDE.md spec policy 条。）
 
-2026-11-17 前曾用 armv9-a+sve2——armv9-a 架构名需 GCC 11+，曾致 Multi-OS Verify 的 20.03/22.03 gcc-10 镜像 Build 全红（PR #661 回归，run 44011713221）；+sve2 在 armv8.x-a base 上 GCC 10 即可编；双 march 40 库 objdump A/B 实测（2026-11-17 干净同源全量构建对比，flags 除 march 外逐项全等）：40/40 库原始反汇编有差异（分支偏移/地址移位 + 标量调度重排，合计 ~10.2k 行），32/40 库助记符多重集逐库全等，余 8/40 库另有 ±1..13 次纯标量计数微差（mov/ldr/str/stp/ldp/ldur/stur/nop/add/lsl/madd/mul/b.*，含一次整数 mul↔madd 融合翻转；零 SVE 族、零 FP 族计数变化 → 数值面不变），WHILEWR 逐库计数 A/B 全等（合计 1549 实例分布于 35 库），诚实边界不变。
+2026-11-17 前曾用 `armv9-a+sve2`——armv9-a 架构名需 GCC 11+，曾致 Multi-OS Verify 的 20.03/22.03 gcc-10 镜像 Build 全红（PR #661 回归，run 44011713221）；+sve2 在 armv8.x-a base 上 GCC 10 即可编；双 march 40 库 objdump A/B 实测（2026-11-17 干净同源全量构建对比，flags 除 march 外逐项全等）：40/40 库原始反汇编有差异（分支偏移/地址移位 + 标量调度重排，合计 ~10.2k 行），32/40 库助记符多重集逐库全等，余 8/40 库另有 ±1..13 次纯标量计数微差（mov/ldr/str/stp/ldp/ldur/stur/nop/add/lsl/madd/mul/b.*，含一次整数 mul↔madd 融合翻转；零 SVE 族、零 FP 族计数变化 → 数值面不变），WHILEWR 逐库计数 A/B 全等（合计 1549 实例分布于 35 库），诚实边界不变。

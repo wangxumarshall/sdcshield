@@ -150,8 +150,12 @@ static int neon_rot_ldr_at_top_rowmajor_fp64_dump_init(struct test *test) {
      * scalar and vector FP64 dispatch to the same F0/F1 pipes, so no FP64
      * arithmetic (scalar or vector) can serve as a fully independent golden
      * (the only such path would be integer emulation of IEEE-754, out of
-     * scope); that whole-unit fault class is where the sibling
-     * scalar-integer test family fills in. */
+     * scope). That whole-unit fault class carries NO independent golden
+     * anywhere in this family — the sibling scalar-integer tests execute
+     * only integer vector ALUs (vaddq_u64/veorq/vandq/vorrq) with scalar
+     * integer recomputes and not one FP64 instruction, so they detect
+     * nothing of an FP64-unit fault either. This is a disclosed
+     * family-level blind spot, not a delegated one. */
     {
         const float64x1_t *sa = reinterpret_cast<const float64x1_t *>(data->srcA);
         const float64x1_t *sb = reinterpret_cast<const float64x1_t *>(data->srcB);

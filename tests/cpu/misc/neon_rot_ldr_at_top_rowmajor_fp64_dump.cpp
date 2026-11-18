@@ -45,9 +45,16 @@
  * appear verbatim elsewhere in any buffer).
  *
  * Dumps land in movbe_log/fp64_rowmajor/ (relative to CWD, created in
- * init; dualcmp convention). If the dir cannot be created the binary
- * dump is skipped silently - the failure message still carries the
- * first differing elements.
+ * init) — the in-tree dump-family layout shared with the sve_rot_*
+ * probes (movbe_log/gps_rowmajor/), which the dualcmp flow consumes.
+ * Trade-off, stated honestly (reviewed 2026-11-11, twice): the sibling
+ * dump tests neon_rot_ldr_at_top_dump and neon_rot_ldr_at_top_str4_checkall
+ * write to /var/tmp/ because a
+ * panic on a tmpfs CWD would lose CWD-relative dumps — this fault class
+ * HAS panicked the target machine. movbe_log/ is kept here for family
+ * layout consistency; run the campaign from a persistent-disk CWD. If
+ * the dump file cannot be opened the loss is logged via log_error —
+ * the failure message still carries the first differing elements.
  * @endparblock
  */
 

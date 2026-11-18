@@ -25,6 +25,13 @@
  * 两个实现都由它供给,不再引入 windows.h(零宏面注入)。 */
 #include <unistd.h>
 
+/* Page-size helpers (ROUND_UP_TO / sandstone_page_size / ROUND_UP_TO_PAGE):
+ * shared single implementation, see sandstone_page.h.  Keep this include
+ * OUTSIDE the extern "C" block below -- the header's own #include <stdlib.h>
+ * resolves (in C++) to the C++ <stdlib.h> wrapper, whose first inclusion
+ * must not sit inside a linkage specification (issue #590). */
+#include "sandstone_page.h"
+
 #ifdef __cplusplus
 #include <span>
 #include <vector>
@@ -73,12 +80,6 @@ extern "C" {
         ret = stmt;                         \
     } while (ret == -1 && errno == EINTR)
 #endif
-
-/* Page-size helpers (ROUND_UP_TO / sandstone_page_size / ROUND_UP_TO_PAGE):
- * shared single implementation, see sandstone_page.h.  Included inside the
- * extern "C" block is safe -- the header is self-contained and gives the
- * helper C++ linkage via its own extern "C++" wrapper. */
-#include "sandstone_page.h"
 
 extern char *program_invocation_name;       // also in glibc's <errno.h>
 
@@ -267,6 +268,7 @@ struct TestConfig
     OutputFormat output_format = DefaultOutputFormat;
     uint8_t output_yaml_indent = 0;
     bool log_test_knobs = false;
+    bool compact_log = true;        // default on: lossless YAML log compaction (--full-log disables)
 };
 
 // Isolate variables set during opts parsing into a separate struct.
@@ -677,6 +679,8 @@ void logging_init_child_preexec();
 void logging_finish();
 TestResult logging_print_results(std::span<const ChildExitStatus> status, const struct test *test);
 int log_skip_or_print(SkipCategory cat, const char *fmt, ...) ATTRIBUTE_PRINTF(2, 3);
+void compact_log_set_progress_total(int total);
+void compact_log_update_progress(int distinct_done, int iteration);
 
 /* random.cpp */
 void random_init_global(const char *argument);

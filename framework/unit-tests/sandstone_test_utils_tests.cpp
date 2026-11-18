@@ -198,7 +198,7 @@ TEST(PageSize, InvalidPageSizesRejected) {
 }
 
 TEST(PageSize, FatalOnUnusablePageSize) {
-    EXPECT_DEATH(sandstone_page_size_fatal(-1), "unusable page size");
+    EXPECT_DEATH(sandstone_page_size_fatal(-1, "sysconf(_SC_PAGESIZE)"), "unusable page size");
 }
 
 TEST(PageSize, ConcurrentCallsAgree) {

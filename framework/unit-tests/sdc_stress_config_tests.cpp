@@ -21,6 +21,18 @@
  * 记录该边界)。其外部依赖仅 log_warning 宏展开所需的 thread_num 与
  * log_message(sandstone.h 声明)——在此提供 unittests 域定义, 与
  * sandstone_unittests_utils.cpp 的 dummy 模式同款。
+ *
+ * 联合层的例外是下方 issue #607 NULL-args 契约死亡用例: 调用点四实参
+ * 全编译期常量(!a 恒真), -O≥1 构建内联+死代码消除把联合层函数体连同
+ * numa/反馈符号引用折叠干净(链接零边际成本), 故以 __OPTIMIZE__ 门住;
+ * debug(-O0, 无 __OPTIMIZE__/无 DCE)下该语句会把 sdc_numa_* 符号引进
+ * 单测链接(#420 记录的链接边界, 维持原判定)。不用 NDEBUG: b_ndebug
+ * =if-release 下仅 release 定义它, 而执行单测的两条 CI lane(pr.yaml/
+ * sanitizer.yaml)均 debugoptimized——NDEBUG 门会让回归锁在 CI 从不
+ * 编译执行。lo<1 同源守卫不设独立死亡用例: 本机 GCC 12 -O3 实测, 两
+ * 用例共存时 ipa-cp 按公共常量(test/knob/solve_once)合并克隆、a 留
+ * 运行期参数, 联合层主体存活即越 #420 边界(单 NULL 用例四实参全常量,
+ * 折叠干净链接通过)。真实求解路径的联合层行为仍不进本 TU, 边界不变。
  */
 
 #include <gtest/gtest.h>
@@ -28,6 +40,7 @@
 #include "sdc_stress_config.h"
 
 #include <chrono>
+#include <sysexits.h>
 
 thread_local int thread_num = -1;
 
@@ -96,3 +109,63 @@ TEST(SdcCalibratedDim, HealthyProbeUnchanged)
     EXPECT_GT(fit.a_ms, 0.0);              /* mid==p1 退化回退 a=t1/p1^k */
     EXPECT_DOUBLE_EQ(fit.p, 3.0);
 }
+
+/*
+ * issue #692: sdc_joint_knob_value cache 命中重 clamp。cache 键
+ * (test->id+"."+key)不含边界——命中值是按首次查询调用点的边界 clamp
+ * 的结果, 边界不同的二次查询须按本次 [lo, hi] 重 clamp; 0(未显式配置
+ * 哨兵)透传。生产代码当前所有调用方预热边界与 ja.lo/hi 一致、且显式值
+ * 都在调用方 init 短路(命中路径今天只返回 0), 修复分支无法经真实二进制
+ * 触达——按本文件头注的机制级验证教义, 直接操作本 TU 的 cache 实例
+ * (static inline 函数局部 static, 每 TU 一份)锁定该分支契约。
+ */
+TEST(SdcJointKnobValue, CacheHitInRangePassesThrough)
+{
+    struct test t = {};
+    t.id = "ut692";
+    sdc_knob_cache()[sdc_knob_cache_key(&t, "mdim")] = 500;
+    EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 500);
+}
+
+TEST(SdcJointKnobValue, CacheHitAboveHiReclampsDown)
+{
+    struct test t = {};
+    t.id = "ut692";
+    sdc_knob_cache()[sdc_knob_cache_key(&t, "mdim")] = 5000;
+    EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 2048);  /* 修复前: 5000 */
+}
+
+TEST(SdcJointKnobValue, CacheHitBelowLoReclampsUp)
+{
+    struct test t = {};
+    t.id = "ut692";
+    sdc_knob_cache()[sdc_knob_cache_key(&t, "mdim")] = 16;
+    EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 64);    /* 修复前: 16 */
+}
+
+TEST(SdcJointKnobValue, CacheHitZeroSentinelPassesThrough)
+{
+    struct test t = {};
+    t.id = "ut692";
+    sdc_knob_cache()[sdc_knob_cache_key(&t, "mdim")] = 0;
+    /* 0 = 未显式配置哨兵, 不参与 clamp——否则 def=0 语义(→ env 兜底/自适应
+     * 链)会被 lo 抬升破坏 */
+    EXPECT_EQ(sdc_joint_knob_value(&t, "mdim", 64, 2048), 0);
+}
+
+#if defined(__OPTIMIZE__)
+/* issue #607: sdc_joint_dim_slice 的 NULL args 是调用方编程错误, 修复前
+ * 契约静默返回 0——0 是不可用维度, 调用方模式
+ * `d->n = sdc_joint_dim_slice(...)` 直通赋值后即 0×0 矩阵、0 字节比对
+ * 的空转 PASS(no-op-pass, CLAUDE.md rule 6); 修复后必须 fail-loud:
+ * _exit(EX_SOFTWARE)=70 + stderr 消息(70 → parent 侧 OperatingSystemError
+ * 分类, issue #396 同型裁定)。死亡断言双重锁: 退出码 + stderr 含
+ * issue 标识。__OPTIMIZE__ 门的原因与 lo<1 无独立用例的折叠边界见
+ * 文件头注释。 */
+TEST(SdcJointDimSlice, NullArgsFailsLoudInsteadOfSilentZero)
+{
+    EXPECT_EXIT(sdc_joint_dim_slice(nullptr, "mdim", nullptr, nullptr),
+                ::testing::ExitedWithCode(EX_SOFTWARE), "issue #607");
+}
+
+#endif

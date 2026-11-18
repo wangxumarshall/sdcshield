@@ -271,32 +271,40 @@ static bool special_values_check()
                                              vdupq_n_f64(b));
             double lanes[2];
             vst1q_f64(lanes, vd);
-            const uint64_t hw = bits_of_double(lanes[0]);
             const uint64_t sw = bits_of_double(std::fma(a, b, c));
 
-            /* NaN payload/sign is implementation-defined (IEEE-754 §6.2.1):
-             * hardware FMLA and a software std::fma may quiet an sNaN to
-             * different bit patterns, so byte-comparing two NaNs would tie
-             * init to an implementation coincidence and can false-FAIL on
-             * healthy silicon. Assert NaN-vs-non-NaN agreement (the real
-             * propagation signal) and byte-compare only the non-NaN results,
-             * which IEEE-754 fully specifies for fma. */
-            if (is_nan_bits(hw) != is_nan_bits(sw)) {
-                log_warning("memcpy_l2_cache_size_neon_fp64: special-value "
-                            "NaN/non-NaN mismatch a=0x%016" PRIx64
-                            " b=0x%016" PRIx64 " hw=0x%016" PRIx64
-                            " sw=0x%016" PRIx64,
-                            kSpecial[i], kSpecial[j], hw, sw);
-                return false;
-            }
-            if (is_nan_bits(hw))
-                continue; // both NaN: payload not byte-comparable
-            if (hw != sw) {
-                log_warning("memcpy_l2_cache_size_neon_fp64: special-value "
-                            "mismatch a=0x%016" PRIx64 " b=0x%016" PRIx64
-                            " hw=0x%016" PRIx64 " sw=0x%016" PRIx64,
-                            kSpecial[i], kSpecial[j], hw, sw);
-                return false;
+            /* Both lanes carry the same inputs (vdupq) so both must agree;
+             * checked per-lane (reviewed 2026-11-11: comparing only
+             * lanes[0] left lane 1's NaN/Inf handling with no verification
+             * point anywhere in the test). */
+            for (int l = 0; l < 2; ++l) {
+                const uint64_t hw = bits_of_double(lanes[l]);
+
+                /* NaN payload/sign is implementation-defined (IEEE-754 §6.2.1):
+                 * hardware FMLA and a software std::fma may quiet an sNaN to
+                 * different bit patterns, so byte-comparing two NaNs would tie
+                 * init to an implementation coincidence and can false-FAIL on
+                 * healthy silicon. Assert NaN-vs-non-NaN agreement (the real
+                 * propagation signal) and byte-compare only the non-NaN results,
+                 * which IEEE-754 fully specifies for fma. */
+                if (is_nan_bits(hw) != is_nan_bits(sw)) {
+                    log_warning("memcpy_l2_cache_size_neon_fp64: special-value "
+                                "NaN/non-NaN mismatch lane=%d a=0x%016" PRIx64
+                                " b=0x%016" PRIx64 " hw=0x%016" PRIx64
+                                " sw=0x%016" PRIx64,
+                                l, kSpecial[i], kSpecial[j], hw, sw);
+                    return false;
+                }
+                if (is_nan_bits(hw))
+                    continue; // both NaN: payload not byte-comparable
+                if (hw != sw) {
+                    log_warning("memcpy_l2_cache_size_neon_fp64: special-value "
+                                "mismatch lane=%d a=0x%016" PRIx64
+                                " b=0x%016" PRIx64 " hw=0x%016" PRIx64
+                                " sw=0x%016" PRIx64,
+                                l, kSpecial[i], kSpecial[j], hw, sw);
+                    return false;
+                }
             }
         }
     }

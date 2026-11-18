@@ -37,7 +37,11 @@
  *      标量 ldr/str), 独立于被测的 ldp/stp 访存通路与 128 位向量数据通路
  *      (高 lane); 但不独立于 ARMv8 上与 NEON 共享的 FP 算术 ALU——标量
  *      fadd d 与向量 fadd v.2d 发往同一条 FP 流水线, 持续型 FP 算术单元
- *      故障仍会让 golden 与 dst 同步出错 (该缺陷类由整数 slot 父测试覆盖)。
+ *      故障仍会让 golden 与 dst 同步出错。该缺陷类在本家族内无任何独立
+ *      黄金覆盖: 整数 slot 父测试只执行整数向量 ALU (vaddq_u64/veorq/
+ *      vandq/vorrq) 与标量整数重算, 不执行任何 FP64 指令, 对该单元故障
+ *      零检出——本模块的独立覆盖面是 ldp/stp 访存通路与向量 lane 通路,
+ *      不含共享 FP 算术核心 (家族级盲区, 与 neon_rot_ldp 用例同口径)。
  *    - 激发强度: 默认定时 2s 持续压测 + 每核 (per-CPU) 全核覆盖。
  *
  * 3. 模块参数: seed (ullong), sweeps (uint, 显式次数上限, 0=关),
@@ -262,9 +266,14 @@ static noinline void fp64_golden_init(struct fp64_ctx *ctx)
      * vector datapath (high lane). NOT independent of the FP arithmetic unit:
      * on ARMv8 scalar fadd d and vector fadd v.2d issue to the SAME FP
      * pipeline, so a persistent FP add/mul/max ALU fault corrupts golden and
-     * actual identically — that fault class is the integer-slot parent test's
-     * coverage, not this module's. A persistent vector-lane or pair-instruction
-     * fault, by contrast, surfaces as a byte difference at the hot-loop memcmp.
+     * actual identically. That fault class carries NO independent golden
+     * anywhere in the family: the integer-slot parent test executes only
+     * integer vector ALUs (vaddq_u64/veorq/vandq/vorrq) with a scalar
+     * integer recompute and not one FP64 instruction, so it detects nothing
+     * here. This module's independent coverage is the ldp/stp memory path
+     * and the vector lanes, not the shared FP arithmetic core. A persistent
+     * vector-lane or pair-instruction fault, by contrast, surfaces as a byte
+     * difference at the hot-loop memcmp.
      * kernel_neon_begin/end still required for ANY FPSIMD use in kernel
      * context. */
     const u64 *sa = (const u64 *)ctx->srcA;

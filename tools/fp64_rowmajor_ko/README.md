@@ -26,8 +26,12 @@
   128 位向量数据通路（高 lane）——持续型向量通路故障不再让 golden 与 dst
   同步出错。**边界须如实界定**：ARMv8 上标量 `fadd d` 与向量 `fadd v.2d`
   发往同一条 FP 流水线，golden 并不独立于 FP 算术 ALU；持续型 FP 加/乘/
-  取最大算术单元故障会让 golden 与 dst 同步出错（该缺陷类由整数 slot 父
-  测试的标量整数 golden 覆盖）。
+  取最大算术单元故障会让 golden 与 dst 同步出错——**该缺陷类在本家族内
+  无任何独立黄金覆盖**：整数 slot 父测试只执行整数向量 ALU
+  （vaddq_u64/veorq/vandq/vorrq）与标量整数重算，不执行任何 FP64 指令，
+  对该单元故障零检出；本模块的独立覆盖面是 ldp/stp 访存通路与向量 lane
+  通路，不含共享 FP 算术核心（家族级盲区，与 neon_rot_ldp 用例的如实披露
+  同口径）。
 - **slot 3 用 FMAXNM 而非 FMAX**：`vmaxq_f64`（FMAX）的 NaN 传播语义在标量 C
   无对应表达式，会破坏标量 golden 的逐位一致性；`vmaxnmq_f64`（FMAXNM）与
   C `fmax`/`__builtin_fmax` 逐位一致。

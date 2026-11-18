@@ -96,9 +96,14 @@ TEST(PageSizeTest, RoundUpToPageRoundsUpToNextPage)
 TEST(PageSizeTest, RoundUpToPagePast4GiB)
 {
     // >=4 GiB values must round up in 64 bits.  With a 32-bit mask the
-    // result silently kept only bits 16..31 (observed 2026-11-11: a
-    // 4.14 GB stderr memfd was mmap'ed as 142 MB and the scan ran off
-    // the mapping -> SIGSEGV); the old macro returned 0 / ps here.
+    // result silently kept only the low 32 bits (probe-verified, ps=65536:
+    // 4 GiB -> 0, 4 GiB+1 -> ps, 4.14 GiB -> 143.4 MiB).  Honesty note:
+    // that truncation was one candidate mechanism for the 2026-11-11
+    // stderr-dump SIGSEGV; the crash scene recorded at the time
+    // (size 4294261107 < 2^32, mapping ending at +58 KiB) is NOT explained
+    // by it and the coredump is gone — see sandstone_page.h.  The dump
+    // path now preads instead of mmapping, so it is robust under either
+    // scene.
     const size_t ps = sandstone_page_size();
     const size_t four_gib = size_t(4) << 30;
     EXPECT_EQ(ROUND_UP_TO_PAGE(four_gib), four_gib);

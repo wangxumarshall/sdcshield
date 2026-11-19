@@ -6,10 +6,15 @@
 push 回各自 head 分支。未 merge、未 resolve thread、未改 `WIP:` 标题
 （角色边界）。
 
-验证环境：本机 firestorm（Apple M1 系，96 逻辑核，**无 SVE/SVE2/SME**，
-gcc 10.3.1），vendored 5 库 install/ 全在位。三 PR 的受影响行为在本机
+验证环境：本机 Kunpeng-920（HiSilicon，无 SVE/SVE2/SME，96 逻辑核，gcc 10.3.1），
+vendored 5 库 install/ 全在位。三 PR 的受影响行为在本机
 全部可运行（518 是构建系统面、814 是 NEON/L3 面、695 是 Python 面），
 无 gem5-fi 边界需求（详见各节）。
+（身份勘误 2026-11-19：初版误写「firestorm（Apple M1 系）」——那是
+`--dump-cpu-info` 按 part 0xd01 经 `simd-arm.conf:141` 的近似别名串
+（`arch=firestorm → cortex_a76 # Apple M1 Firestorm-equivalent (approx)`），
+非 MIDR 身份；本机真实身份为 Kunpeng-920，implementer 0x48，hostname
+cathelper-k8s-worker2。验证结论不受影响。）
 
 ---
 
@@ -158,7 +163,7 @@ a6dc9ece 等）。真正阻塞是 CONFLICTING——`scripts/task_loop.py` 的
    不 merge、不 resolve thread、不改 WIP: 标题）
 2. main 的 CLAUDE.md 存在 6 处 docs/research/ 悬空引用（31f6a99e 大清理
    遗留，main 自身问题，非本任务三 PR 范围）——建议单开 docs PR 修
-3. 本机（firestorm）与 CLAUDE.md 口径主机（SVE1-256/鲲鹏 920）是不同
-   机器；三 PR 的 SVE 面验证依据 = march 多重集逐字节相等（518）/
+3. 本机（Kunpeng-920 no-SVE 变体）与 CLAUDE.md 口径主机（SVE1-256 鲲鹏 920）
+   是同族不同主机；三 PR 的 SVE 面验证依据 = march 多重集逐字节相等（518）/
    ARM64_REQUIRES_SVE 门控净变化 0（814 的 SVE 系测试）/无 SVE 面（695），
-   如需 SVE 运行时行为佐证可在鲲鹏主机补跑
+   如需 SVE 运行时行为佐证可在 SVE1-256 主机补跑（本机无 SVE）

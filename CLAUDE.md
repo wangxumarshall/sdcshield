@@ -78,10 +78,15 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               = 迁移 111 (arm0102_* 基础 10 项 2026-11-03 退册) +
                                                #               arm_add 7 + _neon 14 + cache 新 9 PROD;
                                                #               eigen SVE 12 新/退役 1 + SVE2 配套 14 全
-                                               #               ARM64_REQUIRES_SVE/SVE2 门控, 净变化 0;
-                                               #               feat/neon-fp64 两新例为非门控 PROD, 落地后任意
-                                               #               aarch64 主机默认集 +2 (0xd01 2026-11-10 基线实测
-                                               #               459/567/571, = 该口径 + 本分支 2))
+                                               #               ARM64_REQUIRES_SVE/SVE2 门控, 净变化 0);
+                                               #               PR #814 已并入 L3_cache_920 统一目录 + FP64/L3 家族
+                                               #               + 退役重复件（firestorm no-SVE 2026-11-18 实测 521/630/634，链见 README；
+                                               #               main 侧本文件另记 519/628/632，两处本就不一致，此处照录并如实标注以 README 为准）。
+                                               #               本 merge（PR #625 onto #814）新增 625 侧非门控 PROD
+                                               #               memcpy_l2_cache_size_neon_fp64（+1 净增；neon_rot_ldr_at_top_rowmajor_fp64_dump
+                                               #               系 625/814 双方独立新增的 add/add 冲突，采纳 625 更完整版——标量 d-register
+                                               #               golden #373 + 非 aarch64 占位诚实 + 分配失败 log_skip + dump 失败 log_error，
+                                               #               不重复计数）。本机（no-SVE 920 0xd01）实测 525 PROD / 634 q0 / 638 q-1
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

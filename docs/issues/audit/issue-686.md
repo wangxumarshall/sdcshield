@@ -81,10 +81,12 @@ plan 只验 2+1 档即自认完成——**档位覆盖矩阵与触及面声明�
    已失效旧路径，spec §8 勘误同认，本机真实路径以实测为准）CHAOS/SE 同源
    双内核 `workloads/sdcshield/`，`--sve_vl 1`（=128 bit）跑两用例，
    期望：`exit: pass`、tier readback 128、checksum、`SDCSHIELD_FAILS=0`。
-4. **结果归档**：真实输出贴回 issue #686 评论收口该单；同步在
-   `docs/research/progress-log.md` 记一行（progress-log 是本仓过程结论的
-   现行载体，不复活已删 plan）。若 128 档出现异常（fail/错误 sizing），
-   则升级为代码缺陷另立 fix-PR——那正是这条从未验过的腿该抓的东西。
+4. **结果归档**：真实输出贴回 issue #686 评论收口该单；归档行落验证任务的
+   新计划文档，照常落 `docs/superpowers/plans/`（新建即可，不复活已删
+   plan——`docs/research/` 整目录已随 `31f6a99e`（2026-11-17）清出本分支
+   基底，本文初稿误引的 progress-log 通道在该时点不存在）。若 128 档出现
+   异常（fail/错误 sizing），则升级为代码缺陷另立 fix-PR——那正是这条
+   从未验过的腿该抓的东西。
 
 ## 4. 验证边界
 

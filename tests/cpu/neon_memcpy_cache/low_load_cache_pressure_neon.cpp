@@ -1,5 +1,5 @@
 /*  low_load_cache_pressure_neon — NEON variant of
- *  tests/cpu/arm_add/low_load_cache_pressure.cpp (original untouched).
+ *  tests/cpu/neon_memcpy_cache/low_load_cache_pressure.cpp (original untouched).
  *
  *  Same low-duty-cycle cross-die probe (10 ms period, duty_us knob,
  *  cntvct window timing, sleep as payload) — the slot payload moves
@@ -54,17 +54,17 @@ static inline uint64_t llpn_timer_freq(void) {
 static int low_load_cache_pressure_neon_init(struct test *test) {
     auto *d = new LLPNData;
     if (!d) return EXIT_FAILURE;
-    /* Test options are init-only (the framework's fail-loud check aborts on
-     * any worker-thread query): clamp duty_us once here and let run() lanes
-     * read the cached value. */
-    uint64_t duty_us = get_testspecific_knob_value_uint(test, "duty_us", 1000);
-    if (duty_us < 500)  duty_us = 500;
-    if (duty_us > 3000) duty_us = 3000;
-    d->duty_us = duty_us;
     for (int i = 0; i < LLPN_MAX_THREADS; ++i) {
         for (int l = 0; l < 4; ++l) d->slot[i][l] = 0;
         d->started[i].store(0, std::memory_order_relaxed);
     }
+    /* Test options are init-only (the framework's fail-loud check aborts on
+     * any worker-thread query — main #580 / issue #417): clamp duty_us once
+     * here and let run() lanes read the cached value. */
+    uint64_t duty_us = get_testspecific_knob_value_uint(test, "duty_us", 1000);
+    if (duty_us < 500)  duty_us = 500;
+    if (duty_us > 3000) duty_us = 3000;
+    d->duty_us = duty_us;
     test->data = d;
     return EXIT_SUCCESS;
 }

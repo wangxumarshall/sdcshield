@@ -49,8 +49,9 @@ triage 既有 bot findings、修真实问题 push 回 head 分支、rule 2 自�
     `_n` 后缀）+ `spinlock_stale_read{,_xchg}` 2 + `spinlock_unaligned` 1（meson
     `aarch64` 门在 881 行起，USCAT 理由注释在案）+ 双架构基础 30（lock 9 +
     atomic_simd 3 + spinlock 主套 18）= 47 ✓
-  - 运行时：本机（no-SVE 鲲鹏，`firestorm` 0xd01）q-1 全量名单 grep 族四前缀 =
-    **47** ✓（锁族不依赖 vendored 库，缺依赖构建下结论有效）
+  - 运行时：本机（HiSilicon Kunpeng-920，implementer 0x48 / part 0xd01，无 SVE）
+    q-1 全量名单 grep 族四前缀 = **47** ✓（锁族不依赖 vendored 库，缺依赖构建下
+    结论有效。主机身份更正见 §3 开头）
 - **L126 算术自洽**：58 = 21+7+14+9+8−1 ✓；vendored 至多 11 = 8+3 ✓（−1 退役的
   bidiag 亦 vendored，故实为 10，「至多 11」上界仍真）；余 ≥47 ✓。所引为
   2026-11-03 merge 增量账目（时名 `arm_add/`，2026-11-03 同日更名
@@ -133,9 +134,17 @@ pipeline 门判，按 spec 2026-11-12-full-auto-pipeline 走）。
 
 ## 3. 验证边界（诚实披露）
 
-- 565/675/683（SVE1 三档）无法在本机复测：本机为 no-SVE 鲲鹏（`firestorm`
-  0xd01，`--dump-cpu-info` 实证 SVE/SVE2/SME 全无），非 plan 记录的 0xd02 SVE1
-  机；该项以 plan :56 的机判口径披露为准，未发现矛盾。
+- **主机身份更正（review fix 轮，2026-11-19）**：初版报告写「no-SVE 鲲鹏
+  （`firestorm` 0xd01）」，把 `--dump-cpu-info` 的 `Detected CPU: firestorm` 当
+  主机标签——该串是 `framework/device/cpu/simd-arm.conf:141` 按 part 0xd01 的
+  **特征位匹配别名**（该行注释自述 "Apple M1 Firestorm-equivalent (approx)"），
+  非 MIDR 身份，与本 PR 629 修正过的「cortex x3b」（finding 4525656438）同类。
+  本机实测：`lscpu` Model name = **Kunpeng-920**（HiSilicon，implementer 0x48 /
+  part 0xd01），hostname cathelper-k8s-worker2，SVE/SVE2/SME 全无。验证行为发生
+  在鲲鹏目标平台上，结论不受影响。
+- 565/675/683（SVE1 三档）无法在本机复测：本机为无 SVE 的 HiSilicon
+  Kunpeng-920（part 0xd01），非 plan 记录的 0xd02 SVE1 机；该项以 plan :56 的
+  机判口径披露为准，未发现矛盾。
 - 本机构建缺 vendored 5 库 install/（meson log 实证 ipsec/ssl/sleef/isal/acl/
   openblas 组构建期缺席），故 382/490/494 与 CLAUDE.md no-SVE 全依赖口径
   458/566/570 的差 76 即缺位组数，自洽但不构成对全依赖口径的直接复测。

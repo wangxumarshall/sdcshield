@@ -40,25 +40,26 @@ This **six-stage PR pipeline** (Status → Wait → Collect → Subagent Fix →
 - **`scripts/offline-build/`:** Automates building the prebuilt tarballs and packaging for all target OS versions (see `docs/build-deploy-pr-ci/multi-version-build-deploy.md`). Used by the daily CI to produce verified binaries for release.  
 - **Configuration/Docs:** `.pr_agent.toml` and `AGENTS.md` configure the PR-Agent bot (specifying Chinese locale, SDC-specific review points). `CLAUDE.md` lists general style and safety rules for bots. The `.trae/rules/pr-loop.md` mirrors the above .claude flow definition. `docs/build-deploy-pr-ci/pr-review-bots.md` explains the four review bots’ roles. These define the “source of truth” for automated behavior.  
 
-> **Figure: PR Lifecycle State Machine.**  The diagram below shows the main states and transitions in the automated PR flow: starting from a new **Draft** PR (or updated head), the system enters **WaitingForBots** while agents review.  When reviews start arriving, it may enter a **QuietWindow** (to allow remaining reviews to complete).  If after the quiet period all reviews are in and comments remain, it moves to **ReadyToFix** (invoke fix subagent).  Each push resets back to WaitingForBots.  When eventually no new comments remain, the state becomes **ReadyToMerge** and the merge gate (engine/docs PRs) or the human maintainer (user non-docs PRs) is signaled. *(Any PR can also enter closed states if abandoned.)*  
-> 
-> ```mermaid
-> stateDiagram-v2
->     [*] --> Draft: PR Created
->     Draft --> WaitingForBots: Open for Review
->     state WaitingForBots {
->       [*] --> QuietWindow: Some Reviews Arrived
->       QuietWindow --> WaitingForBots: More Reviews Pending
->       QuietWindow --> ReadyToFix: All Reviews In
->     }
->     state ReadyToFix {
->       [*] --> FixInProgress
->       FixInProgress --> WaitingForBots: Push Fix Commit
->       FixInProgress --> ReadyToMerge: No Outstanding Comments
->     }
->     ReadyToMerge --> [*]: Await Merge Gate (engine/docs PRs auto, user non-docs PRs human)
-> ```
-> *Figure: State machine for the PR review-and-fix loop.* 
+**Figure: PR Lifecycle State Machine.**  The diagram below shows the main states and transitions in the automated PR flow: starting from a new **Draft** PR (or updated head), the system enters **WaitingForBots** while agents review.  When reviews start arriving, it may enter a **QuietWindow** (to allow remaining reviews to complete).  If after the quiet period all reviews are in and comments remain, it moves to **ReadyToFix** (invoke fix subagent).  Each push resets back to WaitingForBots.  When eventually no new comments remain, the state becomes **ReadyToMerge** and the merge gate (engine/docs PRs) or the human maintainer (user non-docs PRs) is signaled. *(Any PR can also enter closed states if abandoned.)*  
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft: PR Created
+    Draft --> WaitingForBots: Open for Review
+    state WaitingForBots {
+      [*] --> QuietWindow: Some Reviews Arrived
+      QuietWindow --> WaitingForBots: More Reviews Pending
+      QuietWindow --> ReadyToFix: All Reviews In
+    }
+    state ReadyToFix {
+      [*] --> FixInProgress
+      FixInProgress --> WaitingForBots: Push Fix Commit
+      FixInProgress --> ReadyToMerge: No Outstanding Comments
+    }
+    ReadyToMerge --> [*]: Await Merge Gate (engine/docs PRs auto, user non-docs PRs human)
+```
+
+*Figure: State machine for the PR review-and-fix loop.* 
 
 ## Branching Workflows & Responsibilities
 
@@ -130,7 +131,7 @@ gantt
     section Phase 3: Production
     Full Release Launch     :2027-04-01, 60d
     Training & Handover     :2027-04-01, 30d
-    ```
+```
 *Timeline: Phased deployment of the agent-full-automation system with overlapping tasks from late 2026 through mid-2027.*
 
 ## Citations

@@ -2,12 +2,13 @@
 
 > 本文是 [`agent-full-automation.md`](agent-full-automation.md) 的中文版，与英文版逐节对应。
 >
-> **译注（2026-11-10；2026-11-13 增补④）**：英文原版成文后系统已有演进。为保持与原版逐节对应，正文按原版忠实翻译、未回改下列已过时表述：
+> **译注（2026-11-10；2026-11-13 增补④；2026-11-17 增补⑤）**：英文原版成文后系统已有演进。为保持与原版逐节对应，正文按原版忠实翻译、未回改下列已过时表述：
 > ① 检视 bot 已由 4 个增至 5 个——新增本地无头 claude 对抗检视（`scripts/pr_local_review.py`；`pr_loop.py` 的 `BOT_ORDER` = codex / coderabbit / pr-agent / greptile / local-claude）；
 > ② 安全扫描工作流文件实为 `security.yaml` 与 `codeql.yaml`（原版写作 `.yml`）；
 > ③ 原版称自动修复 PR「尚未作为代码显式实现」——现已由 task-loop 统一编排引擎（`scripts/task_loop.py`、[task-loop.md](task-loop.md)）落地，另有 `auto-pr.yml`（特性分支首次推送自动开 PR，「一个特性分支 = 一个 PR」）。
 >
 > **④ 合并政策红线反转（2026-11-13）**：原版「任何 PR 都不会被 bot 自动合并、合并权始终属于人类」已被 nightly pipeline 取代——引擎修复 PR（`fix/issue-N|fix/ci-N|fix/revert-prN`）与全 docs-only PR 过六门槛后由编排器**确定性代码**（不委托 LLM）自动 squash merge（docs PR 标题 `WIP:` 前缀 = 草稿闸，去掉 = 显式同意当夜合入）；用户非 docs PR 永不自动 merge，仍由人执行；**自动 resolve review threads 仍然禁止**；`PAUSED` / `NO_AUTO_MERGE` 双熔断可将 merge 门切纯报告模式。本条政策已同步改写进正文与英文原版，详见 spec `2026-11-12-full-auto-pipeline-design.md` §5 与 [task-loop.md](task-loop.md) §7。
+> ⑤ 状态机图原版置于块引用内——GitHub 只渲染**顶层** mermaid 围栏、跳过块引用嵌套的围栏；中英文版均已将其迁至顶层（迁移只去 `> ` 前缀、图结构零改动；图中「等待合并关口」一行系随 ④ 所载 2026-11-13 政策反转同步更新，非迁移所致）。
 
 **摘要：** SDCShield 的「Agent-Full-Automation」（agent 全自动化）框架构想了一套由 AI agent 驱动、覆盖 PR 全生命周期的全自动化体系，整合规划、开发、检视、CI 验证、自动修复与确定性 merge 门。在该设计中，PR 触发自动化工作流：(1) 调集多个专用 bot（Codex、CodeRabbit、PR-Agent、Greptile）开展聚焦 SDC（「silent data corruption」，静默数据损坏）测试质量的代码检视；(2) 汇聚并归类检视反馈；(3) 调用 sub-agent 分析反馈并生成修复计划；(4) 实施修复并重新排队检视，循环迭代直至「Ready to Merge」；(5) 最终进入夜间 pipeline 的确定性 merge 门——引擎修复 PR 与 docs-only PR 六门槛全过后自动 squash merge（归属/检视就绪/必需 CI 检查含继承红基线对照/open 非 DRAFT 非 fork 无冲突/双熔断/审计证据），用户非 docs PR 仍由人类维护者手工合并。并行地，CI 流水线持续跨 OS 目标构建与测试（每日多 OS 回归测试），定时 agent 扫描失败构建并开出修复 PR。关键脚本（如 `scripts/pr_loop.py`、`verify-params.py`、`check-randomization.py`）编排这些循环，GitHub Actions 工作流与 YAML 配置则整合把关、代码扫描与 bot 覆盖检查。整个体系按多阶段推进（概念验证、试点、全面生产），配套度量指标（如 bot 覆盖率、自动 PR 率、CI 通过稳定性）与控制措施（引擎/docs PR 门槛化自动合并 + `PAUSED`/`NO_AUTO_MERGE` 熔断、审计日志；自动 resolve review threads 始终禁止）。本报告详述支撑这套「硅谷级」SDCShield agent 自动化闭环的架构、工作流、状态模型与治理。
 
@@ -50,25 +51,26 @@
 - **`scripts/offline-build/`：** 自动化预构建 tar 包的制作并为全部目标 OS 版本打包（见 `docs/build-deploy-pr-ci/multi-version-build-deploy.md`）。每日 CI 用它产出经过验证的发布二进制。
 - **配置/文档：** `.pr_agent.toml` 与 `AGENTS.md` 配置 PR-Agent bot（指定中文 locale、SDC 专用检视要点）。`CLAUDE.md` 列出 bot 遵循的一般风格与安全规则。`.trae/rules/pr-loop.md` 镜像上述 .claude 流程定义。`docs/build-deploy-pr-ci/pr-review-bots.md` 解释四个检视 bot 的角色。这些共同构成自动行为的「真相源」。
 
-> **图：PR 生命周期状态机。** 下图展示自动 PR 流程的主要状态与迁移：从新建 **Draft** PR（或更新的 head）开始，系统进入 **WaitingForBots** 等待 agent 检视。检视陆续到达时，可进入 **QuietWindow**（让其余检视完成）。静默期结束后，若所有检视到位且仍有评论，则转入 **ReadyToFix**（调用修复 subagent）。每次推送都重置回 WaitingForBots。当最终没有新评论时，状态变为 **ReadyToMerge**，向 merge 门（引擎/docs PR）或人类维护者（用户非 docs PR）发信号。*（任何 PR 也可能因废弃进入关闭态。）*
->
-> ```mermaid
-> stateDiagram-v2
->     [*] --> Draft: PR 创建
->     Draft --> WaitingForBots: 开启检视
->     state WaitingForBots {
->       [*] --> QuietWindow: 部分检视已到达
->       QuietWindow --> WaitingForBots: 还有检视未到
->       QuietWindow --> ReadyToFix: 全部检视到位
->     }
->     state ReadyToFix {
->       [*] --> FixInProgress
->       FixInProgress --> WaitingForBots: 推送修复提交
->       FixInProgress --> ReadyToMerge: 无遗留评论
->     }
->     ReadyToMerge --> [*]: 等待合并关口(引擎/docs PR 自动,用户非 docs PR 人工)
-> ```
-> *图：PR 检视-修复循环的状态机。*
+**图：PR 生命周期状态机。** 下图展示自动 PR 流程的主要状态与迁移：从新建 **Draft** PR（或更新的 head）开始，系统进入 **WaitingForBots** 等待 agent 检视。检视陆续到达时，可进入 **QuietWindow**（让其余检视完成）。静默期结束后，若所有检视到位且仍有评论，则转入 **ReadyToFix**（调用修复 subagent）。每次推送都重置回 WaitingForBots。当最终没有新评论时，状态变为 **ReadyToMerge**，向 merge 门（引擎/docs PR）或人类维护者（用户非 docs PR）发信号。*（任何 PR 也可能因废弃进入关闭态。）*
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft: PR 创建
+    Draft --> WaitingForBots: 开启检视
+    state WaitingForBots {
+      [*] --> QuietWindow: 部分检视已到达
+      QuietWindow --> WaitingForBots: 还有检视未到
+      QuietWindow --> ReadyToFix: 全部检视到位
+    }
+    state ReadyToFix {
+      [*] --> FixInProgress
+      FixInProgress --> WaitingForBots: 推送修复提交
+      FixInProgress --> ReadyToMerge: 无遗留评论
+    }
+    ReadyToMerge --> [*]: 等待合并关口(引擎/docs PR 自动,用户非 docs PR 人工)
+```
+
+*图：PR 检视-修复循环的状态机。*
 
 ## 分支工作流与职责
 

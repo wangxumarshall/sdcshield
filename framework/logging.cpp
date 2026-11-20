@@ -1750,7 +1750,9 @@ void AbstractLogger::print_child_stderr_common(std::function<void(int)> header)
         return;
 
     /* A runaway test can write gigabytes to stderr (observed 2026-11-11:
-     * memcpy1_neon filled a 4.14 GB memfd in one 5-minute round).  Dumping
+     * memcpy1_neon filled a ~4 GiB memfd in one 5-minute round — 4294261107
+     * bytes recorded in the crash scene; a scratch replica filled 356 GB in
+     * 3 minutes.  Capture remains unbounded, tracked in issue #843).  Dumping
      * all of it is useless and slow; keep the head and report the cut.
      * Read just that head with pread() so we never mmap a memfd that has
      * grown to hundreds of GiB: the full mapping served no purpose once the

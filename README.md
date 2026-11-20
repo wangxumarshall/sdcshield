@@ -82,6 +82,7 @@ bash scripts/run/sdc_detect.sh
 2. **停下且有 FAIL** = **SDC 嫌疑**：保留 `-o` 落盘的 YAML 日志（含 seed/迭代号，可复现）。含 2026-10-24 修复的构建中满核 FAIL 与其他测试同等进入定位流程，`-e <测试名> -t 5000 -n 1` 单线程复跑可作交叉对照；旧二进制的 eigen 满核 FAIL 判读口径见「直接运行预构建二进制」节的警示块。eigen 族以同源重算比对，检出**非确定性缺陷**（同输入不同位）；对**确定性核缺陷**存在结构性盲区（已披露的覆盖空洞）。
 3. **停止方式**：Ctrl-C 干净停止（当前测试跑完边界即停，日志完整落盘，`exit: interrupted`）。
 4. **检出后的定位**：`bash scripts/run/run_sdc_campaign.sh`（24h 战役，自动失败分类 + 可复现嫌疑自动逐核二分定位）。
+5. **日志里子进程 stderr 的截断语义**：测试自写 stderr 会进日志（stdout 则被直接丢弃）；超 1 MiB 只转储前 1 MiB，并追加 `[stderr truncated: N bytes total, first M bytes shown]` 注记（防 GB 级失控 stderr 拖垮日志与父进程，2026-11-11 memcpy1_neon 战役实证修复）。
 
 ## 一键最大程度激发 SDC（7×24 战役总入口）
 

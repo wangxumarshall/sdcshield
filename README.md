@@ -358,7 +358,7 @@ sdcshield 启动时探测一次芯片规格（`arm64_spec_get()`：SVE/SVE2/SME/
 
 | 检测域 | 代表用例 | 检测能力 |
 |---|---|---|
-| 内存 / 拷贝 | `memcpy_l{1d,2,3}_cache_size`、`memcpy_rewr`、`mem_disambiguation`、`mmu_stress_arm`、`random_access_sweep` | 各级缓存带宽、store-to-load 转发、跨行一致性与内存序、TLB 扰动、大 mmap 随机偏移/块长扫掠（NEON RMW 字节精确校验，knob: mode/valmode/size_mb） |
+| 内存 / 拷贝 | `memcpy_l{1d,2,3}_cache_size`、`memcpy_l2_cache_size_neon_fp64`、`memcpy_rewr`、`mem_disambiguation`、`mmu_stress_arm`、`random_access_sweep` | 各级缓存带宽、store-to-load 转发、跨行一致性与内存序、TLB 扰动、大 mmap 随机偏移/块长扫掠（NEON RMW 字节精确校验，knob: mode/valmode/size_mb）；FP64 NEON 数据通路 L2 拷贝+FMA 字节精确变体（标量 libm fma golden + IEEE-754 特殊值类别检查） |
 | 缓存 / 互联 | `cachebounce`、`mesh_upi_*`（46，含 18 个 SVE 变体） | cache line 弹跳、CLFLUSH 压力、MESH/UPI 多核读写协同 |
 | 锁 / 原子 | `lock*`、`lockless_cmpxchg*`、`atomic_simd_*`、`spinlock_*`（31） | 锁指令、无锁 cmpxchg、128/256/512 位原子、自旋锁各类竞争（ARM64 atomic） |
 | 向量 / SIMD | `swizzle`、`insert_extract`、`kreg1`–`kreg9`、`gather*` | NEON 排列/插入抽取、掩码寄存器（x86 k-reg 仿真）、gather/scatter |

@@ -17,6 +17,9 @@ if host_machine.cpu_family() == 'aarch64'
 
     arm64_tests = files(
         'neon_test.cpp',
+        # NEON FP64 byte-exact L2-sized copy + FMA SDC stress — the FP64
+        # NEON datapath variant of memcpy_l2_cache_size. Built only on aarch64.
+        'memcpy_l2_cache_size_neon_fp64.cpp',
         'crypto_test.cpp',
         # di/dt voltage-transient power virus ("版图三 瞬态故障动态激发").
         # Alternates NEON full-load bursts with yield stalls to induce voltage

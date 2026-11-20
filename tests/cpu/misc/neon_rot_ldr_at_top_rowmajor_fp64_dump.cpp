@@ -6,6 +6,11 @@
  * @test @b neon_rot_ldr_at_top_rowmajor_fp64_dump
  * @parblock
  * Cold-path dump variant of neon_rot_ldr_at_top_rowmajor_fp64 (2026-11-06).
+ * (The fp64 parent was a 2026-11-06 campaign working-tree file and was
+ * never carried in-tree; this variant is self-contained — test_init
+ * regenerates its own golden with scalar (d-register) FP64 ops instead of
+ * the vector (v-register) units under test, so the byte-identity rationale
+ * below is the design record, not a build-time dependency.)
  *
  * Purpose: bit-position statistics for the FP64 rotation trigger. The
  * parent only reports a generic "data miscompare" (manual memcmp +
@@ -19,9 +24,7 @@
  *
  * Design (movbe_dump / mrn_rmw_dump / eigen_dump / dualcmp family
  * pattern, verified repeatedly not to perturb triggering):
- *   - hot loop BYTE-IDENTICAL to the fp64 parent (research repo:
- *     arm64-sdc-fuzzing/opendcdiag tests/cpu/misc/neon_rot_ldr_at_top_rowmajor_fp64.cpp —
- *     the parent is NOT in this repo): same TEST_LOOP count,
+ *   - hot loop BYTE-IDENTICAL to the fp64 parent: same TEST_LOOP count,
  *     same scratch-ldr-at-top + 2-src asm loads, same fp64_rot slot
  *     order, same back-to-back str/str pair, same sweep order;
  *   - dump lives ONLY in the cold post-sweep failure branch;
@@ -42,9 +45,16 @@
  * appear verbatim elsewhere in any buffer).
  *
  * Dumps land in movbe_log/fp64_rowmajor/ (relative to CWD, created in
- * init; dualcmp convention). If the dir cannot be created the binary
- * dump is skipped silently - the failure message still carries the
- * first differing elements.
+ * init) — the in-tree dump-family layout shared with the sve_rot_*
+ * probes (movbe_log/gps_rowmajor/), which the dualcmp flow consumes.
+ * Trade-off, stated honestly (reviewed 2026-11-11, twice): the sibling
+ * dump tests neon_rot_ldr_at_top_dump and neon_rot_ldr_at_top_str4_checkall
+ * write to /var/tmp/ because a
+ * panic on a tmpfs CWD would lose CWD-relative dumps — this fault class
+ * HAS panicked the target machine. movbe_log/ is kept here for family
+ * layout consistency; run the campaign from a persistent-disk CWD. If
+ * the dump file cannot be opened the loss is logged via log_error —
+ * the failure message still carries the first differing elements.
  * @endparblock
  */
 
@@ -56,6 +66,7 @@
 #include <sched.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -64,14 +75,14 @@
 #define NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT 1024
 #define FP64_DUMP_DIR "movbe_log/fp64_rowmajor"
 
+#if defined(__aarch64__)
+
 struct NeonRotLdrAtTopRowMajorFp64DumpData {
     uint64x2_t *srcA;
     uint64x2_t *srcB;
     uint64x2_t *scratch;
     uint64x2_t *expected;
 };
-
-#if defined(__aarch64__)
 
 static inline void store_vec(void *addr, uint64x2_t val) {
     vst1q_u64(static_cast<uint64_t *>(addr), val);
@@ -98,25 +109,70 @@ static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b) {
     return vreinterpretq_u64_f64(fres);
 }
 
-#endif
-
 static int neon_rot_ldr_at_top_rowmajor_fp64_dump_init(struct test *test) {
     auto *data = static_cast<NeonRotLdrAtTopRowMajorFp64DumpData *>(malloc(sizeof(NeonRotLdrAtTopRowMajorFp64DumpData)));
+    if (!data) {
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_rowmajor_fp64_dump: state allocation failed");
+        return EXIT_SKIP;
+    }
     data->srcA = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
     data->srcB = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
     data->scratch = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
     data->expected = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
+    if (!data->srcA || !data->srcB || !data->scratch || !data->expected) {
+        free(data->srcA);
+        free(data->srcB);
+        free(data->scratch);
+        free(data->expected);
+        free(data);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_rowmajor_fp64_dump: buffer allocation failed");
+        return EXIT_SKIP;
+    }
 
     memset_random(data->srcA, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
     memset_random(data->srcB, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
     memset_random(data->scratch, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t));
 
-    /* golden: same FP64 rotating composition, computed on the same NEON units */
-    for (int i = 0; i < NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT; i++) {
-        data->expected[i] = fp64_rot(i % 4, data->srcA[i], data->srcB[i]);
+    /* golden (issue #373): scalar recomputation — scalar FP64 (d-register)
+     * instructions, never the vector (v-register) units under test. The
+     * scalar ops carry the same IEEE semantics as the vector ones
+     * (FADD/FSUB/FMUL/FMAX, NaN-propagating included), and every one of the
+     * 2*COUNT lanes is recomputed on the d-register scalar path (which lands
+     * on the low 64-bit lane only). Because the golden derives BOTH lanes
+     * from that single scalar path, a stuck bit in either lane (low or high)
+     * makes one lane of the golden diverge from the healthy lane of the
+     * vector result, so a per-lane stuck-at fault now surfaces as a byte
+     * difference at the memcmp — the #373 lane-level blind spot is closed.
+     * What remains open is a fault in the FP unit's shared
+     * control/rounding/exponent logic that corrupts every lane identically:
+     * scalar and vector FP64 dispatch to the same F0/F1 pipes, so no FP64
+     * arithmetic (scalar or vector) can serve as a fully independent golden
+     * (the only such path would be integer emulation of IEEE-754, out of
+     * scope). That whole-unit fault class carries NO independent golden
+     * anywhere in this family — the sibling scalar-integer tests execute
+     * only integer vector ALUs (vaddq_u64/veorq/vandq/vorrq) with scalar
+     * integer recomputes and not one FP64 instruction, so they detect
+     * nothing of an FP64-unit fault either. This is a disclosed
+     * family-level blind spot, not a delegated one. */
+    {
+        const float64x1_t *sa = reinterpret_cast<const float64x1_t *>(data->srcA);
+        const float64x1_t *sb = reinterpret_cast<const float64x1_t *>(data->srcB);
+        float64x1_t *ex = reinterpret_cast<float64x1_t *>(data->expected);
+        for (int i = 0; i < 2 * NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT; i++) {
+            float64x1_t r;
+            switch ((i / 2) % 4) {
+                case 0: r = vadd_f64(sa[i], sb[i]); break;
+                case 1: r = vsub_f64(sa[i], sb[i]); break;
+                case 2: r = vmul_f64(sa[i], sb[i]); break;
+                default: r = vmax_f64(sa[i], sb[i]); break;
+            }
+            ex[i] = r;
+        }
     }
 
-    mkdir("movbe_log", 0755);        /* mkdir creates only the last component */
+    mkdir("movbe_log", 0755); /* mkdir creates only the last component */
     mkdir(FP64_DUMP_DIR, 0755); /* dualcmp convention; idempotent */
 
     test->data = data;
@@ -150,8 +206,8 @@ __attribute__((noinline)) static void fp64_dump_report(
     }
 
     char path[256];
-    snprintf(path, sizeof(path), "%s/fp64dump_fail_cpu%d_sweep%lu_seq%d.bin",
-             FP64_DUMP_DIR, cpu, static_cast<unsigned long>(sweep), seq);
+    snprintf(path, sizeof(path), "%s/fp64dump_fail_cpu%d_sweep%lu_seq%d_pid%d.bin",
+             FP64_DUMP_DIR, cpu, static_cast<unsigned long>(sweep), seq, getpid());
     FILE *f = fopen(path, "wb");
     if (f) {
         fwrite(data->srcA, sizeof(uint64x2_t), NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT, f);
@@ -165,6 +221,8 @@ __attribute__((noinline)) static void fp64_dump_report(
         for (int k = 0; k < nbad; k++) fprintf(f, "%s%d", k ? "," : "", bad[k]);
         fprintf(f, "\n");
         fclose(f);
+    } else {
+        log_error("neon_rot_ldr_at_top_rowmajor_fp64_dump: failed to open dump log %s", path);
     }
 
     /* compact per-element summary in the failure message itself:
@@ -195,6 +253,13 @@ static int neon_rot_ldr_at_top_rowmajor_fp64_dump_run(struct test *test, int cpu
 
     uint64x2_t *temp = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
     uint64x2_t *dst  = static_cast<uint64x2_t *>(aligned_alloc(64, NEON_ROT_LDR_AT_TOP_ROWMAJOR_FP64_DUMP_COUNT * sizeof(uint64x2_t)));
+    if (!temp || !dst) {
+        free(temp);
+        free(dst);
+        log_skip(TestResourceIssueSkipCategory,
+                 "neon_rot_ldr_at_top_rowmajor_fp64_dump: per-thread buffer allocation failed");
+        return EXIT_SKIP;
+    }
 
     uint64_t sweep = 0;
     TEST_LOOP(test, 1 << 8) {
@@ -239,6 +304,31 @@ static int neon_rot_ldr_at_top_rowmajor_fp64_dump_cleanup(struct test *test) {
     }
     return EXIT_SUCCESS;
 }
+
+#else // !__aarch64__
+
+static int neon_rot_ldr_at_top_rowmajor_fp64_dump_init(struct test *test)
+{
+    (void)test;
+    log_skip(CpuNotSupportedSkipCategory,
+             "to be implemented (placeholder): aarch64 NEON FP64 required");
+    return EXIT_SKIP;
+}
+
+static int neon_rot_ldr_at_top_rowmajor_fp64_dump_run(struct test *test, int cpu)
+{
+    (void)test;
+    (void)cpu;
+    return EXIT_SKIP;
+}
+
+static int neon_rot_ldr_at_top_rowmajor_fp64_dump_cleanup(struct test *test)
+{
+    (void)test;
+    return EXIT_SUCCESS;
+}
+
+#endif // __aarch64__
 
 DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_fp64_dump, "Cold-path dump variant of neon_rot_ldr_at_top_rowmajor_fp64: hot loop byte-identical, failure branch dumps got/expected/xor + full buffer context for bit-position and field-graft analysis")
     .test_init    = neon_rot_ldr_at_top_rowmajor_fp64_dump_init,

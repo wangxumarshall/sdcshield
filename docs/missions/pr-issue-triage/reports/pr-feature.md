@@ -10,11 +10,29 @@ push 回各自 head 分支。未 merge、未 resolve thread、未改 `WIP:` 标�
 vendored 5 库 install/ 全在位。三 PR 的受影响行为在本机
 全部可运行（518 是构建系统面、814 是 NEON/L3 面、695 是 Python 面），
 无 gem5-fi 边界需求（详见各节）。
-（身份勘误 2026-11-19：初版误写「firestorm（Apple M1 系）」——那是
-`--dump-cpu-info` 按 part 0xd01 经 `simd-arm.conf:141` 的近似别名串
-（`arch=firestorm → cortex_a76 # Apple M1 Firestorm-equivalent (approx)`），
-非 MIDR 身份；本机真实身份为 Kunpeng-920，implementer 0x48，hostname
-cathelper-k8s-worker2。验证结论不受影响。）
+（身份勘误 2026-11-19；机制叙事 2026-11-20 检视后重写：初版误写
+「firestorm（Apple M1 系）」——把 `--dump-cpu-info` 的 `Detected CPU:`
+串当成了主机身份。该串的真实产生机制是**纯 HWCAP 特征集匹配，与 MIDR
+part 无关**：`framework/device/cpu/cpu_device.cpp` 的 dump 遍历按特征数
+降序的生成表，取第一个 `arch.features ⊆ 设备特性` 的条目；firestorm
+之所以在表内，是 `framework/device/cpu/scripts/armsimd_generate.pl:261-268`
+的键碰撞——它继承 cortex_a76 零新增特性，与 cortex_a76/cortex_a76ae/
+neoverse_n1/neoverse_e1 同 allfeatures 键，conf 行序最晚写入者存活
+（`simd-arm.conf:141` 的 "Apple M1 Firestorm-equivalent (approx)" 只是
+注释，conf 无任何 part→arch 映射）。本机（part 0xd01）实测有
+asimddp/asimdfhm、**无 SSBS**（920 实测记录
+`docs/cpu/arm64/kungpeng/kunpeng920_microarchitecture.md` :18/:157/:314），
+故不匹配
+`simd-arm.conf:119` 的 kunpeng920 条目（其特征集多要 ssbs 一项），落到
+cortex_a76 特征集——**「显示 firestorm」与「本机是 Kunpeng-920」不矛盾**；
+真实 MIDR 身份在 dump 同行 `family-model-stepping (hex): 48-d01-x`
+（同类活例：SVE1-256 鲲鹏主机 0xd02 显示 "cortex x3b"）。814 受影响面
+（NEON/L3/标量 37 件）不依赖 ssbs/asimddp/asimdfhm，「受影响行为在本机
+全部可运行」的断言在此边界内成立。本机身份锚点：`lscpu` Model name =
+Kunpeng-920（implementer 0x48 / part 0xd01，hostname
+cathelper-k8s-worker2——同 mission 姊妹报告 pr-docs.md「主机身份更正」
+节落盘）；dump 原样行未在本报告落盘（cathelper 本次复核会话不可达），
+逐字节复核需在该机补跑 `--dump-cpu-info`。验证结论不受影响。）
 
 ---
 

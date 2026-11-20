@@ -69,7 +69,8 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               降级构建口径——少计 82, 见 README「用例质量分级」footnote)
                                                #   no-SVE 920:  439 PROD / 547 q0 / 551 q-1  (2026-11-02 历史树值;
                                                #               本分支树推导 457/565/569——非 SVE 门控 PROD 净增 18,
-                                               #               推导口径见 README footnote; 源码全量 651 PROD/769)
+                                               #               推导口径见 README footnote; 本构建全量 651 PROD/769 —— crt_builtins 缺席,
+                                               #               libclang_rt 在场的严格源码全量为 653 PROD/771)
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

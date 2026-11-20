@@ -85,7 +85,7 @@ sudo bash scripts/sdc-excite-reproduce/excite.sh --stop   # 停止（保留断�
 
 run 模式需 root（sudo）、幂等可重入（已安装/活跃服务自动跳过，`state.json` 断点保留）；`SDC_BIN` 指定二进制，`SMOKE_TIMEOUT_S` 覆盖冒烟门上限（默认 2400 秒，慢板机器可调大）。链路：预检（fail-loud + L0 冒烟门）→ systemd 单元 → sdc-monitor 联锁 → 战役冒烟门（不过不上线）→ L1-L5 状态机战役（冷机代表集 → 谱系扫档 → 多样性轮转 → 专项轮换 di/dt·热·NUMA → 深驻留，事件取证 + 断点续跑）；M2 事件栈按 [运维手册](docs/sdc-excite-reproduce/operations-runbook.md) 拉起（`-h` 看完整帮助）。
 
-SDC 激励/复现战役（M0–M5）的机侧运维细分脚本同在 `scripts/sdc-excite-reproduce/`：`status.sh` 只读巡检（9 服务 / 战役进度 / M2 事件流 / 电压频率 / SEL / 磁盘 / 告警，即 `--status`）、`start.sh` 直接启动（跳过预检与冒烟门）、`stop.sh` 停止（保留断点，即 `--stop`）——完整运维流程（9 服务、BLACK 恢复、演练排期、巡检模板）亦见该手册。
+SDC 激励/复现战役（M0–M5）的机侧运维细分脚本同在 `scripts/sdc-excite-reproduce/`：`status.sh` 只读巡检（9 服务 / 战役进度 / M2 事件流 / 电压频率 / SEL / 磁盘 / 告警，即 `--status`）、`start.sh` 直接启动（跳过预检与冒烟门）、`stop.sh` 停止（保留断点，即 `--stop`）——完整运维流程（9 服务、BLACK 恢复、演练排期、巡检模板）亦见[运维手册](docs/sdc-excite-reproduce/operations-runbook.md)。
 
 **四工具路由**：
 

@@ -10,6 +10,7 @@ using arm_add_neon::neon_copy;          // 提供 DECLARE_TEST, report_fail_msg,
 #include <cstring>              // memcpy, memcmp
 #include <cstdint>              // uint8_t
 #include <cstddef>              // size_t
+#include <cstdio>               // snprintf, fprintf
 
 static constexpr size_t BLOCK_SIZE = 256;
 
@@ -34,10 +35,10 @@ static int memcpy1_run(struct test *test, int cpu) {
         // 执行复制
         neon_copy(dst, src, BLOCK_SIZE);
 
-        // 校验（失败经 report_fail_msg 正规上报——2026-11-11 战役实证逐迭代
-        // fprintf(stderr) 在 5min×125 线程下产出 GB 级 stderr：既触发框架打印
-        // 路径崩溃，又以 I/O 拖垮激发强度，故删除该调试打印）
-        if (memcmp(dst, src, BLOCK_SIZE) != 0) {
+        // 校验
+        bool passed = (memcmp(dst, src, BLOCK_SIZE) == 0);
+
+        if (!passed) {
             report_fail_msg("memcpy1_neon: data mismatch after copy");
             return EXIT_FAILURE;
         }

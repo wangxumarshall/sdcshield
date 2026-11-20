@@ -78,7 +78,7 @@ tests_set_base.add(
         'memory/memcpy1.cpp',
         'memory/memcpy_l1d_size.cpp',
         'memory/memcpy_l2_cache_size.cpp',
-        'memory/memcpy_l3_cache_size.cpp',
+        'L3_cache_920/memcpy_l3_cache_size.cpp',
         'memory/memcpy_sem.cpp',
         'memory/memcpy_shuffle.cpp',
         'memory/memcpy_shuffle_v2.cpp',
@@ -165,17 +165,17 @@ tests_set_base.add(
         'mesh/mesh_upi_avx2_asymm_distrib_write_int.cpp',
         'mesh/mesh_upi_avx2_asymm_int.cpp',
         'mesh/mesh_upi_avx2_asymm_write_int.cpp',
-        'mesh/mesh_upi_avx2_read_L3_int.cpp',
-        'mesh/mesh_upi_avx2_read_only_int.cpp',
+        'L3_cache_920/mesh_upi_avx2_read_L3_int.cpp',
+        'L3_cache_920/mesh_upi_avx2_read_only_int.cpp',
         'mesh/mesh_upi_avx2_symm_int.cpp',
-        'mesh/mesh_upi_avx2_write_only_int.cpp',
+        'L3_cache_920/mesh_upi_avx2_write_only_int.cpp',
         'mesh/mesh_upi_avx512_asymm_distrib_int.cpp',
         'mesh/mesh_upi_avx512_asymm_distrib_write_int.cpp',
         'mesh/mesh_upi_avx512_asymm_int.cpp',
-        'mesh/mesh_upi_avx512_asymm_read_L3_int.cpp',
-        'mesh/mesh_upi_avx512_asymm_read_only_int.cpp',
+        'L3_cache_920/mesh_upi_avx512_asymm_read_L3_int.cpp',
+        'L3_cache_920/mesh_upi_avx512_asymm_read_only_int.cpp',
         'mesh/mesh_upi_avx512_asymm_write_int.cpp',
-        'mesh/mesh_upi_avx512_asymm_write_only_int.cpp',
+        'L3_cache_920/mesh_upi_avx512_asymm_write_only_int.cpp',
         'mesh/mesh_upi_avx512_sym.cpp',
         'mesh/mesh_upi_avx512_symm_int.cpp',
         # First FP mesh variant: cross-core shared-data f64
@@ -188,11 +188,11 @@ tests_set_base.add(
         'mesh/mesh_upi_sse_asymm_distrib_write_int.cpp',
         'mesh/mesh_upi_sse_asymm_int.cpp',
         'mesh/mesh_upi_sse_asymm_write_int.cpp',
-        'mesh/mesh_upi_sse_read_L3_int.cpp',
-        'mesh/mesh_upi_sse_read_only_int.cpp',
+        'L3_cache_920/mesh_upi_sse_read_L3_int.cpp',
+        'L3_cache_920/mesh_upi_sse_read_only_int.cpp',
         'mesh/mesh_upi_sse_sym.cpp',
         'mesh/mesh_upi_sse_symm_int.cpp',
-        'mesh/mesh_upi_sse_write_only_int.cpp',
+        'L3_cache_920/mesh_upi_sse_write_only_int.cpp',
     )
 )
 
@@ -327,9 +327,20 @@ tests_set_base.add(
 #     the kernel-shaped repro payload
 #   - cache/cachebounce_sdc, cache_stress_civac (dc civac asm),
 #     memory/mem_disambig_alu (store-forwarding discrimination probe)
+# The 2026-11-16 import brings misc/adaptive_mem_sdc (3-file byte-identical
+# migration from the research repo's working tree): adaptive 30-combo
+# rotation SDC test — NEON engine + DECLARE_TEST here, SVE/SVE2 engine TU
+# in the dedicated tests_sve_adaptive static_library below (see the SVE
+# library block). HWCAP ladder SVE2>SVE>NEON self-selects at runtime.
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
+            'misc/adaptive_mem_sdc.cpp',
+            'misc/fmov_train_3ldp_stp.cpp',
+            'misc/fmov_train_3ldr_str.cpp',
+            'misc/fmov_train_ldr_str.cpp',
+            'misc/fmov_train_ldp_stp.cpp',
+            'misc/loop_check_m.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
@@ -344,10 +355,20 @@ if host_machine.cpu_family() == 'aarch64'
             'cache/cache_stress_civac.cpp',
             'cache/cache_stress_clflush_2.cpp',
             'cache/cache_stress_memcpy_2.cpp',
-            'cache/llcstress.cpp',
-            'cache/llc_randomized_load.cpp',
-            'cache/llc_uniform_load.cpp',
-            'cache/l3_execute.cpp',
+            'L3_cache_920/llcstress.cpp',
+            'L3_cache_920/llc_randomized_load.cpp',
+            'L3_cache_920/llc_uniform_load.cpp',
+            'L3_cache_920/l3_execute.cpp',
+            # adaptive_l3_sdc (2026-11-18): adaptive_mem_sdc runtime
+            # chassis (21-combo shm rotation: combat/test/verify, KEY/
+            # MODE/TEST_SLICE/ORDER/COMBO/VERIFY/COVFILE env contract)
+            # with the L3_cache_920 load patterns as the engine layer
+            # (7 patterns x scalar/NEON/FP64 datapaths, each pattern
+            # semantically identical to its parent test in this
+            # directory).  NOTE: no .fracture_loop_count override in the
+            # test — the rotation model relies on the framework's
+            # default auto-fracture re-forking short-lived children.
+            'L3_cache_920/adaptive_l3_sdc.cpp',
             'cache/flushed_memcpy.cpp',
             'cache/flushed_memcpy_bis.cpp',
             'cache/sfence.cpp',
@@ -391,6 +412,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/neon_rot_ldr_at_top_robfill.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_dualcmp.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_dump.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_fp64_dump.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_gps.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k2pureload.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k4bgap.cpp',
@@ -565,8 +587,10 @@ tests_set_skx.add(
 
 # ARM64 SVE-backed Eigen cases (the SVE counterparts of the NEON
 # eigen_svd/eigen_svd_jacobi/eigen_gemm families; 2 pre-existing + 12
-# added 2026-11-03 by the eigen SVE unification); only built on aarch64
-# (see the SVE build block below). These 14 files are the DISPATCH TUs —
+# added 2026-11-03 by the eigen SVE unification, each joined 2026-11-13
+# by an _sve2 companion from feat/eigen-sve2-companion); only built on
+# aarch64 (see the SVE build block below). These 28 files are the
+# DISPATCH TUs (14 SVE-family + 14 _sve2 companions) —
 # the only members of tests_sve from this block — and are deliberately
 # vector-length agnostic: they hold no
 # Eigen SVE types, so tests_sve compiles them with march_sve_dispatch
@@ -587,19 +611,33 @@ tests_set_sve.add(
     when : eigen3_dep,
     if_true : files(
         'eigen_gemm/gemm_double_max_arm.cpp',
+        'eigen_gemm/gemm_double_max_arm_sve2.cpp',
         'eigen_gemm/gemm_double_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_double_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_float_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_float_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_cdouble_dynamic_square_sve.cpp',
+        'eigen_gemm/gemm_cdouble_dynamic_square_sve2.cpp',
         'eigen_gemm/gemm_double14_sve.cpp',
+        'eigen_gemm/gemm_double14_sve2.cpp',
         'eigen_svd/svd_cdouble_sve.cpp',
+        'eigen_svd/svd_cdouble_sve2.cpp',
         'eigen_svd/svd_double_sve.cpp',
+        'eigen_svd/svd_double_sve2.cpp',
         'eigen_svd/svd_double2_sve.cpp',
+        'eigen_svd/svd_double2_sve2.cpp',
         'eigen_svd/svd_float_sve.cpp',
+        'eigen_svd/svd_float_sve2.cpp',
         'eigen_svd/svd_fvectors_sve.cpp',
+        'eigen_svd/svd_fvectors_sve2.cpp',
         'eigen_svd_jacobi/svd_cdouble_sve.cpp',
+        'eigen_svd_jacobi/svd_cdouble_sve2.cpp',
         'eigen_svd_jacobi/svd_double_sve.cpp',
+        'eigen_svd_jacobi/svd_double_sve2.cpp',
         'eigen_svd_jacobi/svd_float_sve.cpp',
+        'eigen_svd_jacobi/svd_float_sve2.cpp',
         'eigen_svd_jacobi/svd_fvectors_sve.cpp',
+        'eigen_svd_jacobi/svd_fvectors_sve2.cpp',
     )
 )
 
@@ -905,8 +943,7 @@ if host_machine.cpu_family() == 'aarch64'
     )
 endif
 
-# neon_memcpy_cache/（原 arm_add/，2026-11-03 lock/memcpy-cache 拆分迁移）
-# —— 2026-11-02 用户规格 10 测试中查重后落地的 7 个（3 个已存在
+# neon_memcpy_cache/（原 arm_add/，2026-11-19 目录改名）—— 2026-11-02 用户规格 10 测试中查重后落地的 7 个（3 个已存在
 # 不重复实现：atomic_simd_128/256_unaligned、spinlock_unaligned）。
 # A 组 5 个 = str 失效故障报告五维探针（跨域写可见性 / 三层回读丢写 /
 # 锁+屏障路径丢写 / 低占空比跨 die / 高密度多宽度 str 批）；B 组 2 个 =
@@ -927,10 +964,10 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/cache_stress_memcpy_2_neon.cpp',
             'neon_memcpy_cache/flushed_memcpy_neon.cpp',
             'neon_memcpy_cache/flushed_memcpy_bis_neon.cpp',
-            'neon_memcpy_cache/llcstress_neon.cpp',
-            'neon_memcpy_cache/llc_randomized_load_neon.cpp',
-            'neon_memcpy_cache/llc_uniform_load_neon.cpp',
-            'neon_memcpy_cache/l3_execute_neon.cpp',
+            'L3_cache_920/llcstress_neon.cpp',
+            'L3_cache_920/llc_randomized_load_neon.cpp',
+            'L3_cache_920/llc_uniform_load_neon.cpp',
+            'L3_cache_920/l3_execute_neon.cpp',
             'neon_memcpy_cache/sfence_neon.cpp',
             'neon_memcpy_cache/store_visibility_cross_class_neon.cpp',
             'neon_memcpy_cache/store_lost_write_detect_neon.cpp',
@@ -948,37 +985,10 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/memcpy1_neon.cpp',
             'neon_memcpy_cache/memcpy_l1d_size_neon.cpp',
             'neon_memcpy_cache/memcpy_l2_cache_size_neon.cpp',
-            'neon_memcpy_cache/memcpy_l3_cache_size_neon.cpp',
+            'L3_cache_920/memcpy_l3_cache_size_neon.cpp',
             'neon_memcpy_cache/memcpy_sem_neon.cpp',
             'neon_memcpy_cache/memcpy_shuffle_neon.cpp',
             'neon_memcpy_cache/memcpy_shuffle_v2_neon.cpp',
-        )
-    )
-endif
-
-# neon_lock/ —— lock 家族（spinlock_stress / spinlock_rmw / lockless_cmpxchg）
-# 的 NEON 变体（lock_arm pass，2026-11-03）：锁协议（CAS/ldaxr-stxr/xchg 获锁
-# 与带屏障释放）与原版逐字一致——它是测试对象，无 NEON 等价物；锁内新增
-# per-thread NEON 向量槽 RMW（asm ldr/str %q，NEON 数据通路抬升临界区切换
-# 功耗，arm_add 激励谱系），原版全部校验（共享计数器 vs 本地总和）逐字保留
-# 并新增向量槽 = local_sum 低 32 位校验。even_odd 文件含 even/odd 两测试，
-# 共 12 文件 13 测试。顶层 #include <arm_neon.h>，仅 aarch64 构建
-# （spinlock_add/ 同款门）——x86-64 不含。
-if host_machine.cpu_family() == 'aarch64'
-    tests_set_base.add(
-        files(
-            'neon_lock/lockless_cmpxchg16b_neon.cpp',
-            'neon_lock/lockless_cmpxchg8b_neon.cpp',
-            'neon_lock/lockless_cmpxchg_neon.cpp',
-            'neon_lock/spinlock_rmw_cmpxchg_neon.cpp',
-            'neon_lock/spinlock_rmw_cmpxchg_pause_neon.cpp',
-            'neon_lock/spinlock_rmw_xchg_neon.cpp',
-            'neon_lock/spinlock_rmw_xchg_pause_neon.cpp',
-            'neon_lock/spinlock_stress_bts_neon.cpp',
-            'neon_lock/spinlock_stress_cmpxchg16b_neon.cpp',
-            'neon_lock/spinlock_stress_cmpxchg_even_odd_neon.cpp',
-            'neon_lock/spinlock_stress_cmpxchg_neon.cpp',
-            'neon_lock/spinlock_stress_neon.cpp',
         )
     )
 endif
@@ -1098,6 +1108,148 @@ tests_set_base.add(
         'virtualization/vmxmsr.cpp',
     )
 )
+
+
+# neon_lock/（原 lock_arm/，2026-11-19 目录改名）—— 2026-11-03 spinlock/lock 族的 NEON 扩展（锁协议原样保留——
+# CAS/ldaxr-stxr/xchg 获取与屏障释放正是被测对象且无 NEON 等价；锁内/
+# 原子更新旁新增 per-thread uint32x4 向量槽 payload（asm ld_vec/st_vec），
+# 原版全部校验保留 + 新增槽 == local_sum 低 32 位校验。仅 aarch64。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'neon_lock/spinlock_stress_neon.cpp',
+            'neon_lock/spinlock_stress_bts_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg_even_odd_neon.cpp',
+            'neon_lock/spinlock_stress_cmpxchg16b_neon.cpp',
+            'neon_lock/spinlock_rmw_cmpxchg_neon.cpp',
+            'neon_lock/spinlock_rmw_cmpxchg_pause_neon.cpp',
+            'neon_lock/spinlock_rmw_xchg_neon.cpp',
+            'neon_lock/spinlock_rmw_xchg_pause_neon.cpp',
+            'neon_lock/lockless_cmpxchg_neon.cpp',
+            'neon_lock/lockless_cmpxchg8b_neon.cpp',
+            'neon_lock/lockless_cmpxchg16b_neon.cpp',
+        )
+    )
+endif
+
+# memory-access/ —— 2026-11-04 尾部访存对探针家族：负载头是扫描变量
+# （随机/步长 ldr 扫、纯 str 流、copy 交替、dc-civac 维护、屏障流、
+# ldaxr/stxr 独占对、stnp NT 流、固定 NEON ALU 链），尾部统一
+# str→str / ldr→str→str 背靠背 asm 探针（≤2 周期 store→load 转发窗口）
+# + init 快照 golden + 段轮转防折叠（ma_tail_probe.h）。针对实测故障
+# 签名：负载结束后连续访存对中第二个写回错位。仅 aarch64。
+#
+# 注：2026-11-04 增补的 ma_l2evict_{rev,2src,plain} / ma_src_overl2 四个
+# 基测试为 co-worker 未提交 WIP（disk state 为准、fresh clone 不携带），
+# 本仓仅落地其 FP64 变体（见下方 fp64/ 块）。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'memory-access/ma_ldr_random.cpp',
+            'memory-access/ma_ldr_stride.cpp',
+            'memory-access/ma_str_stream.cpp',
+            'memory-access/ma_copy_stream.cpp',
+            'memory-access/ma_civac.cpp',
+            'memory-access/ma_barrier.cpp',
+            'memory-access/ma_atomic.cpp',
+            'memory-access/ma_nt.cpp',
+            'memory-access/ma_alu_fixed.cpp',
+        )
+    )
+endif
+
+# fp64/ —— 2026-11-10 FP64 数据通路变体家族：arm_add/lock_arm/memory-access
+# 三目录探针的 _fp64 改造版（arm_add 现名 neon_memcpy_cache、lock_arm 现
+# 名 neon_lock；A 类：ALU 消费端换 FP64 四槽轮转
+# add/sub/mul/rev-sub——整数口→FP 口；B 类：载荷寄存器通路换 FP 寄存器），
+# load/store 骨架与检测语义逐字节保持父测试。golden 遵守 issue #373
+# 标量独立重算纪律（纯 C +,-,* 编译为 FADD/FSUB/FMUL D，与向量形式共享
+# pseudocode 位级一致；弃 fmax——std::fmax 实现自由度可破坏标量 golden 的
+# 双 NaN 位级一致性）。仅 aarch64。
+if host_machine.cpu_family() == 'aarch64'
+    tests_set_base.add(
+        files(
+            'fp64/ma_l2evict_2src_fp64.cpp',
+            'fp64/ma_src_overl2_fp64.cpp',
+            'fp64/ma_l2evict_rev_fp64.cpp',
+            'fp64/ma_alu_fixed_fp64.cpp',
+            # lock_arm（现 neon_lock）pass: lock/CAS protocol bit-level untouched; slot RMW
+            # vaddq_u32 -> vaddq_f64, plain-counter variants double+FADD
+            # (exact domain < 2^53), pack variants keep integer packing.
+            'fp64/spinlock_stress_neon_fp64.cpp',
+            'fp64/spinlock_stress_cmpxchg_neon_fp64.cpp',
+            'fp64/spinlock_stress_cmpxchg_even_odd_neon_fp64.cpp',
+            'fp64/spinlock_stress_bts_neon_fp64.cpp',
+            'fp64/spinlock_stress_cmpxchg16b_neon_fp64.cpp',
+            'fp64/spinlock_rmw_cmpxchg_neon_fp64.cpp',
+            'fp64/spinlock_rmw_cmpxchg_pause_neon_fp64.cpp',
+            'fp64/spinlock_rmw_xchg_neon_fp64.cpp',
+            'fp64/spinlock_rmw_xchg_pause_neon_fp64.cpp',
+            'fp64/lockless_cmpxchg_neon_fp64.cpp',
+            'fp64/lockless_cmpxchg8b_neon_fp64.cpp',
+            'fp64/lockless_cmpxchg16b_neon_fp64.cpp',
+            # arm_add（现 neon_memcpy_cache）A-class: consumer ALU re-typed to the FP64 pipe
+            'fp64/cachebounce_neon_fp64.cpp',
+            'L3_cache_920/llcstress_neon_fp64.cpp',
+            'L3_cache_920/l3_execute_neon_fp64.cpp',
+            'fp64/mem_disambig_alu_neon_fp64.cpp',
+            'fp64/store_visibility_cross_class_neon_fp64.cpp',
+            # L3_cache_920 FP64 expansion (2026-11-18, user directive):
+            # every L3-capable test's f64x2 datapath twin — dynamic L3
+            # windows / 4MB shared arrays / golden k-space sums, the
+            # 2026-11-17/18 L3-capability design born from the start.
+            # Parents: tests/cpu/L3_cache_920/ (canonical) + arm_add
+            #（现 neon_memcpy_cache）NEON twins; see that directory's README.
+            'L3_cache_920/llc_randomized_load_neon_fp64.cpp',
+            'L3_cache_920/llc_uniform_load_neon_fp64.cpp',
+            'L3_cache_920/memcpy_l3_cache_size_neon_fp64.cpp',
+            'L3_cache_920/mesh_upi_avx2_read_L3_neon_fp64.cpp',
+            'L3_cache_920/mesh_upi_avx512_asymm_read_L3_neon_fp64.cpp',
+            'L3_cache_920/mesh_upi_avx2_write_only_neon_fp64.cpp',
+            'L3_cache_920/mesh_upi_sse_write_only_neon_fp64.cpp',
+            'L3_cache_920/mesh_upi_avx512_asymm_write_only_neon_fp64.cpp',
+            # memory-access B-class: tail access pair + load heads on the
+            # FP-register datapath (d-reg ldr/str, ldaxr/fadd/stxr,
+            # stnp d,d), shared ma_tail_probe_fp64.h bit-exact golden
+            'fp64/ma_ldr_stride_fp64.cpp',
+            'fp64/ma_ldr_random_fp64.cpp',
+            'fp64/ma_atomic_fp64.cpp',
+            'fp64/ma_barrier_fp64.cpp',
+            'fp64/ma_civac_fp64.cpp',
+            'fp64/ma_nt_fp64.cpp',
+            # arm_add（现 neon_memcpy_cache）B-class probes: payload re-typed to the FP-register
+            # datapath (str/ldr %d0 scalar, f64x2 vectors); lock/ver/marker
+            # protocols bit-level untouched.  mem_disambiguation_neon
+            # re-audited to C-class (q-register bit-pattern IO: the f64
+            # retype is a compile-time no-op) — honestly skipped.
+            'fp64/barrier_after_lock_store_fp64.cpp',
+            'fp64/barrier_after_lock_store_neon_fp64.cpp',
+            'fp64/barrier_after_lock_store_neon_2_fp64.cpp',
+            'fp64/low_load_cache_pressure_fp64.cpp',
+            'fp64/low_load_cache_pressure_neon_fp64.cpp',
+            'fp64/store_lost_write_detect_fp64.cpp',
+            'fp64/store_lost_write_detect_neon_fp64.cpp',
+            'fp64/store_visibility_cross_class_fp64.cpp',
+            'fp64/str_instruction_stress_fp64.cpp',
+            'fp64/str_instruction_stress_neon_fp64.cpp',
+            # Task 6 re-audited: the q-pass-through _neon family members
+            # (clflush_neon/_2, flushed×2, llc_load×2, mfence×2) are honest
+            # no-ops under an f64 re-view — skipped.  Real B-class only:
+            'fp64/cache_stress_clflush_fp64.cpp',
+            'fp64/sfence_neon_fp64.cpp',
+            # gather family: the s32-lane members re-typed to f64 lanes
+            # (4B->8B element width, LD1/ST1 {Vt.D} lanes; the in-register
+            # multiply moves to the FP unit).  i64 members skipped: LD1/ST1
+            # {Vt.D} is encoding-identical for s64/f64 lanes (no-op); f32
+            # members duplicate the existing f64 members; f64/pd are FP64.
+            'fp64/gather_i32_fp64.cpp',
+            'fp64/gatherscatter_i32_fp64.cpp',
+            # user-recipe excitation probe (2026-11-12): 2 ldr + 4 ext + 1 stp
+            'fp64/fp64_2ldr_4ext_stp.cpp',
+        )
+    )
+endif
 
 tests_config_base = tests_set_base.apply(tests_config)
 
@@ -1250,9 +1402,11 @@ if host_machine.cpu_family() == 'x86_64'
 endif
 
 # ARM64 SVE build block: mirror of the x86 SKX/HSW blocks above. Compiles the
-# per-tier payloads of the 14 Eigen SVE cases (2 pre-existing + 12 added
-# 2026-11-03 by the eigen SVE unification; their dispatch TUs are loaded
-# into tests_sve above) against Eigen's SVE packet backend
+# per-tier payloads of the 14 Eigen SVE cases and their 14 _sve2 companions
+# (28 dispatch TUs in tests_sve above — the 14 SVE cases are 2 pre-existing
+# + 12 added 2026-11-03 by the eigen SVE unification, the 14 _sve2
+# companions were added 2026-11-13 by feat/eigen-sve2-companion; both
+# families share these 10 body sources) against Eigen's SVE packet backend
 # (-DEIGEN_ARM64_USE_SVE) with a fixed vector length, renaming the Eigen
 # namespace per tier so the variants link beside each other and the NEON
 # baseline without symbol clashes. Eigen's SVE packets are compile-time
@@ -1263,6 +1417,23 @@ endif
 # tests_eigen_<pfx>_vl<N> static libraries, and the vector-length-agnostic
 # dispatchers pick the variant that matches the worker's pinned tier at run
 # time.
+# Dual-target extension (2026-11-12, SVE2 companion design): the same table
+# is additionally compiled for the armv8.2-a+sve2 target as
+# tests_eigen_<pfx>_sve2_vl<N> libraries (Eigen namespace EigenSVE2<N>, body
+# symbol namespace <pfx>_sve2_vl<N>) for the _sve2 companion cases; the sve
+# rows keep their library names and args byte-identical. Honesty boundary
+# (corrected 2026-11-17): the sve2 libraries recompile the same SVE1-subset
+# stress bodies for backward-compatible execution on SVE2 hardware — but
+# GCC idiom-recognizes the Eigen copy plumbing (call_assignment/
+# gemm_pack_rhs aliasing-checked copy loops) into WHILEWR, an SVE2-only
+# address-overlap instruction: 1549 instances in 35/40 libraries, present
+# since #661 (armv9-a+sve2) and per-library identical after the
+# armv8.2-a+sve2 switch (the earlier "objdump-audited: zero SVE2-only"
+# claim missed this class; caught by the binutils SVE1-only assembler
+# gate). Runtime is unaffected (HWCAP2_SVE2-gated, executes only on SVE2
+# hardware). The libraries still provide an SVE2-gated entry point, a
+# compile-target declaration and the future hook for an Eigen SVE2
+# backend — NOT SVE2-only datapath coverage.
 if host_machine.cpu_family() == 'aarch64'
     # --- Eigen payload: one instantiation per VL tier, table-driven --------
     # Eigen's SVE packet types are compile-time fixed-width and appear as
@@ -1280,7 +1451,7 @@ if host_machine.cpu_family() == 'aarch64'
     # shape, so all four tiers are built.
     # Table-driven (2026-11-02 eigen SVE unification, design §3):
     #   [body-source, namespace-prefix, eigen_stack_limit_1024]
-    #   — library name = tests_eigen_<pfx>_vl<t>
+    #   — library name = tests_eigen_<pfx>[_sve2]_vl<t>
     # The existing svd/gemm prefixes keep their library names; the per-tier
     # symbol namespace is now injected uniformly as
     # -DEIGEN_SVE_BODY_NS=<pfx>_vl<t> (the body TUs' old
@@ -1322,44 +1493,59 @@ if host_machine.cpu_family() == 'aarch64'
         body_src = spec[0]
         pfx = spec[1]
         stack_limit_1024 = spec[2]
-        foreach tier : ['128', '256', '512', '1024']
-            eigen_tier_args = [
-                '-march=armv8.2-a+sve',
-                '-msve-vector-bits=' + tier,
-                '-DEIGEN_ARM64_SVE_VL=' + tier,
-                '-DEigen=EigenSVE' + tier,
-                '-DEIGEN_SVE_BODY_NS=' + pfx + '_vl' + tier,
-            ]
-            # issue #520: only the f32 SVD bodies exceed Eigen's 128 KiB
-            # stack sentinel at VL=1024 (see the table comment above).
-            if tier == '1024' and stack_limit_1024 != 0
-                eigen_tier_args += [
-                    '-DEIGEN_STACK_ALLOCATION_LIMIT=' + stack_limit_1024.to_string(),
+        # [suffix, march, Eigen-ns-prefix]: sve keeps the existing
+        # names/args byte-identical; sve2 adds the armv8.2-a+sve2 target
+        # (NOT armv9-a+sve2: the armv9-a base name needs GCC 11+, which
+        # broke the GCC-10 Multi-OS Verify images 2026-11-10..17
+        # — cc1plus "unknown value 'armv9-a+sve2' for '-march'",
+        # run 44011713221. SVE2 has been a plain -march extension on
+        # the armv8.x-a base since GCC 10; the gcc-12 objdump A/B audit
+        # (2026-11-17, same-source full builds, compile flags verified
+        # identical modulo march) shows all 40 libraries differ in raw
+        # disassembly (branch-offset/address shifts + scalar
+        # scheduling reorder, ~10.2k lines total); 32/40 keep an
+        # identical mnemonic multiset, the remaining 8/40 (gemm_c128
+        # vl256/vl1024, svd_j_c128 vl256/vl1024, f32-svd vl128-1024)
+        # add ±1..13 scalar-only count deltas (mov/ldr/str/stp/ldp/
+        # ldur/stur/nop/add/lsl/madd/mul/b.*; one integer mul↔madd
+        # fusion flip) — ZERO SVE- or FP-family mnemonic count changed
+        # anywhere, so the numeric datapath is untouched; and the
+        # SVE2-only WHILEWR footprint (GCC's aliasing-checked
+        # copy-loop idiom — see the honesty note in the block header
+        # above) is per-library IDENTICAL under both marches (1549
+        # instances across 35/40 libraries), so the SVE2-gated entry
+        # point is unaffected).
+        foreach tgt : [['',   'armv8.2-a+sve', 'EigenSVE'],
+                       ['_sve2', 'armv8.2-a+sve2', 'EigenSVE2']]
+            foreach tier : ['128', '256', '512', '1024']
+                eigen_tier_args = [
+                    '-march=' + tgt[1],
+                    '-msve-vector-bits=' + tier,
+                    '-DEIGEN_ARM64_SVE_VL=' + tier,
+                    '-DEigen=' + tgt[2] + tier,
+                    '-DEIGEN_SVE_BODY_NS=' + pfx + tgt[0] + '_vl' + tier,
                 ]
-            endif
-            eigen_vl_a = static_library(
-                'tests_eigen_' + pfx + '_vl' + tier,
-                sources : body_src,
-                dependencies: [
-                    eigen3_dep,
-                    boost_dep,
-                ],
-                build_by_default: false,
-                include_directories: [
-                    tests_common_incdirs,
-                ],
-                c_args : [
-                    tests_common_c_args,
-                    eigen_tier_args,
-                ],
-                cpp_args : [
-                    tests_common_cpp_args,
-                    eigen_tier_args,
-                    '-DEIGEN_ARM64_USE_SVE',
-                    sve_bitpattern_exempt,
-                ],
-            )
-            sandstone_tests += [eigen_vl_a]
+                # issue #520: only the f32 SVD bodies exceed Eigen's 128 KiB
+                # stack sentinel at VL=1024 (see the table comment above);
+                # applies to both targets — the sve2 compilation
+                # instantiates the same Eigen kernels.
+                if tier == '1024' and stack_limit_1024 != 0
+                    eigen_tier_args += [
+                        '-DEIGEN_STACK_ALLOCATION_LIMIT=' + stack_limit_1024.to_string(),
+                    ]
+                endif
+                eigen_vl_a = static_library(
+                    'tests_eigen_' + pfx + tgt[0] + '_vl' + tier,
+                    sources : body_src,
+                    dependencies: [ eigen3_dep, boost_dep ],
+                    build_by_default: false,
+                    include_directories: [ tests_common_incdirs ],
+                    c_args : [ tests_common_c_args, eigen_tier_args ],
+                    cpp_args : [ tests_common_cpp_args, eigen_tier_args,
+                                 '-DEIGEN_ARM64_USE_SVE', sve_bitpattern_exempt ],
+                )
+                sandstone_tests += [eigen_vl_a]
+            endforeach
         endforeach
     endforeach
 
@@ -1444,6 +1630,32 @@ if host_machine.cpu_family() == 'aarch64'
     endif
 endif
 
+# adaptive_mem_sdc SVE/SVE2 引擎 TU (2026-11-16 研究仓逐字节迁移): 独立翻译
+# 单元用 +sve2 march 编译 (编译期无需 SVE 硬件——本机鲲鹏 920 编过、运行期
+# HWCAP 永不选中; SVE 机上由 adaptive_mem_sdc.cpp 的 getauxval 探测分发,
+# SVE/SVE2 共码, SVE2-only 轮换槽是 future extension, 当前零 SVE2 指令)。
+# 库名避撞既有 tests_sve (dispatch TU 库); sve_sanitize_exempt 对齐全部 SVE
+# 库纪律 (GCC 12.3 SVE intrinsics + 插桩 codegen ICE, 见文件头注释)。
+# 真实 VL 几何 (svcntd/cntb 步进) 与 tests_sve_vla 同为 VLA, 但保研究仓
+# +sve2 march 编译语义 (spec: 研究仓 docs/ADAPTIVE_MEM_SDC_DESIGN_20261113.md
+# §3), 故独立成库而非并入 sve_vla。
+if host_machine.cpu_family() == 'aarch64'
+    sve2_march = cpp.compiles(
+        '#include <arm_sve.h>\nint f(void) { return 0; }',
+        args: ['-march=armv9-a+sve2'],
+        name: 'armv9-a+sve2 compile probe',
+    ) ? ['-march=armv9-a+sve2'] : ['-march=armv8.2-a+sve2']
+
+    tests_sve_adaptive_a = static_library(
+        'tests_sve_adaptive',
+        sources: ['misc/adaptive_mem_sdc_sve.cpp'],
+        build_by_default: false,
+        include_directories: [tests_common_incdirs],
+        cpp_args: [tests_common_cpp_args, sve2_march, sve_sanitize_exempt],
+    )
+    sandstone_tests += [tests_sve_adaptive_a]
+endif
+
 # ARM64-native arithmetic tests that exercise third-party optimised libraries
 # (GMP / Arm Compute Library / compiler-rt). The subdir's own meson.build
 # defines gmp_dep/acl_dep/crt_builtins_lib via cc.find_library/declare_dependency
@@ -1464,7 +1676,6 @@ subdir('arm64')
 # Self-gated on aarch64 and on eigen3_dep, so x86-64 is untouched and a
 # missing Eigen simply drops the fleet.
 subdir('arm64/sdc_fuzzing')
-
 # SVE ports of the 53 avx-named tests (fma/mesh/eigen/ipsec). Same
 # self-gating pattern as arm64/ above: the subdir's own meson.build wraps
 # everything in the aarch64 guard, so x86-64 is untouched.

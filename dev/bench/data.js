@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795175821940,
+  "lastUpdate": 1795181219952,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4905,6 +4905,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.464,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "4165c0c659761735d17b36f2cb44496099865220",
+          "message": "docs: open PR 全量 triage 报告 + open issue 解决方案文档（mission pr-issue-triage） (#850)\n\n* plan: pr-issue-triage mission (9 PR triage + 9 issue solution docs)\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* plan: roles run in bypass-permissions mode\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(missions): pr-issue-triage/pr-neon 角色报告——4 个 NEON PR (660/643/627/625) triage 处置实录\n\n四 PR 全部 merge-ready（660/627/625 由 CONFLICTING 解决为 MERGEABLE，643\n复核实无改动）；全部 bot findings 逐条三分处置；三处同型「整数兄弟覆盖\nFP64 单元」虚假覆盖承诺如实化；660 的 GCC 10 meson 修复经本机 A/B 实证、\n捕获期无上限建立跟踪 issue #843；各 PR 验证实录（构建/实跑/回归/objdump/\nverify.sh 22 门禁/单测）全部内录。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(missions): pr-feature 角色报告——PR 518/814/695 triage 处置与验证记录\n\n三个大特性 PR 全部从 CONFLICTING 修复至 MERGEABLE：\n- 518 (march tiers): 第七档 march_arm64_sve2_compat 统一 eigen companion\n  字面量；march 多重集/list-tests 与 main 基线双 IDENTICAL 实证\n- 814 (opendcdiag): 目录统一裁决（L3_cache_920 为准, 51 组双注册清零）+\n  L3 校验 element-exact 全量收口（24 文件）+ 4 件 FP64 复制体退役 +\n  c51a739b knob 修复移植；37 件实测 pass, 519 PROD 计数落盘\n- 695 (nodepool): _worktree_cleanup 取 main 收口版 + 测试锚同步；\n  239 passed（1 环境性预存失败同 main 基线）\n\nopen items: 人类 approving review 待做；main CLAUDE.md 悬空引用；\nadaptive_l3_sdc 尚未被任何检视轮覆盖。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(mission): pr-docs triage 报告——629/628 全 findings 处置复核与快道判定\n\nPR 629：10 条 findings 三轮 review 全部已修（head df073e17），锁族 47=30+17\n分解式独立源码实证 + no-SVE 主机运行时 grep 47 复测吻合；无需 push，可快道。\nPR 628：2 条 findings 已修；CONFLICTING 经合 main 解冲突（ec3e7bab，结构取\n本支围栏顶层 + 内容取 main 红线反转）后 MERGEABLE，可快道。rule 2 自证：\n构建 858/858 exit 0、mermaid 11.17.2 parse 4/4、GitHub gfm 渲染结构核验、\ntabs/codespell 0；本机 no-SVE 边界如实披露（SVE1 三档不可本机复测）。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(mission): pr-docs 报告主机身份更正——firestorm 系 simd-arm.conf 匹配别名非 MIDR 身份\n\nreview 判 PASS 但点名 MR 前须更正（与本 mission pr-feature 报告的\n「Apple M1 系」错误同源）：初版把 --dump-cpu-info 的 Detected CPU:\nfirestorm 当主机标签。实证：firestorm 是 framework/device/cpu/\nsimd-arm.conf:141 按 part 0xd01 的特征位匹配别名（注释自述 Apple M1\nFirestorm-equivalent (approx)），非 MIDR 身份——与本报告 triage 的\nPR 629 finding 4525656438（「cortex x3b」同类错误）完全同型。本机\nlscpu Model name = Kunpeng-920（HiSilicon 0x48/0xd01，hostname\ncathelper-k8s-worker2）。验证行为发生在鲲鹏目标平台上，结论不受影响。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(issues): issue #713 解决方案——T11 显式 knob 半迁移态根因与 T11b U1-U9 迁移路线\n\n29 个调用方侧 knob 读取文件实测分五类(A/B/C/D/E); T11 早退块\nsdc_stress_config.h:1434-1484 与尾注 :1451-1453 现行锚点钉死;\n修复路线固化为 U1(框架 is_explicit 探测使能)→U9(四处文档披露\n收口) 九单元, 每单元独立 PR; 验证边界按本机 no-SVE 920 划定,\n_sve/_sve2 单元走 gem5-fi。仅文档, 无代码改动; 全部引用可经\n文末复查清单离线重放。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(issues): issue #686 解决方案——128 档验证缺口: 文档层 moot + gem5-fi --sve_vl 1 补验路线\n\n历史引文逐字属实(31f6a99e^ 取回 plan :611-612/:620, e481496e\n--sve_vl 2/4/8, bb0e148a --sve_vl 4/8, 均无 128); 锚点 plan 已随\n31f6a99e 清理, 文档缺陷无存活面; 实质残留 = eigen_gemm_double_max_arm\n(及 eigen_svd_cdouble_sve) sizing 探针 128 档从未实测——现行分派\nsandstone_eigen_sve_dispatch.h:79/:96 证明 128 档可编译可分派, 缺口\n在证据不在可达性。补验路线: SVE 主机 SDCSHIELD_ARM64_SPEC_MAX_VL=128\n本机降档, 或 gem5-fi --sve_vl 1(本 mission 主机 no-SVE 仅此可行)。\n仅文档; 引用可离线重放。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(issues): issue #655 解决方案——GEMM sizing 超预算 8.8% 已同日修复的现行证据与数学复算\n\n滞后重复审计: 证据快照 e481496e(10-28 00:33)所指两层根因(差分\n口径漏计 run 期第 4 驻留矩阵 → 系数 0.0290 欠测 8.8%; worker 期\n无 bad_alloc 防护)已由同日 09c94fc6(0.0290→0.0315)/73b6918e(T10\n三段窄 catch)/fd2f9bcd(反馈撕裂窗口)全部修复。本文独立复算: 新\n系数@N=3364 = 43.17 GiB vs 实测 43.31(+0.33%), 预算反解 n_mem=3228\n与 09c94fc6 验证记录吻合; 现行锚点 sdc_stress_config.h:1143-1150、\nmax_arm.cpp:338/348、max_arm_body.cpp:93-129 逐条在位。无活缺陷,\n无需新 diff。仅文档; 引用可离线重放。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(issues): issue #645 解决方案——证据矩阵口径偷换: 初版引文属实, 已按如实降级处置\n\naudit 引 :80/:91/:204 经 git 考古逐字核实对应 76482b8b 初版分诊表\n(2026-10-29): 25 超时格 clamp 下限(缩量 ×7,575~15,151/1/4096)计绿\n收口「190/190 全绿、边界格=0」确系口径偷换; 但 issue 立案(11-11)\n前已由 d2bd1ff8(10-30, 469 直绿+91 有界几何三分类)与 2540e685\n(11-04, #404「不构成满强度激发证据」)降级重述, 立案后 a2b6971e\n(11-17, #841 seed 不对称披露)补齐, 锚点文件同日随 31f6a99e 删除\n——无存活修复面。引文勘误如实记录: spec「564 格」系早期草案口径\n(终版 :11 自记 190×3=570)。残余 = 25 格满强度激发证据缺(已如实\n披露为缺, 补齐属新运动决策, 协议应为 ×2 上调阶梯)。仅文档。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(issues): 5 个缺口 issue 解决方案文档（533/376/375/357/332）\n\n为 pr-issue-triage mission 的 issues-gap 角色产出：每份按「根因（文件:行号）\n→ 修复路径 → 验证边界」结构，全部引用按 main 727cc8d3 当日实查（issue 立案\n后已有修复落地，行号漂移与已修/未修状态逐一核实）：\n\n- issue-533：两档（quick-suite crash / Multi-version smoke）自 11-10 起被\n  第三档 codespell 全红掩盖；codespell 档已由 681e8631 修复（本机 codespell\n  2.4.3 复现 exit 65→修后 0 findings 实证），两档现状「未观察、未验证」，\n  run 级时间线与证据链全录。\n- issue-376：点名三处（f32_chain/fmmla/power_virus_dit）均已分段落地；族级\n  普查 17 文件，剩余真缺口 = fma2/power_virus_dit_sve 终态-only（累积型，\n  最高风险级），修复方案=移植同族已验证的 SEG_LEN 分段溢出模式。\n- issue-375：缺口 A（isal_crc 10 文件无 KAT）原样未动为最大剩余面，zpclmul/\n  crypto_test 先例可抄；缺口 B 六行一行已修五行待声明；缺口 C 两修一废\n  （eigen_svd_bidiag_sve 已退役）一不动（x86 参考架构），fma_sve 仍是最刺眼\n  单点，整数操作数化方案给出。\n- issue-357：机制链（40 次 auto-fracture 预算/10ms 翻倍窗/test_time_condition\n  计数语义）在 framework/sandstone_run.cpp 全核实；46 文件三维度盘点\n  （sizing/节流/VA），全修 3 + VA-only 1 + 半修 15 + 原始 22；本机对照实验\n  （no-SVE 主机）澄清病理面精确边界（asymm 单写者骨架 + 屏障孵化偏斜，\n  sym 低线程数自愈）。\n- issue-332：缺口 A 三孪生已修其二（avx_sym/sse_sym 整数化+双侧 sum 落地），\n  剩 avx512_sym + sve_wide_sym（后者 global_sum 字段在而累计被 void，issue\n  误记为已修）；缺口 B 先行项 14 文件落地，剩 3 处丢弃点（含 write_only\n  零内容校验 1 处）。\n\n只出文档，不含修复代码。本 worktree 全新构建（gcc10 需 -Dcpp_std=gnu++20）\n+ zstd19 回归 pass + SVE mesh 诚实 SKIP + sse_sym 五档缓冲对照，均为实跑取证。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(missions): pr-feature 报告身份勘误——本机是 Kunpeng-920 非 firestorm/Apple M1\n\n初版 :9/:161 把本机误标「firestorm（Apple M1 系）」。实为 --dump-cpu-info\n按 part 0xd01 经 framework/device/cpu/simd-arm.conf:141 的近似别名串\n（arch=firestorm → cortex_a76, 注释自述 'Apple M1 Firestorm-equivalent\n(approx)'），非 MIDR 身份。本机真实身份：Kunpeng-920（HiSilicon\nimplementer 0x48 / part 0xd01, hostname cathelper-k8s-worker2, 96 核/\n313GiB, 无 SVE/SVE2/SME）。\n\n修正：\n- :9 验证环境 → 「本机 Kunpeng-920（HiSilicon，无 SVE/SVE2/SME，96\n  逻辑核，gcc 10.3.1）」+ 保留勘误注记（别名串来源与依据，防再犯）\n- :161 → 「本机（Kunpeng-920 no-SVE 变体）与 CLAUDE.md 口径主机\n  （SVE1-256 鲲鹏 920）是同族不同主机」\n\n验证结论全部不受影响——鲲鹏 920 正是本仓口径的目标硬件家族，\nno-SVE 变体上 519 PROD 实测反而与 CLAUDE.md 的 no-SVE 920 口径\n（458+PR814 增量）同族可比。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* docs(issues): issue-686 §3-4 修正——归档通道误引已删 progress-log,改为 713-U9 同款计划文档落点\n\nreview fix(2026-11-19): 初稿把 docs/research/progress-log.md 当「本仓\n过程结论的现行载体」——该文件连同整个 docs/research/ 已于 2026-11-17\n14:31 被 31f6a99e 清出库(本分支基底 727cc8d3 上 git ls-tree 零命中),\n早于本文核查日期 2026-11-18 17:30; 初稿系转抄 CLAUDE.md 文档地图而未 ls\n实证, 与本文自订的「引用必须可复查」相违。归档子步改为与 issue-713 U9\n同款: 新计划文档落 docs/superpowers/plans/(新建即可, 不复活已删 plan),\n并在文中如实记录误引。\n\n核查附注(不改变 fix): origin/main 已前移至 3633cd85, 其 5cca3484\n(WIP #814, 2026-11-19 09:27)在 upstream 重建了 progress-log.md 单文件\n——晚于本文核查时点, 不影响本修正(新表述不依赖该通道)。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n---------\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\nCo-authored-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-20T02:41:12Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/4165c0c659761735d17b36f2cb44496099865220"
+        },
+        "date": 1795181218036,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 85609.041,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44270.497,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 3.066,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 14.986,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.133,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.195,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.137,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 4.139,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 22213.58,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.147,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.367,
             "unit": "s"
           }
         ]

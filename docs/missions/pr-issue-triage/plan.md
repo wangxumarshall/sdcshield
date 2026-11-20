@@ -24,7 +24,8 @@ docs PR 永不自动 merge**，docs-only PR 走快道但同样经你批准。
 ## Decisions for you
 
 1. **角色模型分配**：5 个 builder 用 `sonnet` + `effort: high`，1 个 reviewer 用
-   `opus` + `effort: high`，全部 `--permission-mode acceptEdits`。
+   `opus` + `effort: high`（执行姿态经 e580a7b9 修正为 bypass-permissions——
+   初始计划 acceptEdits，mission 启动 20 分钟后按实际执行改记）。
    **Recommended: 接受**，因为量大体裁是 triage 与文档，sonnet 足够快，reviewer
    换 opus 做终检。approve 即采纳；改模型是 change。
 2. **docs-only PR 的合并动作**：628/629 无 `WIP:` 前缀、CI 绿，属快道。
@@ -37,8 +38,11 @@ docs PR 永不自动 merge**，docs-only PR 走快道但同样经你批准。
 PR 按文件耦合切：4 个 NEON PR 同族归 `pr-neon`；3 个大特性 PR（march/migrate/
 nodepool 三个独立子系统）归 `pr-feature` 按序过；2 个 docs PR 归 `pr-docs`。issue
 按主题切两半：4 个 `[audit]` 口径 issue 归 `issues-audit`，5 个 ci-triage /
-verification-gap / mesh 缺口 issue 归 `issues-gap`。所有 role 互不共享文件
-（各自写自己的报告/文档目录），故全部并行，无 `depends_on`。reviewer 逐个审。
+verification-gap / mesh 缺口 issue 归 `issues-gap`。所有 role 互不共享
+reports/ 输出文件（各自写自己的报告/文档目录），故全部并行，无
+`depends_on`（2026-11-20 复核勘误：此断言被 plan.md 本身证伪——三个 role
+分支各自携带同一 plan.md，#850 先合 mission 主分支后姊妹 PR 全部
+CONFLICTING；「互不共享」仅对 reports/ 输出成立，plan.md 是共享件）。reviewer 逐个审。
 PR role 的「修复」push 回 PR 自己的分支（不落 mission 分支），mission 分支只
 承载报告 + 方案文档。
 
@@ -53,7 +57,7 @@ profiles:
     agent: claude
     model: sonnet
     effort: high
-    flags: [--permission-mode, acceptEdits]
+    flags: [--dangerously-skip-permissions]
     text: workflow:builder
 roles:
   pr-neon:
@@ -80,7 +84,7 @@ roles:
     agent: claude
     model: opus
     effort: high
-    flags: [--permission-mode, acceptEdits]
+    flags: [--dangerously-skip-permissions]
     goal: "Review each branch as it lands"
     touches: []
     reviews: [pr-neon, pr-feature, pr-docs, issues-audit, issues-gap]

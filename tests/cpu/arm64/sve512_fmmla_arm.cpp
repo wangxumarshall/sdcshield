@@ -5,7 +5,7 @@
  *
  * @test @b sve512_fmmla_arm
  * @parblock
- * SVE2 FMMLA matrix-outer-product chain SDC stress (f32 via FEAT_F32MM,
+ * FMMLA matrix-outer-product chain SDC stress (f32 via FEAT_F32MM,
  * f64 via FEAT_F64MM) — the highest-FLOPS-density datapath in SVE (each
  * instruction completes VL/2 x VL multiply-accumulates into a 2D tile)
  * and a first-generation instruction family (PinDrop HPCA'26: an
@@ -46,13 +46,16 @@
  * test_init gates in two layers (all-VL Phase 2 P6 split): the pure SVE
  * capability + 128..1024-bit range check goes through the framework
  * layer (arm64_require_sve_vl, one call, no SVE instruction executes
- * before the gate), while the composite SVE2|F32MM|F64MM HWCAP2 bits
+ * before the gate), while the F32MM|F64MM HWCAP2 bits
  * stay a getauxval hand-probe — that conjunction is this test's own
- * semantics (FEAT_F32MM + FEAT_F64MM), not something the generic
+ * semantics (FEAT_F32MM + FEAT_F64MM, deliberately NOT gated on SVE2:
+ * the matrix-multiply extension is orthogonal to SVE2 and runs on cores
+ * that have no SVE2 at all), not something the generic
  * require helper covers. Either layer returns a clean EXIT_SKIP when
  * absent (e.g. this Kunpeng 920 dev host). test_run re-checks the VL
- * and fails closed on drift. Requires the tests_arm64_sve2 library
- * (-march=armv9-a+sve2+f32mm+f64mm). Any runtime vector length in the
+ * and fails closed on drift. Requires the tests_arm64_sve_mm library
+ * (march_arm64_sve_mm = -march=armv8.2-a+sve+f32mm+f64mm, no +sve2).
+ * Any runtime vector length in the
  * supported range is accepted (full 512-bit on 0xd22).
  * @endparblock
  */
@@ -202,7 +205,7 @@ static int sve512_fmmla_arm_init(struct test *test)
 #else
     /* All-VL Phase 2 P6 split gate: the pure SVE capability + 128..1024-bit
        range check moves to the framework layer (arm64_require_sve_vl —
-       returns the VL in BYTES), while the composite SVE2|F32MM|F64MM
+       returns the VL in BYTES), while the F32MM|F64MM
        HWCAP2 conjunction stays a getauxval hand-probe: it is this test's
        own semantic gate (FEAT_F32MM + FEAT_F64MM matrix-multiply
        instructions), which the generic require helper does not cover. */

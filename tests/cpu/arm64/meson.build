@@ -11,9 +11,7 @@ if host_machine.cpu_family() == 'aarch64'
     # crypto_test.cpp uses vaeseq_u8 / vaesmcq_u8, which require the +crypto
     # target; neon_test.cpp uses baseline armv8.1-A NEON. A single march covers
     # both files.
-    arm64_cpp_flags = [
-        '-march=armv8.1-a+crc+crypto',
-    ]
+    arm64_cpp_flags = [march_arm64_neon_crypto]
 
     arm64_tests = files(
         'neon_test.cpp',
@@ -297,18 +295,18 @@ if host_machine.cpu_family() == 'aarch64'
             default_cpp_warn,
             default_cpp_flags,
             march_generic_flags,
-            '-march=armv8.2-a+sve',
+            march_arm64_sve,
             sve_sanitize_exempt,
             sve_bitpattern_exempt,
         ],
     )
 
-    # SVE2 matrix-multiply (FMMLA) SDC stress tests. Separate library
-    # because FMMLA requires -march=armv9-a+sve2+f32mm+f64mm — stronger
-    # than the tests_arm64_sve library's armv8.2-a+sve, and keeping the
-    # SVE2-only instructions out of the SVE1 library means SVE1-only
+    # FMMLA matrix-multiply (FEAT_F32MM / FEAT_F64MM) SDC stress tests. Separate library
+    # because FMMLA requires -march=armv8.2-a+sve+f32mm+f64mm — a superset
+    # of the tests_arm64_sve library's armv8.2-a+sve, and keeping the
+    # F32MM/F64MM instructions out of the SVE1 library means SVE1-only
     # machines can still run every other SVE test. test_init probes
-    # HWCAP2 (SVE2 + F32MM + F64MM) and returns a clean EXIT_SKIP when
+    # HWCAP2 (F32MM + F64MM) and returns a clean EXIT_SKIP when
     # absent. Compiler-support guard follows the SME pattern below (the
     # gmp/acl/openblas graceful-degradation convention); the library is
     # also exempt from sanitizer instrumentation like every SVE library
@@ -320,9 +318,9 @@ if host_machine.cpu_family() == 'aarch64'
     # FEAT_F32MM+F64MM and HWCAP2_SVE2=0 executes them correctly). Compiling
     # this TU with +sve2 made the framework's compiler_minimum_device gate
     # skip it on such hardware even though every instruction it uses works.
-    # The test's own init still requires SVE2|F32MM|F64MM ... — narrowed
-    # here to F32MM|F64MM, which is what the code actually uses.
-    sve_mm_march = '-march=armv8.2-a+sve+f32mm+f64mm'
+    # The test's own init gates on F32MM|F64MM, which is what the code
+    # actually uses.
+    sve_mm_march = march_arm64_sve_mm
     if cpp.has_argument(sve_mm_march)
         arm64_sve_mm_lib = static_library(
             'tests_arm64_sve_mm',
@@ -359,7 +357,7 @@ if host_machine.cpu_family() == 'aarch64'
                 ') - the FMMLA test is not built.')
     endif
 
-    sve2_march = '-march=armv9-a+sve2+bf16+f32mm+f64mm'
+    sve2_march = march_arm64_sve2
     if cpp.has_argument(sve2_march)
         arm64_sve2_lib = static_library(
             'tests_arm64_sve2',
@@ -400,13 +398,15 @@ if host_machine.cpu_family() == 'aarch64'
     # SME/ZA tile-view SDC stress (sme_za_tileview_arm). Own static_library
     # because the naked-asm ZA kernel needs armv9-a+sve+sme+sme-f64f64, which
     # neither the tests_arm64 baseline (armv8.1-a+crc+crypto) nor the SVE
-    # library (armv8.2-a+sve) can host, and which GCC-12 cannot parse at all.
+    # library (armv8.2-a+sve) can host, and which not every toolchain parses
+    # (openEuler gcc 12.3.1 backport accepts it — 2026-11-03 probe: exit=0,
+    # __ARM_FEATURE_SME defined; vanilla GCC < 14 does not).
     # Compiler-support probed with the C++ compiler object so GCC builds
     # degrade gracefully (test simply absent, the gmp/acl/openblas pattern);
     # every test re-gates at runtime on HWCAP2_SME and the measured SVL
     # range (128..1024-bit, all-VL Phase 2), so it only ever executes on
     # characterized SME hardware. Built only on aarch64.
-    sme_march = '-march=armv9-a+sve+sme+sme-f64f64'
+    sme_march = march_arm64_sme
     sme_args = [sme_march]
     # Clang keeps __ARM_FEATURE_BTI defined for v8.5+/v9 marches regardless
     # of emission; the TU undefines the macro (see its header comment), and

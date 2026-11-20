@@ -2,9 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 if host_machine.cpu_family() == 'aarch64'
-    arm64_cpp_flags = [
-        '-march=armv8.1-a+crc+crypto',
-    ]
+    # march_arm64_neon_crypto is the application's single source of truth
+    # (defined at its root meson.build). Standalone subdir() consumers of the
+    # framework don't define it, so fall back to the historical literal to
+    # keep the framework self-contained — the same optional-variable contract
+    # used for march_flags/march_generic_flags in framework/meson.build.
+    if is_variable('march_arm64_neon_crypto') == false
+        march_arm64_neon_crypto = '-march=armv8.1-a+crc+crypto'
+    endif
+    arm64_cpp_flags = [march_arm64_neon_crypto]
 
     arm64_files = files(
         'kunpeng920_ecc.cpp',

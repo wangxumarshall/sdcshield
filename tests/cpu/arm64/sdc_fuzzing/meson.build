@@ -119,7 +119,7 @@ if host_machine.cpu_family() == 'aarch64'
             default_cpp_flags,
             default_cpp_warn,
             march_generic_flags,
-            '-march=armv8.1-a+crc+crypto',
+            march_arm64_neon_crypto,
         ],
     )
     sandstone_tests += [sdc_fuzz_lib]

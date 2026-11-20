@@ -108,6 +108,31 @@ if host_machine.cpu_family() == 'x86_64'
     endif
 endif
 
+# ---------------------------------------------------------------------------
+# ARM64 ISA march tiers — single source of truth. Every aarch64-specific
+# -march that the Meson build passes to the compiler references one of these
+# variables (never a scattered literal): subdir() shares this scope, so every
+# tests/ and framework/ subdirectory sees them. (One deliberate exception: the
+# framework's standalone-subdir() fallback in
+# framework/device/cpu/arm64/meson.build assigns the value literal itself when
+# this file is absent from the include graph — a self-containment default for
+# out-of-tree consumers, not an in-tree second source. Otherwise the only
+# -march literals left in the tree are g++ command lines in the comments of
+# manually-built standalone scripts/ verifiers — human instructions outside
+# the Meson build.)
+# Tier -> test-family table: README "从源码构建" (adding-tests.md, the
+# former second copy, was removed from main 2026-11-17). NEON itself needs
+# no -march (the armv8-a baseline already has ASIMD); these tiers exist only
+# where intrinsics demand a specific extension. Untouched on x86-64 (inert
+# string data there).
+march_arm64_crc = '-march=armv8.1-a+crc'                   # tests_crc (ACLE __crc32b/h/w)
+march_arm64_neon_crypto = '-march=armv8.1-a+crc+crypto'    # tests_arm64 / tests_arithmetic_arm_* / tests_sdc_fuzzing / framework_arm64
+march_arm64_sve = '-march=armv8.2-a+sve'                   # every SVE1 library + the Eigen per-tier instantiations
+march_arm64_sve_mm = '-march=armv8.2-a+sve+f32mm+f64mm'    # tests_arm64_sve_mm (FMMLA; deliberately NOT +sve2)
+march_arm64_sve2 = '-march=armv9-a+sve2+bf16+f32mm+f64mm'  # tests_arm64_sve2
+march_arm64_sve2_compat = '-march=armv8.2-a+sve2'          # Eigen _sve2 companions (GCC-10-safe minimal SVE2, see tests/cpu/meson.build)
+march_arm64_sme = '-march=armv9-a+sve+sme+sme-f64f64'      # tests_arm64_sme
+
 debug_nasm_flags = ''
 if get_option('buildtype') == 'debug'
     debug_c_flags = [
@@ -407,3 +432,18 @@ summary(
     section: 'Configuration',
     bool_yn: true,
 )
+
+if host_machine.cpu_family() == 'aarch64'
+    summary(
+        {
+            'ACLE CRC (march_arm64_crc)': march_arm64_crc,
+            'NEON+crypto (march_arm64_neon_crypto)': march_arm64_neon_crypto,
+            'SVE1 (march_arm64_sve)': march_arm64_sve,
+            'SVE FMMLA (march_arm64_sve_mm)': march_arm64_sve_mm,
+            'SVE2 (march_arm64_sve2)': march_arm64_sve2,
+            'SVE2 compat (march_arm64_sve2_compat)': march_arm64_sve2_compat,
+            'SME (march_arm64_sme)': march_arm64_sme,
+        },
+        section: 'ARM64 ISA march tiers',
+    )
+endif

@@ -594,7 +594,7 @@ tests_set_skx.add(
 # the only members of tests_sve from this block — and are deliberately
 # vector-length agnostic: they hold no
 # Eigen SVE types, so tests_sve compiles them with march_sve_dispatch
-# (-march=armv8.2-a+sve, NO -msve-vector-bits). Eigen's SVE packet
+# (march_arm64_sve = -march=armv8.2-a+sve, NO -msve-vector-bits). Eigen's SVE packet
 # backend is compile-time fixed-width (arm_sve_vector_bits(
 # EIGEN_ARM64_SVE_VL)) and VLA is un-compilable at the C++ language level
 # (sizeless struct members / NumTraits sizeof, twice-confirmed spike), so
@@ -1316,7 +1316,7 @@ if host_machine.cpu_family() == 'aarch64'
         ],
         cpp_args : [
             tests_common_cpp_args,
-            '-march=armv8.1-a+crc',
+            march_arm64_crc,
         ],
     )
     sandstone_tests += [tests_crc_a]
@@ -1493,9 +1493,12 @@ if host_machine.cpu_family() == 'aarch64'
         body_src = spec[0]
         pfx = spec[1]
         stack_limit_1024 = spec[2]
-        # [suffix, march, Eigen-ns-prefix]: sve keeps the existing
-        # names/args byte-identical; sve2 adds the armv8.2-a+sve2 target
-        # (NOT armv9-a+sve2: the armv9-a base name needs GCC 11+, which
+        # [suffix, march tier variable, Eigen-ns-prefix]: sve keeps the
+        # existing names/args byte-identical; sve2 adds the armv8.2-a+sve2
+        # target via march_arm64_sve2_compat — the root-defined single
+        # source of truth for that value, deliberately distinct from the
+        # full march_arm64_sve2 tier (NOT armv9-a+sve2: the armv9-a base
+        # name needs GCC 11+, which
         # broke the GCC-10 Multi-OS Verify images 2026-11-10..17
         # — cc1plus "unknown value 'armv9-a+sve2' for '-march'",
         # run 44011713221. SVE2 has been a plain -march extension on
@@ -1515,11 +1518,11 @@ if host_machine.cpu_family() == 'aarch64'
         # above) is per-library IDENTICAL under both marches (1549
         # instances across 35/40 libraries), so the SVE2-gated entry
         # point is unaffected).
-        foreach tgt : [['',   'armv8.2-a+sve', 'EigenSVE'],
-                       ['_sve2', 'armv8.2-a+sve2', 'EigenSVE2']]
+        foreach tgt : [['',      march_arm64_sve,         'EigenSVE'],
+                       ['_sve2', march_arm64_sve2_compat, 'EigenSVE2']]
             foreach tier : ['128', '256', '512', '1024']
                 eigen_tier_args = [
-                    '-march=' + tgt[1],
+                    tgt[1],
                     '-msve-vector-bits=' + tier,
                     '-DEIGEN_ARM64_SVE_VL=' + tier,
                     '-DEigen=' + tgt[2] + tier,
@@ -1553,7 +1556,7 @@ if host_machine.cpu_family() == 'aarch64'
     # No -msve-vector-bits: their arm64_sve_vl_bytes() readback and the switch
     # on the actual tier must not be constant-folded, and they hold no Eigen
     # types any more.
-    march_sve_dispatch = ['-march=armv8.2-a+sve']
+    march_sve_dispatch = [march_arm64_sve]
 
     tests_config_sve = tests_set_sve.apply(tests_config)
     tests_sve_sources = tests_config_sve.sources()
@@ -1618,11 +1621,11 @@ if host_machine.cpu_family() == 'aarch64'
             ],
             c_args : [
                 tests_common_c_args,
-                '-march=armv8.2-a+sve',
+                march_arm64_sve,
             ],
             cpp_args : [
                 tests_common_cpp_args,
-                '-march=armv8.2-a+sve',
+                march_arm64_sve,
                 sve_sanitize_exempt,
             ],
         )

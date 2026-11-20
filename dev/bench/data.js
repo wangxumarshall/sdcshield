@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795157688938,
+  "lastUpdate": 1795159386880,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4680,6 +4680,81 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 12.001,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "committer": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "id": "9282588825dd62a6bbc145f41bd192bcbd010d7e",
+          "message": "fix(arm64): tests_base 补 shm_open→librt 条件链接——修 20.03 五镜像链接红\n\nMulti-OS Verify run 44683247314（main 4165c0c6，f0375ab6 HWCAP2_SVE2\n编译修复后的首验）20.03 五个 verify job 全部死在 Build 最终链接：\n\n  /usr/bin/ld: tests/cpu/libtests_base.a(misc_adaptive_mem_sdc.cpp.o):\n    adaptive_mem_sdc.cpp:797: undefined reference to `shm_open'\n  ... 797/802 + L3_cache_920/adaptive_l3_sdc.cpp:1103/1108 共 4 处，\n  collect2: error: ld returned 1 exit status\n  （job 136111402644/802/852/870/879 五件同构现场，逐一核对无其它错误）\n\n根因：PR #814（5cca3484）引入的 adaptive_mem_sdc/adaptive_l3_sdc 用命名\nPOSIX shm 做跨 fork 协调（按 ppid 命名，兄弟进程各自独立 mmap 后凭名字\n会合，O_EXCL 选主发布 anchor/sdc_flag——MAP_ANONYMOUS 无法替代此语义）。\nshm_open 在 glibc<2.34 位于 librt（20.03 镜像 = glibc 2.28），glibc 2.34\n起并入 libc——故只有 20.03 链接红、22.03/24.03 无恙。此前从未暴露：#814\n落 main 后首跑（run 44456953718）在 HWCAP2_SVE2 编译错处全红，到不了\n链接步；编译错修复后本 run 首次推到链接，残 bug 显形。\n\n修法：tests/cpu/meson.build 按同文件 libatomic 既有模式加 rt 探测——\n非 x86_64 且 cc.has_function('shm_open') 为假（= libc 不提供）时\ncc.find_library('rt') 并挂入 tests_base_a dependencies（meson 静态库\n依赖传播至最终可执行链接行，--start-group 组内解析）。glibc≥2.34/musl/\nBSD 主机探测为真 → 链接行零变化；x86_64 按 rule 5 完全不动（守卫短路，\n且两测试均为 ARM 新增、上游 x86 参考路径无此符号）。\n\n本机自证（openEuler 22.03 aarch64，GCC 10.3.1，glibc 2.34）：\n- vendored meson 0.59.4（20.03 CI 同款）setup：meson-log \"Checking for\n  function \\\"shm_open\\\" : YES\" → 最终链接行 -lrt 出现 0 次（22.03/24.03\n  链接行不变，22.03/24.03 用系统 meson 亦同机制）\n- 接线验证（临时以不存在符号 shm_open_qq_nonexistent 强制 false 分支后\n  已还原）：meson-log \"Library rt found: YES\"，-lrt 落最终 sdcshield 链接\n  行 --start-group(第11位)/--end-group(第121位) 组内（第 117 位）——ld\n  组语义保证 libtests_base.a 的 shm_open 引用可解析\n- ./scripts/build.sh 全量 927/927 干净，零新增告警（4 处既有告警均在\n  未触碰文件：stacksize.cpp / llcstress*.cpp 三件）\n- -e adaptive_mem_sdc -e adaptive_l3_sdc -t 3000 -n 2 -vv → 两件真执行\n  （-vv tests 列表可见），exit: pass\n- -e zstd19 -t 2000 -n 1 → exit: pass，rc=0\n- x86-64 检视：arch 守卫短路，零源码改动，链接行不变\n\n诚实边界：本机无 glibc 2.28 环境（无 podman、docker daemon 无权限、\nthird-party/rpms 为空），20.03 真实链接只能由下一轮 Multi-OS Verify 的\n20.03 job 定夺；glibc<2.34 shm_open 位于 librt 为 glibc 2.34 release\nnotes 文档化事实，与本 run CI 现场 4 处 undefined reference 完全吻合。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-20T06:46:32Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/9282588825dd62a6bbc145f41bd192bcbd010d7e"
+        },
+        "date": 1795159385092,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 83310.333,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 43948.289,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.871,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 81.55,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.998,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.056,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.861,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 4.088,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21505.736,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.177,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.796,
             "unit": "s"
           }
         ]

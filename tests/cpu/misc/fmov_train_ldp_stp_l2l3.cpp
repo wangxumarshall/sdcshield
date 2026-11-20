@@ -34,8 +34,9 @@
  * size detected SDC) and for residence-depth bit errors the
  * fast-domain parent structurally cannot see.
  *
- * Memory note: 640 KiB per thread x 192 threads ~= 120 GiB peak on a
- * full-core run — check free(1) first; no runtime knob (v1).
+ * Memory note: 640 KiB per-thread footprint (4 compute buffers +
+ * golden) x 192 threads ~= 120 MiB peak on a full-core run — trivial
+ * for any server host; no runtime knob (v1).
  * Provenance: SIMDFPLoadStoreMemLoopCpyP08 disassembly extract
  * (user-provided, 2026-11-18), same as the whole fmov_train family.
  * @endparblock

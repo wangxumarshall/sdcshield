@@ -54,8 +54,9 @@
  * domain, plus residence-depth bit-error detection the fast-domain pair
  * structurally cannot see (its verify reads are L1D/L2 hits).
  *
- * Memory note: 512 KiB per thread x 192 threads ~= 96 GiB peak on a
- * full-core run — check free(1) first; there is no runtime knob (v1).
+ * Memory note: 640 KiB per-thread footprint (4 compute buffers +
+ * golden) x 192 threads ~= 120 MiB peak on a full-core run — trivial
+ * for any server host; there is no runtime knob (v1).
  * Provenance: hot loop extracted from SIMDFPLoadStoreMemLoopCpyP08
  * disassembly (user-provided, 2026-11-18), same as the parent pair.
  * The LDP/STP twin of THIS test lives in fmov_train_ldp_stp_l2l3.cpp.
@@ -273,7 +274,7 @@ static int fmov_train_ldr_str_l2l3_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(fmov_train_ldr_str_l2l3, "L2/L3-resident counterpart of fmov_train_ldr_str: 512 KiB working-set FMOV cross-register-file consumer chain (2-source ldr + slot-rotated add/eor/sub + back-to-back str/str), per-round compute + DSB SY + three-reference verify (recompute vs stored vs init golden) (ARM64)")
+DECLARE_TEST(fmov_train_ldr_str_l2l3, "L2/L3-resident counterpart of fmov_train_ldr_str: 512 KiB working-set FMOV cross-register-file consumer chain (2-source ldr + FMOV round-trip + add + back-to-back str/str; rot/slot pinned, see header DESIGN RULING), per-round compute + DSB SY + three-reference verify (recompute vs stored vs init golden) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = fmov_train_ldr_str_l2l3_init,
     .test_run = fmov_train_ldr_str_l2l3_run,

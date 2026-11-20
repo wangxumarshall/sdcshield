@@ -983,6 +983,10 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/mfence_pure_neon.cpp',
             'neon_memcpy_cache/memcpy0_neon.cpp',
             'neon_memcpy_cache/memcpy1_neon.cpp',
+            # memcpy1_neon 的 FP64 输入变体（32×double/256B，frandom_scale
+            # 有界 f64，neon_copy + memcmp 字节精确）——2026-11-13 本机三轮
+            # soak 验证后注册
+            'neon_memcpy_cache/memcpy1_neon_fp64.cpp',
             'neon_memcpy_cache/memcpy_l1d_size_neon.cpp',
             'neon_memcpy_cache/memcpy_l2_cache_size_neon.cpp',
             'L3_cache_920/memcpy_l3_cache_size_neon.cpp',

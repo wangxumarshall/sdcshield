@@ -46,7 +46,7 @@ profiles:
     agent: claude
     model: opus
     effort: high
-    flags: [--permission-mode, acceptEdits]
+    flags: [--permission-mode, bypassPermissions]
     text: workflow:builder
 roles:
   fix:
@@ -57,7 +57,7 @@ roles:
     agent: claude
     model: sonnet
     effort: high
-    flags: [--permission-mode, acceptEdits]
+    flags: [--permission-mode, bypassPermissions]
     goal: "Review 分支，确认寄存器钉扎与指令链逐条不变"
     touches: []
     reviews: [fix]

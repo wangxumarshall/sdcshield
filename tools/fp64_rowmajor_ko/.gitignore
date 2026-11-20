@@ -1,0 +1,16 @@
+# kernel module (kbuild) build artifacts — generated, not source
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+.modules.order.cmd
+Module.symvers
+modules.order
+.tmp_versions/
+
+# userland reference binary + verify script runtime outputs — generated, not source
+userspace_ref
+ref.out
+ref.err
+verify.log

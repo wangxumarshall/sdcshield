@@ -1,37 +1,53 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * fp64_rowmajor_ldp_stp.c — neon_rot_ldr_at_top_rowmajor_fp64 的
- * ldp/stp 内核模块 (ko) 版本
+ * fp64_rowmajor_ldp_stp.c — neon_rot_ldr_at_top_rowmajor 的 fp64 变体
+ * (ldp/stp 内核模块 (ko) 版本)
  *
- * 改造说明 (相对原 sandstone 测试 neon_rot_ldr_at_top_rowmajor_fp64_dump):
+ * 骨架来自框架测试 tests/cpu/misc/neon_rot_ldr_at_top_rowmajor(整数 slot
+ * add/eor/and/orr + 标量 golden)。本模块是 fp64 变体, 其算术映射
+ * (fadd/fsub/fmul/fmaxnm) 为**新写**, 并非对某个「fp64 父测试」的等价改写
+ * (仓库中不存在 *_fp64* 族文件)。本变体的检验对象是**访存通路**: 把 ldr q/
+ * str q 替换成 ldp/stp 双寄存器对, 并核验两套访存序列逐位一致。
  *
- * 1. 指令替换 — 原 NEON 单寄存器访存全部改为双寄存器对:
+ * 1. 指令替换 — NEON 单寄存器访存改为双寄存器对:
  *        load_vec:  "ldr %q0, [%1]"    (ldr qN, [addr], 16B)
  *        store_vec: vst1q_u64()        (str qN, [addr], 16B)
  *    =>  load_vec:  "ldp %0,%1,[%2]"   (ldp xA,xB, [addr], 8B+8B)
  *        store_vec: "stp %0,%1,[%2]"   (stp xA,xB, [addr], 8B+8B)
  *    语义等价性: 小端 AArch64 下 ldr q 的 v.d[0]/v.d[1] 通道分别对应
  *    16 字节窗口的前/后 8 字节, 与 ldp xA,xB 的装入顺序一一对应;
- *    stp 与 vst1q_u64 同理。计算逻辑 (fp64_rot 旋转 slot 合成) 未变。
+ *    stp 与 vst1q_u64 同理。
  *
  * 2. 内核化约束:
  *    - NEON/FPSIMD: arm64 内核使用 NEON 必须处于 kernel_neon_begin/end
  *      区间; 所有 V 寄存器操作限制在两个 noinline 函数内
  *      (fp64_golden_init / fp64_run_sweeps), 便于反汇编核验;
  *    - 编译: 内核全局 -mgeneral-regs-only, 通过 CFLAGS_REMOVE 移除
- *      (与内核 lib/xor-neon.o 同一做法, 见 Makefile);
+ *      (与内核 lib/xor-neon.o 同一做法, 见 Makefile); 另加 -std=gnu11
+ *      (5.10 kbuild 默认 gnu89, 本模块为 C11 风格);
  *    - 内存: __get_free_pages 页对齐分配 (满足原 64B 对齐要求),
  *      GFP_KERNEL|__GFP_ZERO;
- *    - 数据转储: 内核态不直接写文件, 原 movbe_log 二进制 dump 改为
- *      dmesg 报告 — 逐 sweep memcmp, 失败时冷路径打印 nbad 与前 2 个
- *      差异元素的 A/B/T/G/E/X (格式与原 report_fail_msg 一致, 保留
- *      "miscompare" 关键字以兼容 grep);
+ *    - 数据转储: 内核态不直接写文件, 逐 sweep memcmp, 失败时冷路径打印
+ *      nbad 与前 2 个差异元素的 A/B/T/G/E/X (格式保留 "miscompare" 关键字
+ *      以兼容 grep);
  *    - 验证接口: 与用户态参考 (userspace_ref.c) 共用同一 xorshift64*
  *      种子与 FNV-1a 哈希, 输出 "HASH srcA=.. srcB=.. scratch=..
  *      expected=.. temp=.. dst=.." 供逐位一致性比对。
+ *    - golden (issue #373): 标量独立重算 (标量 fadd/fsub/fmul/fmaxnm +
+ *      标量 ldr/str), 独立于被测的 ldp/stp 访存通路与 128 位向量数据通路
+ *      (高 lane); 但不独立于 ARMv8 上与 NEON 共享的 FP 算术 ALU——标量
+ *      fadd d 与向量 fadd v.2d 发往同一条 FP 流水线, 持续型 FP 算术单元
+ *      故障仍会让 golden 与 dst 同步出错。该缺陷类在本家族内无任何独立
+ *      黄金覆盖: 整数 slot 父测试只执行整数向量 ALU (vaddq_u64/veorq/
+ *      vandq/vorrq) 与标量整数重算, 不执行任何 FP64 指令, 对该单元故障
+ *      零检出——本模块的独立覆盖面是 ldp/stp 访存通路与向量 lane 通路,
+ *      不含共享 FP 算术核心 (家族级盲区, 与 neon_rot_ldp 用例同口径)。
+ *    - 激发强度: 默认定时 2s 持续压测 + 每核 (per-CPU) 全核覆盖。
  *
- * 3. 模块参数: seed (ullong, 默认 0x12345678DEADBEEF)
- *    用法: insmod fp64_rowmajor_ldp_stp.ko seed=0x12345678DEADBEEF
+ * 3. 模块参数: seed (ullong), sweeps (uint, 显式次数上限, 0=关),
+ *    duration_ms (uint, 每核时间预算, 默认 2000, 0=关)。
+ *    用法: insmod fp64_rowmajor_ldp_stp.ko seed=0x12345678DEADBEEF \
+ *             [sweeps=N] [duration_ms=M]
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -41,22 +57,36 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/string.h>
-#include <linux/atomic.h>
 #include <linux/smp.h>
+#include <linux/jiffies.h>
+#include <linux/workqueue.h>
+#include <linux/percpu.h>
+#include <linux/cpumask.h>
 #include <linux/utsname.h>
 #include <asm/neon.h>
 /* 内核规范的 NEON 内建函数包装头 (统一 u64/s64 与 arm_neon.h 的类型),
  * 见 arch/arm64/include/asm/neon-intrinsics.h */
 #include <asm/neon-intrinsics.h>
 
-#define FP64_COUNT        1024
-#define FP64_SWEEPS       256
-#define FP64_BUF_SZ       (FP64_COUNT * sizeof(uint64x2_t))
-#define FP64_DEFAULT_SEED 0x12345678DEADBEEFULL
+#define FP64_COUNT                  1024
+#define FP64_BUF_SZ                 (FP64_COUNT * sizeof(uint64x2_t))
+#define FP64_DEFAULT_SEED           0x12345678DEADBEEFULL
+#define FP64_DEFAULT_DURATION_MS    2000
 
 static u64 seed = FP64_DEFAULT_SEED;
 module_param(seed, ullong, 0444);
 MODULE_PARM_DESC(seed, "xorshift64* seed for srcA/srcB/scratch (same value as userspace_ref argv[1])");
+
+/* 定时持续压测 (仓库规则: 不得固定迭代次数短跑) — duration_ms 为时间预算,
+ * sweeps 为显式次数上限 (verify 用确定性), 两者可叠加 (先到先止); 全 0 回退
+ * 到默认 2s。 */
+static unsigned int duration_ms = FP64_DEFAULT_DURATION_MS;
+module_param(duration_ms, uint, 0444);
+MODULE_PARM_DESC(duration_ms, "per-CPU run time budget in ms (0 = disabled, use sweeps)");
+
+static unsigned int sweeps = 0;
+module_param(sweeps, uint, 0444);
+MODULE_PARM_DESC(sweeps, "per-CPU explicit sweep cap (0 = disabled, use duration_ms)");
 
 struct fp64_ctx {
     uint64x2_t *srcA;
@@ -84,7 +114,9 @@ static inline uint64x2_t load_vec(const void *addr)
 }
 
 /* FP64 rotation, slot order mirrors the integer parent: 0=fadd 1=fsub
- * 2=fmul 3=fmax. 与原版完全一致, 未做任何改动。 */
+ * 2=fmul 3=fmaxnm. Slot 3 用 FMAXNM (IEEE maxNum, NaN 忽略) 而非 FMAX
+ * (NaN 传播): FMAX 的 NaN 传播在标量 C 无对应表达式, 会破坏 issue #373
+ * 的标量独立 golden 逐位一致性; FMAXNM 与 C fmax/__builtin_fmax 逐位一致。 */
 static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b)
 {
     const float64x2_t fa = vreinterpretq_f64_u64(a);
@@ -94,7 +126,7 @@ static inline uint64x2_t fp64_rot(int slot, uint64x2_t a, uint64x2_t b)
     case 0: fres = vaddq_f64(fa, fb); break;
     case 1: fres = vsubq_f64(fa, fb); break;
     case 2: fres = vmulq_f64(fa, fb); break;
-    default: fres = vmaxq_f64(fa, fb); break;
+    default: fres = vmaxnmq_f64(fa, fb); break;
     }
     return vreinterpretq_u64_f64(fres);
 }
@@ -169,9 +201,6 @@ static noinline void fp64_miscompare_report(
     /* cpu is NOT a parameter: fetch it cold — the actual core residency
      * at report time (raw_smp_processor_id: 冷路径允许在可抢占上下文). */
     const int cpu = raw_smp_processor_id();
-    static atomic_t g_seq = ATOMIC_INIT(0); /* cold-only: unique seq */
-    const int seq = atomic_inc_return(&g_seq) - 1;
-    (void)seq;
 
     int bad[8];
     int nbad = 0;
@@ -212,16 +241,59 @@ static noinline void fp64_miscompare_report(
     pr_err("%s\n", msg);
 }
 
-/* ===== 黄金值计算 + 热循环: 所有 NEON 使用限制在这两个 noinline
- * 函数内 (kernel_neon_begin/end 保护), 便于反汇编核验 ===== */
+/* ===== 黄金值计算 (标量独立重算) + 热循环: 所有 FPSIMD 使用限制在
+ * 这两个 noinline 函数内 (kernel_neon_begin/end 保护), 便于反汇编核验 ===== */
+
+static inline u64 f64_bits(double d)
+{
+    u64 v;
+    memcpy(&v, &d, sizeof(v));
+    return v;
+}
+
+static inline double f64_from_bits(u64 v)
+{
+    double d;
+    memcpy(&d, &v, sizeof(d));
+    return d;
+}
 
 static noinline void fp64_golden_init(struct fp64_ctx *ctx)
 {
+    /* golden (issue #373): scalar independent recomputation — scalar fp64
+     * fadd/fsub/fmul/fmax (d-register) + scalar ldr/str, independent of the
+     * ldp/stp pair-instruction memory path under test AND of the 128-bit
+     * vector datapath (high lane). NOT independent of the FP arithmetic unit:
+     * on ARMv8 scalar fadd d and vector fadd v.2d issue to the SAME FP
+     * pipeline, so a persistent FP add/mul/max ALU fault corrupts golden and
+     * actual identically. That fault class carries NO independent golden
+     * anywhere in the family: the integer-slot parent test executes only
+     * integer vector ALUs (vaddq_u64/veorq/vandq/vorrq) with a scalar
+     * integer recompute and not one FP64 instruction, so it detects nothing
+     * here. This module's independent coverage is the ldp/stp memory path
+     * and the vector lanes, not the shared FP arithmetic core. A persistent
+     * vector-lane or pair-instruction fault, by contrast, surfaces as a byte
+     * difference at the hot-loop memcmp.
+     * kernel_neon_begin/end still required for ANY FPSIMD use in kernel
+     * context. */
+    const u64 *sa = (const u64 *)ctx->srcA;
+    const u64 *sb = (const u64 *)ctx->srcB;
+    u64 *ex = (u64 *)ctx->expected;
+
     kernel_neon_begin();
     for (int i = 0; i < FP64_COUNT; i++) {
-        const uint64x2_t a = load_vec(&ctx->srcA[i]);        /* ldp */
-        const uint64x2_t b = load_vec(&ctx->srcB[i]);        /* ldp */
-        store_vec(&ctx->expected[i], fp64_rot(i % 4, a, b)); /* stp */
+        for (int l = 0; l < 2; l++) {
+            const double a = f64_from_bits(sa[2 * i + l]);
+            const double b = f64_from_bits(sb[2 * i + l]);
+            double r;
+            switch (i % 4) {
+            case 0: r = a + b; break;
+            case 1: r = a - b; break;
+            case 2: r = a * b; break;
+            default: r = __builtin_fmax(a, b); break;
+            }
+            ex[2 * i + l] = f64_bits(r);
+        }
     }
     kernel_neon_end();
 }
@@ -237,7 +309,20 @@ static noinline int fp64_run_sweeps(struct fp64_ctx *ctx)
     if (!temp || !dst)
         goto nomem;
 
-    for (int iter = 0; iter < FP64_SWEEPS; iter++) {
+    /* 定时持续压测: duration_ms 时间预算 + sweeps 显式上限, 先到先止;
+     * 全 0 回退到默认时长 (绝不固定 256 次短跑)。 */
+    unsigned int budget_ms = duration_ms;
+    unsigned int cap = sweeps;
+    if (!budget_ms && !cap)
+        budget_ms = FP64_DEFAULT_DURATION_MS;
+    const unsigned long deadline = budget_ms ? jiffies + msecs_to_jiffies(budget_ms) : 0;
+
+    for (;;) {
+        if (cap && sweep >= cap)
+            break;
+        if (budget_ms && time_after(jiffies, deadline))
+            break;
+
         const bool ascending = (sweep & 1) == 0;
 
         kernel_neon_begin();
@@ -272,9 +357,9 @@ static noinline int fp64_run_sweeps(struct fp64_ctx *ctx)
             (unsigned long long)fnv1a64(ctx->expected, FP64_BUF_SZ),
             (unsigned long long)fnv1a64(temp, FP64_BUF_SZ),
             (unsigned long long)fnv1a64(dst, FP64_BUF_SZ));
-    pr_info("%s cpu=%d sweeps=%d seed=0x%016llx\n",
-            failing ? "FAIL" : "PASS", raw_smp_processor_id(), FP64_SWEEPS,
-            (unsigned long long)seed);
+    pr_info("%s cpu=%d sweeps=%llu seed=0x%016llx\n",
+            failing ? "FAIL" : "PASS", raw_smp_processor_id(),
+            (unsigned long long)sweep, (unsigned long long)seed);
 
     buf_free(temp);
     buf_free(dst);
@@ -286,15 +371,32 @@ nomem:
     return -ENOMEM;
 }
 
+/* per-CPU 结果聚合: 每个在线 CPU 各自跑主循环并把失败 sweep 数写回自己的槽位。
+ * 5.10 的 schedule_on_each_cpu 未 EXPORT 且只接受 work_func_t (无数据参数),
+ * 故用模块全局指针传 ctx + 每核一个 work_struct 经 queue_work_on 派发。
+ * fp64_active_ctx 在 flush 等待返回前只读、不会并发修改。 */
+static DEFINE_PER_CPU(int, fp64_sweep_fail);
+static DEFINE_PER_CPU(struct work_struct, fp64_sweep_work_item);
+static struct fp64_ctx *fp64_active_ctx;
+
+static void fp64_sweep_work(struct work_struct *work)
+{
+    (void)work;
+    int failing = fp64_run_sweeps(fp64_active_ctx);
+    int cpu = get_cpu();
+    per_cpu(fp64_sweep_fail, cpu) = failing;
+    put_cpu();
+}
+
 static int __init fp64_rowmajor_ldp_stp_init(void)
 {
     struct fp64_ctx ctx = { NULL, NULL, NULL, NULL };
     int ret;
 
     rng_seed_init(seed);
-    pr_info("init: kernel=%s cpu=%d count=%d sweeps=%d seed=0x%016llx\n",
+    pr_info("init: kernel=%s cpu=%d count=%d sweeps=%u duration_ms=%u seed=0x%016llx\n",
             init_utsname()->release, raw_smp_processor_id(),
-            FP64_COUNT, FP64_SWEEPS, (unsigned long long)seed);
+            FP64_COUNT, sweeps, duration_ms, (unsigned long long)seed);
 
     ctx.srcA     = buf_alloc();
     ctx.srcB     = buf_alloc();
@@ -310,13 +412,49 @@ static int __init fp64_rowmajor_ldp_stp_init(void)
     memset_random(ctx.scratch, FP64_BUF_SZ);
 
     fp64_golden_init(&ctx);
-    ret = fp64_run_sweeps(&ctx);
+
+    /* per-CPU 覆盖: 在每个在线 CPU 上各跑一遍主循环 (per-cpu workqueue 的
+     * kworker 进程上下文 — kernel_neon_begin/end 安全), 任一 CPU 分配失败则
+     * 整个加载失败, 否则聚合所有 CPU 的 miscompare 数。 */
+    {
+        int cpu, total_fail = 0;
+        ret = 0;
+        fp64_active_ctx = &ctx;
+        for_each_online_cpu(cpu) {
+            struct work_struct *w = per_cpu_ptr(&fp64_sweep_work_item, cpu);
+            INIT_WORK(w, fp64_sweep_work);
+            queue_work_on(cpu, system_wq, w);
+        }
+        /* 只等本模块自己的 per-CPU work (逐项 flush), 不等 system_wq 上其它
+         * 子系统排队的无关 work (flush_workqueue(system_wq) 会把 insmod
+         * 耗时耦合到全系统无关负载)。 */
+        for_each_online_cpu(cpu)
+            flush_work(per_cpu_ptr(&fp64_sweep_work_item, cpu));
+        fp64_active_ctx = NULL;
+        for_each_online_cpu(cpu) {
+            int r = per_cpu(fp64_sweep_fail, cpu);
+            if (r < 0) {
+                ret = r;
+                break;
+            }
+            total_fail += r;
+        }
+        if (ret == 0)
+            ret = total_fail;
+    }
 
 out:
     buf_free(ctx.srcA);
     buf_free(ctx.srcB);
     buf_free(ctx.scratch);
     buf_free(ctx.expected);
+
+    /* 透传 SDC 检出结果: failing>0 (已发现数据损坏) 必须让 insmod 失败,
+     * 否则以 insmod 退出码作门禁的自动化会把失效硬件当通过。 */
+    if (ret > 0) {
+        pr_err("SDC miscompare detected in %d sweep(s) — failing module load\n", ret);
+        return -EIO;
+    }
     return ret < 0 ? ret : 0;
 }
 

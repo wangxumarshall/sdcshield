@@ -43,7 +43,12 @@
  * Knobs (read at init, -O fmov_train_droop.<knob>=<v>):
  *   burst  FMAs per aggressor burst        (default 512, clamp 16..65536)
  *   chunk  victim elements per adjacency   (default 64,  clamp 16..2048)
- *   gap    NOPs between burst and victim   (default 0,   clamp 0..63)
+ *   gap    NOPs between burst and victim   (default 0,   clamp 0..255,
+ *          ~98ns at 2.6GHz — covers the first-droop trough, 30..80ns)
+ *   toggle 1 = worst-toggle aggressor: each FMA step veorq'd with an
+ *          alternating all-0/all-ones mask (full input-net inversion
+ *          per cycle on top of the FMA chain — one more notch of
+ *          dynamic current; default 0 = plain alternating operands)
  * The phase space (burst x chunk x gap) is meant to be SWEPT by a
  * campaign script on the fault machine — the droop depth/period of a
  * server PDN is unknown, so the structure scans rather than guesses.
@@ -90,7 +95,8 @@
 #define FTD_CHUNK_MAX     2048
 #define FTD_GAP_DEFAULT   0
 #define FTD_GAP_MIN       0
-#define FTD_GAP_MAX       63
+#define FTD_GAP_MAX       255   /* ~98ns at 2.6GHz — covers the first-droop
+                                  * trough window (30-80ns) end to end */
 
 /* racy-by-intent sink: keeps the aggressor chain live; never read */
 static volatile uint32_t ftd_sink;
@@ -100,6 +106,10 @@ struct FtdData {
     int burst;
     int chunk;
     int gap;
+    int toggle;    /* 0 = alternating-FMA operands (power_virus_dit lineage);
+                    * 1 = worst-toggle: every step veorq with an alternating
+                    * all-0/all-~0 mask — full input-net inversion per cycle
+                    * (max dynamic current on top of the FMA chain) */
 };
 }
 
@@ -115,13 +125,26 @@ struct FtdData {
  * XOR-reduced into the caller's sink accumulator (exciter: kept live,
  * never compared).  Magnitude growth +3.75 per pair keeps values finite
  * (no NaN/Inf) for any n <= 65536.
+ *
+ * toggle=1 (worst-toggle mode, 2026-11-20 v2): each chain step is
+ * followed by veorq with an alternating all-0 / all-ones mask — the
+ * accumulator's input nets fully invert every cycle on top of the FMA
+ * toggling.  The veorq result feeds the next FMA's addend input, so the
+ * chain stays dependent and the values stay finite (xor of finite
+ * bit patterns reinterpreted as float can produce huge/NaN exponents —
+ * but the FMA then only adds a*b=+3.75/-0.25 per step, and the FINAL
+ * reduction is the raw xor, never used as a float result).  The point
+ * is current, not arithmetic: every input net of the SIMD unit flips
+ * every cycle.
  */
-static inline uint32_t ftd_burst(int n)
+static inline uint32_t ftd_burst(int n, int toggle)
 {
     const float32x4_t a0 = vdupq_n_f32(1.0f);     /* 0x3f800000 */
     const float32x4_t a1 = vdupq_n_f32(-2.0f);    /* 0xc0000000 */
     const float32x4_t b0 = vdupq_n_f32(4.0f);     /* 0x40800000 */
     const float32x4_t b1 = vdupq_n_f32(0.125f);   /* 0x3e000000 */
+    const uint32x4_t m0 = vdupq_n_u32(0x00000000u);
+    const uint32x4_t m1 = vdupq_n_u32(0xffffffffu);
     float32x4_t c0 = vdupq_n_f32(0.0f);
     float32x4_t c1 = vdupq_n_f32(0.0f);
     float32x4_t c2 = vdupq_n_f32(0.0f);
@@ -131,15 +154,37 @@ static inline uint32_t ftd_burst(int n)
     float32x4_t c6 = vdupq_n_f32(0.0f);
     float32x4_t c7 = vdupq_n_f32(0.0f);
     int n8 = n / 8;
-    for (int i = 0; i < n8; ++i) {
-        c0 = vfmaq_f32(c0, a0, b0);
-        c1 = vfmaq_f32(c1, a1, b1);
-        c2 = vfmaq_f32(c2, a0, b0);
-        c3 = vfmaq_f32(c3, a1, b1);
-        c4 = vfmaq_f32(c4, a0, b0);
-        c5 = vfmaq_f32(c5, a1, b1);
-        c6 = vfmaq_f32(c6, a0, b0);
-        c7 = vfmaq_f32(c7, a1, b1);
+    if (toggle) {
+        for (int i = 0; i < n8; ++i) {
+            const uint32x4_t m = (i & 1) ? m1 : m0;
+            c0 = vreinterpretq_f32_u32(veorq_u32(
+                    vreinterpretq_u32_f32(vfmaq_f32(c0, a0, b0)), m));
+            c1 = vreinterpretq_f32_u32(veorq_u32(
+                    vreinterpretq_u32_f32(vfmaq_f32(c1, a1, b1)), m));
+            c2 = vreinterpretq_f32_u32(veorq_u32(
+                    vreinterpretq_u32_f32(vfmaq_f32(c2, a0, b0)), m));
+            c3 = vreinterpretq_f32_u32(veorq_u32(
+                    vreinterpretq_u32_f32(vfmaq_f32(c3, a1, b1)), m));
+            c4 = vreinterpretq_f32_u32(veorq_u32(
+                    vreinterpretq_u32_f32(vfmaq_f32(c4, a0, b0)), m));
+            c5 = vreinterpretq_f32_u32(veorq_u32(
+                    vreinterpretq_u32_f32(vfmaq_f32(c5, a1, b1)), m));
+            c6 = vreinterpretq_f32_u32(veorq_u32(
+                    vreinterpretq_u32_f32(vfmaq_f32(c6, a0, b0)), m));
+            c7 = vreinterpretq_f32_u32(veorq_u32(
+                    vreinterpretq_u32_f32(vfmaq_f32(c7, a1, b1)), m));
+        }
+    } else {
+        for (int i = 0; i < n8; ++i) {
+            c0 = vfmaq_f32(c0, a0, b0);
+            c1 = vfmaq_f32(c1, a1, b1);
+            c2 = vfmaq_f32(c2, a0, b0);
+            c3 = vfmaq_f32(c3, a1, b1);
+            c4 = vfmaq_f32(c4, a0, b0);
+            c5 = vfmaq_f32(c5, a1, b1);
+            c6 = vfmaq_f32(c6, a0, b0);
+            c7 = vfmaq_f32(c7, a1, b1);
+        }
     }
     uint32x4_t x = vreinterpretq_u32_f32(c0);
     x = veorq_u32(x, vreinterpretq_u32_f32(c1));
@@ -263,6 +308,9 @@ static int fmov_train_droop_init(struct test *test)
     if (d->gap < FTD_GAP_MIN) d->gap = FTD_GAP_MIN;
     if (d->gap > FTD_GAP_MAX) d->gap = FTD_GAP_MAX;
 
+    v = get_testspecific_knob_value_int(test, "toggle", 0);
+    d->toggle = (v != 0) ? 1 : 0;
+
     test->data = d;
     return EXIT_SUCCESS;
 }
@@ -281,6 +329,7 @@ static int fmov_train_droop_run(struct test *test, int cpu)
     const int burst = d->burst;
     const int chunk = d->chunk;
     const int gap = d->gap;
+    const int toggle = d->toggle;
 
     /* per-thread buffers (parent geometry: 32KB each, L1D-domain
      * tight-timing supply — the victim must stay in the fast domain);
@@ -311,7 +360,7 @@ static int fmov_train_droop_run(struct test *test, int cpu)
         for (int start = 0; start < FTD_NUM_ELEMENTS; start += chunk) {
             const int m = (chunk < FTD_NUM_ELEMENTS - start)
                         ? chunk : (FTD_NUM_ELEMENTS - start);
-            sink_acc ^= ftd_burst(burst);
+            sink_acc ^= ftd_burst(burst, toggle);
             ftd_gap(gap);
             ftd_victim_chunk(srcA, srcB, dstA, dstB, rot, slot, start, m);
         }

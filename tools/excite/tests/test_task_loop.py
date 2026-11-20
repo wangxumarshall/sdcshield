@@ -747,6 +747,79 @@ def test_lane_b_immediate_save_preserves_audit_advances(tmp_path, monkeypatch):
     assert state["audit_cursor"]["sha"] == "audit-advanced"
 
 
+def test_lane_b_saturation_offloads_to_remote_node(tmp_path, monkeypatch):
+    """fix-round 1 Important#1: 泳道3(pr_repair)饱和态分载——本机两槽活满
+    时,lane_b 的 READY_TO_FIX 派发经 pick_node=0102 走远程分支(entry.host
+    =0102、板上 worktree、本机零 run_background);满槽闸按目标节点分账,
+    全链容量 2→2+2(spec 决策 1 对 repair 泳道成立)。旧代码 dispatch 不传
+    node → 全局满槽闸在本机配额上归零、在 _resolve_dispatch_node 之前拒绝
+    → 条目滞留 PR_OPEN(本测 RED);反向缺口(板上 2 活时本机被误拒)同根。
+    """
+    from types import SimpleNamespace
+    import task_loop_pipeline as tp
+    import task_loop_nodepool as np
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    (tmp_path / "agent.env").write_text("# test env\n")
+    monkeypatch.setenv("TASKLOOP_REPO", "selftest/local")
+    pr = SimpleNamespace(number=88, head_sha="b" * 40, url="https://x/88",
+                         bot_done={"local-claude": "t"})
+    monkeypatch.setattr(tl.pr_loop, "fetch_pr", lambda slug, num: pr)
+    monkeypatch.setattr(tl.pr_loop, "classify_state",
+                        lambda p, quiet, now: "READY_TO_FIX")
+    monkeypatch.setattr(tl.pr_loop, "render_collect",
+                        lambda p, slug, quiet: "# collect(fake)\n")
+    monkeypatch.setattr(tl.pr_loop, "ensure_local_review",
+                        lambda num, sha: None)
+    monkeypatch.setattr(tl, "gh_label_add", lambda n, lb: None)
+    monkeypatch.setattr(tl, "pr_files", lambda n: ["src/a.c"])
+    monkeypatch.setattr(tl, "gh_json_idem",
+                        lambda args, input_text=None:
+                        {"additions": 500, "deletions": 200})
+    monkeypatch.setattr(tp, "mem_gate_ok", lambda: True)
+    monkeypatch.setattr(tl, "agent_alive", lambda pid: True)   # 本机两槽活
+
+    def _no_ssh(host_id, cmd, timeout=45):
+        raise np.NodeError(f"测试内禁真 SSH(有 np 操作漏桩): {cmd}")
+    monkeypatch.setattr(np, "run_ssh", _no_ssh)
+    monkeypatch.setattr(np, "pick_node",
+                        lambda k, s: np.node_by_host("0102"))
+    monkeypatch.setattr(np, "refresh_env_remote", lambda n, env: None)
+    monkeypatch.setattr(np, "prepare_worktree_remote",
+                        lambda n, key: "/board/wt")
+    monkeypatch.setattr(np, "heal_remote", lambda n: None)
+    monkeypatch.setattr(np, "put_file", lambda h, l, r: None)
+    spawned_remote = []
+    monkeypatch.setattr(np, "spawn_remote",
+                        lambda n, cmd, log: spawned_remote.append((n, cmd))
+                        or 4242)
+    monkeypatch.setattr(np, "kill_remote", lambda h, p, s: None)
+    spawned_local = []
+    monkeypatch.setattr(tl, "run_background",
+                        lambda cmd, cwd, log: spawned_local.append(cmd) or 1)
+
+    def _no_local_wt(clone_dir, key):
+        raise AssertionError("饱和态远程派发不应回落本机 worktree")
+    monkeypatch.setattr(tl, "_worktree_prepare", _no_local_wt)
+    entry = _task_entry(status="PR_OPEN", pr_number=88, rounds=0,
+                        last_dispatched_head=None)
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+    # 本机 pr_repair 两槽活满(饱和现场)
+    tp.slot_acquire(state, "pr_repair", "pr-L1", 101, 101, "/l", "/w",
+                    "t", "b", host="local")
+    tp.slot_acquire(state, "pr_repair", "pr-L2", 102, 102, "/l", "/w",
+                    "t", "b", host="local")
+    tl.lane_b_advance(state, dry_run=False)
+    e = tl.StateStore.entries(state)[0]
+    assert e.status == "BOT_FIX" and e.host == "0102" and e.agent_pid == 4242
+    assert e.rounds == 1 and e.last_dispatched_head == "b" * 40
+    assert e.worktree == "/board/wt" and e.lane == "pr_repair"
+    assert not spawned_local                          # 本机零派生
+    assert spawned_remote and spawned_remote[0][0]["host_id"] == "0102"
+    assert tp.slot_get(state, "pr_repair", "pr-88")["host"] == "0102"
+    assert tp.free_slots_on(state, "pr_repair", "local") == 0   # 本机仍满
+    assert tp.free_slots_on(state, "pr_repair", "0102") == 1    # 板占 1/2
+
+
 # ============ PR#317 检视#11: paused 横幅与闸门同口径(双路径) ============
 
 def test_scan_paused_banner_honors_legacy_dir(tmp_path, monkeypatch, capsys):
@@ -1613,6 +1686,66 @@ def test_timeout_outcome_kills_live_agent_before_requeue(monkeypatch, tmp_path):
     assert killed == [555]                    # timeout 活 PID 被击杀
     e = tl.StateStore.entries(state)[0]
     assert e.attempts == 2 and e.agent_pid is None   # 走重派记账
+
+
+def test_reap_cleans_remote_worktree_on_slot_release(monkeypatch, tmp_path):
+    """N25: 远程条目退场(reap 释放远程槽)时板上 worktree 就地清——reap
+    释放即出账本,janitor 不再触及,成功/升级/超时退场不重派会留板上 GB 级
+    孤儿 checkout;仅同 key 重派由 prepare_worktree_remote 的 cleanup 兜底。"""
+    import task_loop_nodepool as np
+    import task_loop_pipeline as tp
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    cleaned = []
+    monkeypatch.setattr(np, "cleanup_worktree_remote",
+                        lambda h, p: cleaned.append((h, p)))
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "dead")
+    monkeypatch.setattr(tl, "_kill_agent_if_alive", lambda e: None)
+    monkeypatch.setattr(tl, "_requeue_or_escalate", lambda e, s, r, n, d: None)
+    monkeypatch.setattr(tp, "_board_rebooted_since", lambda h, t: False)
+    entry = _task_entry(status="DISPATCHED", agent_pid=555,
+                        agent_started_at="2026-01-01T00:00:00Z",
+                        host="0102")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0}
+    tp.slot_acquire(state, "issue_fix", "issue-33", 555, 555, "/r.log",
+                    "/board/wt", "2026-01-01T00:00:00Z", "boot", host="0102")
+    tl.reap_or_advance(state, dry_run=False)
+    assert cleaned == [("0102", "/board/wt")]
+
+
+def test_unreachable_escalates_after_two_nights(monkeypatch, tmp_path):
+    """N26: 节点连续不可达达 2 个 pipeline 夜 → 升级人工(有界告警),不再
+    永久冻结零盲区;计数按 host 逐夜、同夜不重复 +1。"""
+    import task_loop_pipeline as tp
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    escalated = []
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "unreachable")
+    monkeypatch.setattr(tl, "_escalate",
+                        lambda e, s, r, n, d: escalated.append(r))
+    monkeypatch.setattr(tp, "_pipeline_night", lambda now: "2026-11-16")
+    entry = _task_entry(status="DISPATCHED", agent_pid=555, host="0102")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0,
+             "unreachable_nights": {"0102": {"night": "2026-11-15",
+                                             "count": 1}}}
+    tl.reap_or_advance(state, dry_run=False)
+    assert escalated == [
+        "节点 0102 已连续 2 个 pipeline 夜不可达"
+        "(条目冻结未计 attempts)——请检查板供电/网络/是否退网"]
+
+
+def test_unreachable_counter_clears_on_reachable(monkeypatch, tmp_path):
+    """N26: 节点任何非 unreachable 判档(如 running=探活 SSH 成功)即清零,
+    只数连续夜——板抖一晚不会假性升级。"""
+    import task_loop_pipeline as tp
+    monkeypatch.setenv("TASKLOOP_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(tl, "check_agent_outcome", lambda e: "running")
+    monkeypatch.setattr(tl, "_escalate", lambda e, s, r, n, d: None)
+    monkeypatch.setattr(tp, "_pipeline_night", lambda now: "2026-11-16")
+    entry = _task_entry(status="DISPATCHED", agent_pid=555, host="0102")
+    state = {"entries": [entry.to_dict()], "auth_failure_streak": 0,
+             "unreachable_nights": {"0102": {"night": "2026-11-15",
+                                             "count": 1}}}
+    tl.reap_or_advance(state, dry_run=False)
+    assert state["unreachable_nights"] == {}   # 恢复可达即清零
 
 
 def test_audit_search_finding_issue_checks_closed_too(monkeypatch):

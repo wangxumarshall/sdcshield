@@ -84,6 +84,10 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               实测 519 PROD / 628 q0 / 632 q-1（链见 README）；
                                                #               +fmov_train 对 2（11-18 晚，跨堆 FMOV 消费链
                                                #               独立验证对）→ 0102 主机实测 522/631/635。
+                                               #   11-20 增量：loop_check_m 1 + fmov_train 3+3 对 2 +
+                                               #               fmov_train L2/L3 驻留对 2（512 KiB 驻留域 +
+                                               #               DSB SY + 三参照校验，负空间臂 0-fail 验证）
+                                               #               → 0102 主机实测 527/636/640。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

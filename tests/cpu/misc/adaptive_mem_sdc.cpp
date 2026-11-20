@@ -339,7 +339,15 @@ static inline __attribute__((always_inline)) uint64x2_t xfmov_rot(int slot, uint
             : "=w" (vr)
             : "w" (va), "w" (vb), [rot] "r" (r)
             : "x9", "x10", "x11", "x12", "v19");
-    return vr;
+    /* GCC 13 rejects `return vr;` on an explicit-register variable
+     * ("address of explicit register variable requested", Sanitizer
+     * nightly 2026-11-20; GCC 10 accepts it, so only CI's GCC 13.3.0
+     * goes red). Move the pinned v18 out through the one `mov v0.16b,
+     * v18.16b` the ABI return would have emitted anyway — stress chain
+     * and output bits unchanged, register pinning intact. */
+    uint64x2_t result;
+    __asm__ ("mov %0.16b, %1.16b" : "=w" (result) : "w" (vr));
+    return result;
 }
 
 static inline __attribute__((always_inline)) uint64x2_t xfmov_rot3(int slot, uint64x2_t a, uint64x2_t b, uint64x2_t c)
@@ -388,7 +396,10 @@ static inline __attribute__((always_inline)) uint64x2_t xfmov_rot3(int slot, uin
             : "=w" (vr)
             : "w" (va), "w" (vb), "w" (vc), [rot] "r" (r)
             : "x9", "x10", "x11", "x12", "v19");
-    return vr;
+    /* Same GCC 13 explicit-register return fix as xfmov_rot above. */
+    uint64x2_t result;
+    __asm__ ("mov %0.16b, %1.16b" : "=w" (result) : "w" (vr));
+    return result;
 }
 
 /* =====================================================================

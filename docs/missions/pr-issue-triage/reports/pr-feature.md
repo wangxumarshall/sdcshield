@@ -72,8 +72,10 @@ SVE2 正交）、L49 复合门控去 SVE2、L54-55 库名/march 误写更正
   armv8.2-a+sve2×40`——变量化零传参变化，等价性由多重集严格蕴含
   （同 flags→同二进制），故无运行时行为变化、无 gem5-fi 边界
 - `--list-tests` 457 行与 main 基线 IDENTICAL（与 2026-11-17 正典「无
-  SVE 920 实测 458 PROD」差 1 未对账——no-SVE 主机不可复现验证、原始
-  逐行输出未存档，可能系行计数与用例计数口径差或树间漂移）；
+  SVE 920 实测 458 PROD」差 1 未对账——本机同为 no-SVE 920 类、差 1
+  并非主机不可及，而是两侧原始会话/逐行输出均未存档、无裁决依据；
+  若 457 行与正典 458 同口径则二者必有一错，已如实标注为悬案，
+  复核需在 no-SVE 920 上对同树重跑 list 落盘）；
   `-e zstd19 -t 2000 -n 1`
   → `exit: pass`；x86-64 检视（根定义惰性字符串 + 引用全在 aarch64 守卫内）
 - 本机 gcc 10.3 不认 armv9-a 基名：march_arm64_sve2/sme 档按设计探测剔除
@@ -103,7 +105,10 @@ arm_add/low_load_cache_pressure{,_neon}（PR 版分叉早于该修复，run 内�
 分支已修；二/三轮核心 = L3 家族 sum/k-space 聚合校验违反「逐元素精确
 比对」铁律。按**模式族一次收敛**（三轮 review 就是同型缺陷逐轮点名新
 复制体的循环，部分修不收敛）：
-- **element-exact 收口 24 文件**：read _int 6 + read neon_fp64 保留 2 +
+- **element-exact 收口 24 文件**（2026-11-20 复核注：分项字面加总 20+12
+  或 20+1 与 24 不闭合——「四引擎×3 通路」系 adaptive_l3_sdc 单文件内
+  的引擎×通路矩阵而非文件数，逐文件清单未存档、不可再精确对账，总数
+  24 系当时 git diff 实测）：read _int 6 + read neon_fp64 保留 2 +
   write int 3 + write neon_fp64 3 + llc_{randomized,uniform}×3 数据通路 6 +
   adaptive_l3_sdc 四引擎×3 通路——golden 副本（写点双写/生成时拷贝）+
   逐 lane 位比对；global_sum/global_ksum 计数器随协议退役
@@ -180,6 +185,16 @@ a6dc9ece 等）。真正阻塞是 CONFLICTING——`scripts/task_loop.py` 的
 | 814 opendcdiag | CONFLICTING, 49 findings | **MERGEABLE** | a75b2855..cc82e1b5（4 commits） | 构建 0 新警告 + 37 件实测 pass + 519 计数落盘 |
 | 695 nodepool | CONFLICTING, 24 findings 已修 | **MERGEABLE** | 6035cf6c..087d8973（1 commit） | 239 passed（1 环境性预存失败同 main） |
 
+**2026-11-20 CI 复核补记（pr-loop 第三轮，实查 `gh pr checks`）**：
+PR 518/695 当前 head = auto-pr pass + pr-agent pass（CodeRabbit skipping，
+<10 star 仓常态）；PR 814 已 MERGED（checks 冻结于 merge 前，同绿）。
+初版报告以「MERGEABLE（GitHub 实时确认）」替代了 plan 要求的「CI 复绿
++ 验证输出摘录」，三节均无 CI 记录——本补记如数补上；另如实记录：处置
+commit 8367b293/087d8973/cc82e1b5 均为双 parent merge commit（PR 分支
+merge main 的产物，push 上 head 分支），与 PR 分支 rebase 纪律相悖
+（PR 分支 merge commit 曾触发 CI 红），当前 checks 实测绿属幸运而非
+合规——后续同类处置一律 rebase。
+
 **共同 open items（移交 orchestrator）**：
 1. 三 PR 的 reviewDecision 仍为空——需人类 approving review（角色边界：
    不 merge、不 resolve thread、不改 WIP: 标题）
@@ -190,9 +205,15 @@ a6dc9ece 等）。真正阻塞是 CONFLICTING——`scripts/task_loop.py` 的
    `docs/cpu/arm64/kungpeng/`、`docs/cpu/arm64/armv8-isa/`、
    `docs/cpu/arm64-microarchtecture-internals/`、`docs/hypothesis/
    ARM64-SDC-uArch.md`、`docs/paper/SDC_FAULT_INJECTION_EXPERIMENT_PLAN_CN.md`、
-   `docs/superpowers/plans/`——按 6 处开的 docs PR 会留大面积死链，建议
-   单开 docs PR 按 13 处全量修
+   `docs/superpowers/plans/`、`neoverse-*-trm/`（:286）——上述按 CLAUDE.md
+   行引用全量计 ≥14 处（6 处 docs/research + :278 + :283/:285/:286 + :290
+   + :298 + :301 + :38 等行），按 6 处开的 docs PR 会留大面积死链，建议
+   单开 docs PR 按全量行清单修
 3. 本机（Kunpeng-920 no-SVE 变体）与 CLAUDE.md 口径主机（SVE1-256 鲲鹏 920）
    是同族不同主机；三 PR 的 SVE 面验证依据 = march 多重集逐字节相等（518）/
    ARM64_REQUIRES_SVE 门控净变化 0（814 的 SVE 系测试）/无 SVE 面（695），
    如需 SVE 运行时行为佐证可在 SVE1-256 主机补跑（本机无 SVE）
+4. 本报告勘误段的 firestorm/cortex-x3b 标签机制考据（HWCAP 特征集匹配
+   非 MIDR 身份）系平台级知识，宜提炼入 CLAUDE.md「Known platform
+   quirks」一节长期复用（与第 2 条建议的单开 docs PR 一并处置），避免
+   与 pr-docs.md「主机身份更正」节双份落盘各自演化

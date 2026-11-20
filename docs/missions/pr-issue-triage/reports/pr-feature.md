@@ -20,9 +20,10 @@ part 无关**：`framework/device/cpu/cpu_device.cpp` 的 dump 遍历按特征�
 neoverse_n1/neoverse_e1 同 allfeatures 键，conf 行序最晚写入者存活
 （`simd-arm.conf:141` 的 "Apple M1 Firestorm-equivalent (approx)" 只是
 注释，conf 无任何 part→arch 映射）。本机（part 0xd01）实测有
-asimddp/asimdfhm、**无 SSBS**（920 实测记录
-`docs/cpu/arm64/kungpeng/kunpeng920_microarchitecture.md` :18/:157/:314），
-故不匹配
+asimddp/asimdfhm、**无 SSBS**（920 实测记录：历史树
+`31f6a99e^:docs/cpu/arm64/kungpeng/kunpeng920_microarchitecture.md`
+:18/:157/:314——该目录 2026-11-17 已被 `31f6a99e` 大清理删除，引用按
+历史树核实），故不匹配
 `simd-arm.conf:119` 的 kunpeng920 条目（其特征集多要 ssbs 一项），落到
 cortex_a76 特征集——**「显示 firestorm」与「本机是 Kunpeng-920」不矛盾**；
 真实 MIDR 身份在 dump 同行 `family-model-stepping (hex): 48-d01-x`
@@ -70,7 +71,10 @@ SVE2 正交）、L49 复合门控去 SVE2、L54-55 库名/march 误写更正
   `armv8.1-a+crc×3 / +crc+crypto×145 / armv8.2-a+sve×242 / +f32mm+f64mm×1 /
   armv8.2-a+sve2×40`——变量化零传参变化，等价性由多重集严格蕴含
   （同 flags→同二进制），故无运行时行为变化、无 gem5-fi 边界
-- `--list-tests` 457 行与 main 基线 IDENTICAL；`-e zstd19 -t 2000 -n 1`
+- `--list-tests` 457 行与 main 基线 IDENTICAL（与 2026-11-17 正典「无
+  SVE 920 实测 458 PROD」差 1 未对账——no-SVE 主机不可复现验证、原始
+  逐行输出未存档，可能系行计数与用例计数口径差或树间漂移）；
+  `-e zstd19 -t 2000 -n 1`
   → `exit: pass`；x86-64 检视（根定义惰性字符串 + 引用全在 aarch64 守卫内）
 - 本机 gcc 10.3 不认 armv9-a 基名：march_arm64_sve2/sme 档按设计探测剔除
   （message 提示不阻断）——与 #661 Multi-OS Verify gcc-10 行为一致
@@ -179,8 +183,15 @@ a6dc9ece 等）。真正阻塞是 CONFLICTING——`scripts/task_loop.py` 的
 **共同 open items（移交 orchestrator）**：
 1. 三 PR 的 reviewDecision 仍为空——需人类 approving review（角色边界：
    不 merge、不 resolve thread、不改 WIP: 标题）
-2. main 的 CLAUDE.md 存在 6 处 docs/research/ 悬空引用（31f6a99e 大清理
-   遗留，main 自身问题，非本任务三 PR 范围）——建议单开 docs PR 修
+2. main 的 CLAUDE.md 悬空引用远不止 6 处 docs/research/（31f6a99e 大清理
+   遗留，main 自身问题，非本任务三 PR 范围）——2026-11-20 树内实测（#847
+   复核）：除 6 处 docs/research/（:92/:97/:269/:270/:276/:277）外，同次
+   清理还遗孤 7 条死路径——`docs/cases/`（:278，全部 case history）、
+   `docs/cpu/arm64/kungpeng/`、`docs/cpu/arm64/armv8-isa/`、
+   `docs/cpu/arm64-microarchtecture-internals/`、`docs/hypothesis/
+   ARM64-SDC-uArch.md`、`docs/paper/SDC_FAULT_INJECTION_EXPERIMENT_PLAN_CN.md`、
+   `docs/superpowers/plans/`——按 6 处开的 docs PR 会留大面积死链，建议
+   单开 docs PR 按 13 处全量修
 3. 本机（Kunpeng-920 no-SVE 变体）与 CLAUDE.md 口径主机（SVE1-256 鲲鹏 920）
    是同族不同主机；三 PR 的 SVE 面验证依据 = march 多重集逐字节相等（518）/
    ARM64_REQUIRES_SVE 门控净变化 0（814 的 SVE 系测试）/无 SVE 面（695），

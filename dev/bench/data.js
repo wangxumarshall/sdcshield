@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795166618617,
+  "lastUpdate": 1795175821940,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -4830,6 +4830,81 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.409,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "committer": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "id": "d2c68f525a8c01869a8b2646cd4d11d9c071ffbd",
+          "message": "fix(arm64): ma_src_overl2_fp64/ma_l2evict_2src_fp64 输入 NaN/Inf-free——修 20.03-SP1 both-NaN 选择性 miscompare\n\nMulti-OS Verify run 44701023625（mission 分支 full）20.03-LTS-SP1 的\nVerify(full) 红：[all-PROD -n 4] fail=1，ma_src_overl2_fp64 miscompare\nblock 164 vec 482 lane 1 (round=1)：golden=0x7ffbdd9139c0f15e\nactual=0xfff8ab4170db47c0（-n 1 与 all-quality 均过；4 线程报告同位\n同值——确定性数据相关，非瞬态翻转）。\n\n本机（Kunpeng 920）同种子精确复现（--rng-state AES:b9eda9ea…c76da4，\n同 block/vec/lane/同值）。裸值取证（临时插桩 dump 后已还原）：该 lane\n两操作数皆为 sNaN——a=0x7ff3dd9139c0f15e、b=0xfff0ab4170db47c0；\ngolden=quiet(a)、actual=quiet(b)。独立微探针（gcc -O2，noinline+volatile）\n在裸值上直接复现分歧：scalar FADD/FMUL 返回 quiet(第一操作数)、\nvaddq/vmulq 返回 quiet(第二操作数)；20 万随机 both-sNaN 对 ~50% 分歧\n（100236/200000）；交换操作数顺序结果互换。ARM 手册对 both-NaN「返回\n哪个输入 NaN」为实现定义，且不要求标量与 SIMD 形态一致——CI 现场\ngolden=quiet(a)/actual=quiet(b) 亦证明 CI runner 核心同方向。两文件头注\n「+,-,* 与向量形态逐位相同」的断言在选择点被证伪。非硬件 SDC：两类\n核心（920 与 CI runner）同样分歧 + 位级解码完全可解释。\n\n修法（按 adaptive_mem_sdc 2026-11-13 同根类修复纪律——LOAD_FP64ROT\nsanitize 先例，其注释同样实测「AArch64 对 both-sNaN lane 返回被 quiet 的\n第一操作数」）：init 的 memset_random 后对 srcA/srcB 将全 1 指数档清除\nbit 62（NaN/Inf → 有限值），both-NaN 选择点不可达——有限算术在标量/向量\n形态与操作数重排下逐位确定。两文件头注与 init 注释中被证伪的断言同步\n更正。scratch 是死加载、不参与 FP 消费，不 sanitize（最小改动）。\n\n兄弟件扫描（tests/cpu/fp64/ 全目录 44 件 + 仓级 grep 兜底）：\n- 受影响（同款「随机位型→FP 四则→标量 golden 跨路径比对」）仅此两件，\n  本次同修\n- 不受影响：ma_l2evict_rev（vaddq(v,v) 双操作数同值，无选择歧义）、\n  fp64_2ldr_4ext_stp（lane 选择 golden，vextq 排列无算术）、\n  cache_stress_clflush（memcpy 快照无算术）、llcstress/l3_execute/\n  cachebounce/lockless*/spinlock*/low_load*（+1.0/+inc 计数器永不 NaN\n  或纯载荷搬运）、neon_test/neon_add_sve（uint32 整数）、\n  rowmajor_fp64_dump（golden 本身用 NEON 计算，自洽）、\n  adaptive_mem_sdc(_sve)（已带 2026-11-13 同款 sanitize）、\n  libomp_ctx_arm（1.0 倍增计数器）、ma_tail_probe_fp64.h 系 6 件\n  （纯 ldr/str 复制 + init 快照）\n\n本机自证（openEuler 22.03 aarch64，GCC 10.3.1，no-SVE Kunpeng 920——\n本测试纯 NEON，本机可跑）：\n- ./scripts/build.sh 增量干净，两个重编 TU 零告警（今晨全量构建仅 4 处\n  既有告警，均在未触碰文件）\n- CI 失败种子 --rng-state AES:b9eda9ea…：修复前 -n 4 复现 fail（与 CI\n  同 block/vec/lane 同值）；修复后 -n 4 与 -n 1 均 exit: pass\n- 两测试连跑 3 个新种子 -n 4 -t 5000：3× exit: pass\n- -e zstd19 -t 2000 -n 1 → exit: pass\n- x86-64 检视：全部改动位于两文件 #if defined(__aarch64__) 内，零其他\n  文件改动，x86 路径不可见\n\n诚实边界：修复是输入侧的（NaN/Inf 不再进入算术），与任何核心的 NaN\n选择方向无关，主机无关；20.03-LTS-SP1 的最终确认由 mission 分支下一轮\nfull run 定夺。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-20T10:09:20Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/d2c68f525a8c01869a8b2646cd4d11d9c071ffbd"
+        },
+        "date": 1795175820154,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 83524.333,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 43903.727,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.788,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 30.901,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.936,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.108,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.657,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.834,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21765.39,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.208,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.464,
             "unit": "s"
           }
         ]

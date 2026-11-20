@@ -49,6 +49,20 @@
  *          alternating all-0/all-ones mask (full input-net inversion
  *          per cycle on top of the FMA chain — one more notch of
  *          dynamic current; default 0 = plain alternating operands)
+ *   mode   mixed (default) | aggressor | victim — the multi-core
+ *          campaign split (2026-11-20 v2): a single core cannot pull
+ *          a server PDN deep enough (first-droop depth 40-70mV vs the
+ *          75-85mV undervolt gap), so the fault machine's campaign
+ *          runs NEIGHBOUR cores as aggressor-only instances and the
+ *          fault core as a victim-only instance.  Orchestration:
+ *            taskset -c <fault core>  sdcshield -e fmov_train_droop \
+ *                -O fmov_train_droop.mode=victim      -t <T> ... &
+ *            taskset -c <neighbours>  sdcshield -e fmov_train_droop \
+ *                -O fmov_train_droop.mode=aggressor   -t <T> ... &
+ *          aggressor-only has NO detection face by design (pure
+ *          exciter — its own output is sunk, never compared); the
+ *          victim-only instance carries the golden check and is where
+ *          a detection lands.
  * The phase space (burst x chunk x gap) is meant to be SWEPT by a
  * campaign script on the fault machine — the droop depth/period of a
  * server PDN is unknown, so the structure scans rather than guesses.
@@ -110,6 +124,14 @@ struct FtdData {
                     * 1 = worst-toggle: every step veorq with an alternating
                     * all-0/all-~0 mask — full input-net inversion per cycle
                     * (max dynamic current on top of the FMA chain) */
+    int mode;      /* 0 = mixed (default: this thread both bursts and runs
+                    * the victim — single-core self-excitation)
+                    * 1 = aggressor-only: pure burst loop, NO victim, NO
+                    *     detection face (campaign skeleton: neighbour cores
+                    *     of the fault core pull the shared core rail down)
+                    * 2 = victim-only: no burst — the recipe runs back-to-
+                    *     back and is golden-verified every round (the fault
+                    *     core's role; the droop comes from the neighbours) */
 };
 }
 
@@ -311,6 +333,21 @@ static int fmov_train_droop_init(struct test *test)
     v = get_testspecific_knob_value_int(test, "toggle", 0);
     d->toggle = (v != 0) ? 1 : 0;
 
+    {
+        const char *m = get_testspecific_knob_value_string(test, "mode",
+                                                            "mixed");
+        if (strcmp(m, "aggressor") == 0)
+            d->mode = 1;
+        else if (strcmp(m, "victim") == 0)
+            d->mode = 2;
+        else {
+            if (strcmp(m, "mixed") != 0)
+                fprintf(stderr, "fmov_train_droop: mode must be "
+                                "mixed|aggressor|victim, ignoring '%s'\n", m);
+            d->mode = 0;
+        }
+    }
+
     test->data = d;
     return EXIT_SUCCESS;
 }
@@ -330,6 +367,21 @@ static int fmov_train_droop_run(struct test *test, int cpu)
     const int chunk = d->chunk;
     const int gap = d->gap;
     const int toggle = d->toggle;
+    const int mode = d->mode;
+
+    /* aggressor-only: the campaign-skeleton role.  No buffers, no victim,
+     * no detection face — this thread is pure excitation (its value is
+     * pulling the shared core rail down while a victim-only instance on
+     * the fault core runs the checked recipe).  The XOR sink keeps the
+     * chain live. */
+    if (mode == 1) {
+        uint32_t acc = 0;
+        do {
+            acc ^= ftd_burst(burst, toggle);
+        } while (test_time_condition(test));
+        ftd_sink = acc;
+        return EXIT_SUCCESS;
+    }
 
     /* per-thread buffers (parent geometry: 32KB each, L1D-domain
      * tight-timing supply — the victim must stay in the fast domain);
@@ -356,12 +408,17 @@ static int fmov_train_droop_run(struct test *test, int cpu)
         const uint64_t rot = 0x9E3779B97F4A7C15ULL + round;
 
         /* one buffer pass in chunk_m aggressor/victim adjacencies; the
-         * tail chunk covers the remainder when 2048 % chunk != 0 */
+         * tail chunk covers the remainder when 2048 % chunk != 0.
+         * victim-only (mode 2) skips the burst/gap — the recipe runs
+         * back-to-back and the droop, if any, comes from the neighbour
+         * cores' aggressor-only instances (campaign orchestration). */
         for (int start = 0; start < FTD_NUM_ELEMENTS; start += chunk) {
             const int m = (chunk < FTD_NUM_ELEMENTS - start)
                         ? chunk : (FTD_NUM_ELEMENTS - start);
-            sink_acc ^= ftd_burst(burst, toggle);
-            ftd_gap(gap);
+            if (mode != 2) {
+                sink_acc ^= ftd_burst(burst, toggle);
+                ftd_gap(gap);
+            }
             ftd_victim_chunk(srcA, srcB, dstA, dstB, rot, slot, start, m);
         }
 
@@ -392,7 +449,7 @@ static int fmov_train_droop_run(struct test *test, int cpu)
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(fmov_train_droop, "Core-rail transient-droop excitation: dependent NEON FMA burst (aggressor, power_virus_dit lineage, output sunk not compared) + adjustable gap + fmov_train_ldr_str recipe chunk (victim, instruction-for-instruction, byte-exact per-round scalar golden); knobs burst/chunk/gap (-O) sweep the droop phase (ARM64)")
+DECLARE_TEST(fmov_train_droop, "Core-rail transient-droop excitation: dependent NEON FMA burst (aggressor, output sunk not compared) + adjustable gap + fmov_train_ldr_str recipe chunk (victim, byte-exact per-round scalar golden); knobs burst/chunk/gap/toggle/mode (-O; mode=aggressor|victim splits the multi-core campaign: neighbours excite, fault core verifies) (ARM64)")
     .groups = DECLARE_TEST_GROUPS(&group_math),
     .test_init = fmov_train_droop_init,
     .test_run = fmov_train_droop_run,

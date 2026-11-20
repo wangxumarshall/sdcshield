@@ -446,8 +446,10 @@ ras/日志 <1；v5 §5.6）。参考机实况（2026-09-27）：数据根 7.6G�
    模板无本单元诊断。生效条件：重装单元（install.sh）→ 重启服务，属用户决策窗口。
 3. **status.sh 呈现扩展**（v5 单元 14 未完部分）：纳入九服务活性/controller 状态/
   repro_queue 看板（§4.1 巡检项目前靠手工组合命令）。
-4. **README 运维段引用**：仓库 README 尚无 sdc-excite-reproduce 运维入口——本手册
-   合入后按 docs 同步纪律补引用行。
+4. ~~**README 运维段引用**：仓库 README 尚无 sdc-excite-reproduce 运维入口——本手册
+   合入后按 docs 同步纪律补引用行。~~ **已闭环**（sdcshield-pr855 README 重构）：
+   README「一键最大程度激发 SDC」节内联 status/start/stop 三脚本入口并以
+   「亦见该手册」回链本手册。
 5. **m2 基线脚本在 install.sh 重装后的重做**：install.sh 覆盖单元文件不改 spool 状态
    （基线状态文件在即拒），但 `sdc-collector@.service` 重装后 M1 的 PMU_CORE_COUNTERS
    注入行需重做（onboarding 第 4 步第 2 点）。

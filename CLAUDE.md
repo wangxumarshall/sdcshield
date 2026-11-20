@@ -64,13 +64,12 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
 # acl — see README). Missing install/ degrades gracefully, never hard.
 
 ./builddir/sdcshield --list-tests             # default PROD set AFTER spec filtering — host-dependent:
-                                               #   SVE1 host:  565 PROD / 675 q0 / 683 q-1  (2026-11-03 merge 复核:
-                                               #               main #472 迁移/增量 + feat/eigen-sve-unification
-                                               #               +12 SVE eigen cases, − eigen_svd_bidiag_sve;
-                                               #               full chain in README)
-                                               #   no-SVE 920 (本机): 439 PROD / 547 q0 / 551 q-1  (2026-11-02 main 实测,
-                                               #               = 迁移 121 + arm_add 7 + _neon 14 + cache 新 9 PROD 后;
-                                               #               eigen SVE 分支 12 新 + 退役 1 全 ARM64_REQUIRES_SVE, 净变化 0)
+                                               #   SVE1 host:  647 PROD / 757 q0 / 765 q-1  (2026-11-19 实测, vendored 库
+                                               #               齐备构建; 2026-11-03 旧值 565/675/683 系缺 vendored 库的
+                                               #               降级构建口径——少计 82, 见 README「用例质量分级」footnote)
+                                               #   no-SVE 920:  439 PROD / 547 q0 / 551 q-1  (2026-11-02 历史树值;
+                                               #               本分支树推导 457/565/569——非 SVE 门控 PROD 净增 18,
+                                               #               推导口径见 README footnote; 源码全量 651 PROD/769)
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

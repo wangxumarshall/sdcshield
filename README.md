@@ -110,7 +110,7 @@ SDC 激励/复现战役（M0–M5）的机侧运维细分脚本同在 `scripts/s
 | [`third-party/rpms/openEuler-22.03/`](https://github.com/wangxumarshall/sdcshield-rpm-22.03.git) | 22.03 LTS / SP1–SP4 |
 | [`third-party/rpms/openEuler-24.03/`](https://github.com/wangxumarshall/sdcshield-rpm-24.03.git) | 24.03 LTS / SP1–SP4（SP3 = 基准版本） |
 
-预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（PROD 源码全量上界，随源码演进、现值 651），少的是镜像内未含的 vendored 计算库测试组；用例计数口径见「用例质量分级」。
+预构建二进制（git 08c37be3，2026-09-12 构建）含 221 个 PROD 用例——少于源码构建（本构建 PROD 全量 651；`libclang_rt.builtins.a` 在场的严格源码上界 653——含 `crt_builtins{,_sve}` 2 个 PROD；均随源码演进）。差值归因：82 个系镜像未含的 vendored 计算库测试组（ipsec 70 + openssl 3 + openblas 5 + sleef 2 + acl 2），其余 348 个系 2026-09-12 以来源码树演进新增；用例计数口径见「用例质量分级」。
 
 > **旧二进制判读警示**：2026-09-12 预构建二进制是 eigen 满核假阳修复（2026-10-24）**之前**的构建——其上 `eigen_svd_double`/`eigen_sparse` 的满核 FAIL 按旧口径判读为已知 ULP 级良性抖动（`-n 1` 复跑通过即可），不升级为 SDC 嫌疑；"满核挂 = SDC 嫌疑"的判读规则仅适用于含修复的构建。用旧二进制跑 24h 战役脚本须显式恢复旧白名单（含修复的源码构建不需要、也不应设置）：
 >

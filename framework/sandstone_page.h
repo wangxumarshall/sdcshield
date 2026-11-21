@@ -25,8 +25,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* align to a power of 2 */
-#define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & (~((n) - 1)))
+/* align to a power of 2.
+ * The mask must be computed in size_t: with a 32-bit n (sandstone_page_size()
+ * returns unsigned) ~((n) - 1) is a 32-bit mask that silently drops bits
+ * >= 2^32, so ROUND_UP_TO_PAGE on a >=4 GiB size returned only its low
+ * 32 bits (probe-verified 2026-11-18, ps=65536: 4 GiB -> 0, 4 GiB+1 -> ps,
+ * 4.14 GiB -> 143.4 MiB).  Honesty note: this truncation was ONE candidate
+ * mechanism for the 2026-11-11 stderr-dump SIGSEGV (a >4 GiB memfd would
+ * have been mmap'ed as ~143 MiB and the scan would run off the mapping),
+ * but the crash-scene numbers recorded at the time (size 4294261107 < 2^32,
+ * mapping ending at data+58 KiB, see
+ * docs/superpowers/plans/2026-11-12-memcpy1-neon-stderr-fix.md) are NOT
+ * explained by it — the old mask rounds that size up to 4 GiB, not 58 KiB.
+ * The coredump that would have settled the conflict is gone, and the dump
+ * path no longer mmaps at all (print_child_stderr_common preads the
+ * clamped head), so it is robust under either scene.  The fix stands on
+ * its own probe- and unit-test-verified merits (RoundUpToPagePast4GiB). */
+#define ROUND_UP_TO(value, n)       (((value) + (n) - 1) & ~((size_t)(n) - 1))
 
 /*
  * Page size used for mmap/mprotect alignment.  MUST match the system's actual

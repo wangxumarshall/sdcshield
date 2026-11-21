@@ -58,6 +58,23 @@ if not cpp.has_header('barrier', args: ['-std=gnu++20'])
             '-isystem', host_compat_dir,
             language: 'cpp',
         )
+        # The unittests executable is declared native: true and therefore
+        # draws from the native argument pool: without this second call it
+        # missed the polyfill and failed on <barrier> on the very
+        # old-toolchain hosts this block exists for (observed 2026-11-12;
+        # A/B-verified 2026-11-18 on GCC 10.3.1 / openEuler 22.03: without
+        # this block `ninja unittests` dies on "fatal error: barrier: No
+        # such file or directory" in framework/device/cpu/topology_cpu.h,
+        # with it the target builds warning-free and RoundUpToPagePast4GiB
+        # passes).  Host-pool targets are unaffected.
+        add_project_arguments(
+            '-DSDCSHIELD_COMPAT_LIBSTDCXX',
+            '-include', host_compat_polyfill,
+            '-include', 'unistd.h',
+            '-isystem', host_compat_dir,
+            language: 'cpp',
+            native: true,
+        )
         message('libstdc++ has no <barrier>: injecting framework/compat C++23 polyfill (host-native old-toolchain build)')
     else
         warning('libstdc++ has no <barrier> and framework/compat/cpp23_polyfill.h is missing')

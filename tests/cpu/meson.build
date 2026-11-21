@@ -340,6 +340,20 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/fmov_train_3ldr_str.cpp',
             'misc/fmov_train_ldr_str.cpp',
             'misc/fmov_train_ldp_stp.cpp',
+            # l2l3 variants + core-rail transient-droop excitation probe
+            # (aggressor/victim mode split for multi-core campaigns) — from
+            # feat/migrate-opendcdiag-tests (2026-11-20/21)
+            'misc/fmov_train_ldr_str_l2l3.cpp',
+            'misc/fmov_train_ldp_stp_l2l3.cpp',
+            'misc/fmov_train_droop.cpp',
+            # gdroop quadruplet: all-core synchronized global-droop excitation
+            # (barrier-aligned stall -> synchronized FMA burst -> recipe chunks
+            # in the sagged window), asm pairs + intrinsics twins — from
+            # feat/migrate-opendcdiag-tests (2026-11-21/22)
+            'misc/fmov_train_gdroop_ldr_str.cpp',
+            'misc/fmov_train_gdroop_ldp_stp.cpp',
+            'misc/fmov_train_gdroop_ldr_str_intr.cpp',
+            'misc/fmov_train_gdroop_ldp_stp_intr.cpp',
             'misc/loop_check_m.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
@@ -972,6 +986,8 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/store_visibility_cross_class_neon.cpp',
             'neon_memcpy_cache/store_lost_write_detect_neon.cpp',
             'neon_memcpy_cache/barrier_after_lock_store_neon.cpp',
+            # 锁超时判别器 v2（死锁 vs 瞬时饥饿四象限取证）
+            'neon_memcpy_cache/barrier_after_lock_store_neon_2.cpp',
             'neon_memcpy_cache/low_load_cache_pressure_neon.cpp',
             'neon_memcpy_cache/str_instruction_stress_neon.cpp',
             'neon_memcpy_cache/cache_stress_clflush_neon.cpp',
@@ -983,6 +999,10 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/mfence_pure_neon.cpp',
             'neon_memcpy_cache/memcpy0_neon.cpp',
             'neon_memcpy_cache/memcpy1_neon.cpp',
+            # memcpy1_neon 的 FP64 输入变体（32×double/256B，frandom_scale
+            # 有界 f64，neon_copy + memcmp 字节精确）——2026-11-13 本机三轮
+            # soak 验证后注册
+            'neon_memcpy_cache/memcpy1_neon_fp64.cpp',
             'neon_memcpy_cache/memcpy_l1d_size_neon.cpp',
             'neon_memcpy_cache/memcpy_l2_cache_size_neon.cpp',
             'L3_cache_920/memcpy_l3_cache_size_neon.cpp',
@@ -1155,6 +1175,12 @@ if host_machine.cpu_family() == 'aarch64'
             'memory-access/ma_atomic.cpp',
             'memory-access/ma_nt.cpp',
             'memory-access/ma_alu_fixed.cpp',
+            # L1D 旁路 NEON 判别战役四件（2026-11-04 验证全过）——from
+            # feat/migrate-opendcdiag-tests
+            'memory-access/ma_l2evict_2src.cpp',
+            'memory-access/ma_l2evict_rev.cpp',
+            'memory-access/ma_l2evict_plain.cpp',
+            'memory-access/ma_src_overl2.cpp',
         )
     )
 endif

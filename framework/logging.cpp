@@ -1745,20 +1745,80 @@ AbstractLogger::print_one_thread_messages_tdata(int fd, PerThreadData::Common *d
 
 void AbstractLogger::print_child_stderr_common(std::function<void(int)> header)
 {
-    LogMessagesFile f(stderr_fd);
-    if (f.size_bytes() == 0)
+    struct stat st;
+    if (fstat(stderr_fd, &st) == -1 || st.st_size == 0)
         return;
 
-    char indent[] = "    ";
-    std::string_view contents(f.bytes(), f.size_bytes());
+    /* A runaway test can write gigabytes to stderr (observed 2026-11-11:
+     * memcpy1_neon filled a ~4 GiB memfd in one 5-minute round — 4294261107
+     * bytes recorded in the crash scene; a scratch replica filled 356 GB in
+     * 3 minutes.  Capture remains unbounded, tracked in issue #843).  Dumping
+     * all of it is useless and slow; keep the head and report the cut.
+     * Read just that head with pread() so we never mmap a memfd that has
+     * grown to hundreds of GiB: the full mapping served no purpose once the
+     * dump was clamped, and an mmap failure here used to exit(EX_OSERR) and
+     * take the whole parent down. */
+    static constexpr size_t MaxStderrDumpSize = 1024 * 1024;
+    const size_t total = size_t(st.st_size);
+    const size_t shown = total < MaxStderrDumpSize ? total : MaxStderrDumpSize;
 
+    /* Read `shown` bytes with a retry loop.  A single pread() can be
+     * interrupted by a signal (EINTR) when the parent's handler lacks
+     * SA_RESTART, and a short read would silently drop the tail — with no
+     * truncation note at all when total <= MaxStderrDumpSize.  Keep asking
+     * until we have `shown` bytes, hit EOF, or a real error. */
+    std::string contents(size_t(shown), '\0');
+    size_t nread = 0;
+    int read_error = 0;
+    while (nread < shown) {
+        ssize_t r = pread(stderr_fd, contents.data() + nread, shown - nread, off_t(nread));
+        if (r > 0) {
+            nread += size_t(r);
+            continue;
+        }
+        if (r == 0)
+            break;                          /* EOF: keep what we read so far */
+        if (errno == EINTR)
+            continue;                       /* interrupted: try again */
+        read_error = errno;
+        break;                              /* real error: report below */
+    }
+
+    if (nread == 0) {
+        /* nothing readable (error before any byte, or the file vanished):
+         * record the loss instead of silently discarding the only diagnostic
+         * field there is, but do not kill the parent over child stderr */
+        if (read_error) {
+            std::string msg = "    ... [stderr dump unreadable: ";
+            msg += strerror(read_error);
+            msg += "; " + std::to_string(total) + " bytes dropped]";
+            writeln(AbstractLogger::file_log_fd, msg);
+        }
+        truncate_log_internal(stderr_fd);
+        return;
+    }
+    contents.resize(nread);
+
+    std::string truncation_note;
+    if (total > nread) {
+        truncation_note = "    ... [stderr truncated: " + std::to_string(total)
+                + " bytes total, first " + std::to_string(nread) + " bytes shown";
+        if (read_error)
+            truncation_note += "; read error: " + std::string(strerror(read_error));
+        truncation_note += "]";
+    }
+
+    char indent[] = "    ";
     header(AbstractLogger::file_log_fd);
     print_content_indented(AbstractLogger::file_log_fd, indent, contents);
+    if (!truncation_note.empty())
+        writeln(AbstractLogger::file_log_fd, truncation_note);
     if (AbstractLogger::file_log_fd != AbstractLogger::real_stdout_fd && sApp->shmem->cfg.verbosity > 0) {
         header(AbstractLogger::real_stdout_fd);
         print_content_indented(AbstractLogger::real_stdout_fd, indent, contents);
+        if (!truncation_note.empty())
+            writeln(AbstractLogger::real_stdout_fd, truncation_note);
     }
-    f.unmap();
 
     /* reset it for the next iteration */
     truncate_log_internal(stderr_fd);

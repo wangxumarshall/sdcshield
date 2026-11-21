@@ -340,6 +340,13 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/fmov_train_3ldr_str.cpp',
             'misc/fmov_train_ldr_str.cpp',
             'misc/fmov_train_ldp_stp.cpp',
+            'misc/fmov_train_ldr_str_l2l3.cpp',
+            'misc/fmov_train_ldp_stp_l2l3.cpp',
+            'misc/fmov_train_droop.cpp',
+            'misc/fmov_train_gdroop_ldr_str.cpp',
+            'misc/fmov_train_gdroop_ldp_stp.cpp',
+            'misc/fmov_train_gdroop_ldr_str_intr.cpp',
+            'misc/fmov_train_gdroop_ldp_stp_intr.cpp',
             'misc/loop_check_m.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
@@ -972,6 +979,7 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/store_visibility_cross_class_neon.cpp',
             'neon_memcpy_cache/store_lost_write_detect_neon.cpp',
             'neon_memcpy_cache/barrier_after_lock_store_neon.cpp',
+            'neon_memcpy_cache/barrier_after_lock_store_neon_2.cpp',
             'neon_memcpy_cache/low_load_cache_pressure_neon.cpp',
             'neon_memcpy_cache/str_instruction_stress_neon.cpp',
             'neon_memcpy_cache/cache_stress_clflush_neon.cpp',
@@ -1141,8 +1149,10 @@ endif
 # 签名：负载结束后连续访存对中第二个写回错位。仅 aarch64。
 #
 # 注：2026-11-04 增补的 ma_l2evict_{rev,2src,plain} / ma_src_overl2 四个
-# 基测试为 co-worker 未提交 WIP（disk state 为准、fresh clone 不携带），
-# 本仓仅落地其 FP64 变体（见下方 fp64/ 块）。
+# 基测试曾长期为 co-worker 未提交 WIP（其 FP64 变体先行落地，见下方
+# fp64/ 块）；2026-11-21 基测试连同 meson 注册一并入库（11-04 判别格
+# 战役产物，两阶段验证全过、判读 A 落定——档案 docs/runs/
+# 20261104_l2evict_validation/，本地）。
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
@@ -1155,6 +1165,10 @@ if host_machine.cpu_family() == 'aarch64'
             'memory-access/ma_atomic.cpp',
             'memory-access/ma_nt.cpp',
             'memory-access/ma_alu_fixed.cpp',
+            'memory-access/ma_l2evict_rev.cpp',
+            'memory-access/ma_l2evict_2src.cpp',
+            'memory-access/ma_l2evict_plain.cpp',
+            'memory-access/ma_src_overl2.cpp',
         )
     )
 endif

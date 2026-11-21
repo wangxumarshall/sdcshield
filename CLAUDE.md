@@ -93,6 +93,8 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #   11-21 11-04/05 磁盘 WIP 入库：l2evict
                                                #               判别格 4 PROD + balsn_2 BETA 1
                                                #               → 532/642/646。
+                                               #   11-21 再追加 fmov_train_gdroop 对 2（全核同步
+                                               #               全局 droop 臂）→ 534/644/648。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

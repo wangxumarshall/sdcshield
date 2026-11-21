@@ -344,6 +344,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/fmov_train_ldp_stp_l2l3.cpp',
             'misc/fmov_train_droop.cpp',
             'misc/fmov_train_gdroop_ldr_str.cpp',
+            'misc/fmov_train_gdroop_ldp_stp.cpp',
             'misc/loop_check_m.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',

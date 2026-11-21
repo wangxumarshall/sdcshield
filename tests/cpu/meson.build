@@ -340,6 +340,12 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/fmov_train_3ldr_str.cpp',
             'misc/fmov_train_ldr_str.cpp',
             'misc/fmov_train_ldp_stp.cpp',
+            # l2l3 variants + core-rail transient-droop excitation probe
+            # (aggressor/victim mode split for multi-core campaigns) — from
+            # feat/migrate-opendcdiag-tests (2026-11-20/21)
+            'misc/fmov_train_ldr_str_l2l3.cpp',
+            'misc/fmov_train_ldp_stp_l2l3.cpp',
+            'misc/fmov_train_droop.cpp',
             'misc/loop_check_m.cpp',
             'misc/mite.cpp',
             'misc/movdq2q.cpp',
@@ -972,6 +978,8 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/store_visibility_cross_class_neon.cpp',
             'neon_memcpy_cache/store_lost_write_detect_neon.cpp',
             'neon_memcpy_cache/barrier_after_lock_store_neon.cpp',
+            # 锁超时判别器 v2（死锁 vs 瞬时饥饿四象限取证）
+            'neon_memcpy_cache/barrier_after_lock_store_neon_2.cpp',
             'neon_memcpy_cache/low_load_cache_pressure_neon.cpp',
             'neon_memcpy_cache/str_instruction_stress_neon.cpp',
             'neon_memcpy_cache/cache_stress_clflush_neon.cpp',
@@ -1159,6 +1167,12 @@ if host_machine.cpu_family() == 'aarch64'
             'memory-access/ma_atomic.cpp',
             'memory-access/ma_nt.cpp',
             'memory-access/ma_alu_fixed.cpp',
+            # L1D 旁路 NEON 判别战役四件（2026-11-04 验证全过）——from
+            # feat/migrate-opendcdiag-tests
+            'memory-access/ma_l2evict_2src.cpp',
+            'memory-access/ma_l2evict_rev.cpp',
+            'memory-access/ma_l2evict_plain.cpp',
+            'memory-access/ma_src_overl2.cpp',
         )
     )
 endif

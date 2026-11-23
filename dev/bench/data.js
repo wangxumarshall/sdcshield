@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795400136297,
+  "lastUpdate": 1795446026292,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -5213,6 +5213,81 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.355,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "email": "wangxumarshall@qq.com"
+          },
+          "committer": {
+            "name": "wangxumarshall",
+            "email": "wangxumarshall@qq.com"
+          },
+          "id": "c8e319ee335e749e64c2d2f4a89de1cd4c76b699",
+          "message": "fix(tests): fmov_train_gdroop 两 pair 件 DECLARE 描述错标 ldr_str 配方→更正为 ldp_stp\n\n回迁搬运保持逐字节的原则下唯一的独立修字补丁：fmov_train_gdroop_ldp_stp\n与 fmov_train_gdroop_ldp_stp_intr 的 DECLARE_TEST 描述串均错写 \"fmov_train_\nldr_str recipe chunks inside the sagged window\"——两件 victim 实为 pair 配方\n（fmov_train_ldp_stp，各自头注释与 victim 代码可证），属研究仓 39b84830/\n87af4dad 复制残留；--list-tests -l 用户可见、事实性错标。各改 1 行，其余\n不动。\n\n验证（本机 0102）：构建零警告；--list-tests -l 实测两件描述均为\n\"fmov_train_ldp_stp recipe chunks\"（引用真实输出）；行为面复跑两件\n-t 5000 -n 4 均 pass（描述串不影响行为）；zstd19 回归 pass。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-23T02:28:53Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/c8e319ee335e749e64c2d2f4a89de1cd4c76b699"
+        },
+        "date": 1795446024379,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 84922.384,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44963.411,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 4.78,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 55.424,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.021,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.06,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.031,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 3.923,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21855.951,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 1.958,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 10.807,
             "unit": "s"
           }
         ]

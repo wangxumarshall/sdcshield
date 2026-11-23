@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795353164818,
+  "lastUpdate": 1795400136297,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -5136,6 +5136,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 12.219,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "e867e9d263ea35f9ed857fbb820e0d0806d5f55c",
+          "message": "fix(arm64): Multi-OS Verify 复绿——shm_open→librt 条件链接 + fp64 both-NaN 输入 sanitize\n\nshm_open→librt 条件链接（修 20.03 五镜像链接红）+ ma_src_overl2_fp64/ma_l2evict_2src_fp64 输入 NaN/Inf-free sanitize（修 20.03-SP1 both-NaN 标量/NEON 选择分歧）。全量 run 44722261099：15 verify + report + benchmark-trend 全 success。",
+          "timestamp": "2026-11-23T01:07:11Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/e867e9d263ea35f9ed857fbb820e0d0806d5f55c"
+        },
+        "date": 1795400134476,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 84746.823,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 45199.721,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 14.514,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 33.602,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 1.998,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.05,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 2.804,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 5.531,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21420.196,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.095,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.355,
             "unit": "s"
           }
         ]

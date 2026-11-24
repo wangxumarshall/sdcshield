@@ -97,6 +97,14 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               全局 droop 臂）→ 534/644/648。
                                                #   11-21 再追加 gdroop intrinsics 对 2（编码判别
                                                #               臂）→ 536/646/650。
+                                               #   11-24 新建 tests/cpu/fmov/（346 套件
+                                               #               SIMDFPLoadStoreMemLoopCpy 谱系：
+                                               #               ldp_stp_cpy_{p08,p13,p05,p06} 四探针
+                                               #               + adaptive_ldp_stp 54 组合引擎
+                                               #               （种类×装载 2-4×存储 2-4×本批中间负载，
+                                               #               shm 锚点复刻 adaptive_mem_sdc），全 PROD，
+                                               #               标量金身（门实证）+ verify 54/54 覆盖）
+                                               #               → 0102 主机实测 541/651/655。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

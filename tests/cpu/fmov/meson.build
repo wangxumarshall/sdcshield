@@ -11,6 +11,7 @@ if host_machine.cpu_family() == 'aarch64'
         'ldp_stp_cpy_p08.cpp',
         'ldp_stp_cpy_p13.cpp',
         'ldp_stp_cpy_p05.cpp',
+        'ldp_stp_cpy_p06.cpp',
     )
 
     fmov_tests_lib = static_library(

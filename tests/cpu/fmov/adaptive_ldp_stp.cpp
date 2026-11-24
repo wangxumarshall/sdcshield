@@ -37,7 +37,11 @@
  *
  * Env contract (campaign script, mirrors adaptive_mem_sdc):
  *   ADAPTIVE_LDP_STP_KEY        shm name suffix (fresh key = fresh
- *                               anchor)
+ *                               anchor; KEY'd objects are the campaign
+ *                               script's to clean; the default
+ *                               ppid-derived objects are reaped by a
+ *                               later run's children when their parent
+ *                               process is dead)
  *   ADAPTIVE_LDP_STP_VERIFY=1   verify mode: round-robin counter,
  *                               each child takes the next combo (a
  *                               short -T run covers all 54 goldens)
@@ -73,6 +77,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
+#include <dirent.h>
+#include <signal.h>
+#include <sys/types.h>
 #include <sys/mman.h>
 #endif
 
@@ -107,8 +114,49 @@ struct AdaptiveLdpStpShm {
     uint32_t sdc_flag;                    /* set by any failing child */
 };
 
+/* Stale-object reaper (2026-11-24 review fix I-1; Linux-only cold path).
+ * The default ppid-derived name deliberately outlives every child — the
+ * cross-child anchor IS the sharing mechanism — so nothing in-process
+ * can unlink it while the campaign lives, and the framework never runs
+ * test code in the main process.  Instead each child reaps objects whose
+ * parent process is demonstrably dead: a live campaign's object has a
+ * live main pid (kill(pid,0)==0) and is skipped; a dead campaign's
+ * object is unlinked here.  KEY'd objects are exempt — they follow the
+ * campaign script's fresh-key discipline and are that script's to
+ * clean.  pid-reuse fails open (skip): worst case the object lingers
+ * until reboot or a manual rm. */
+static void ald_shm_reap_stale(void)
+{
+    if (getenv("ADAPTIVE_LDP_STP_KEY") != nullptr)
+        return;
+    DIR *dir = opendir("/dev/shm");
+    if (dir == nullptr)
+        return;
+    static const char prefix[] = "adaptive_ldp_stp_ppid";
+    const size_t plen = sizeof(prefix) - 1;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        if (strncmp(ent->d_name, prefix, plen) != 0)
+            continue;
+        char *end = nullptr;
+        const long pid = strtol(ent->d_name + plen, &end, 10);
+        if (end == ent->d_name + plen || *end != '\0' || pid <= 1)
+            continue;
+        if (kill((pid_t)pid, 0) == 0 || errno != ESRCH)
+            continue;               /* alive, or not provably dead: skip */
+        char path[9 + 256 + 1];       /* "/dev/shm/" + NAME_MAX + NUL */
+        snprintf(path, sizeof(path), "/dev/shm/%s", ent->d_name);
+        if (unlink(path) == 0)
+            fprintf(stderr, "adaptive_ldp_stp: reaped stale shm object %s "
+                    "(parent process %ld is gone)\n", ent->d_name, pid);
+    }
+    closedir(dir);
+}
+
 static struct AdaptiveLdpStpShm *ald_shm_setup(void)
 {
+    ald_shm_reap_stale();
+
     const char *key = getenv("ADAPTIVE_LDP_STP_KEY");
     char name[128];
     if (key) {
@@ -711,6 +759,9 @@ static int adaptive_ldp_stp_init(struct test *test)
 {
     auto *data = static_cast<struct AldData *>(malloc(sizeof(struct AldData)));
     data->shm = ald_shm_setup();
+    if (data->shm == nullptr)
+        fprintf(stderr, "adaptive_ldp_stp: shm setup failed — this child "
+                "will idle (combo sweep degraded)\n");
     data->test_mode = 0;
     data->test_slice = 600;
     const char *mode = getenv("ADAPTIVE_LDP_STP_MODE");
@@ -748,8 +799,10 @@ static int adaptive_ldp_stp_run(struct test *test, int cpu)
 static int adaptive_ldp_stp_cleanup(struct test *test)
 {
     auto *data = static_cast<struct AldData *>(test->data);
-    /* shm mapping dies with the child process; the named object is
-     * removed by the campaign script at campaign end */
+    /* the shm MAPPING dies with the child process; the named object
+     * intentionally outlives children (cross-child anchor) — ppid-derived
+     * objects are reaped by a later run's children (dead-pid scan in
+     * ald_shm_reap_stale), KEY'd objects belong to the campaign script */
     free(data);
     test->data = nullptr;
     return EXIT_SUCCESS;

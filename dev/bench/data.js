@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795446026292,
+  "lastUpdate": 1795534327248,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -5288,6 +5288,81 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 10.807,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "committer": {
+            "name": "wangxu",
+            "email": "wangxumarshall@qq.com"
+          },
+          "id": "f7b88cbdfa38a85988c739fe61ad951d8b37c4b1",
+          "message": "feat(tools): 新增 tools/freq/cpu_toggle.sh——CPU 动态调频脚本（DVS 压测）\n\n- 每 INTERVAL 秒（默认 15）把各核切换到频率列表下一档：优先\n  scaling_available_frequencies（排序去重），缺省用 cpuinfo_min/max 两档\n- userspace governor 全不可用（如 intel_pstate）时回退 scaling_max_freq\n  限频，并钳到该核当前 scaling_min_freq 以免写入被内核拒绝\n- 退出（Ctrl+C/SIGTERM）恢复原始 governor 与频率上下限\n- help/-h/--help、非法间隔、非 root、无 cpufreq 均给出明确说明\n- 相对草稿修复：usleep 秒/微秒错用→sleep；删掉误当命令的中文残行；\n  删除循环内重复的 setspeed 写入与调试 cat；CPU_SYSFS 支持环境变量覆盖\n- 验证：mock cpufreq 端到端（set/cap 两模式、钳位、SIGINT 恢复）实测通过；\n  真机 /sys 写路径需 root，本机无免密 sudo 且为共享机，未执行/未改动真机频率\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-24T06:26:13Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/f7b88cbdfa38a85988c739fe61ad951d8b37c4b1"
+        },
+        "date": 1795534324850,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 84946.82,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 44285.67,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 83.477,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 78.855,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.175,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.293,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.315,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 4.404,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 22139.949,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.235,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 11.578,
             "unit": "s"
           }
         ]

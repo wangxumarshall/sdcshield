@@ -1,0 +1,36 @@
+# Copyright 2025 Intel Corporation.
+# SPDX-License-Identifier: Apache-2.0
+#
+# fmov/: LDP/STP 访存循环拷贝探针族 + adaptive_ldp_stp 自适应引擎
+# （346 套件 SIMDFPLoadStoreMemLoopCpy 谱系，2026-11-24 用户指令建此目录）。
+# 自门控模式抄 tests/cpu/arm64/meson.build：整个 subdir 只在 aarch64 守卫内
+# 进入，x86-64 零改动。纯 NEON 基线（armv8.1-a），无 +crypto/+sve 需求。
+
+if host_machine.cpu_family() == 'aarch64'
+    fmov_tests = files(
+        'ldp_stp_cpy_p08.cpp',
+    )
+
+    fmov_tests_lib = static_library(
+        'tests_fmov',
+        fmov_tests,
+        build_by_default: false,
+        include_directories: [
+            framework_incdir,
+        ],
+        dependencies: [
+            boost_dep,
+        ],
+        cpp_args: [
+            debug_c_flags,
+            default_cpp_warn,
+            default_cpp_flags,
+            march_generic_flags,
+            '-march=armv8.1-a',
+        ],
+    )
+
+    sandstone_tests += [
+        fmov_tests_lib,
+    ]
+endif

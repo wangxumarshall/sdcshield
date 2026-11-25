@@ -1168,19 +1168,12 @@ static int pick_count(int isa)
                     pin);
     }
     if (pick_kb < 0) {
-        /* First-draw burn (adversarial review 2026-11-25): a FRESH framework
-         * AES engine's first generate64 is the CONSTANT 0x1616161616161616
-         * on ARM — random.cpp builds state[1] = ~state[0] and ARM AESE adds
-         * the round key BEFORE SubBytes (x86 AESENC adds it after), so the
-         * first round input is 0xff..f and the draw degenerates to tier 512K
-         * on every fresh AES process (12/12 in the guard smoke evidence).
-         * Burn one draw so the weighted pick consumes a seed-dependent one;
-         * harmless on LCG / -s-seeded runs.  The framework-side engine fix
-         * is a separate unit (ledgered, blast radius = all tests' streams). */
-        uint64_t burn = 0;
-        memset_random(&burn, sizeof(burn));
+        /* framework RNG: -s-seed reproducible.  The first draw is
+         * seed-dependent since the framework AES engine's construction
+         * consumes its own degenerate zeroth output (random.cpp,
+         * 2026-11-25) — no test-side burn needed. */
         uint64_t r = 0;
-        memset_random(&r, sizeof(r));       /* framework RNG: -s-seed reproducible */
+        memset_random(&r, sizeof(r));
         unsigned pct = (unsigned)(r % 100);
         pick_kb = pct < 40 ? 512 : pct < 70 ? 256 : pct < 90 ? 128 : 64;
     }

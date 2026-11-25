@@ -121,6 +121,12 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               （同一 (a,b) 算 N 次：轮换槽位防 CSE，
                                                #               全 N 缓冲金身比对；objdump 反 CSE 门）
                                                #               → 0102 主机实测 552/662/666。
+                                               #   11-25 追加写侧快检测器探针族
+                                               #               neon_rot_ldr_at_top_rowmajor_{strfwd,
+                                               #               waw2str,dstr4}（同址 str→ldr 转发窗/
+                                               #               同址双写 WAW 序/四连写密度，asm 钉死，
+                                               #               目标机运行协议见 README）
+                                               #               → 0102 主机实测 555/665/669。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

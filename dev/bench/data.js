@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795534327248,
+  "lastUpdate": 1795618212667,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -5363,6 +5363,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 11.578,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "0cf2fa1f017f30f15863af31ae9409adfb3b9095",
+          "message": "feat(arm64): adaptive_mem_sdc 二次回迁（profile/stress/detect 引擎 + 拷贝链 + 足迹档）+ 框架 AES RNG 首抽退化修复 (#869)\n\n* docs(claude): 规则4补简单问题例外——直接做不走 writing-plans（用户裁定 2026-11-25）\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* feat(arm64): adaptive_mem_sdc 二次回迁——profile/stress/detect 引擎 + 拷贝链 + 足迹档\n\n研究仓 sdcshield-wangxu-neon 工作区快照（2026-11-25 静默态）回迁，非逐字节：\nautoci 独有的 #868 latecomer fstat 门控（shm_setup 0 字节对象 SIGBUS 修复）\n与 @test parblock 文档头重放于快照之上，其余 6 文件字节一致\n（cpp aa9480e2 / h c035b722 / sve 9573f5f4 / detect 4ab42d87+824437ae / stress 53f2f931）。\n\n- str 轴重定义 = 链式拷贝数（str2/3/4 = 2/3/6 次拷贝，逐节 asm-volatile\n  重载刚存地址，dst 收尾——store→load 转发 + 寄存器依赖链双谱系 LSU 激发）\n- 足迹档运行时化：{64K..512K} 元素 40/30/20/10 加权抽取 + MemAvailable 守卫\n  （ncpu×9×count×elem_bytes ≤ budget×0.8；下修/64K 装不下诚实 EXIT_SKIP；\n  COUNT 钉死绕过下修；首抽 burn 修 ARM AES 引擎首抽常量退化）\n- PROFILE=stress|soak 引擎（adaptive_mem_sdc_stress.cpp，无 DECLARE_TEST）：\n  13 个 canary 看守缓冲、标量直算/等价改写/NEON 冗余三算 + FP64 定点金身、\n  1..64B 多粒度非对齐/跨行/随机访问、每 sweep 独立冻结 golden、\n  INJECT 确定性单 bit 注入自检（intentional_injection，与真 SDC 显式区分）\n- adaptive_sdc_* 取证库（adaptive_mem_sdc_detect.cpp/.h，无 DECLARE_TEST）：\n  统一 check_bytes（memcmp 快路 + CRC32/FNV 摘要、lane 直方图、首错 hex\n  窗口冷路）、EVENT_LOG kv 事件行；NEON/SVE 两引擎校验统一走此库\n- meson aarch64 tests_set_base 注册两新 TU；无新 DECLARE_TEST，用例数不变\n  （0102 口径 531/640/644）；README 计数链同步\n\n验证（本机 kunpeng920 no-SVE，全部真实输出）：\n- 构建 BUILD_EXIT=0，零新警告（日志 3 条 warning 均为 llcstress* 既有）\n- NEON verify：COUNT=64 ISA=neon VERIFY=1 -n4 -t420s → exit pass、\n  covfile 36/36 combo 全覆盖、生效档 64K、0 fail\n- stress：PROFILE=stress -n4 -t30s → exit pass、0 fail（默认 64KB 块，\n  stress 档 = ADAPTIVE_MEM_SDC_BLOCK_KB 独立口径 + 自有 MemAvailable 守卫）\n- INJECT 自检：PROFILE=stress INJECT=source EVENT_LOG → fail 块（预期）+\n  4×event=injection（classification=intentional_injection real_sdc=false\n  target=\"source\" before=0xfc after=0xfd）+ 4×event=sdc 检出事件\n- 回归：zstd19 -t2000 -n1 → exit pass\n- x86 非回归（检视）：改动全在 meson aarch64 门 + 文件 __aarch64__ 守卫内\n- SVE 引擎边界（用户裁定 2026-11-25 不测 SVE）：本机实测 SVE not present\n  （--dump-cpu-info）；SVE 引擎运行期未在本机行使，证据 = 本仓编译门 +\n  研究仓 objdump 链门（st→ld 相邻对门）；gem5-fi 四档腿按研究仓同日\n  用户裁定挂账为后续战役\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* fix(arm64): 框架 AES RNG 构造期消费退化零抽 + adaptive_mem_sdc 测试侧 burn 退役\n\n研究仓 e7363ab 同源移植（同一因果单元——拆开会产生无效中间态：burn 已撤\n而框架未修则首抽退化复发）。本仓 random.cpp 与研究仓 pre-fix 版逐字节\n同底，修复以研究仓终态逐字节套用（md5 7a24eab1）。\n\n根因（对抗评审 2026-11-25）：ARM AESE(d,k)=SR(SB(d⊕k))——round key 在\nSubBytes 之前折入，x86 AESENC 在其后。引擎 state[1]=~state[0] 构造下零轮\n输入恒 pattern⊕~pattern=0xff..f，首个 AESE+AESMC 输出 = 与种子无关的\n常量 0x1616..16；每个 fork 子进程每 worker 线程构造新引擎，首抽恒退化\n（adaptive_mem_sdc 加权抽档定量引爆：修复前 8/8 恒 512K）。旧注释\n\"vaesmcq(vaeseq) is the ARM counterpart to _mm_aesenc_si128\" 不成立。\n\n修复（用户裁定 ARM 原生形态）：构造器尾自进一次 generateM128() 内部消费\n退化零抽——公开流从一直种子依赖的第二抽起逐比特不变（-s 重放路径完全\n不变），AESE+AESMC 两指令形态与 state 推导不动；x86 引擎块零触碰（检视，\nARM-only 段）。sdcshield 为 ARM64-only fork，流不保 x86 AESENC 孪生可\n移植（用户裁定 2026-11-25）。测试侧首抽 burn mitigation（dd8d716b 引入）\n随之退役——框架修复后无需兜底。\n\n验证（本机 kunpeng920 no-SVE，全部真实输出）：\n- 构建 BUILD_EXIT=0、0 新警告（仅 5 目标重编：random.cpp+.cpp+链接）\n- 判别实验（无 burn、无 -s、无 COUNT，6 个全新进程 12 child init）：\n  抽档 = 4×128K + 2×256K + 6×512K——分化确认（修复前 8/8 恒 512K）\n- NEON verify：COUNT=64 ISA=neon VERIFY=1 -n4 -t420s → exit pass、\n  covfile 36/36 combo 全覆盖、0 fail\n- zstd19 -t2000 -n1 → exit pass（框架 RNG 全局面回归门）\n- x86 非回归（检视）：random.cpp 改动全在 ARM AES 引擎段（__aarch64__\n  守卫内），x86 引擎块零触碰；.cpp 改动为 burn 块退役（arch 中性）\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n* fix(arm64): adaptive_mem_sdc stress 引擎预算纳入 13 缓冲常量开销 + INJECT 描述串校正\n\n研究仓工作区增量（2026-11-25 静默态，未提交部分）回迁，stress.cpp 逐字节\n（md5 beae5874）：\n\n- stress_probe_count 预算修正：need = workers × (per_worker_kb×kb +\n  per_worker_overhead)，overhead = 13 缓冲 × (2×64B canary + 63B 最大\n  offset + 64B tail)——原算式漏掉 canary/padding 常量开销，小内存机上\n  高估可装档位；下修改先扣 workers×overhead 总额再除；workers 取\n  total_thread_count 优先（机器级预算口径，与 .cpp 侧 multi-slice 修正\n  一致，stress 块也按机器并发预算）\n- DECLARE 描述串尾：INJECT=<target> bit-flip self-test（原文\n  \"INJECT=self-test bit flips\" 不准确——注入是单 bit、按目标枚举）\n\n验证（本机 kunpeng920 no-SVE，真实输出）：\n- 构建 BUILD_EXIT=0（4 目标重编，无新警告）\n- PROFILE=stress -n4 -t30s → exit pass、0 fail（默认 64KB 块 = covfile\n  4K 档；本机预算充裕，overhead 纳入不改变选档边界——守卫算式修正实证）\n- zstd19 -t2000 -n1 → exit pass\n- x86 非回归（检视）：stress.cpp 改动在 __aarch64__ 守卫内的\n  stress_probe_count；描述串为注册文本\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\n\n---------\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>\nCo-authored-by: wangxumarshall <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-25T14:41:30Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/0cf2fa1f017f30f15863af31ae9409adfb3b9095"
+        },
+        "date": 1795618210272,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 85827.405,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 45603.875,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 57.877,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 53.881,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.266,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.252,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.313,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 4.473,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 22284.425,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.257,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.133,
             "unit": "s"
           }
         ]

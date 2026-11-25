@@ -111,6 +111,11 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               防 GCC 折叠成 memcpy；引擎 intr 版 27 组合
                                                #               砍 kind 轴 + COPY 死装载受检 xor 累加器）
                                                #               → 0102 主机实测 546/656/660。
+                                               #   11-25 再追加 fmov L2 驻留对照组（*_intr_l2，
+                                               #               单缓冲 128KB=2×L1D 容量跳 L1：p08/p05/p06
+                                               #               对照 + 引擎 _l2 版 27 组合热集梯度
+                                               #               512KB→1MB 跨 L2/L3）
+                                               #               → 0102 主机实测 550/660/664。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

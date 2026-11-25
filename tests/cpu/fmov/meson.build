@@ -43,6 +43,7 @@ if host_machine.cpu_family() == 'aarch64'
     # The asm arm above keeps its original flags untouched.
     fmov_intr_tests = files(
         'ldp_stp_cpy_p08_intr.cpp',
+        'ldp_stp_cpy_p13_intr.cpp',
     )
 
     fmov_intr_tests_lib = static_library(

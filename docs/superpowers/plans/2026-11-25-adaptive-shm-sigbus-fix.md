@@ -315,3 +315,20 @@ Expected: 3 个 commit（plan + 两个 fix）已全部推送，工作区无相�
 - 覆盖：根因（creator-only ftruncate）→ 两文件同修；V1（Step 5 并发）/V3（Step 4 确定性陷阱）两触发路径都被 A/B 验证；协议语义不变已由 Step 6 verify 冒烟覆盖。
 - 无占位符：所有步骤含完整命令与期望输出。
 - 类型一致：`struct AdaptiveShm`/`struct AL3Shm` 各归各文件，无跨文件符号引用。
+
+---
+
+## 设计修订（2026-11-25 当日，幂等 ftruncate → fstat 门控）
+
+初版修复（creator 与 latecomer 一律 ftruncate，幂等自愈）执行完毕并推送后，用户提出对抗性复审并给出替代设计：**latecomer 在 mmap 前 fstat 门控等待 creator 完成尺寸化，超时（500000×usleep(10)）返回 nullptr → idle；latecomer 保持纯观察者，只有 creator 尺寸化对象**。
+
+复审裁决（两设计 in-model 正确性等价，差异在残留风险选择）：
+- 门控版优势：latecomer **零文件系统写入面**——彻底消除幂等版新引入的 symlink-truncate 放大（R1）与混版本收缩两个风险面；Boost.Interprocess 式 readiness gating，模式辨识度更高。
+- 幂等版优势被下调为"化妆性"：死 creator 下 ready 永不发布，愈尺寸不愈功能，两设计的死键同样功能性死亡、同样依赖 campaign 侧清理；此优势不足以抵偿写入面收益。
+- 采纳门控版。重置分支重做两个 fix commit。
+
+修订后实测补充（诚实口径）：
+- 500000×(fstat+usleep(10)) 本机实测 **31.3s**（timer slack 使 usleep(10) 实际 ~62µs），"5s 标称"是纯算术口径，已写入代码注释；既有 ready-spin（200000 次）真实上界同为 ~12.5s 而非其注释宣称的 2s（既有文本，本补丁不动）。
+- 死键（0 字节残骸）场景下，门控版每子轮询 ~31s 后 idle；`-t 30000` 的 campaign 实例窗内 child 会被框架在轮询中途按窗终杀（正常生命周期，非 crash、无 covfile 行）——运维观察死键应改看"covfile 无行"而非"combo=-1 洪峰"。
+- 预修复基线不变（两测试各 11×Bus error、exit=1）；门控版同陷阱翻转 pass，三实例并发全 pass，latecomer 经门控读到 creator 锚点跑真组合（COVFILE 实证 combo 12），verify/常规/zstd19 全 pass。
+

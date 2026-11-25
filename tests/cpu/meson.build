@@ -352,6 +352,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor.cpp',
+            'misc/neon_rot_ldr_at_top_rowmajor_strfwd.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k7pattern.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k3res.cpp',

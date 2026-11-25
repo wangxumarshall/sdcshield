@@ -116,6 +116,11 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               对照 + 引擎 _l2 版 27 组合热集梯度
                                                #               512KB→1MB 跨 L2/L3）
                                                #               → 0102 主机实测 550/660/664。
+                                               #   11-25 追加冠军底盘 ALU 多源化扩展对
+                                               #               neon_rot_ldr_at_top_rowmajor_fp64_dup{2,3}
+                                               #               （同一 (a,b) 算 N 次：轮换槽位防 CSE，
+                                               #               全 N 缓冲金身比对；objdump 反 CSE 门）
+                                               #               → 0102 主机实测 552/662/666。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

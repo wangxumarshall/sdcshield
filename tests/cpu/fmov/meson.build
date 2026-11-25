@@ -34,7 +34,39 @@ if host_machine.cpu_family() == 'aarch64'
         ],
     )
 
+    # Intrinsics-built twins (_intr, 2026-11-25): compiled with
+    # -fno-tree-loop-distribute-patterns — the intr arm's premise is a
+    # compiler-built ELEMENT TRAIN, and GCC's loop-distribution pass
+    # idiom-recognizes monotone (and even alternating-direction) copy
+    # loops into libc memcpy() calls (observed 2026-11-25: `bl memcpy`),
+    # which would duplicate the repo's existing 28-test memcpy fleet.
+    # The asm arm above keeps its original flags untouched.
+    fmov_intr_tests = files(
+        'ldp_stp_cpy_p08_intr.cpp',
+    )
+
+    fmov_intr_tests_lib = static_library(
+        'tests_fmov_intr',
+        fmov_intr_tests,
+        build_by_default: false,
+        include_directories: [
+            framework_incdir,
+        ],
+        dependencies: [
+            boost_dep,
+        ],
+        cpp_args: [
+            debug_c_flags,
+            default_cpp_warn,
+            default_cpp_flags,
+            march_generic_flags,
+            '-march=armv8.1-a',
+            '-fno-tree-loop-distribute-patterns',
+        ],
+    )
+
     sandstone_tests += [
         fmov_tests_lib,
+        fmov_intr_tests_lib,
     ]
 endif

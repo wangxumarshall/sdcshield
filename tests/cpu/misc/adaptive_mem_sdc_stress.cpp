@@ -496,9 +496,9 @@ int stress_probe_count()
     const unsigned block_kb = static_cast<unsigned>(parse_bounded_env(
             "ADAPTIVE_MEM_SDC_BLOCK_KB", 64, 4, 8192, &explicit_block));
 
-    int workers = thread_count();
+    int workers = total_thread_count();
     if (workers <= 0)
-        workers = total_thread_count();
+        workers = thread_count();
     if (workers <= 0)
         workers = 1;
 
@@ -506,8 +506,11 @@ int stress_probe_count()
     const unsigned long long budget = static_cast<unsigned long long>(
             mem_bytes - mem_bytes / 5);
     const unsigned long long per_worker_kb = 12ULL * 1024ULL;
+    const unsigned long long per_worker_overhead =
+            BUFFER_COUNT * (2ULL * kCanaryBytes + kMaxDataOffset + kTailBytes);
     auto need_bytes = [&](unsigned kb) {
-        return static_cast<unsigned long long>(workers) * per_worker_kb * kb;
+        return static_cast<unsigned long long>(workers) *
+               (per_worker_kb * kb + per_worker_overhead);
     };
 
     if (need_bytes(block_kb) <= budget)
@@ -520,8 +523,12 @@ int stress_probe_count()
         return static_cast<int>(block_kb * 64);
     }
 
-    unsigned long long fitting_kb = budget /
-            (static_cast<unsigned long long>(workers) * per_worker_kb);
+    const unsigned long long total_overhead =
+            static_cast<unsigned long long>(workers) * per_worker_overhead;
+    unsigned long long fitting_kb = budget > total_overhead
+            ? (budget - total_overhead) /
+              (static_cast<unsigned long long>(workers) * per_worker_kb)
+            : 0;
     fitting_kb &= ~3ULL;                 /* deterministic 4KB granularity */
     if (fitting_kb < 4) {
         fprintf(stderr,

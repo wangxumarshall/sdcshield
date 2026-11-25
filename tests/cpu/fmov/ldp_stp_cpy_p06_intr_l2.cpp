@@ -17,7 +17,7 @@
  * MASTER FILL: the 5a_a5 alternating byte pattern (word-constant
  * 0xa55aa55aa55aa55a, every byte 0x5a/a5 by its parity) instead of
  * random bits.  This is the intr L2 arm's fixed-pattern data
- * discriminant, pairing with ldp_stp_cpy_p06_intr (L1-tier 5a_a5) and
+ * discriminant, pairing with ldp_stp_cpy_p06_intr (64KB straddle-tier 5a_a5) and
  * ldp_stp_cpy_p05_intr_l2 (L2-tier random).
  *
  * Known boundary (same as all p05/p06 forms, recorded deliberately):

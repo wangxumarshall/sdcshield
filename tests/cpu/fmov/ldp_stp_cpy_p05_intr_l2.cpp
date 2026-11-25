@@ -20,7 +20,12 @@
  *                                -> clean L2-resident (p05_intr's 64KB
  *                                   buffers straddle the L1 boundary
  *                                   exactly; this control leaves the
- *                                   straddle for unambiguous L2)
+ *                                   straddle for unambiguous L2).  Seam
+ *                                   note: the sweep-boundary memcpy reset
+ *                                   and the cold goldens add brief
+ *                                   master/golden traffic (~2% of sweep) —
+ *                                   the hot-phase math above is what the
+ *                                   residency axis rides on.
  *
  * Known boundary (same as all p05 forms, recorded deliberately):
  * sweep-end memcmp only; a single-bit error through the and/orr slots

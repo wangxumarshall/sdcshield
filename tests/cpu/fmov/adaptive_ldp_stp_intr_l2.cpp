@@ -31,7 +31,10 @@
  * The residency axis and the count axis are deliberately entangled in
  * this variant — holding every combo in clean L2 would require
  * <=64KB/buffer, giving up the per-buffer L1 capacity-skip.  Campaign
- * per-combo verdicts read the two axes together.
+ * per-combo verdicts read the two axes together.  (Seam note: the
+ * cold sweep boundary also reads the shared expected buffer, adding a
+ * brief 128KB to the footprint — ~2% of sweep traffic, hot-phase
+ * residency math above is what the axes ride on.)
  *
  * Golden: PURE SCALAR (issue #373 paradigm, check-scalar-golden.sh
  * gated on aldl2_scalar_golden): the same word-level fold as the
@@ -69,7 +72,7 @@
 #define ALDL2_COMBO_COUNT 27
 #define ALDL2_SLICE_SECONDS 1800            /* 30min combat slice */
 #define ALDL2_COUNT 8192                    /* elements per buffer -> 128KB (L2 residency control) */
-#define ALDL2_BYTES (ALDL2_COUNT * 16)      /* 16KB per buffer */
+#define ALDL2_BYTES (ALDL2_COUNT * 16)      /* 128KB per buffer */
 
 enum { ALDL2_C_ALUROT = 0, ALDL2_C_EXT = 1, ALDL2_C_COPY = 2 };
 

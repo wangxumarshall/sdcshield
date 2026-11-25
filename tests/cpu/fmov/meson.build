@@ -46,6 +46,7 @@ if host_machine.cpu_family() == 'aarch64'
         'ldp_stp_cpy_p13_intr.cpp',
         'ldp_stp_cpy_p05_intr.cpp',
         'ldp_stp_cpy_p06_intr.cpp',
+        'adaptive_ldp_stp_intr.cpp',
     )
 
     fmov_intr_tests_lib = static_library(

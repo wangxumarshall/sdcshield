@@ -127,6 +127,23 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               同址双写 WAW 序/四连写密度，asm 钉死，
                                                #               目标机运行协议见 README）
                                                #               → 0102 主机实测 555/665/669。
+                                               #   11-26 新建 tests/cpu/L2_cache/（写侧三探针
+                                               #               L2 恒等直通三档族 {strfwd,
+                                               #               waw2str,dstr4}_l2_{128k,256k,512k}
+                                               #               ——memcpy 元素补全（数据面零 ALU，
+                                               #               objdump 门九档实证）+ loop_check_m/
+                                               #               memcpy_l2 输入方法移植（固定档位块/
+                                               #               2×窗口随机滑移/0x5A 污染）
+                                               #               → 0102 主机实测 564/674/678。
+                                               #   11-26 续建 rowmajor 子族 L2 计算底盘
+                                               #               三档族（batch1 八母本×三档
+                                               #               24 件：本体/dump/fp64_dump/
+                                               #               dualcmp/fp64_dup2/fp64_dup3/
+                                               #               str3_checkall/scalar64——
+                                               #               底盘保持+几何移植统一模板；
+                                               #               GPS 标签族 32 位偏移重设计
+                                               #               后 1b 波跟进）
+                                               #               → 0102 主机实测 588/698/702。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

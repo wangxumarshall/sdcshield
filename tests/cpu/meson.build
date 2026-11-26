@@ -987,6 +987,7 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/store_visibility_cross_class_neon.cpp',
             'neon_memcpy_cache/store_lost_write_detect_neon.cpp',
             'neon_memcpy_cache/barrier_after_lock_store_neon.cpp',
+            'neon_memcpy_cache/barrier_after_lock_store_neon_2.cpp',
             'neon_memcpy_cache/low_load_cache_pressure_neon.cpp',
             'neon_memcpy_cache/str_instruction_stress_neon.cpp',
             'neon_memcpy_cache/cache_stress_clflush_neon.cpp',

@@ -104,7 +104,7 @@ static int db_load_stale_data_probe_run(struct test *test, int cpu)
                 "dc civac, %[p]\n\t"
                 "dsb sy\n\t"
                 "ldr %q[reloaded], [%[p]]\n\t"
-                : [reloaded] "=w"(reloaded), [oldv] "=w"(old_v)
+                : [reloaded] "=&w"(reloaded), [oldv] "=&w"(old_v)
                 : [p] "r"(p), [newv] "w"(newv)
                 : "memory");
 

@@ -162,7 +162,7 @@ static int db_load_agu_pointer_chase_run(struct test *test, int cpu)
             "lsl x1, x1, #4\n\t"
             "add %[cur], %[base], x1\n\t"
             ".endr\n\t"
-            : [cur] "+r"(cur), [acc] "+r"(acc)
+            : [cur] "+&r"(cur), [acc] "+&r"(acc)
             : [base] "r"(base)
             : "v0", "x1", "x2", "memory", "cc");
 

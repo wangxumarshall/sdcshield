@@ -38,6 +38,24 @@
  * == the init-time precomputed golden (any wrong-address load feeds a
  * foreign window into the checksum).
  *
+ * Pinning ruling (reviewer finding, 2026-11-27): the window core is plain
+ * NEON intrinsics, not a pinned asm block — an ld2/st2 same-address pair
+ * is exactly the shape GCC is known to transform (see
+ * store_visibility_cross_class_neon.cpp header: "GCC store-transforms and
+ * load-forwards same-address intrinsic pairs; measured today"). Today's
+ * toolchain keeps the st2 (objdump-gated at commit time: ld2/eor/add/st2
+ * sequence verified present), so the store arm is real; but that gate is
+ * the ONLY guard — a future compiler that eliminates or store-forwards the
+ * identity pair would make this test silently degenerate to a pure-load
+ * exciter (checks stay green, detection narrows, nothing fails). The
+ * ld2 pair cannot be expressed with GCC register constraints (an LD2
+ * writes an adjacent register pair), so the alternatives were pinning the
+ * whole window core in hand-written asm with hard-coded registers
+ * (new-defect risk for a marginal robustness gain) or this disclosure;
+ * the repo already carries the disclosure pattern. If this test ever
+ * silently loses effectiveness after a toolchain change, re-run the
+ * objdump gate first.
+ *
  * quality_level BETA: new-design exciter, no field validation yet.
  * @endparblock
  */

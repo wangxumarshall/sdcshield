@@ -144,6 +144,23 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               GPS 标签族 32 位偏移重设计
                                                #               后 1b 波跟进）
                                                #               → 0102 主机实测 588/698/702。
+                                               #   11-26 GPS 标签族 1b 波首件 gps_l2 三档
+                                               #               （16 位 byte_off 256k 档溢出→
+                                               #               32 位偏移档族自有格式，弃补码
+                                               #               校验位换宽度）→ 591/701/705。
+                                               #   11-26 1b 波 k 系六族 18 件 24 id
+                                               #               （k4gap/k4bgap/k5far/
+                                               #               k5inter_rand/k2pureload 各三档
+                                               #               + k7pattern 一文件三测试×3 档；
+                                               #               k2pureload/k7p_hiham 全核含 179
+                                               #               病核两次整机复位→0102 验证协议
+                                               #               =offline 179 后 24/24 pass）→
+                                               #               615/725/729。
+                                               #   11-26 k3res_l2 三档收官（判别格底盘
+                                               #               的 L2 版，rowmajor 谱系 19/19 族
+                                               #               齐；scalar-golden 门+179-offline
+                                               #               全核三档 pass）→ 0102 主机实测
+                                               #               618/728/732。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

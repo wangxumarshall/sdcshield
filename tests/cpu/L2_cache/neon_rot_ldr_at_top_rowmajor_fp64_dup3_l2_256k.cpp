@@ -5,7 +5,7 @@
  *
  * @test @b neon_rot_ldr_at_top_rowmajor_fp64_dup3_l2_256k
  * @parblock
- * L2-resident tier 128KB of neon_rot_ldr_at_top_rowmajor_fp64_dup3
+ * L2-resident tier 256KB of neon_rot_ldr_at_top_rowmajor_fp64_dup3
  * (2026-11-26, user directive: the input block size is a coupling axis
  * — the effective window is >64KB and <512KB, L2-resident — so the
  * rowmajor champion subfamily gets L2-sized input blocks; these L2
@@ -262,7 +262,7 @@ static int neon_rot_ldr_at_top_rowmajor_fp64_dup3_l2_256k_run(struct test *test,
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_fp64_dup3_l2_256k, "L2-resident tier 128KB of fp64_dup3: ALU-multi-sourcing axis preserved (same (a,b) computed three times per element, rotating slot per repetition — CSE-proof, one store per repetition with dst last, all repetition buffers golden-checked), sliding-window geometry transplanted; scalar goldens on NaN-free, zero-canonicalized inputs over the full window (ARM64)")
+DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_fp64_dup3_l2_256k, "L2-resident tier 256KB of fp64_dup3: ALU-multi-sourcing axis preserved (same (a,b) computed three times per element, rotating slot per repetition — CSE-proof, one store per repetition with dst last, all repetition buffers golden-checked), sliding-window geometry transplanted; scalar goldens on NaN-free, zero-canonicalized inputs over the full window (ARM64)")
     .test_init    = neon_rot_ldr_at_top_rowmajor_fp64_dup3_l2_256k_init,
     .test_run     = neon_rot_ldr_at_top_rowmajor_fp64_dup3_l2_256k_run,
     .test_cleanup = neon_rot_ldr_at_top_rowmajor_fp64_dup3_l2_256k_cleanup,

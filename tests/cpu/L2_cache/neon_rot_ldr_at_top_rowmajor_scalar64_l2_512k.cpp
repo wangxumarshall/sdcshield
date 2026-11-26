@@ -5,7 +5,7 @@
  *
  * @test @b neon_rot_ldr_at_top_rowmajor_scalar64_l2_512k
  * @parblock
- * L2-resident tier 128KB of neon_rot_ldr_at_top_rowmajor_scalar64
+ * L2-resident tier 512KB of neon_rot_ldr_at_top_rowmajor_scalar64
  * (2026-11-26, user directive: the input block size is a coupling axis
  * — the effective window is >64KB and <512KB, L2-resident — so the
  * rowmajor champion subfamily gets L2-sized input blocks; these L2
@@ -169,7 +169,7 @@ static int scalar64_l2_512k_cleanup(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_scalar64_l2_512k, "L2-resident tier 128KB of scalar64: scalar-64b chassis preserved (asm X-reg ldr/str, 8B elements — tier counts doubled: 16384/32768/65536), sliding-window geometry transplanted (8-element 64B-aligned offset granularity, 0x5A dst poison, slice memcmp vs full-window scalar golden) (ARM64)")
+DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_scalar64_l2_512k, "L2-resident tier 512KB of scalar64: scalar-64b chassis preserved (asm X-reg ldr/str, 8B elements — tier counts doubled: 16384/32768/65536), sliding-window geometry transplanted (8-element 64B-aligned offset granularity, 0x5A dst poison, slice memcmp vs full-window scalar golden) (ARM64)")
     .test_init    = scalar64_l2_512k_init,
     .test_run     = scalar64_l2_512k_run,
     .test_cleanup = scalar64_l2_512k_cleanup,

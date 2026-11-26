@@ -5,7 +5,7 @@
  *
  * @test @b neon_rot_ldr_at_top_rowmajor_str3_checkall_l2_512k
  * @parblock
- * L2-resident tier 128KB of neon_rot_ldr_at_top_rowmajor_str3_checkall
+ * L2-resident tier 512KB of neon_rot_ldr_at_top_rowmajor_str3_checkall
  * (2026-11-26, user directive: the input block size is a coupling axis
  * — the effective window is >64KB and <512KB, L2-resident — so the
  * rowmajor champion subfamily gets L2-sized input blocks; these L2
@@ -319,7 +319,7 @@ static int str3_checkall_l2_512k_cleanup(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_str3_checkall_l2_512k, "L2-resident tier 128KB of str3_checkall: store-slot classification axis preserved (3 ldr + rot ALU + 3 str of same res to temp/junk/dst, per-sweep 3-way slice memcmp + per-index slot_mask scan + binary records with window_off), sliding-window geometry transplanted (ARM64)")
+DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_str3_checkall_l2_512k, "L2-resident tier 512KB of str3_checkall: store-slot classification axis preserved (3 ldr + rot ALU + 3 str of same res to temp/junk/dst, per-sweep 3-way slice memcmp + per-index slot_mask scan + binary records with window_off), sliding-window geometry transplanted (ARM64)")
     .test_init    = str3_checkall_l2_512k_init,
     .test_run     = str3_checkall_l2_512k_run,
     .test_cleanup = str3_checkall_l2_512k_cleanup,

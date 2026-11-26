@@ -5,7 +5,7 @@
  *
  * @test @b neon_rot_ldr_at_top_rowmajor_gps_l2_256k
  * @parblock
- * L2-resident tier 128KB of neon_rot_ldr_at_top_rowmajor_gps
+ * L2-resident tier 256KB of neon_rot_ldr_at_top_rowmajor_gps
  * (2026-11-26, user directive: the input block size is a coupling axis
  * — the effective window is >64KB and <512KB, L2-resident — so the
  * rowmajor champion subfamily gets L2-sized input blocks; these L2
@@ -214,7 +214,7 @@ static int gps_l2_256k_cleanup(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_gps_l2_256k, "L2-resident tier 128KB of the GPS chassis: tagged fill (32-bit-offset tag format — this family's own, complement field dropped) + read-side chassis preserved (scratch dead ldr + 2-src asm loads + rot ALU + bb str/str), sliding-window geometry transplanted; field-graft slice dump on fail (ARM64)")
+DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_gps_l2_256k, "L2-resident tier 256KB of the GPS chassis: tagged fill (32-bit-offset tag format — this family's own, complement field dropped) + read-side chassis preserved (scratch dead ldr + 2-src asm loads + rot ALU + bb str/str), sliding-window geometry transplanted; field-graft slice dump on fail (ARM64)")
     .test_init    = gps_l2_256k_init,
     .test_run     = gps_l2_256k_run,
     .test_cleanup = gps_l2_256k_cleanup,

@@ -5,7 +5,7 @@
  *
  * @test @b neon_rot_ldr_at_top_rowmajor_dump_l2_256k
  * @parblock
- * L2-resident tier 128KB of neon_rot_ldr_at_top_rowmajor_dump
+ * L2-resident tier 256KB of neon_rot_ldr_at_top_rowmajor_dump
  * (2026-11-26, user directive: the input block size is a coupling axis
  * — the effective window is >64KB and <512KB, L2-resident — so the
  * rowmajor champion subfamily gets L2-sized input blocks; these L2
@@ -255,7 +255,7 @@ static int neon_rot_ldr_at_top_rowmajor_dump_l2_256k_cleanup(struct test *test) 
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_dump_l2_256k, "L2-resident tier 128KB of rowmajor_dump: integer read-side chassis preserved (scratch dead ldr + 2-src asm loads + rot ALU + bb str/str), sliding-window geometry transplanted; on fail logs srcA/srcB/exp/act/xor + sweep_dir + window_off per index + binary records (load- vs ALU-error and address-local vs sweep-seam classification) (ARM64)")
+DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_dump_l2_256k, "L2-resident tier 256KB of rowmajor_dump: integer read-side chassis preserved (scratch dead ldr + 2-src asm loads + rot ALU + bb str/str), sliding-window geometry transplanted; on fail logs srcA/srcB/exp/act/xor + sweep_dir + window_off per index + binary records (load- vs ALU-error and address-local vs sweep-seam classification) (ARM64)")
     .test_init    = neon_rot_ldr_at_top_rowmajor_dump_l2_256k_init,
     .test_run     = neon_rot_ldr_at_top_rowmajor_dump_l2_256k_run,
     .test_cleanup = neon_rot_ldr_at_top_rowmajor_dump_l2_256k_cleanup,

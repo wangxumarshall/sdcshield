@@ -5,7 +5,7 @@
  *
  * @test @b neon_rot_ldr_at_top_rowmajor_dualcmp_l2_512k
  * @parblock
- * L2-resident tier 128KB of neon_rot_ldr_at_top_rowmajor_dualcmp
+ * L2-resident tier 512KB of neon_rot_ldr_at_top_rowmajor_dualcmp
  * (2026-11-26, user directive: the input block size is a coupling axis
  * — the effective window is >64KB and <512KB, L2-resident — so the
  * rowmajor champion subfamily gets L2-sized input blocks; these L2
@@ -243,7 +243,7 @@ static int dualcmp_l2_512k_cleanup(struct test *test) {
     return EXIT_SUCCESS;
 }
 
-DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_dualcmp_l2_512k, "L2-resident tier 128KB of dualcmp: integer read-side chassis preserved (scratch dead ldr + 2-src asm loads + rot ALU + bb str/str), sliding-window geometry transplanted; dual-store cold-path classifier (A_only/B_only/divergent/same-wrong) + five-buffer slice dump, both store legs poisoned (ARM64)")
+DECLARE_TEST(neon_rot_ldr_at_top_rowmajor_dualcmp_l2_512k, "L2-resident tier 512KB of dualcmp: integer read-side chassis preserved (scratch dead ldr + 2-src asm loads + rot ALU + bb str/str), sliding-window geometry transplanted; dual-store cold-path classifier (A_only/B_only/divergent/same-wrong) + five-buffer slice dump, both store legs poisoned (ARM64)")
     .test_init    = dualcmp_l2_512k_init,
     .test_run     = dualcmp_l2_512k_run,
     .test_cleanup = dualcmp_l2_512k_cleanup,

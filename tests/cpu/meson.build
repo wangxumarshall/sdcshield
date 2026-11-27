@@ -1083,6 +1083,7 @@ if host_machine.cpu_family() == 'aarch64'
             'neon_memcpy_cache/mfence_pure_neon.cpp',
             'neon_memcpy_cache/memcpy0_neon.cpp',
             'neon_memcpy_cache/memcpy1_neon.cpp',
+            'neon_memcpy_cache/memcpy2_neon.cpp',
             'neon_memcpy_cache/memcpy_l1d_size_neon.cpp',
             'neon_memcpy_cache/memcpy_l2_cache_size_neon.cpp',
             'L3_cache_920/memcpy_l3_cache_size_neon.cpp',

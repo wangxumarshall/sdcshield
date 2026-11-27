@@ -439,6 +439,21 @@ for i in 0 1 2; do SANDSTONE_STRATEGY_INDEX=$i ./builddir/sdcshield -e memcpy_re
 
 **默认模式**（conf 缺席或部署机无源码树）——全核并行自适应：`block_size = clamp(MemAvailable×50% ÷ 线程数 ÷ 6, 64 KiB, 2 MiB)`、`producer_count = max(1, 核数/12)`（对齐原版参考参数 p 0..3 / c 0..47）；conf 存在但损坏/不可读仍然 loud skip。参考实测（Kunpeng 920 128 核，MemAvailable ≈ 22.5 GB）：默认模式 block_size 封顶 2 MiB、峰值 RSS ≈ 1.52 GiB 无 OOM；conf 三策略全核（`-t 3000`）三档均 `result: pass`。
 
+### `memcpy2_neon`：LSU/MMU 微架构压测（页尾跨页 + STLF + TLB 杀手）
+
+ARM64 专属（`tests/cpu/neon_memcpy_cache/`），怀疑面 LSU + MMU：大窗口非对齐 NEON 拷贝（4K..4 MiB 段、跨页锚定首向量）、紧窗口 STLF（窄写宽读 partial-forwarding 无分支模板 + 24 条 burst `str q` store-queue 背压）、周期 mprotect 热页翻转 + 同址重拷、MADV_DONTNEED PTE 拆除，以及独立的 `mmu` 子模式——LCG 全周期页置换序连续访问 4096 页、每页只做页尾跨页 32B RMW（chase/随机序每 sweep 轮换，THP 双保险），把 walk 密度从顺序拷贝的 ~十万/s 量级提到 M/s 量级，专攻 64K 页 L2 TLB/PTW。校验为字节级 oracle（1 MiB 基表 + epoch/cpu/块号密钥，消 1 MiB 混叠），观测通路 GPR `ldp` 与写侧 NEON `stp` 不对称化；失败日志含 16B 现场 + 128B 上下文 + pagemap PFN。
+
+单变量诊断与执行器环境变量（详见源码头注；战役级执行 `scripts/run/memcpy2_neon_repro.sh`，PMU 采样 `scripts/memcpy2_perf.sh`——事件按现场 `perf list` 探测，不存在打印 unavailable 不伪造）：
+
+| 变量 | 取值 | 作用 |
+|---|---|---|
+| `SDCSHIELD_MEMCPY2_MODE` | `all`（默认）/`copy`/`stlf`/`regen`/`protect`/`mmu` | 单变量子模式选择（mmu 独占迭代，不跑 copy/STLF） |
+| `SDCSHIELD_MEMCPY2_PAGE_SIZE` | `4096`/`32768`/`65536` | 覆盖几何页大小：在 4K 主机模拟 64K 跨页几何（pagemap 仍按真实页查） |
+| `SDCSHIELD_MEMCPY2_INJECT` | `source`/`destination`/`guard` | 检测器自检（默认关）：cpu 0 首次主拷贝注入一个脏字节，日志标 `SELFTEST-INJECTED` |
+| `SDCSHIELD_MEMCPY2_REGEN_EVERY` | 整数 ≥1（默认 64） | 每 N 迭代一次全区 MADV_DONTNEED（4.19 全局 mmap_sem 调频旋钮） |
+| `SDCSHIELD_MEMCPY2_PROT_EVERY` | 整数 ≥1（默认 64） | 每 N 迭代一次 mprotect 热页翻转 + 同址重拷 |
+| `SDCSHIELD_MEMCPY2_STATS` | 文件路径 | 每 worker 追加一行覆盖率（迭代/字节/跨页/锚定/regen/protect/mmu_sweeps/mmu_pages） |
+
 ## 运行测试
 
 ```console

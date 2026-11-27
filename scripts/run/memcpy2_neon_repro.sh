@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # memcpy2_neon 单次战役与确定性重放执行器。
-# 环境变量：MODE=all|copy|stlf|regen|protect DURATION=12h THREADS CPUSET SEED
+# 环境变量：MODE=all|copy|stlf|regen|protect|mmu DURATION=12h THREADS CPUSET SEED
 #           INJECT=source|destination|guard BIN LOGDIR SDCSHIELD_LD_LIBRARY_PATH
+#           SDCSHIELD_MEMCPY2_STATS（覆盖率导出文件；未设时导出到
+#           <run-dir>/stats.txt——不要依赖 -vv 日志兜底）
 # 命令：run（前台）、start/stop/status（后台）、replay <run-dir>（原环境重放）。
 set -uo pipefail
 
@@ -237,6 +239,12 @@ capture_metadata()
         printf 'source=%s\n' "$ROOT/tests/cpu/neon_memcpy_cache/memcpy2_neon.cpp"
         printf 'source_sha256='; sha256sum "$ROOT/tests/cpu/neon_memcpy_cache/memcpy2_neon.cpp" | cut -d' ' -f1
         printf 'script_sha256='; sha256sum "$SCRIPT" | cut -d' ' -f1
+        printf 'ras_mc_summary:\n'
+        if command -v ras-mc-ctl >/dev/null 2>&1; then
+            ras-mc-ctl --summary 2>&1 || true
+        else
+            printf 'unavailable\n'
+        fi
     } > "$RUN_DIR/metadata.txt"
     sha256sum "$BIN" | cut -d' ' -f1 > "$RUN_DIR/binary.sha256"
     lscpu > "$RUN_DIR/topology.txt" 2>&1 || true
@@ -369,6 +377,8 @@ supervise()
     [[ -z "$SEED" ]] || cmd+=(-s "$SEED")
 
     export SDCSHIELD_MEMCPY2_MODE=$MODE
+    # 覆盖率直接落盘（方案 P6）：外部已设则尊重原值（例如自定义聚合文件）。
+    export SDCSHIELD_MEMCPY2_STATS=${SDCSHIELD_MEMCPY2_STATS:-$RUN_DIR/stats.txt}
     if [[ -n "$INJECT" ]]; then
         export SDCSHIELD_MEMCPY2_INJECT=$INJECT
     else

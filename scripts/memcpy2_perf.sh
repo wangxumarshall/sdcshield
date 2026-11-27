@@ -3,6 +3,19 @@
 # 不存在的事件（例如很多 TSV110 专属事件在通用 PMUv3 主机上不存在）打印为
 # unavailable，绝不把不存在的 metric 当成"已测量"。
 #
+# 本机实测 ABSENT（2026-11-27 perf list，方案 §1.2，防止后人复用原建议的
+# "五组 perf 命令"里的不存在事件）：
+#   mem_stall_anyload / *_l1miss / *_l2miss, prf_req, hit_on_prf
+#       —— Neoverse N2/V2 系 IMPDEF，TSV110/通用 PMUv3 无；
+#   -M memory_bound / l1_bound / l2_bound / mem_bound / store_bound /
+#   machine_clears / nuke_flush / ooo_flush / saveopq_stall / sync_stall
+#       —— Intel TopDown 指标 / POWER 系事件名，非 ARM64 PMUv3 事件；
+#   l1d_cache_inval / l2d_cache_inval —— 非 PMUv3 标准事件；
+#   ld_spec / st_spec —— ARMv8 可选事件，本机通用 PMUv3 未实现（2026-11-27
+#       perf stat 实证 Bad event name，本机只有 inst_spec/op_spec）；
+#       920/TSV110 上应存在，现场探测为准。
+# 目标机（920/4.19）perf list 与开发机不同，一切以现场探测为准。
+#
 # 用法:
 #   scripts/memcpy2_perf.sh                 # 每组各起一个 10s 的 memcpy2_neon 采样
 #   scripts/memcpy2_perf.sh -t 30           # 每组 30s
@@ -68,13 +81,15 @@ run_group() {
 echo "target=${PID:-fresh memcpy2_neon per group} duration=${DUR}s mode=$MODE"
 echo "(events filtered by perf list; unavailable ones are reported, not faked)"
 
-g1=$(pick cycles instructions mem_access l1d_cache l1d_cache_refill l2d_cache_refill ll_cache_miss)
-g2=$(pick dtlb_walk l1d_tlb l2d_tlb l2d_tlb_refill remote_access memory_error)
-g3=$(pick alignment-faults minor-faults context-switches cpu-migrations)
+g1=$(pick cycles instructions ld_spec st_spec mem_access l1d_cache l1d_cache_refill l2d_cache_refill ll_cache_miss)
+# 组 2 拆 g2a/g2b（方案 P6）：每核 6 个通用计数器，9+ 事件会时分复用稀释；
+# 两组各 ≤6。软件事件（faults/migrations）并入对应组，原组 3 取消。
+g2a=$(pick dtlb_walk l1d_tlb_refill l2d_tlb_refill ttbr_write_retired exc_taken minor-faults)
+g2b=$(pick mem_access remote_access memory_error context-switches cpu-migrations alignment-faults)
 
-run_group "group 1: pipeline/L1-L3" "$g1"
-run_group "group 2: MMU/TLB + memory_error" "$g2"
-run_group "group 3: faults/migration (software)" "$g3"
+run_group "group 1: pipeline/L1-L3 (LSU 占空比 mem_access/inst_retired >=0.35)" "$g1"
+run_group "group 2a: MMU/TLB walk + exception/minor-faults" "$g2a"
+run_group "group 2b: mem_access/remote/memory_error + 软件事件" "$g2b"
 
 # Uncore 计数器挂在 SCCL/HHA/L3C 上，按本机实际 PMU 名称取；
 # 用户文档里常见的 back_invalid/retry_cpu/rw_chg 等 TSV110 事件在部分主机

@@ -482,6 +482,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/db_load_agu_pointer_chase.cpp',
             'misc/db_load_store_mixed_stress.cpp',
             'misc/db_load_stale_data_probe.cpp',
+            'misc/db_load_addr_zero_probe.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_dualcmp.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_dump.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_fp64_dump.cpp',

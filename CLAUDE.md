@@ -99,6 +99,15 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               × asm/intr 判别对 + adaptive_ldp_stp
                                                #               双引擎 54/27 组合，研究仓逐字节回迁）
                                                #               → 0102 主机 2026-11-25 实测 531/640/644。
+                                               #   +neon_920 17 件（11-26，分支快照 172 件去重后
+                                               #               main 缺失件：fmov L2 对照 4 + ma 基件 4 +
+                                               #               fmov_train droop/L2L3 3 + 写侧快检测器 3 +
+                                               #               fp64_dup2/3 2 + barrier v2（BETA）1，
+                                               #               逐字节回迁原位+注册；另前置修复 dele
+                                               #               (102891dd) 残留 sdc_fuzzing subdir 死引用）
+                                               #               → 本机（SVE1-256）2026-11-26 实测
+                                               #               744/756/764（迁移前基线 728/739/747；
+                                               #               0102 口径待该机复测）。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

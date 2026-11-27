@@ -116,6 +116,11 @@ tests_set_base.add(
         # clean EXIT_SKIP ("to be implemented (placeholder): ARM NEON required")
         # on non-aarch64 (x86-64 untouched).
         'load_port/load_port.cpp',
+        # bit-41 address-path SDC fast reproducer (issue #874, 950-machine
+        # campaign). NEON streaming RMW under #ifdef __aarch64__; the DECLARE_
+        # TEST is outside the guard, so the id registers on all arches and
+        # self-skips honestly on non-aarch64 (x86-64 untouched).
+        'misc/bit41_dram_stream_arm.cpp',
     )
 )
 

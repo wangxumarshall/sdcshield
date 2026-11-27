@@ -42,7 +42,11 @@
  *  自检；只在 framework cpu 0 的首次主拷贝注入，日志标 SELFTEST-INJECTED。
  *  SDCSHIELD_MEMCPY2_PAGE_SIZE=<4096|32768|65536> 覆盖几何页大小（默认
  *  sysconf），仅用于在 4K 主机上模拟 64K 页的 VA 跨页几何；pagemap 始终按
- *  真实页大小查询。
+ *  真实页大小查询。SDCSHIELD_MEMCPY2_REGEN_EVERY /
+ *  SDCSHIELD_MEMCPY2_PROT_EVERY（整数 >=1，默认 64/64）控制全区
+ *  MADV_DONTNEED 与 mprotect 热页翻转的外层迭代频率——4.19 全局 mmap_sem
+ *  下的调频旋钮，目标机 A/B 归因用。mprotect 翻转最近活跃拷贝页（非
+ *  scratch 冷区），翻转后同址重拷叠加热重填压力（方案 P5）。
  *
  *  DC ZVA/IVAC/CIVAC 在 init 用 SIGILL 探测；不可用只禁用对应子步。覆盖率
  *  必须用迭代、字节、跨页/锚定计数与系统调用计数描述，不能由 1 GiB VA 或
@@ -83,9 +87,15 @@ static constexpr unsigned MAX_SEG_N = 16;                    /* 每迭代段数�
 static constexpr unsigned MAX_MISALIGN = 16;
 static constexpr size_t GUARD = 64;
 
-/* 周期性动作按外层迭代计（不按 epoch：epoch 每段涨 2+，语义混淆且成本失控） */
-static constexpr uint64_t PROT_EVERY  = 16;   /* 每 16 次迭代翻转一次 mprotect */
-static constexpr uint64_t REGEN_EVERY = 4;    /* 每 4 次迭代全区 MADV_DONTNEED */
+/* 周期性动作按外层迭代计（不按 epoch：epoch 每段涨 2+，语义混淆且成本失控）。
+ * 4.19 目标机为全局 mmap_sem：频率必须受控（方案 P5）。默认 64 次迭代一
+ * 次；SDCSHIELD_MEMCPY2_REGEN_EVERY / SDCSHIELD_MEMCPY2_PROT_EVERY 可调
+ * （>=1），保留目标机 A/B 归因能力。DONTNEED 是刻意的 PTE 拆除激励源，
+ * env 是调频不是删除。 */
+static constexpr uint64_t PROT_EVERY_DEFAULT  = 64;
+static constexpr uint64_t REGEN_EVERY_DEFAULT = 64;
+static uint64_t g_prot_every  = PROT_EVERY_DEFAULT;
+static uint64_t g_regen_every = REGEN_EVERY_DEFAULT;
 
 static constexpr uint64_t GOLDEN  = 0x9e3779b97f4a7c15ULL;
 static constexpr uint64_t GOLDEN2 = 0xc2b2ae3d27d4eb4fULL;
@@ -341,6 +351,9 @@ struct worker_ctx {
     uint64_t iter;
     size_t segment;
     bool injected;
+    uint8_t *last_s;       /* 最近一次主拷贝（protect 热页翻转目标） */
+    uint8_t *last_d;
+    size_t   last_len;
     uint64_t segments;
     uint64_t copied_bytes;
     uint64_t cross_page_segments;
@@ -772,9 +785,6 @@ static bool do_stlf(worker_ctx &c, uint8_t *d, size_t seg_len, size_t len)
 /* 一个段：正反向各按五阶段校验；all 模式再叠 STLF。 */
 static bool do_segment(worker_ctx &c, size_t seg_len, bool with_stlf)
 {
-    uint8_t *last_d = nullptr;
-    size_t last_len = 0;
-
     auto one_copy = [&](bool reverse) -> bool {
         const placement ps = pick_placement();
         placement pd = pick_placement();
@@ -783,8 +793,9 @@ static bool do_segment(worker_ctx &c, size_t seg_len, bool with_stlf)
         const size_t len = seg_len / 2 + (size_t)(random64() % (seg_len / 2));
         uint8_t *s = place_at(c.src_base, ps);
         uint8_t *d = place_at(c.dst_base, pd);
-        last_d = d;
-        last_len = len;
+        c.last_s = s;
+        c.last_d = d;
+        c.last_len = len;
         const uint64_t copy_epoch = c.epoch;
         const uint64_t src_logical = logical_va(s);
         const uint8_t poison = (uint8_t)~((reverse ? 0x5A : 0xA5)
@@ -818,7 +829,7 @@ static bool do_segment(worker_ctx &c, size_t seg_len, bool with_stlf)
 
     if (!one_copy(false) || !one_copy(true))
         return false;
-    return with_stlf ? do_stlf(c, last_d, seg_len, last_len) : true;
+    return with_stlf ? do_stlf(c, c.last_d, seg_len, c.last_len) : true;
 }
 
 /* scratch 指令多样性：DC ZVA（按 256B 对齐刷 256B + 两侧哨兵不出界）、
@@ -977,6 +988,28 @@ static int memcpy2_init(struct test *test)
         return EXIT_FAILURE;
     }
 
+    /* 方案 P5：4.19 全局 mmap_sem 下的频率控制；env 保留目标机 A/B 归因。 */
+    if (const char *rv = std::getenv("SDCSHIELD_MEMCPY2_REGEN_EVERY")) {
+        char *end = nullptr;
+        const unsigned long long v = std::strtoull(rv, &end, 0);
+        if (!end || *end || v < 1) {
+            log_error("memcpy2_neon: SDCSHIELD_MEMCPY2_REGEN_EVERY must be "
+                      "an integer >= 1 (got '%s')", rv);
+            return EXIT_FAILURE;
+        }
+        g_regen_every = v;
+    }
+    if (const char *pv = std::getenv("SDCSHIELD_MEMCPY2_PROT_EVERY")) {
+        char *end = nullptr;
+        const unsigned long long v = std::strtoull(pv, &end, 0);
+        if (!end || *end || v < 1) {
+            log_error("memcpy2_neon: SDCSHIELD_MEMCPY2_PROT_EVERY must be "
+                      "an integer >= 1 (got '%s')", pv);
+            return EXIT_FAILURE;
+        }
+        g_prot_every = v;
+    }
+
     blob_init();
 
     g_have_dczva = el0_instruction_available([] {
@@ -989,9 +1022,11 @@ static int memcpy2_init(struct test *test)
         asm volatile("dc civac, %0" :: "r"(g_probe_buf) : "memory");
     });
     log_info("memcpy2_neon: mode=%s inject=%s page_size=%zu geom_page=%zu "
-             "DC_ZVA=%d DC_IVAC=%d DC_CIVAC=%d",
+             "DC_ZVA=%d DC_IVAC=%d DC_CIVAC=%d regen_every=%llu prot_every=%llu",
              mode_name(g_mode), g_inject == INJECT_NONE ? "none" : "enabled",
-             g_page_size, g_geom_page, g_have_dczva, g_have_ivac, g_have_civac);
+             g_page_size, g_geom_page, g_have_dczva, g_have_ivac, g_have_civac,
+             (unsigned long long)g_regen_every,
+             (unsigned long long)g_prot_every);
     return EXIT_SUCCESS;
 }
 
@@ -1066,35 +1101,55 @@ static int memcpy2_run(struct test *test, int cpu)
 
         c.segment = SIZE_MAX;
         if ((g_mode == MODE_ALL || g_mode == MODE_PROTECT) &&
-            c.iter % PROT_EVERY == 0) {
-            constexpr size_t protect_len = 1UL << 20;   /* 4K/16K/64K 均整除 */
-            const size_t fl_off = (size_t)(random64() % (SCRATCH_LEN - protect_len))
-                                & ~g_geom_mask;
-            uint8_t *fl = c.scratch + fl_off;
-            if (mprotect(fl, protect_len, PROT_READ) != 0) {
+            c.iter % g_prot_every == 0 && c.last_d) {
+            /* 热页翻转（方案 P5）：翻最近活跃拷贝页而非 scratch 冷区。
+             * 96 线程共享 mm 下任何 mprotect 的 TLBI 广播到全部核——
+             * 广播机制本身就是把 TLBI 注入并发 NEON 流的手段，翻热页
+             * 让广播命中的恰是正在拷贝的地址范围。按真实基页翻转
+             * [last_d-GUARD, last_d+len+GUARD) 覆盖的页（含 guard 两侧），
+             * 页数 = 段页数 + 2，受控且远小于旧版 1 MiB 固定冷区。 */
+            uint8_t *first = reinterpret_cast<uint8_t *>(
+                ((uintptr_t)c.last_d - GUARD) & ~(uintptr_t)(g_page_size - 1));
+            const uintptr_t end_raw = (uintptr_t)c.last_d + c.last_len + GUARD;
+            const uintptr_t end =
+                (end_raw + g_page_size - 1) & ~(uintptr_t)(g_page_size - 1);
+            const size_t flen = (size_t)(end - (uintptr_t)first);
+            if (mprotect(first, flen, PROT_READ) != 0) {
                 report_fail_msg("memcpy2_neon: INFRASTRUCTURE-ERROR "
-                                "stage=mprotect-read iter=%llu error=%s",
-                                (unsigned long long)c.iter, std::strerror(errno));
+                                "stage=mprotect-read iter=%llu len=%zu error=%s",
+                                (unsigned long long)c.iter, flen,
+                                std::strerror(errno));
                 ok = false;
                 break;
             }
             /* 只读状态下按真实页逐页触读：强制 TLBI 之后的 TLB 重填与 PTW
-             * 重播；恢复写权限前完成，避免这段 TLB 压力空转（合并自并发
-             * 会话的实现）。 */
-            for (size_t o = 0; o < protect_len; o += g_page_size) {
+             * 重播；恢复写权限前完成，避免这段 TLB 压力空转。 */
+            for (size_t o = 0; o < flen; o += g_page_size) {
                 uint8_t value = 0;
-                asm volatile("ldrb %w0, [%1]" : "=r"(value) : "r"(fl + o)
+                asm volatile("ldrb %w0, [%1]" : "=r"(value) : "r"(first + o)
                              : "memory");
                 (void)value;
             }
-            if (mprotect(fl, protect_len, PROT_READ | PROT_WRITE) != 0) {
+            if (mprotect(first, flen, PROT_READ | PROT_WRITE) != 0) {
                 report_fail_msg("memcpy2_neon: INFRASTRUCTURE-ERROR "
-                                "stage=mprotect-write iter=%llu error=%s",
-                                (unsigned long long)c.iter, std::strerror(errno));
+                                "stage=mprotect-write iter=%llu len=%zu error=%s",
+                                (unsigned long long)c.iter, flen,
+                                std::strerror(errno));
                 ok = false;
                 break;
             }
             ++c.protect_count;
+            /* 同址重拷：把 TLB 重填后的热页写读与新 fill+copy 流叠加。
+             * 新 epoch fill src（src 半区未被翻转）→ copy → 目的校验；
+             * guard 已由上一轮 do_segment 验过，本轮不动 guard。 */
+            const uint64_t recopy_epoch = c.epoch++;
+            const uint64_t src_logical = logical_va(c.last_s);
+            fill_pat(c.last_s, c.last_len, recopy_epoch, c.cpu);
+            neon_copy(c.last_d, c.last_s, c.last_len);
+            note_copy(c, c.last_s, c.last_d, c.last_len, false);
+            if (!check_data(c, recopy_epoch, c.last_d, src_logical, c.last_len,
+                            0, 0, "protect-recopy"))
+                ok = false;
         }
 
         if (g_mode == MODE_ALL && !do_scratch(c)) {
@@ -1103,7 +1158,7 @@ static int memcpy2_run(struct test *test, int cpu)
         }
 
         if ((g_mode == MODE_ALL || g_mode == MODE_REGEN) &&
-            c.iter % REGEN_EVERY == 0) {
+            c.iter % g_regen_every == 0) {
             if (madvise(region, c.region_len, MADV_DONTNEED) != 0) {
                 report_fail_msg("memcpy2_neon: INFRASTRUCTURE-ERROR stage=madvise "
                                 "iter=%llu error=%s", (unsigned long long)c.iter,

@@ -108,6 +108,13 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               → 本机（SVE1-256）2026-11-26 实测
                                                #               744/756/764（迁移前基线 728/739/747；
                                                #               0102 口径待该机复测）。
+                                               #   +L2_cache 整族 57 件 63 id（11-27，19 族 ×
+                                               #               128k/256k/512k L2 驻留扩展族逐字节
+                                               #               回迁+注册；恒等直通 9 + 1a 波 24 +
+                                               #               GPS 族 6 + k 系 24 id；0102 病核 179
+                                               #               协议随件头注）→ 本机（SVE1-256）
+                                               #               2026-11-27 实测 807/819/827（迁移前
+                                               #               744/756/764，+63 精确；0102 待复测）。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

@@ -281,4 +281,4 @@ vector/swizzle.cpp
 - 判据以**测试代码实际数据面**为准，不认残留 include：`memory-access` 8 件、`loop_check_m` 含 `arm_neon.h`/NEON 源码路径但实际标量，全部排除并记录理由；
 - `neon_copy`（共享头 `arm_add_neon_copy.h`）视同 NEON 数据面——`neon_memcpy_cache` 与 `L3_cache_920` 的 `*_neon` 双胞胎由此列入；
 - 修正记录：初扫 `\bv[a-z]+_` 判据漏掉 `vld1q/vst1q` 等含数字词干 intrinsic，曾漏 `flushed_memcpy_neon`/`movmskpspd` 等，本清单为修正后口径；
-- 本清单 2026-11-26 随 neon_920 运行清单包一并入库（原分支位置 docs/research/，main 已整体清除该目录，随包移至 tests/cpu/neon_920/ 自包含）；`L2_cache` 在分支侧为并行会话在途产物，清点时未收入本包——2026-11-27 该族整套（19 族 × 三档 57 件 63 id）已独立回迁 main（`tests/cpu/L2_cache/`），仍不在本清单 176 id 内；「分支快照 172 件镜像」中 main 缺失的 17 件已于 2026-11-26 逐字节回迁 main 原位（见本目录 README「形态」节）。
+- 本清单 2026-11-26 随 neon_920 运行清单包一并入库（原分支位置 docs/research/，main 已整体清除该目录，随包移至 tests/cpu/neon_920/ 自包含）；`L2_cache` 54 件在分支侧为并行会话在途产物，截至今日在 main 未迁移（不在本包）；「分支快照 172 件镜像」中 main 缺失的 17 件已同日逐字节回迁 main 原位（见本目录 README「形态」节）。

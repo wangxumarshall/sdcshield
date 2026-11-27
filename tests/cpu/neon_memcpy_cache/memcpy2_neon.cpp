@@ -37,8 +37,10 @@
  *  unavailable。重读/维护结果只作观测，不直接命名 LSU/TLB/cache/DRAM 根因。
  *  MADV_DONTNEED/mprotect 的系统调用错误属于基础设施错误，不是 SDC。
  *
- *  SDCSHIELD_MEMCPY2_MODE=all|copy|stlf|regen|protect（默认 all）用于单变量
- *  诊断。SDCSHIELD_MEMCPY2_INJECT=source|destination|guard 是默认关闭的检测器
+ *  SDCSHIELD_MEMCPY2_MODE=all|copy|stlf|regen|protect|mmu（默认 all）用于
+ *  单变量诊断；mmu 模式只跑页置换页尾跨页 RMW 扫描（TLB/PTW 压力，
+ *  见 do_mmu），不跑 copy/STLF/scratch。SDCSHIELD_MEMCPY2_INJECT=source|
+ *  destination|guard 是默认关闭的检测器
  *  自检；只在 framework cpu 0 的首次主拷贝注入，日志标 SELFTEST-INJECTED。
  *  SDCSHIELD_MEMCPY2_PAGE_SIZE=<4096|32768|65536> 覆盖几何页大小（默认
  *  sysconf），仅用于在 4K 主机上模拟 64K 页的 VA 跨页几何；pagemap 始终按
@@ -70,6 +72,7 @@
 #include <sched.h>
 #include <string>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 
 using arm_add_neon::neon_copy;
@@ -107,7 +110,8 @@ static bool   g_have_dczva;      /* DC ZVA @ EL0 (SCTLR_EL1.DZE) */
 static bool   g_have_civac;      /* DC CIVAC @ EL0 (SCTLR_EL1.UCI) */
 static bool   g_have_ivac;       /* DC IVAC @ EL0 (UCI；不回写，triage 优先) */
 
-enum run_mode { MODE_ALL, MODE_COPY, MODE_STLF, MODE_REGEN, MODE_PROTECT };
+enum run_mode { MODE_ALL, MODE_COPY, MODE_STLF, MODE_REGEN, MODE_PROTECT,
+               MODE_MMU };
 enum inject_mode { INJECT_NONE, INJECT_SOURCE, INJECT_DESTINATION, INJECT_GUARD };
 static run_mode g_mode = MODE_ALL;
 static inject_mode g_inject = INJECT_NONE;
@@ -360,6 +364,13 @@ struct worker_ctx {
     uint64_t anchored_segments;
     uint64_t regen_count;
     uint64_t protect_count;
+    uint64_t mmu_sweeps;
+    uint64_t mmu_pages;
+    uint8_t *mmu_scan;    /* mmu 扫描基址：per worker 首次选定后固定 */
+    unsigned mmu_mis;     /* mmu 页尾撕裂偏移：per worker 固定（1..15）。
+                           * 跨页 RMW 窗口位置必须跨 sweep 恒定，否则上轮
+                           * 越页写的页首数据与本轮读窗口错位（确定性误
+                           * 报）；96 worker 各自随机即覆盖 15 种撕裂点。 */
 };
 
 static const char *mode_name(run_mode mode)
@@ -369,6 +380,7 @@ static const char *mode_name(run_mode mode)
         case MODE_STLF: return "stlf";
         case MODE_REGEN: return "regen";
         case MODE_PROTECT: return "protect";
+        case MODE_MMU: return "mmu";
         default: return "all";
     }
 }
@@ -1111,9 +1123,10 @@ static int memcpy2_init(struct test *test)
         else if (!std::strcmp(mode, "stlf")) g_mode = MODE_STLF;
         else if (!std::strcmp(mode, "regen")) g_mode = MODE_REGEN;
         else if (!std::strcmp(mode, "protect")) g_mode = MODE_PROTECT;
+        else if (!std::strcmp(mode, "mmu")) g_mode = MODE_MMU;
         else {
             log_error("memcpy2_neon: SDCSHIELD_MEMCPY2_MODE must be "
-                      "all|copy|stlf|regen|protect (got '%s')", mode);
+                      "all|copy|stlf|regen|protect|mmu (got '%s')", mode);
             return EXIT_FAILURE;
         }
     }
@@ -1127,11 +1140,19 @@ static int memcpy2_init(struct test *test)
             return EXIT_FAILURE;
         }
     }
-    if (g_inject != INJECT_NONE && g_mode == MODE_STLF) {
+    if (g_inject != INJECT_NONE &&
+        (g_mode == MODE_STLF || g_mode == MODE_MMU)) {
         log_error("memcpy2_neon: fault-injection selftest requires "
-                  "all/copy/regen/protect mode");
+                  "all/copy/regen/protect mode (no main copy in stlf/mmu)");
         return EXIT_FAILURE;
     }
+
+    /* 方案 P4 THP 双保险之一：test 独立 fork 子进程内禁 THP，不污染其他
+     * 用例。64K 页系统 THP 为 PMD 级，一旦合并 1 个 TLB 项顶 8192 基页，
+     * mmu 子模式的 TLB 压力蒸发。失败仅退化（madvise 仍是第二层）。 */
+    if (prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0) != 0)
+        log_info("memcpy2_neon: PR_SET_THP_DISABLE failed: %s "
+                 "(mmu THP 防护退化为 madvise 单保险)", std::strerror(errno));
 
     /* 方案 P5：4.19 全局 mmap_sem 下的频率控制；env 保留目标机 A/B 归因。 */
     if (const char *rv = std::getenv("SDCSHIELD_MEMCPY2_REGEN_EVERY")) {
@@ -1175,6 +1196,115 @@ static int memcpy2_init(struct test *test)
     return EXIT_SUCCESS;
 }
 
+/* ---- P4：mmu 模式——64K 页 TLB/PTW 杀手（方案 §3 P4）----
+ * 顺序拷贝每 64K 页 ~4096 条访存共享 1 个 TLB 项，walk 生成率被稀释
+ * ~1000×（拷贝速率/64K ≈ 十万级/秒 vs 原型页置换 128M touches/s）。本模
+ * 式每页只触碰页尾跨页 32B（[page_end-mis, page_end-mis+32)，mis∈[1,15]，
+ * 撕裂跨页 17..31B -> 每页 2 次 TLB 查找），连续遍历 MMU_PAGES 页
+ * （4K 主机 16 MiB / 64K 主机 256 MiB = 「L2 TLB 1024 项」假设的 4× 覆盖）。
+ * 页序用全周期 LCG 置换（模 2^12：C 奇、A≡5 mod 8 ⊂ ≡1 mod 4；零存储
+ * 零重排，epoch 派生 A/C 每轮新序，框架 RNG 可重放）。chase/随机序每
+ * sweep 轮换：chase 把 next 页号嵌在页值低 32 位经 load 数据传递
+ * （load-to-load 串行依赖链，防 MLP 掩蔽 walk，原型 58.8M/s）；随机序
+ * 连续推 LCG 无访存依赖，靠容量压 TLB（原型 128M/s）。
+ * 值 = mix64(page_idx*GOLDEN ^ epoch) 链式派生 32B；RMW = 读校验上
+ * 一 sweep 写入值 -> 写本 sweep 值（同址页尾 stp 恰在 ldp 后，附带
+ * store-to-load 窗口）。THP 双保险（缺一整个子模式失效：64K 页系统
+ * THP 为 PMD 级，一旦合并 1 个 TLB 项顶 8192 基页，压力蒸发）：init
+ * prctl(PR_SET_THP_DISABLE) + 每 sweep madvise(MADV_NOHUGEPAGE)。 */
+static constexpr size_t MMU_PAGES = 4096;   /* 2^12：LCG 全周期要求 2 的幂 */
+
+static bool do_mmu(worker_ctx &c, bool chase)
+{
+    const uint64_t epoch = c.epoch++;
+    const size_t page = g_page_size;
+    const size_t scan_len = (MMU_PAGES + 1) * page;   /* +1 页 guard：页尾跨页写 */
+    /* 基址 per worker 固定（首次随机选定后缓存）：RMW 校验语义要求连续
+     * sweep 命中同一物理页集（换基址会在 zero-page 上误报）；walk 密度
+     * 由每 sweep MMU_PAGES 页 x 页尾跨页双查找决定，基址轮换无增益。 */
+    if (!c.mmu_scan) {
+        const size_t avail = REGION_HALF - scan_len;
+        c.mmu_scan = c.dst_base
+                   + (size_t)(random64() % (avail / page + 1)) * page;
+        c.mmu_mis = 1u + (unsigned)(random64() % 15u);
+        if (madvise(c.mmu_scan, scan_len, MADV_NOHUGEPAGE) != 0) {
+            /* 失败只减 TLB 压力不算基础设施错误（init prctl 仍是第一层保险） */
+            log_info("memcpy2_neon: mmu madvise(NOHUGEPAGE) failed: %s",
+                     std::strerror(errno));
+        }
+    }
+    uint8_t *scan = c.mmu_scan;
+    const uint32_t Am = 5u + 8u * (uint32_t)(mix64(epoch * GOLDEN) & 0x1FFu);
+    const uint32_t Cm = (uint32_t)(mix64(epoch * GOLDEN2) | 1u) & 0xFFFu;
+    const bool init = c.mmu_sweeps == 0;
+    const uint64_t exp_epoch = epoch - 1;   /* 上一 sweep 写入值（init 时下溢，不校验） */
+    /* 上一 sweep（exp_epoch）的链参数：页值低 32 位统一嵌链 next =
+     * f_exp(cur)——chase/随机序两形态值格式一致（chase 写链 rand 校验
+     * 链均可重算），rand 形态附带链结构自检（检测面更大）。 */
+    const uint32_t eAm = 5u + 8u * (uint32_t)(mix64(exp_epoch * GOLDEN) & 0x1FFu);
+    const uint32_t eCm = (uint32_t)(mix64(exp_epoch * GOLDEN2) | 1u) & 0xFFFu;
+    uint32_t cur = (uint32_t)(mix64(epoch ^ GOLDEN2) & (MMU_PAGES - 1));
+
+    for (size_t k = 0; k < MMU_PAGES; ++k) {
+        if (!chase)
+            cur = (cur * Am + Cm) & (uint32_t)(MMU_PAGES - 1);
+        const uint32_t next = (cur * Am + Cm) & (uint32_t)(MMU_PAGES - 1);
+        const uint32_t exp_next = (cur * eAm + eCm) & (uint32_t)(MMU_PAGES - 1);
+        uint8_t *pg = scan + (size_t)cur * page;
+        const unsigned mis = c.mmu_mis;
+        uint8_t *p = pg + page - mis;
+
+        const uint64_t e0o = mix64((uint64_t)cur * GOLDEN ^ exp_epoch);
+        const uint64_t e0 = (e0o & 0xFFFFFFFF00000000ULL) | exp_next;
+        const uint64_t e1 = mix64(e0o), e2 = mix64(e1), e3 = mix64(e2);
+
+        /* 页尾跨页 32B 撕裂读（ldp q,q 128b；%q 修饰符取 V 寄存器的
+         * q 视图）；校验经 mov x,v.d[] 搬 GPR eor/cmp（观测通路不对称
+         * 化同 P1b 原则）。 */
+        uint8x16_t q0v, q1v;
+        asm volatile("ldp %q0, %q1, [%2]" : "=w"(q0v), "=w"(q1v)
+                     : "r"(p) : "memory");
+        const uint64x2_t d0 = vreinterpretq_u64_u8(q0v);
+        const uint64x2_t d1 = vreinterpretq_u64_u8(q1v);
+        const uint64_t r0 = vgetq_lane_u64(d0, 0), r1 = vgetq_lane_u64(d0, 1);
+        const uint64_t r2 = vgetq_lane_u64(d1, 0), r3 = vgetq_lane_u64(d1, 1);
+        if (!init) {
+            if (((r0 ^ e0) | (r1 ^ e1) | (r2 ^ e2) | (r3 ^ e3)) != 0) {
+                const uint64_t rr[4] = { r0, r1, r2, r3 };
+                const uint64_t ee[4] = { e0, e1, e2, e3 };
+                for (unsigned w = 0; w < 4; ++w)
+                    for (unsigned b = 0; b < 8; ++b) {
+                        const uint8_t gb = (uint8_t)(rr[w] >> (8u * b));
+                        const uint8_t wb = (uint8_t)(ee[w] >> (8u * b));
+                        if (gb != wb) {
+                            report_mismatch(c, exp_epoch, p, w * 8 + b,
+                                            logical_va(p), 32, 0, 0,
+                                            chase ? "mmu-chase" : "mmu-rand",
+                                            nullptr, gb, wb);
+                        }
+                    }
+                return false;
+            }
+        }
+        /* RMW：同址页尾写本 sweep 值（v0 低 32 位嵌本轮链 next，
+         * 与读校验格式统一）。 */
+        uint64_t w0 = mix64((uint64_t)cur * GOLDEN ^ epoch);
+        const uint64_t w1 = mix64(w0), w2 = mix64(w1), w3 = mix64(w2);
+        w0 = (w0 & 0xFFFFFFFF00000000ULL) | next;
+        asm volatile("stp %q0, %q1, [%2]"
+                     :: "w"(vreinterpretq_u8_u64(vcombine_u64(
+                               vcreate_u64(w0), vcreate_u64(w1)))),
+                        "w"(vreinterpretq_u8_u64(vcombine_u64(
+                               vcreate_u64(w2), vcreate_u64(w3)))),
+                        "r"(p) : "memory");
+        if (chase)
+            cur = init ? next : (uint32_t)r0;  /* init 数据无链，纯函数推进 */
+        ++c.mmu_pages;
+    }
+    ++c.mmu_sweeps;
+    return true;
+}
+
 /* pass 运行默认不保留 INFO 日志，覆盖率必须能被执行器留存：
  * SDCSHIELD_MEMCPY2_STATS=<file> 时每 worker 追加一行（O_APPEND 跨线程安全）。 */
 static void emit_coverage(const worker_ctx &c)
@@ -1187,13 +1317,14 @@ static void emit_coverage(const worker_ctx &c)
         return;
     dprintf(fd, "mode=%s cfg_cpu=%d os_cpu=%d iter=%llu copies=%llu bytes=%llu "
                 "cross_page=%llu anchored=%llu regen=%llu protect=%llu "
-                "geom_page=%zu\n",
+                "mmu_sweeps=%llu mmu_pages=%llu geom_page=%zu\n",
             mode_name(g_mode), c.cpu, device_info[c.cpu].cpu_number,
             (unsigned long long)c.iter, (unsigned long long)c.segments,
             (unsigned long long)c.copied_bytes,
             (unsigned long long)c.cross_page_segments,
             (unsigned long long)c.anchored_segments,
             (unsigned long long)c.regen_count, (unsigned long long)c.protect_count,
+            (unsigned long long)c.mmu_sweeps, (unsigned long long)c.mmu_pages,
             g_geom_page);
     close(fd);
 }
@@ -1228,6 +1359,15 @@ static int memcpy2_run(struct test *test, int cpu)
     bool ok = true;
     do {
         ++c.iter;
+        if (g_mode == MODE_MMU) {
+            /* 方案 P4：mmu 独占迭代——只跑页置换页尾跨页 RMW 扫描，
+             * 不做 copy/STLF/scratch/regen/protect。chase/随机序每
+             * sweep 轮换。 */
+            ok = do_mmu(c, (c.mmu_sweeps & 1u) == 0);
+            if (!ok)
+                break;
+            continue;
+        }
         const unsigned k = 1 + (unsigned)(random64() % MAX_SEG_N);
         for (unsigned si = 0; si < k && ok; ++si) {
             c.segment = si;

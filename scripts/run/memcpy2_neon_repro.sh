@@ -30,9 +30,11 @@ usage()
   scripts/run/memcpy2_neon_repro.sh replay <run-dir>
 
 默认 MODE=all DURATION=12h，使用全部可用 CPU。THREADS/CPUSET/SEED/INJECT
-均可显式指定。replay 保留原参数，不自动缩减核心数。结果分类为 pass、
-mismatch、selftest、infrastructure、timeout、crash、oom、skip 或 incomplete；
-mismatch 只是数据异常候选，不直接等同于硬件 SDC。
+均可显式指定；MODE 可取 all/copy/stlf/regen/protect/mmu（mmu 为页置换
+页尾跨页 RMW 扫描，专打 64K 页 TLB/PTW）。replay 保留原参数，不自动
+缩减核心数。结果分类为 pass、mismatch、selftest、infrastructure、
+timeout、crash、oom、skip 或 incomplete；mismatch 只是数据异常候选，
+不直接等同于硬件 SDC。
 EOF
 }
 
@@ -57,10 +59,12 @@ PY
 
 validate_config()
 {
-    case "$MODE" in all|copy|stlf|regen|protect) ;; *) die "无效 MODE=$MODE" ;; esac
+    case "$MODE" in all|copy|stlf|regen|protect|mmu) ;; *) die "无效 MODE=$MODE" ;; esac
     case "$INJECT" in ''|source|destination|guard) ;; *) die "无效 INJECT=$INJECT" ;; esac
     [[ "$MODE $INJECT" != "stlf source" && "$MODE $INJECT" != "stlf destination" &&
-       "$MODE $INJECT" != "stlf guard" ]] || die "stlf 模式不支持主拷贝注入"
+       "$MODE $INJECT" != "stlf guard" && "$MODE $INJECT" != "mmu source" &&
+       "$MODE $INJECT" != "mmu destination" && "$MODE $INJECT" != "mmu guard" ]] \
+        || die "stlf/mmu 模式不支持主拷贝注入"
     duration_seconds "$DURATION" >/dev/null || die "无效 DURATION=$DURATION"
     [[ "$THREADS" =~ ^[0-9]*$ ]] || die "THREADS 必须为非负整数"
     [[ -x "$BIN" ]] || die "二进制不可执行：$BIN"

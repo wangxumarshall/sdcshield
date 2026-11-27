@@ -115,6 +115,11 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               协议随件头注）→ 本机（SVE1-256）
                                                #               2026-11-27 实测 807/819/827（迁移前
                                                #               744/756/764，+63 精确；0102 待复测）。
+                                               #   +bit41_dram_stream_arm（11-27，issue #874：
+                                               #               950 机 bit-41 地址通路 SDC 复现器，
+                                               #               全核流式 RMW 4MiB/线程 + 冷校验）
+                                               #               → 本机（SVE1-256）2026-11-27 实测
+                                               #               808/820/828。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

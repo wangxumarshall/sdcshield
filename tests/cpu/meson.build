@@ -366,6 +366,19 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/neon_rot_ldr_at_top_rowmajor_strfwd.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_waw2str.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_dstr4.cpp',
+            # L2_cache/ —— 2026-11-26 分支 L2 驻留族回迁（2026-11-27 落 main）：
+            # 19 族 × 128k/256k/512k 三档（block=档位、WIN=2×、每 sweep 随机
+            # 64B 对齐共享偏移滑窗 + 0x5A 污染；标量全窗金身或 src-窗口
+            # memcmp），纯 NEON/标量数据面。恒等直通三族（写侧快检测器 L2 版）：
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_strfwd_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_strfwd_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_strfwd_l2_512k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_waw2str_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_waw2str_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_waw2str_l2_512k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_dstr4_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_dstr4_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_dstr4_l2_512k.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k7pattern.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k3res.cpp',

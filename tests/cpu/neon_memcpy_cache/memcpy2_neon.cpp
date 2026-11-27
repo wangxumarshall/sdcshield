@@ -622,68 +622,213 @@ static inline uint8_t *place_at(uint8_t *base, const placement &p)
     return base + p.off + (p.anchor ? (g_geom_page - p.mis) : p.mis);
 }
 
-/* partial-STLF：对同一 16B 区域做 2..4 条错位窄写（strb/strh/str，写入新
- * epoch 值），随后不等任何校验立即 ldp 宽读，专打 store-buffer 合并/转发
- * 掩码。读回按"被写位置=新 epoch、其余=拷贝 epoch"逐字节核对。本步会改变
- * 该 16B 区域内容，故必须在全段校验之后调用。 */
+/* partial-STLF 模板化（方案 P3）。
+ * 热序列（store->load 转发窗口）约束：零分支、零栈访存——
+ *   vst1q_u8（init 由 w0/w1 纯寄存器构造，vcombine）-> 固定组合窄写
+ *   （strb/strh/str 立即数偏移，1..2 条）-> ldp 16B。
+ * 模板选择（random64()%6 取表项）、窄写值、期望构造、burst 基址全部在
+ * 序列外预计算，经函数指针进入热序列（原型 /tmp/m2proto 实测 58.07M
+ * probes/s；旧版 switch+栈数组 ops 的数据依赖分支会把探针落在 store
+ * buffer 已排空之后）。burst 变体：24 条背景 str q 跨 12 行挤占 store
+ * queue（1/2 概率、窗口放得下时），原型实测速率降至 1/3.3——队列
+ * 真实满载的行为学证据。窄写值写入新 epoch 值，读回按"被写位置=新值、
+ * 其余=init"逐字节核对。本步会改变该 16B 区域与 burst 区内容，故必须
+ * 在全段校验之后调用。 */
+struct stlf_tmpl {
+    __uint128_t (*fn)(uint8_t *p, uint64_t w0, uint64_t w1, uint64_t v0,
+                      uint64_t v1);
+    unsigned nw;
+    unsigned o[2];
+    unsigned width[2];
+};
+
+static __uint128_t stlf_t0(uint8_t *p, uint64_t w0, uint64_t w1, uint64_t v0,
+                           uint64_t v1)
+{
+    (void)v1;
+    const uint64x2_t vi = vcombine_u64(vcreate_u64(w0), vcreate_u64(w1));
+    vst1q_u8(p, vreinterpretq_u8_u64(vi));
+    asm volatile("strb %w0, [%1, #3]" :: "r"((unsigned)v0), "r"(p)
+                 : "memory");
+    uint64_t a = 0, b = 0;
+    asm volatile("ldp %0, %1, [%2]" : "=r"(a), "=r"(b) : "r"(p) : "memory");
+    return ((__uint128_t)b << 64) | a;
+}
+
+static __uint128_t stlf_t1(uint8_t *p, uint64_t w0, uint64_t w1, uint64_t v0,
+                           uint64_t v1)
+{
+    (void)v1;
+    const uint64x2_t vi = vcombine_u64(vcreate_u64(w0), vcreate_u64(w1));
+    vst1q_u8(p, vreinterpretq_u8_u64(vi));
+    asm volatile("strh %w0, [%1, #6]" :: "r"((unsigned)v0), "r"(p)
+                 : "memory");
+    uint64_t a = 0, b = 0;
+    asm volatile("ldp %0, %1, [%2]" : "=r"(a), "=r"(b) : "r"(p) : "memory");
+    return ((__uint128_t)b << 64) | a;
+}
+
+static __uint128_t stlf_t2(uint8_t *p, uint64_t w0, uint64_t w1, uint64_t v0,
+                           uint64_t v1)
+{
+    (void)v1;
+    const uint64x2_t vi = vcombine_u64(vcreate_u64(w0), vcreate_u64(w1));
+    vst1q_u8(p, vreinterpretq_u8_u64(vi));
+    asm volatile("str %w0, [%1, #4]" :: "r"((unsigned)v0), "r"(p)
+                 : "memory");
+    uint64_t a = 0, b = 0;
+    asm volatile("ldp %0, %1, [%2]" : "=r"(a), "=r"(b) : "r"(p) : "memory");
+    return ((__uint128_t)b << 64) | a;
+}
+
+static __uint128_t stlf_t3(uint8_t *p, uint64_t w0, uint64_t w1, uint64_t v0,
+                           uint64_t v1)
+{
+    const uint64x2_t vi = vcombine_u64(vcreate_u64(w0), vcreate_u64(w1));
+    vst1q_u8(p, vreinterpretq_u8_u64(vi));
+    asm volatile("strb %w0, [%1, #3]" :: "r"((unsigned)v0), "r"(p)
+                 : "memory");
+    asm volatile("strh %w0, [%1, #6]" :: "r"((unsigned)v1), "r"(p)
+                 : "memory");
+    uint64_t a = 0, b = 0;
+    asm volatile("ldp %0, %1, [%2]" : "=r"(a), "=r"(b) : "r"(p) : "memory");
+    return ((__uint128_t)b << 64) | a;
+}
+
+static __uint128_t stlf_t4(uint8_t *p, uint64_t w0, uint64_t w1, uint64_t v0,
+                           uint64_t v1)
+{
+    const uint64x2_t vi = vcombine_u64(vcreate_u64(w0), vcreate_u64(w1));
+    vst1q_u8(p, vreinterpretq_u8_u64(vi));
+    asm volatile("str %w0, [%1, #4]" :: "r"((unsigned)v0), "r"(p)
+                 : "memory");
+    asm volatile("strb %w0, [%1, #11]" :: "r"((unsigned)v1), "r"(p)
+                 : "memory");
+    uint64_t a = 0, b = 0;
+    asm volatile("ldp %0, %1, [%2]" : "=r"(a), "=r"(b) : "r"(p) : "memory");
+    return ((__uint128_t)b << 64) | a;
+}
+
+static __uint128_t stlf_t5(uint8_t *p, uint64_t w0, uint64_t w1, uint64_t v0,
+                           uint64_t v1)
+{
+    const uint64x2_t vi = vcombine_u64(vcreate_u64(w0), vcreate_u64(w1));
+    vst1q_u8(p, vreinterpretq_u8_u64(vi));
+    asm volatile("strh %w0, [%1, #2]" :: "r"((unsigned)v0), "r"(p)
+                 : "memory");
+    asm volatile("str %w0, [%1, #8]" :: "r"((unsigned)v1), "r"(p)
+                 : "memory");
+    uint64_t a = 0, b = 0;
+    asm volatile("ldp %0, %1, [%2]" : "=r"(a), "=r"(b) : "r"(p) : "memory");
+    return ((__uint128_t)b << 64) | a;
+}
+
+static const stlf_tmpl g_stlf_tmpls[6] = {
+    { stlf_t0, 1, { 3, 0 },       { 1, 0 } },
+    { stlf_t1, 1, { 6, 0 },       { 2, 0 } },
+    { stlf_t2, 1, { 4, 0 },       { 4, 0 } },
+    { stlf_t3, 2, { 3, 6 },       { 1, 2 } },
+    { stlf_t4, 2, { 4, 11 },      { 4, 1 } },
+    { stlf_t5, 2, { 2, 8 },       { 2, 4 } },
+};
+
+/* burst 背景：24 条 str q 跨 12 行（64B 步进）挤占 store queue。
+ * 单调用点小函数，-O3 下内联进探针序列，中间不插任何 flush/分支。 */
+static inline void stlf_burst24(uint8_t *bb, uint8x16_t v)
+{
+#pragma GCC unroll 24
+    for (unsigned k = 0; k < 24; ++k)
+        vst1q_u8(bb + k * 64, v);
+}
+
+/* 网格类别探针构造（方案 P3 边界锁定）：在 [base, base+win) 内取网格内
+ * 偏移 (p & (grid-1)) ∈ [lo,hi) 的位置；保证 16B 探针窗不越窗。
+ * 窗口放不下该类别时返回 nullptr（调用方退化为随机）。 */
+static uint8_t *pick_grid_probe(uint8_t *base, size_t win, size_t grid,
+                                unsigned lo, unsigned hi)
+{
+    const uintptr_t g0 = ((uintptr_t)base + grid - 1) & ~(uintptr_t)(grid - 1);
+    const uintptr_t last = (uintptr_t)base + win - 16;
+    if (g0 + (hi - 1) > last)
+        return nullptr;
+    const size_t rows = (size_t)((last - (g0 + hi - 1)) / grid) + 1;
+    const size_t row = (size_t)(random64() % rows);
+    return (uint8_t *)(g0 + row * grid + lo
+                       + (unsigned)(random64() % (hi - lo)));
+}
+
+/* partial-STLF 主流程。位置锁定（方案 P3）：8 探针中 2 钉 (p&63)∈[49,56)
+ * （窄跨行半区）、2 钉 [56,64)（宽跨行）、2 钉跨几何页
+ * (p & g_geom_mask) ∈ [page-15, page)（跨页必跨行：64B 行是几何页的
+ * 子网格；偏移上限用 g_geom_mask/g_geom_page 推导，4K/64K 主机通用）、
+ * 2 随机。旧版偏移纯随机，打中行界/页界的概率被稀释到 12.5%/16 分之一。 */
 static bool stlf_partial(worker_ctx &c, uint8_t *dst_ov, const uint8_t *src_ov,
                          size_t ov_len, uint64_t copy_epoch)
 {
     if (ov_len < 64)
         return true;
     const unsigned delta = (unsigned)(dst_ov - src_ov);
+    constexpr size_t BURST_SPAN = 24u * 64u;
 
     for (unsigned t = 0; t < 8; ++t) {
-        const size_t off = (size_t)(random64() % (ov_len - 32));
-        uint8_t *p = dst_ov + off;
+        uint8_t *p = nullptr;
+        switch (t >> 1) {
+        case 0:
+            p = pick_grid_probe(dst_ov, ov_len, 64, 49, 56);
+            break;
+        case 1:
+            p = pick_grid_probe(dst_ov, ov_len, 64, 56, 64);
+            break;
+        case 2:
+            p = pick_grid_probe(dst_ov, ov_len, g_geom_page,
+                                (unsigned)g_geom_page - 15,
+                                (unsigned)g_geom_page);
+            break;
+        default:
+            break;
+        }
+        if (!p)
+            p = dst_ov + (size_t)(random64() % (ov_len - 16));
 
         /* 自包含期望图样（合并自并发会话）：每个探针用自己的 16B 初值，
          * 后续探针窗口重叠也不会互相污染，无需依赖拷贝内容的残留状态。 */
         const uint64_t w0 = mix64(copy_epoch * GOLDEN
                                   ^ ((uint64_t)(c.cpu + 1) * GOLDEN2) ^ t);
         const uint64_t w1 = mix64(w0);
-        uint8_t init[16], expect[16];
-        std::memcpy(init, &w0, 8);
-        std::memcpy(init + 8, &w1, 8);
-        std::memcpy(expect, init, sizeof init);
+        const stlf_tmpl &tm = g_stlf_tmpls[random64() % 6];
 
-        struct narrow_op { unsigned o, width, val; };
-        narrow_op ops[4];
-        const unsigned nw = 2 + (unsigned)(random64() % 3);   /* 2..4 条窄写 */
-        for (unsigned w = 0; w < nw; ++w) {
-            const unsigned width = 1u << (unsigned)(random64() % 3);  /* 1/2/4 */
-            const unsigned o = (unsigned)(random64() % (16 - width + 1));
+        /* 窄写值与期望：热序列外预计算；值域按宽度 mask。 */
+        uint64_t v[2] = {0, 0};
+        uint8_t expect[16];
+        std::memcpy(expect, &w0, 8);
+        std::memcpy(expect + 8, &w1, 8);
+        for (unsigned w = 0; w < tm.nw; ++w) {
+            const unsigned width = tm.width[w];
             const unsigned mask = width == 4 ? 0xFFFFFFFFu
-                                             : (1u << (8 * width)) - 1u;
+                                             : (1u << (8u * width)) - 1u;
             const unsigned val = (unsigned)mix64(w0 ^ (GOLDEN2 + w)) & mask;
+            v[w] = val;
             for (unsigned j = 0; j < width; ++j)
-                expect[o + j] = (uint8_t)(val >> (8 * j));
-            ops[w] = { o, width, val };
+                expect[tm.o[w] + j] = (uint8_t)(val >> (8u * j));
         }
 
-        /* 宽写旧图样 -> 窄写新值 -> 立即宽读；中间不插校验/函数调用，
-         * 让窄写真正落在 store buffer 尚未排空的窗口内。 */
-        vst1q_u8(p, vld1q_u8(init));
-        for (unsigned w = 0; w < nw; ++w) {
-            uint8_t *tp = p + ops[w].o;
-            switch (ops[w].width) {
-            case 1:
-                asm volatile("strb %w0, [%1]" :: "r"(ops[w].val), "r"(tp)
-                             : "memory");
-                break;
-            case 2:
-                asm volatile("strh %w0, [%1]" :: "r"(ops[w].val), "r"(tp)
-                             : "memory");
-                break;
-            default:
-                asm volatile("str %w0, [%1]" :: "r"(ops[w].val), "r"(tp)
-                             : "memory");
-                break;
-            }
+        /* burst：24 条背景 str q 挤满 store queue 后紧接模板序列
+         * （1/2 概率、窗口放得下时）。 */
+        uint8_t *bb = nullptr;
+        uint8x16_t bvec = vdupq_n_u8(0);
+        if (ov_len >= BURST_SPAN + 16 && (random64() & 1)) {
+            bb = dst_ov + (size_t)(random64() % (ov_len - BURST_SPAN));
+            const uint64_t bv0 = mix64(w0 ^ GOLDEN2);
+            const uint64_t bv1 = mix64(bv0);
+            bvec = vreinterpretq_u8_u64(vcombine_u64(vcreate_u64(bv0),
+                                                     vcreate_u64(bv1)));
         }
-        uint64_t r1 = 0, r2 = 0;
-        asm volatile("ldp %0, %1, [%2]" : "=r"(r1), "=r"(r2) : "r"(p)
-                     : "memory");
+
+        if (bb)
+            stlf_burst24(bb, bvec);
+        const __uint128_t got128 = tm.fn(p, w0, w1, v[0], v[1]);
+        const uint64_t r1 = (uint64_t)got128;
+        const uint64_t r2 = (uint64_t)(got128 >> 64);
         uint8_t got[16];
         std::memcpy(got, &r1, 8);
         std::memcpy(got + 8, &r2, 8);

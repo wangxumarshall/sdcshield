@@ -9,13 +9,16 @@
  *
  *  Oracle 使用 mapping-relative logical VA：相同 seed/线程数/模式在 ASLR 改变
  *  后仍生成相同逻辑图样，实际 VA 仅用于失败取证。图样 =
- *      pattern(lva, epoch, cpu) = blob[lva & 1MiB-1] ^ key[lva & 7]
- *  blob 为 init 一次性生成的 1 MiB 伪随机基表，key 由双射 mix64 从
- *  (epoch, cpu) 派生（不同 epoch 必不同）。填充/校验因此是 NEON 16B 一条
- *  veor；2026-11-27 perf 实测旧版 SplitMix 版 mem_access/instructions 仅
- *  0.116，约 88% 指令耗在图样 ALU，12h 标称运行里真正 LSU/MMU 占比可忽略。
- *  诚实边界：VA 相差 1 MiB 整数倍时图样相同，本用例拷贝偏移 <=15B、归因
- *  窗口 +/-64B 不受影响，但因此不能证明 1 MiB 级整段错位。
+ *      pattern(lva, epoch, cpu) = blob[lva & 1MiB-1] ^ blk_key(lva>>20)[lva & 7]
+ *  blob 为 init 一次性生成的 1 MiB 伪随机基表，blk_key 由双射 mix64 从
+ *  (epoch, cpu, lva>>20) 派生：不同 epoch 必不同，且同 epoch 不同 1 MiB 块
+ *  必不同（mix64 双射）——VA 高位（bit>=20）翻转映射到相邻 1 MiB 块时必
+ *  失配。这是 2026-11-27 修复的混叠盲区：此前密钥只含 (epoch, cpu)，VA
+ *  相差 1 MiB 整数倍图样相同，MMU/TLB 高位错映射完全不可检。跨 epoch
+ *  跨块的密钥碰撞概率 2^-64/事件对，可接受。填充/校验按 1 MiB 子块外层
+ *  循环，块入口重算 kv 一次，块内 16B 仍一条 veor；2026-11-27 perf 实测
+ *  旧版 SplitMix 版 mem_access/instructions 仅 0.116，约 88% 指令耗在
+ *  图样 ALU，12h 标称运行里真正 LSU/MMU 占比可忽略。
  *
  *  校验分阶段：源填充 → 源校验 → 拷贝 → 目的校验 → 源复核。目的失配时同时
  *  回读同一偏移的源字节 s[off]（STLF 重叠区源已被拷贝合法覆盖，显式标注
@@ -100,8 +103,11 @@ static inline uint64_t logical_va(const void *p)
 }
 
 /* ---- 图样 oracle ----
- * 预生成基表 + (epoch, cpu) 密钥 XOR。16B 对齐分块保证块内 (VA & 7) 相位恒为
- * 0..7,0..7；标量头/尾按字节取同一函数。 */
+ * 预生成基表 + (epoch, cpu, 1MiB 块号) 密钥 XOR。16B 对齐分块保证块内
+ * (VA & 7) 相位恒为 0..7,0..7；标量头/尾按字节取同一函数。密钥按块号
+ * 折入（blk_key）：同 epoch 不同 1 MiB 块必得不同密钥，1 MiB 图样混叠
+ * （高位 VA 错映射）必失配；fill/verify 按 1 MiB 子块外层循环，每块入口
+ * 重算 kv 一次，块内每 16B 仍只 1 条 veorq。 */
 static constexpr unsigned BLOB_BITS = 20;
 static constexpr size_t BLOB_LEN = size_t{1} << BLOB_BITS;
 static constexpr size_t BLOB_MASK = BLOB_LEN - 1;
@@ -131,6 +137,15 @@ static inline uint64_t epoch_key(uint64_t epoch, int cpu)
     return mix64(epoch * GOLDEN ^ ((uint64_t)(cpu + 1) * GOLDEN2));
 }
 
+/* 把 1 MiB 块号折进密钥：VA 高位（bit>=20）翻转 → 块号变 → 密钥变。
+ * mix64 双射 + GOLDEN2 为奇数 => 同 key 下不同块必得不同 blk_key，
+ * 1 MiB 图样混叠（MMU/TLB 高位错映射到相邻 1 MiB 块）因此必失配检出。
+ * 跨 epoch 跨块的密钥碰撞概率 2^-64/事件对（见头注释）。 */
+static inline uint64_t blk_key(uint64_t key, uint64_t lva)
+{
+    return key ^ mix64((lva >> BLOB_BITS) * GOLDEN2);
+}
+
 static inline uint8_t pat_byte_k(uint64_t lva, uint64_t key)
 {
     return (uint8_t)(g_blob[lva & BLOB_MASK]
@@ -139,7 +154,7 @@ static inline uint8_t pat_byte_k(uint64_t lva, uint64_t key)
 
 static inline uint8_t pat_byte(uint64_t va, uint64_t epoch, int cpu)
 {
-    return pat_byte_k(va, epoch_key(epoch, cpu));
+    return pat_byte_k(va, blk_key(epoch_key(epoch, cpu), va));
 }
 
 static inline uint8x16_t key_vec(uint64_t key)
@@ -154,25 +169,35 @@ static void fill_pat(uint8_t *mem, size_t n, uint64_t epoch, int cpu)
 {
     const uint64_t va = logical_va(mem);
     const uint64_t key = epoch_key(epoch, cpu);
-    const uint8x16_t kv = key_vec(key);
     size_t i = 0;
-    while (i < n && ((va + i) & 15u)) {
-        mem[i] = pat_byte_k(va + i, key);
-        ++i;
+    while (i < n) {
+        /* 外层按 1 MiB 子块推进：块边界与 16B/32B 网格、blob 回卷点
+         * 重合（1 MiB 是 16 的倍数），kv 每块入口只算一次，块内每
+         * 16B 仍只 1 条 veorq。标量路径逐字节折 blk_key（跨块窗口）。 */
+        const uint64_t lva = va + i;
+        const size_t blk_rem = BLOB_LEN - (size_t)(lva & BLOB_MASK);
+        const size_t rem = std::min(n - i, blk_rem);
+        const uint8x16_t kv = key_vec(blk_key(key, lva));
+        size_t j = 0;
+        while (j < rem && ((lva + j) & 15u)) {
+            mem[i + j] = pat_byte_k(lva + j, blk_key(key, lva + j));
+            ++j;
+        }
+        for (; j + 32 <= rem; j += 32) {
+            const size_t o = (size_t)((lva + j) & BLOB_MASK);
+            const uint8x16_t b0 = veorq_u8(vld1q_u8(g_blob + o), kv);
+            const uint8x16_t b1 = veorq_u8(vld1q_u8(g_blob + o + 16), kv);
+            vst1q_u8(mem + i + j, b0);
+            vst1q_u8(mem + i + j + 16, b1);
+        }
+        for (; j + 16 <= rem; j += 16) {
+            const uint8x16_t b = vld1q_u8(g_blob + ((lva + j) & BLOB_MASK));
+            vst1q_u8(mem + i + j, veorq_u8(b, kv));
+        }
+        for (; j < rem; ++j)
+            mem[i + j] = pat_byte_k(lva + j, blk_key(key, lva + j));
+        i += rem;
     }
-    for (; i + 32 <= n; i += 32) {
-        const size_t o = (size_t)((va + i) & BLOB_MASK);
-        const uint8x16_t b0 = veorq_u8(vld1q_u8(g_blob + o), kv);
-        const uint8x16_t b1 = veorq_u8(vld1q_u8(g_blob + o + 16), kv);
-        vst1q_u8(mem + i, b0);
-        vst1q_u8(mem + i + 16, b1);
-    }
-    for (; i + 16 <= n; i += 16) {
-        const uint8x16_t b = vld1q_u8(g_blob + ((va + i) & BLOB_MASK));
-        vst1q_u8(mem + i, veorq_u8(b, kv));
-    }
-    for (; i < n; ++i)
-        mem[i] = pat_byte_k(va + i, key);
 }
 
 /* 返回首个失配偏移并保存首次 got/want；全对返回 n。
@@ -182,55 +207,66 @@ static size_t verify_pat(const uint8_t *mem, uint64_t exp_va, size_t n,
                          uint8_t *want_out)
 {
     const uint64_t key = epoch_key(epoch, cpu);
-    const uint8x16_t kv = key_vec(key);
     size_t i = 0;
-    while (i < n && ((exp_va + i) & 15u)) {
-        const uint8_t want = pat_byte_k(exp_va + i, key);
-        if (mem[i] != want) {
-            *got_out = mem[i]; *want_out = want;
-            return i;
-        }
-        ++i;
-    }
-    for (; i + 32 <= n; i += 32) {
-        const size_t o = (size_t)((exp_va + i) & BLOB_MASK);
-        const uint8x16_t g0 = vld1q_u8(mem + i);
-        const uint8x16_t g1 = vld1q_u8(mem + i + 16);
-        const uint8x16_t w0 = veorq_u8(vld1q_u8(g_blob + o), kv);
-        const uint8x16_t w1 = veorq_u8(vld1q_u8(g_blob + o + 16), kv);
-        const uint8x16_t x = vorrq_u8(veorq_u8(g0, w0), veorq_u8(g1, w1));
-        if (vmaxvq_u8(x) != 0) {
-            for (size_t j = 0; j < 32; ++j) {
-                const uint8_t wb = pat_byte_k(exp_va + i + j, key);
-                if (mem[i + j] != wb) {
-                    *got_out = mem[i + j]; *want_out = wb;
-                    return i + j;
-                }
+    while (i < n) {
+        /* 与 fill_pat 对称的 1 MiB 子块外层循环；失配精化窗口可能跨块，
+         * 逐字节折 blk_key（冷路径）。 */
+        const uint64_t lva = exp_va + i;
+        const size_t blk_rem = BLOB_LEN - (size_t)(lva & BLOB_MASK);
+        const size_t rem = std::min(n - i, blk_rem);
+        const uint8x16_t kv = key_vec(blk_key(key, lva));
+        size_t j = 0;
+        while (j < rem && ((lva + j) & 15u)) {
+            const uint8_t want = pat_byte_k(lva + j, blk_key(key, lva + j));
+            if (mem[i + j] != want) {
+                *got_out = mem[i + j]; *want_out = want;
+                return i + j;
             }
-            return i;
+            ++j;
         }
-    }
-    for (; i + 16 <= n; i += 16) {
-        const uint8x16_t got = vld1q_u8(mem + i);
-        const uint8x16_t want =
-            veorq_u8(vld1q_u8(g_blob + ((exp_va + i) & BLOB_MASK)), kv);
-        if (vmaxvq_u8(veorq_u8(got, want)) != 0) {
-            for (size_t j = 0; j < 16; ++j) {
-                const uint8_t wb = pat_byte_k(exp_va + i + j, key);
-                if (mem[i + j] != wb) {
-                    *got_out = mem[i + j]; *want_out = wb;
-                    return i + j;
+        for (; j + 32 <= rem; j += 32) {
+            const size_t o = (size_t)((lva + j) & BLOB_MASK);
+            const uint8x16_t g0 = vld1q_u8(mem + i + j);
+            const uint8x16_t g1 = vld1q_u8(mem + i + j + 16);
+            const uint8x16_t w0 = veorq_u8(vld1q_u8(g_blob + o), kv);
+            const uint8x16_t w1 = veorq_u8(vld1q_u8(g_blob + o + 16), kv);
+            const uint8x16_t x = vorrq_u8(veorq_u8(g0, w0), veorq_u8(g1, w1));
+            if (vmaxvq_u8(x) != 0) {
+                for (size_t k = 0; k < 32; ++k) {
+                    const uint8_t wb = pat_byte_k(lva + j + k,
+                                                  blk_key(key, lva + j + k));
+                    if (mem[i + j + k] != wb) {
+                        *got_out = mem[i + j + k]; *want_out = wb;
+                        return i + j + k;
+                    }
                 }
+                return i + j;
             }
-            return i;
         }
-    }
-    for (; i < n; ++i) {
-        const uint8_t want = pat_byte_k(exp_va + i, key);
-        if (mem[i] != want) {
-            *got_out = mem[i]; *want_out = want;
-            return i;
+        for (; j + 16 <= rem; j += 16) {
+            const uint8x16_t got = vld1q_u8(mem + i + j);
+            const uint8x16_t want =
+                veorq_u8(vld1q_u8(g_blob + ((lva + j) & BLOB_MASK)), kv);
+            if (vmaxvq_u8(veorq_u8(got, want)) != 0) {
+                for (size_t k = 0; k < 16; ++k) {
+                    const uint8_t wb = pat_byte_k(lva + j + k,
+                                                  blk_key(key, lva + j + k));
+                    if (mem[i + j + k] != wb) {
+                        *got_out = mem[i + j + k]; *want_out = wb;
+                        return i + j + k;
+                    }
+                }
+                return i + j;
+            }
         }
+        for (; j < rem; ++j) {
+            const uint8_t want = pat_byte_k(lva + j, blk_key(key, lva + j));
+            if (mem[i + j] != want) {
+                *got_out = mem[i + j]; *want_out = want;
+                return i + j;
+            }
+        }
+        i += rem;
     }
     return n;
 }

@@ -25,6 +25,12 @@
  *  不可观测），用于区分 fill(ALU) 与 copy(LSU/MMU)。重叠 dst>src 用倒序
  *  memmove 语义。
  *
+ *  观测通路不对称化（2026-11-27 P1b）：校验的数据读走 GPR ldp（2x8B），
+ *  期望仍由 NEON veorq 计算后经 mov x,v.d[] 搬 GPR 做 eor/cmp——写侧
+ *  fill/copy 走 NEON 128b 数据通路，观测侧走 GPR 64b 通路，打破「NEON
+ *  lane k 写坏、校验再经同坏 lane k 读」的自洽掩蔽。STLF 回读本来就是
+ *  混合位宽 GPR，无需处理。
+ *
  *  取证口径：失败日志先快照 16B 现场与 128B 上下文，再做缓存维护；triage
  *  优先 DC IVAC（不回写），避免 DC CIVAC 把脏 L1D 错值写回后被误判为
  *  store/DRAM 持久错。PFN 按运行时真实基页查 pagemap，无权限输出
@@ -226,12 +232,23 @@ static size_t verify_pat(const uint8_t *mem, uint64_t exp_va, size_t n,
         }
         for (; j + 32 <= rem; j += 32) {
             const size_t o = (size_t)((lva + j) & BLOB_MASK);
-            const uint8x16_t g0 = vld1q_u8(mem + i + j);
-            const uint8x16_t g1 = vld1q_u8(mem + i + j + 16);
+            /* 数据读走 GPR ldp（2x8B）：打破 fill(vst1q) 与校验(vld1q) 同走
+             * NEON 128b lane 的自洽掩蔽（头注释 P1b）。期望仍 NEON veorq
+             * 算，vgetq_lane_u64 生成 mov x,v.d[] 搬 GPR 后 eor/cmp。 */
+            uint64_t g0 = 0, g1 = 0, g2 = 0, g3 = 0;
+            asm volatile("ldp %0, %1, [%2]" : "=r"(g0), "=r"(g1)
+                         : "r"(mem + i + j) : "memory");
+            asm volatile("ldp %0, %1, [%2]" : "=r"(g2), "=r"(g3)
+                         : "r"(mem + i + j + 16) : "memory");
             const uint8x16_t w0 = veorq_u8(vld1q_u8(g_blob + o), kv);
             const uint8x16_t w1 = veorq_u8(vld1q_u8(g_blob + o + 16), kv);
-            const uint8x16_t x = vorrq_u8(veorq_u8(g0, w0), veorq_u8(g1, w1));
-            if (vmaxvq_u8(x) != 0) {
+            const uint64x2_t w0d = vreinterpretq_u64_u8(w0);
+            const uint64x2_t w1d = vreinterpretq_u64_u8(w1);
+            const uint64_t x = (g0 ^ vgetq_lane_u64(w0d, 0))
+                             | (g1 ^ vgetq_lane_u64(w0d, 1))
+                             | (g2 ^ vgetq_lane_u64(w1d, 0))
+                             | (g3 ^ vgetq_lane_u64(w1d, 1));
+            if (x != 0) {
                 for (size_t k = 0; k < 32; ++k) {
                     const uint8_t wb = pat_byte_k(lva + j + k,
                                                   blk_key(key, lva + j + k));
@@ -244,10 +261,15 @@ static size_t verify_pat(const uint8_t *mem, uint64_t exp_va, size_t n,
             }
         }
         for (; j + 16 <= rem; j += 16) {
-            const uint8x16_t got = vld1q_u8(mem + i + j);
+            uint64_t g0 = 0, g1 = 0;
+            asm volatile("ldp %0, %1, [%2]" : "=r"(g0), "=r"(g1)
+                         : "r"(mem + i + j) : "memory");
             const uint8x16_t want =
                 veorq_u8(vld1q_u8(g_blob + ((lva + j) & BLOB_MASK)), kv);
-            if (vmaxvq_u8(veorq_u8(got, want)) != 0) {
+            const uint64x2_t wd = vreinterpretq_u64_u8(want);
+            const uint64_t x = (g0 ^ vgetq_lane_u64(wd, 0))
+                             | (g1 ^ vgetq_lane_u64(wd, 1));
+            if (x != 0) {
                 for (size_t k = 0; k < 16; ++k) {
                     const uint8_t wb = pat_byte_k(lva + j + k,
                                                   blk_key(key, lva + j + k));

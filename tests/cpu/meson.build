@@ -78,6 +78,7 @@ tests_set_base.add(
         'memory/memcpy1.cpp',
         'memory/memcpy_l1d_size.cpp',
         'memory/memcpy_l2_cache_size.cpp',
+        'memory/memcpy_l2_pointer_chase.cpp',
         'L3_cache_920/memcpy_l3_cache_size.cpp',
         'memory/memcpy_sem.cpp',
         'memory/memcpy_shuffle.cpp',

@@ -109,7 +109,11 @@ static int db_load_addr_gap_sweep_run(struct test *test, int cpu)
     uint64_t iter = 0;
 
     TEST_LOOP(test, 1 << 6) {
+        /* Slot stride 3 (coprime with both 1024 and the 8-wide gap
+         * rotation) so a slot-dependent fault cannot masquerade as a
+         * gap-dependent one: each slot visits all eight widths. */
         const uint64_t s = idx;
+        idx = (idx + 3) & DB_LGS_SLOT_MASK;
         const uint64_t off = s * 16;
         uint64x2_t got;
 
@@ -130,19 +134,23 @@ static int db_load_addr_gap_sweep_run(struct test *test, int cpu)
         const uint64_t hi = vgetq_lane_u64(got, 1);
         if (lo != data->exp_lo[s] || hi != data->exp_hi[s]) {
             const uint64_t got_slot = (lo >> 16) & DB_LGS_SLOT_MASK;
-            const uint64_t prev_slot = (s + DB_LGS_SLOTS - 1) & DB_LGS_SLOT_MASK;
+            /* Previous-visit tracking with stride-3 slots: the literal
+             * previous slot is (s+1024-3)&1023; stale first (see
+             * db_load_addr_zero_probe), zero is the residual verdict. */
+            const uint64_t prev_slot = (s + DB_LGS_SLOTS - 3) & DB_LGS_SLOT_MASK;
             const uint64_t gap = DB_LGS_GAPS[iter & 7];
-            const bool zero_stuck = got_slot == 0 && s != 0;
+            const bool stale = got_slot == prev_slot;
+            const bool zero_visit = got_slot == 0 && s != 0 && !stale;
             report_fail_msg("db_load_addr_gap_sweep: nop-width %llu window, slot %llu "
                             "expected but the load visited slot %llu (%s); readback "
                             "0x%016llx:0x%016llx, expected 0x%016llx:0x%016llx",
                             static_cast<unsigned long long>(gap),
                             static_cast<unsigned long long>(s),
                             static_cast<unsigned long long>(got_slot),
-                            zero_stuck
-                                ? "ZERO stuck over the address write"
-                                : (got_slot == prev_slot
-                                       ? "STALE previous-address capture"
+                            stale
+                                ? "STALE previous-address capture"
+                                : (zero_visit
+                                       ? "slot-0 visit (offset-operand zero capture)"
                                        : "WRONG-VALUE capture"),
                             static_cast<unsigned long long>(lo),
                             static_cast<unsigned long long>(hi),
@@ -150,7 +158,6 @@ static int db_load_addr_gap_sweep_run(struct test *test, int cpu)
                             static_cast<unsigned long long>(data->exp_hi[s]));
         }
 
-        idx = (idx + 1) & DB_LGS_SLOT_MASK;
         ++iter;
     }
 

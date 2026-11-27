@@ -32,7 +32,11 @@
  * PREVIOUS iteration's offset: the load visits slot (idx-1), whose tag
  * says so directly. Triage on failure:
  *   tag decodes to slot idx-1      -> stale previous-address capture
- *   readback zero / slot-0 shape   -> zero-address capture
+ *   readback all-zero             -> the load landed on a zero-filled page
+ *                                     (an address-register ZERO capture that
+ *                                     did NOT fault; a full absolute-zero
+ *                                     capture would crash the worker instead,
+ *                                     which the framework also reports)
  *   any other slot                -> wrong-value address
  *
  * The region deliberately stays inside L1 (no TLB/cache noise): this
@@ -133,7 +137,8 @@ static int db_load_addr_capture_run(struct test *test, int cpu)
             const uint64_t prev_slot = (s + DB_LAC_SLOTS - 1) & DB_LAC_SLOT_MASK;
             const char *verdict;
             if (lo == 0 && hi == 0)
-                verdict = "ZERO-ADDRESS capture (address register read as zero)";
+                verdict = "ALL-ZERO readback (load landed on a zero-filled page; a full "
+                          "absolute-zero capture would crash instead)";
             else if (got_slot == prev_slot)
                 verdict = "STALE capture (address register returned the PREVIOUS address)";
             else

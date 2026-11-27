@@ -24,6 +24,15 @@
  * block — the zero-gap shape is the point of the probe and cannot be
  * expressed in C++; everything else is plain C++.
  *
+ * Mechanics of the two B-class failure shapes (stated honestly, they
+ * differ in observability): if the zeroing sticks over x1 entirely, the
+ * load dereferences ABSOLUTE address zero — that surfaces as a worker
+ * crash (detected, but without a tag verdict; the framework reports the
+ * fault). If the pollution instead hits the ADD's offset OPERAND (the
+ * off input reads as zero), the load visits base+0 = slot 0 and the
+ * self-describing tag names it — that is the "ZERO stuck" verdict this
+ * test reports.
+ *
  * Same self-describing tag region as db_load_addr_capture: the readback
  * decodes to the slot actually visited. Failure triage for B-class:
  *   tag decodes to slot 0  -> zero stuck over the address write
@@ -128,17 +137,22 @@ static int db_load_addr_zero_probe_run(struct test *test, int cpu)
         if (lo != data->exp_lo[s] || hi != data->exp_hi[s]) {
             const uint64_t got_slot = (lo >> 16) & DB_LZP_SLOT_MASK;
             const uint64_t prev_slot = (s + DB_LZP_SLOTS - 1) & DB_LZP_SLOT_MASK;
-            const bool zero_stuck = got_slot == 0 && s != 0;
+            /* Stale first: at s==1 a stale capture also lands on slot 0
+             * and stale is the better-supported reading (the previous
+             * address IS slot 0 there) — zero-idiom pollution is the
+             * residual verdict, not the default one. */
+            const bool stale = got_slot == prev_slot;
+            const bool zero_stuck = got_slot == 0 && s != 0 && !stale;
             report_fail_msg("db_load_addr_zero_probe: %s-class iteration, slot %llu "
                             "expected but the load visited slot %llu (%s); readback "
                             "0x%016llx:0x%016llx, expected 0x%016llx:0x%016llx",
                             (iter & 1) ? "B(zero-prefixed)" : "A(plain)",
                             static_cast<unsigned long long>(s),
                             static_cast<unsigned long long>(got_slot),
-                            zero_stuck
-                                ? "ZERO stuck over the address write — zero-idiom pollution"
-                                : (got_slot == prev_slot
-                                       ? "STALE previous-address capture"
+                            stale
+                                ? "STALE previous-address capture"
+                                : (zero_stuck
+                                       ? "ZERO stuck over the address write — zero-idiom pollution"
                                        : "WRONG-VALUE capture"),
                             static_cast<unsigned long long>(lo),
                             static_cast<unsigned long long>(hi),

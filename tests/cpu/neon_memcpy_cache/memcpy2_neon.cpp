@@ -568,7 +568,11 @@ static bool check_seg(worker_ctx &c, uint64_t epoch, const uint8_t *mem,
 
 static inline size_t rand_span_off(void)
 {
-    return (size_t)(random64() % (SEG_SPAN - MAX_HUGE)) & ~g_geom_mask;
+    /* 下限 g_geom_page：anchor=false && mis=0 时 d=dst_base+off，此前 off
+     * 可为 0，memset(d-GUARD) 越出 dst 半区尾部写 src 半区末 64B（仅靠
+     * 480M/512M 布局空隙侥幸不损数据）。下限保证 d-GUARD 恒在 dst 半区。 */
+    const size_t span = SEG_SPAN - MAX_HUGE - g_geom_page;
+    return g_geom_page + (size_t)((random64() % span) & ~g_geom_mask);
 }
 
 static inline size_t pick_seg_len(void)
@@ -827,7 +831,10 @@ static bool do_scratch(worker_ctx &c)
     if (g_have_dczva) {
         /* DC ZVA 的完成依赖 DSB（架构要求），这里的 dsb 不是多余串行化；
          * 保留它，避免把"维护未完成"误报成 zva residue。 */
-        size_t off = (size_t)(random64() % (usable - 384)) & ~(size_t)255;
+        /* off 下限 GUARD：z-GUARD 不越出 scratch 基址（布局参数防御，
+         * 方案 P2；scratch 前沿本就在段散布范围之外，属双保险）。 */
+        size_t off = GUARD + ((size_t)(random64() % (usable - 384 - GUARD))
+                              & ~(size_t)255);
         uint8_t *z = c.scratch + off;
         std::memset(z - GUARD, 0xFF, 256 + 2 * GUARD);
         for (unsigned b = 0; b < 4; ++b)
@@ -853,7 +860,8 @@ static bool do_scratch(worker_ctx &c)
      * 同线程同地址的 stnp->ldp 由程序序保证，无需 DSB（旧版在这里的 dsb
      * 会排空写合并缓冲，削弱非临时写路径的压力）。 */
     for (unsigned t = 0; t < 2; ++t) {
-        size_t off = (size_t)(random64() % (usable - 64));
+        /* off 下限 8：np-8 哨兵不越出 scratch 基址（同上，防御性）。 */
+        size_t off = 8 + (size_t)(random64() % (usable - 64 - 8));
         if (t == 0)
             off &= ~(size_t)7;            /* 对齐 */
         else if ((off & 7u) == 0)

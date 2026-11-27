@@ -61,5 +61,7 @@ SVE2>SVE>NEON 会把 SVE1 主机路由进该引擎 → `sve_fill_golden`（`adap
 
 **与分支快照的差异披露**：分支侧 172 件镜像中，misc/ 目录还包含同名 k 系
 （k2pureload/k3res/k4gap/k4bgap/k5far/k5inter_rand/k7pattern）——main 上的同名件是
-**L1D 域判别格战役的母本**（misc/ 原位），与分支在途的 L2_cache/ 目录 L2 三档扩展族
-（本次未迁移，仍在分支）同名不同目录不同几何，按 id 跑的是原位母本。
+**L1D 域判别格战役的母本**（misc/ 原位）；与它们同名不同目录不同几何的
+`tests/cpu/L2_cache/` L2 三档扩展族（19 族 × 128k/256k/512k，57 件 63 id）已于
+**2026-11-27 独立回迁 main**（不在本清单 176 id 内，按 `neon_rot_ldr_at_top_rowmajor_*_l2_*`
+id 直接跑；该族不在原 172 件镜像范围，因分支侧快照时尚在途）。

@@ -478,6 +478,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/neon_rot_ldr_at_top_rfport_v2.cpp',
             'misc/neon_rot_ldr_at_top_robfill_np.cpp',
             'misc/neon_rot_ldr_at_top_robfill.cpp',
+            'misc/db_load_addr_capture.cpp',
             'misc/db_load_agu_pointer_chase.cpp',
             'misc/db_load_store_mixed_stress.cpp',
             'misc/db_load_stale_data_probe.cpp',

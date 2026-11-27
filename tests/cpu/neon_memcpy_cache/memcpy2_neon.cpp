@@ -515,8 +515,12 @@ static inline size_t rand_span_off(void)
 
 static inline size_t pick_seg_len(void)
 {
-    if ((random64() % 16) == 0)   /* 1/16：> L2 的大段，压 MMU/page-walk */
-        return MIN_HUGE + (size_t)(random64() % ((MAX_HUGE - MIN_HUGE) >> 12)) * 4096;
+    if ((random64() % 16) == 0) {  /* 1/16：> L2 的大段，压 MMU/page-walk */
+        /* 步长跟随几何页（合并自并发会话）：64K 几何模拟下大段保持 64K
+         * 对齐，避免半页长度把"是否跨页"变成随机噪声。 */
+        const size_t steps = (MAX_HUGE - MIN_HUGE) / g_geom_page;
+        return MIN_HUGE + (size_t)(random64() % steps) * g_geom_page;
+    }
     return MIN_SEG << (unsigned)(random64() % 5);   /* 4K..64K，2 的幂 */
 }
 
@@ -552,15 +556,21 @@ static bool stlf_partial(worker_ctx &c, uint8_t *dst_ov, const uint8_t *src_ov,
 {
     if (ov_len < 64)
         return true;
-    const uint64_t src_logical = logical_va(src_ov);
-    const uint64_t e2 = copy_epoch + 0x9E3779B1ULL;   /* 不同密钥 = 新图样 */
+    const unsigned delta = (unsigned)(dst_ov - src_ov);
 
     for (unsigned t = 0; t < 8; ++t) {
         const size_t off = (size_t)(random64() % (ov_len - 32));
         uint8_t *p = dst_ov + off;
-        uint8_t want[16];
-        for (unsigned j = 0; j < 16; ++j)
-            want[j] = pat_byte(src_logical + off + j, copy_epoch, c.cpu);
+
+        /* 自包含期望图样（合并自并发会话）：每个探针用自己的 16B 初值，
+         * 后续探针窗口重叠也不会互相污染，无需依赖拷贝内容的残留状态。 */
+        const uint64_t w0 = mix64(copy_epoch * GOLDEN
+                                  ^ ((uint64_t)(c.cpu + 1) * GOLDEN2) ^ t);
+        const uint64_t w1 = mix64(w0);
+        uint8_t init[16], expect[16];
+        std::memcpy(init, &w0, 8);
+        std::memcpy(init + 8, &w1, 8);
+        std::memcpy(expect, init, sizeof init);
 
         struct narrow_op { unsigned o, width, val; };
         narrow_op ops[4];
@@ -568,15 +578,17 @@ static bool stlf_partial(worker_ctx &c, uint8_t *dst_ov, const uint8_t *src_ov,
         for (unsigned w = 0; w < nw; ++w) {
             const unsigned width = 1u << (unsigned)(random64() % 3);  /* 1/2/4 */
             const unsigned o = (unsigned)(random64() % (16 - width + 1));
-            unsigned val = 0;
-            for (unsigned j = 0; j < width; ++j) {
-                const uint8_t vb = pat_byte(src_logical + off + o + j, e2, c.cpu);
-                want[o + j] = vb;
-                val |= (unsigned)vb << (8 * j);
-            }
+            const unsigned mask = width == 4 ? 0xFFFFFFFFu
+                                             : (1u << (8 * width)) - 1u;
+            const unsigned val = (unsigned)mix64(w0 ^ (GOLDEN2 + w)) & mask;
+            for (unsigned j = 0; j < width; ++j)
+                expect[o + j] = (uint8_t)(val >> (8 * j));
             ops[w] = { o, width, val };
         }
-        /* 窄写背靠背，然后立即宽读——中间不插校验/函数调用。 */
+
+        /* 宽写旧图样 -> 窄写新值 -> 立即宽读；中间不插校验/函数调用，
+         * 让窄写真正落在 store buffer 尚未排空的窗口内。 */
+        vst1q_u8(p, vld1q_u8(init));
         for (unsigned w = 0; w < nw; ++w) {
             uint8_t *tp = p + ops[w].o;
             switch (ops[w].width) {
@@ -601,18 +613,12 @@ static bool stlf_partial(worker_ctx &c, uint8_t *dst_ov, const uint8_t *src_ov,
         std::memcpy(got, &r1, 8);
         std::memcpy(got + 8, &r2, 8);
         for (unsigned j = 0; j < 16; ++j) {
-            if (got[j] != want[j]) {
-                report_mismatch(c, copy_epoch, dst_ov, off + j, src_logical,
-                                ov_len, 0, 0, "stlf-partial", nullptr,
-                                got[j], want[j]);
+            if (got[j] != expect[j]) {
+                report_mismatch(c, copy_epoch, p, j, logical_va(p),
+                                sizeof expect, 0, delta, "stlf-partial", nullptr,
+                                got[j], expect[j]);
             }
         }
-        /* 探针窗口可能与前/后探针重叠：立即恢复为拷贝 epoch 图样，
-         * 否则后续探针会把遗留的新 epoch 值当成拷贝错。 */
-        uint8_t restore[16];
-        for (unsigned j = 0; j < 16; ++j)
-            restore[j] = pat_byte(src_logical + off + j, copy_epoch, c.cpu);
-        vst1q_u8(p, vld1q_u8(restore));
     }
     return true;
 }
@@ -757,7 +763,8 @@ static bool do_segment(worker_ctx &c, size_t seg_len, bool with_stlf)
  * STNP/LDP 非临时对存储（对齐与非对齐各一，含邻域不被误写）。 */
 static bool do_scratch(worker_ctx &c)
 {
-    const size_t usable = SCRATCH_LEN - 4096;
+    /* 页边距按真实页大小留（合并自并发会话）：64K 页目标机上 4096 不够。 */
+    const size_t usable = SCRATCH_LEN - g_page_size;
 
     if (g_have_dczva) {
         /* DC ZVA 的完成依赖 DSB（架构要求），这里的 dsb 不是多余串行化；
@@ -994,23 +1001,33 @@ static int memcpy2_run(struct test *test, int cpu)
         c.segment = SIZE_MAX;
         if ((g_mode == MODE_ALL || g_mode == MODE_PROTECT) &&
             c.iter % PROT_EVERY == 0) {
-            const size_t fl_off = (size_t)(random64() % (SCRATCH_LEN - (2UL << 20)))
+            constexpr size_t protect_len = 1UL << 20;   /* 4K/16K/64K 均整除 */
+            const size_t fl_off = (size_t)(random64() % (SCRATCH_LEN - protect_len))
                                 & ~g_geom_mask;
             uint8_t *fl = c.scratch + fl_off;
-            if (mprotect(fl, 1UL << 20, PROT_READ) != 0 ||
-                mprotect(fl, 1UL << 20, PROT_READ | PROT_WRITE) != 0) {
-                report_fail_msg("memcpy2_neon: INFRASTRUCTURE-ERROR stage=mprotect "
-                                "iter=%llu error=%s", (unsigned long long)c.iter,
-                                std::strerror(errno));
+            if (mprotect(fl, protect_len, PROT_READ) != 0) {
+                report_fail_msg("memcpy2_neon: INFRASTRUCTURE-ERROR "
+                                "stage=mprotect-read iter=%llu error=%s",
+                                (unsigned long long)c.iter, std::strerror(errno));
                 ok = false;
                 break;
             }
-            /* 恢复权限后立即逐页触读：强制 TLBI 之后的 TLB 重填与 PTW 重播，
-             * 而不是让这段 TLB 压力空转。 */
-            uint64_t acc = 0;
-            for (size_t o = 0; o < (1UL << 20); o += g_geom_page)
-                acc += fl[o];
-            asm volatile("" :: "r"(acc) : "memory");
+            /* 只读状态下按真实页逐页触读：强制 TLBI 之后的 TLB 重填与 PTW
+             * 重播；恢复写权限前完成，避免这段 TLB 压力空转（合并自并发
+             * 会话的实现）。 */
+            for (size_t o = 0; o < protect_len; o += g_page_size) {
+                uint8_t value = 0;
+                asm volatile("ldrb %w0, [%1]" : "=r"(value) : "r"(fl + o)
+                             : "memory");
+                (void)value;
+            }
+            if (mprotect(fl, protect_len, PROT_READ | PROT_WRITE) != 0) {
+                report_fail_msg("memcpy2_neon: INFRASTRUCTURE-ERROR "
+                                "stage=mprotect-write iter=%llu error=%s",
+                                (unsigned long long)c.iter, std::strerror(errno));
+                ok = false;
+                break;
+            }
             ++c.protect_count;
         }
 

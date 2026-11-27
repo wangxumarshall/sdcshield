@@ -217,7 +217,19 @@ neon_rot_ldr_at_top_rowmajor_dstr4
 | `db_load_stale_data_probe` | load_stale_address_probe 的检测面 | 读到上一次的值 | BETA，已提交（MemDiv 式 str→dc civac+dsb→重读，q2==newv 不变量） |
 | `db_load_store_mixed_stress` | （超出 §10 建议）Buffer Pool 组合压力 | 全现象混合 | BETA，已提交（1MiB 页池 + vld2 交错 + 跨 4K 窗 + 恒等直通 + 双金身） |
 
-计数影响：PROD 618 不变（BETA 不进默认集）；q0 731 / q-1 735（各 +3）。验证门全过（build 零新警告、168 线程全核实跑 pass、objdump 门、zstd19 回归 pass）。§10 剩余真增量：load_zero_address_probe（zero-idiom 污染地址寄存器）与 load_addr_rf_port_stress（RF+地址组合压力）仍未实装。
+计数影响：PROD 618 不变（BETA 不进默认集）；q0 731 / q-1 735（各 +3）。验证门全过（build 零新警告、191 线程全核实跑 pass【179 offline】、objdump 门、zstd19 回归 pass）。§10 剩余真增量：load_zero_address_probe（zero-idiom 污染地址寄存器）与 load_addr_rf_port_stress（RF+地址组合压力）仍未实装。
+
+### §10.2 语义修正与地址捕获窗三件（2026-11-27 第二轮，BETA）
+
+用户第二轮澄清后修正判定：故障语义 = load 消费的**地址寄存器**（RF 读端口/旁路捕获）突然读出错值/上一次的值/0——是地址操作数捕获失败（179 store 数据寄存器故障的 load 地址镜像），**不是数据侧**。据此诚实修正：上表三件（agu/stale_data/mixed）对该捕获窗**覆盖弱**（地址分别来自内存间接寻址/固定槽遍历/页表计算，均无"寄存器刚写入→立即被 ldr 消费"的背靠背窗压力）；`db_load_stale_data_probe` 压的是数据侧 load-return。三件保留（各自轴仍有效），直击件为下列三件套：
+
+| 实装 id | 直击模式 | 机制 |
+|---|---|---|
+| `db_load_addr_capture` | 错值 / 上一次的地址（核心件） | 地址寄存器 add 写入→下一条 ldr 零间隙消费（2 行 asm 钉死，objdump 实证邻接）；自描述槽标签 fail 时读回值自行解出实际访问槽位，三分类一步归因 |
+| `db_load_addr_zero_probe` | 读到 0 地址 | A/B 交替差分：B 类 `eor x1,x1,x1` 清零后立即写地址再 ldr——0 值粘住覆盖地址写则 load 访问槽 0 且标签点名；仅 B 类 fail 即零化路径实锤 |
+| `db_load_addr_gap_sweep` | 窗宽定位（判别件） | add 与 ldr 间插 nop×N 八档 {0..64}：仅小 N fail=旁路前递病、仅大 N fail=写值未提交、平坦=纯值污染 |
+
+三件金身/校验/归因全 C++（用户"多 C++ 少 asm"指令，已入会话持久记忆）；asm 仅关键窗 2-6 行（neon_fp64 程度）。验证门：build 零警告 + 191 线程全核（--quality=-1）+ objdump 门 + zstd19 回归 pass。计数：PROD 620 不变（含 11-27 memcpy_l2_pointer_chase +2 后基线），q0 736 / q-1 740（本轮 +3）。§10 的 load_addr_capture/load_stale_address_probe/load_zero_address_probe 三建议至此全部实装覆盖。
 
 ## 11. 工作区未完成件（当前跑不到，防混淆）
 
@@ -231,6 +243,7 @@ neon_rot_ldr_at_top_rowmajor_dstr4
 3. **`-e` 前缀匹配陷阱**：`-e neon_rot_ldr_at_top` 会匹配全族；精确控制用附录 A + `--test-list-file`。
 4. **差分协议**：故障板 vs 正常板同参数对比；单一用例不承诺复现。
 5. SVE 变体按目标机 spec 门控自动出现/跳过，先 `--quality=-1 --list-tests` 现场对表。
+6. **BETA 件验证陷阱（实测 2026-11-27）**：不带 `--quality=-1`（或 `--beta`）跑 BETA 级测试（本清单 §10.1/§10.2 全部 db_load_*）会**静默 SKIP 且控制台显示与真跑完全相同的 `exit: pass`**——唯一判别物是运行时长（空跑 ~0.1s / 真跑 ≥2s）。本机核对机 191 在线核（179 offline），三件 db_load_addr_* 门跑 `--quality=-1` 全核 wall 11.3s 实证真跑；部署 BETA 件一律同口径并核对时长。
 
 ## 附录 A：全部可跑 id 平铺（159 件，可直接 `--test-list-file`）
 

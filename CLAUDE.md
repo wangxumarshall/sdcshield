@@ -161,6 +161,17 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               齐；scalar-golden 门+179-offline
                                                #               全核三档 pass）→ 0102 主机实测
                                                #               618/728/732。
+                                               #   11-27 追加 memcpy 舰队首件追逐式
+                                               #               双臂 memcpy_l2_pointer_chase
+                                               #               {,_ro}（L2 容量块随机
+                                               #               Hamiltonian 环自描述标签
+                                               #               0xA5A5|NEXT|PREV|GEN 逐跳
+                                               #               即校验+失败签名寄存器直出
+                                               #               ——在途 load 返回损坏故障类
+                                               #               检测器（iter_322 null 签名
+                                               #               终结），零 asm 依赖链自钉）
+                                               #               → 620/733/737（q0/q-1 含
+                                               #               并行 db_load_* BETA +3）。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

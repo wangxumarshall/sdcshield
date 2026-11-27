@@ -412,6 +412,31 @@ if host_machine.cpu_family() == 'aarch64'
             'L2_cache/neon_rot_ldr_at_top_rowmajor_k3res_l2_128k.cpp',
             'L2_cache/neon_rot_ldr_at_top_rowmajor_k3res_l2_256k.cpp',
             'L2_cache/neon_rot_ldr_at_top_rowmajor_k3res_l2_512k.cpp',
+            # 1b 波 k 系六族（跨距/图案/纯读轴的 L2 版，18 件 24 id）：
+            # k4gap=4 跨距 ldr 前置 8 连 nop（RF 旁路窗臂）/ k4bgap=4 跨距
+            # store 背靠背（ALU→store-data 旁路臂）/ k5far=5 跨距远邻 /
+            # k5inter_rand=5 跨距随机交错 / k7pattern=zero/one/hiham 三图案
+            # ×3 档=9 id（第四格 k7p_rand 故意不移植=字节同假象克隆）/
+            # k2pureload=纯读风暴臂（热环零 store）。0102 病核 179 协议见
+            # 各件头注（本机按健康机全核）。
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k4gap_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k4gap_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k4gap_l2_512k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k4bgap_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k4bgap_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k4bgap_l2_512k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k7pattern_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k7pattern_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k7pattern_l2_512k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k5far_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k5far_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k5far_l2_512k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k5inter_rand_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k5inter_rand_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k5inter_rand_l2_512k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k2pureload_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k2pureload_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k2pureload_l2_512k.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k7pattern.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k3res.cpp',

@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795618212667,
+  "lastUpdate": 1795789446344,
   "repoUrl": "https://github.com/wangxumarshall/sdcshield",
   "entries": {
     "sdcshield benchmark (24.03-LTS-SP3)": [
@@ -5440,6 +5440,83 @@ window.BENCHMARK_DATA = {
           {
             "name": "openssl_sha",
             "value": 12.133,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "wangxumarshall",
+            "username": "wangxumarshall",
+            "email": "37137833+wangxumarshall@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "88672accb0da23339c128fe7defaee6d839de6a0",
+          "message": "chore(tests): 删除 arm-0102 退役族 9 件未接线残留源文件 (#877)\n\n退役族 #814 复活残留，variant-of 重复（对位族均在册），孤儿扫描归零。\n\nSigned-off-by: wangxu <wangxumarshall@qq.com>",
+          "timestamp": "2026-11-27T05:07:52Z",
+          "url": "https://github.com/wangxumarshall/sdcshield/commit/88672accb0da23339c128fe7defaee6d839de6a0"
+        },
+        "date": 1795789444739,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "openblas_dgemm",
+            "value": 82957.007,
+            "unit": "s"
+          },
+          {
+            "name": "openblas_sgemm",
+            "value": 45055.343,
+            "unit": "s"
+          },
+          {
+            "name": "zstd",
+            "value": 42.321,
+            "unit": "s"
+          },
+          {
+            "name": "zlib",
+            "value": 42.888,
+            "unit": "s"
+          },
+          {
+            "name": "fma",
+            "value": 2.075,
+            "unit": "s"
+          },
+          {
+            "name": "crc32",
+            "value": 2.199,
+            "unit": "s"
+          },
+          {
+            "name": "pocketfft_fft",
+            "value": 3.127,
+            "unit": "s"
+          },
+          {
+            "name": "memcpy_l2_cache_size",
+            "value": 4.189,
+            "unit": "s"
+          },
+          {
+            "name": "eigen_gemm_double_dynamic_square",
+            "value": 21695.756,
+            "unit": "s"
+          },
+          {
+            "name": "gmp_bignum",
+            "value": 2.073,
+            "unit": "s"
+          },
+          {
+            "name": "openssl_sha",
+            "value": 12.061,
             "unit": "s"
           }
         ]

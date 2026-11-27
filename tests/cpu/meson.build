@@ -404,6 +404,14 @@ if host_machine.cpu_family() == 'aarch64'
             'L2_cache/neon_rot_ldr_at_top_rowmajor_scalar64_l2_128k.cpp',
             'L2_cache/neon_rot_ldr_at_top_rowmajor_scalar64_l2_256k.cpp',
             'L2_cache/neon_rot_ldr_at_top_rowmajor_scalar64_l2_512k.cpp',
+            # GPS 标签族：gps_l2（32 位偏移档族自有标签格式）+ k3res_l2
+            # （K3 驻留判别格底盘 L2 版，判别使命退役披露=常驻慢检测器）：
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_gps_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_gps_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_gps_l2_512k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k3res_l2_128k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k3res_l2_256k.cpp',
+            'L2_cache/neon_rot_ldr_at_top_rowmajor_k3res_l2_512k.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k5inter_rand.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k7pattern.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor_k3res.cpp',

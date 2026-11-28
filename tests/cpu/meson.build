@@ -467,6 +467,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/mrn_rmw_fwd_vs_l1d.cpp',
             'misc/mrn_rmw_timing_probe.cpp',
             'misc/movbe_l1d_variants.cpp',
+            'misc/neon_regcalc_chain.cpp',
             'misc/neon_rot_1src.cpp',
             'misc/neon_rot_fwd_probe.cpp',
             'misc/neon_rot_ldr_at_top_dump.cpp',

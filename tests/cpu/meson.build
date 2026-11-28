@@ -336,6 +336,9 @@ tests_set_base.add(
 if host_machine.cpu_family() == 'aarch64'
     tests_set_base.add(
         files(
+            # memcpy 舰队计算臂：NEON 件 aarch64 门控（标量母本双臂在上方
+            # 公共列表 memory/memcpy_l2_pointer_chase.cpp；规则 5 x86 untouched）
+            'memory/memcpy_l2_pointer_chase_calc.cpp',
             'misc/adaptive_mem_sdc.cpp',
             'misc/fmov_train_3ldp_stp.cpp',
             'misc/fmov_train_3ldr_str.cpp',

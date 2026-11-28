@@ -231,6 +231,10 @@ neon_rot_ldr_at_top_rowmajor_dstr4
 
 三件金身/校验/归因全 C++（用户"多 C++ 少 asm"指令，已入会话持久记忆）；asm 仅关键窗 2-6 行（neon_fp64 程度）。验证门：build 零警告 + 191 线程全核（--quality=-1）+ objdump 门 + zstd19 回归 pass。计数：PROD 620 不变（含 11-27 memcpy_l2_pointer_chase +2 后基线），q0 736 / q-1 740（本轮 +3）。§10 的 load_addr_capture/load_stale_address_probe/load_zero_address_probe 三建议至此全部实装覆盖。
 
+### §10.3 Eaglebu 轴 + 银行轴增量（2026-11-28，BETA 五件）
+
+不属于 §10 外部建议谱系（来源 = Eaglebu 三段建议系统化 + 用户银行并发负载提取指令"多记录同时并行存入读写"）：`mix_pressure_spectrum` / `neon_regcalc_chain`（计算:访存配比谱 + 零访存纯计算链——vector unit 与 cache/MMU 假设解耦判别的两极端）、`memcpy_l2_pointer_chase_calc`（memcpy 舰队第二件：追逐环逐跳向量消费链，序不变金身）、`db_bank_transfer_cas` / `db_bank_transfer_lse`（银行并发转账守恒判别对：256 账户全核冲突 RMW，持续脏行一致性流量——私有缓冲件不可达路径；四本账对账四分类归因，cas 独占对 / lse ldaddal 两原子路径互为判别臂；60s×191 线程健康基线零误报双臂）。与 §11 工作区搁置件无关。计数：PROD 620 不变；q0 736+5=741 / q-1 740+5=745（0102 2026-11-28 实测对账）。部署编排见 §12.7。
+
 ## 11. 工作区未完成件（当前跑不到，防混淆）
 
 1c 波 28 件 L2 版已在源码树但**未注册 meson、未验证、未提交**（str3 / str4 / str4_checkall / ldr4 / ldr5 / lsqfill_v2 / rfport_v2 / robfill / robfill_np / tlbstress 的 L2 三档）——
@@ -244,10 +248,16 @@ neon_rot_ldr_at_top_rowmajor_dstr4
 4. **差分协议**：故障板 vs 正常板同参数对比；单一用例不承诺复现。
 5. SVE 变体按目标机 spec 门控自动出现/跳过，先 `--quality=-1 --list-tests` 现场对表。
 6. **BETA 件验证陷阱（实测 2026-11-27）**：不带 `--quality=-1`（或 `--beta`）跑 BETA 级测试（本清单 §10.1/§10.2 全部 db_load_*）会**静默 SKIP 且控制台显示与真跑完全相同的 `exit: pass`**——唯一判别物是运行时长（空跑 ~0.1s / 真跑 ≥2s）。本机核对机 191 在线核（179 offline），三件 db_load_addr_* 门跑 `--quality=-1` 全核 wall 11.3s 实证真跑；部署 BETA 件一律同口径并核对时长。
+7. **0203 编排协议（激发件+检测件并跑，2026-11-28 立）**：背景激发件池 = `fmov_train_gdroop_{ldr_str,ldp_stp}` 对 + `fmov_train_gdroop_{ldr_str,ldp_stp}_intr` 对 + `fmov_train_droop`（core 轨）+ fp64 满载臂——**排除 `k2pureload`/`k7p_hiham`**（0102 两次整机复位史，§12.2）；前台检测件池 = rowmajor 族（含 L2 底盘族）+ db_load 六件 + `memcpy_l2_pointer_chase{,_ro,_calc}` + `mix_pressure_spectrum` + `neon_regcalc_chain` + `db_bank_transfer_{cas,lse}`（§10.3）。阶段：① 病核单核（31 号核跑前台检测件，背景全核激发——0102 locv_b2 满载激发 + rowmajor 300s 检出 179 的先例协议）→ ② 受控核组 → ③ 全核；db_bank 判别对与追逐件属最高电流密度类（跨核脏行乒乓），渐进加压强制。锚定负空间报告结论：火力 = 结构轴 × 近核域，不再扩 L2/L3 驻留轴。
 
-## 附录 A：全部可跑 id 平铺（159 件，可直接 `--test-list-file`）
+## 附录 A：全部可跑 id 平铺（2026-11-28 增 §10.3 五件后逐行实测 168 行；原 159 为遗留口径未逐行审计，db_load 六件亦不在清单内——可直接 `--test-list-file`）
 
 ```
+db_bank_transfer_cas
+db_bank_transfer_lse
+memcpy_l2_pointer_chase_calc
+mix_pressure_spectrum
+neon_regcalc_chain
 agu_stress_1src
 agu_stress_2src
 agu_stress_unaligned

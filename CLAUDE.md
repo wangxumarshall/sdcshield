@@ -172,6 +172,13 @@ PKG_CONFIG_PATH=./third-party/eigen5 meson setup builddir --buildtype=release
                                                #               终结），零 asm 依赖链自钉）
                                                #               → 620/733/737（q0/q-1 含
                                                #               并行 db_load_* BETA +3）。
+                                               #               11-28 追加混合压力三件+银行并发转账守恒判别
+                                               #               对两件（memcpy_l2_pointer_chase_calc /
+                                               #               mix_pressure_spectrum / neon_regcalc_chain /
+                                               #               db_bank_transfer_{cas,lse}——全 BETA，PROD 不计）
+                                               #               + db_load_addr 三件对账并入（矩阵文档 §10.2
+                                               #               已载，README 链未及单列）：基线 620/736/740
+                                               #               → 0102 实测 620/741/745。
                                                # full dated chain: README「测试用例与检测能力」
 ./builddir/sdcshield -e zstd19 -t 5000        # one test, 5 s, all CPUs
 ./builddir/sdcshield -e zstd19 -t 5000 -n 1   # single-threaded (deterministic)

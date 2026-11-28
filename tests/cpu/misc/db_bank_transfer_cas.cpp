@@ -45,10 +45,13 @@
  * most interesting signature — both words updated "successfully" but
  * inconsistently).
  *
- * PER-OP IN-RUN CHECK: every ldxp-loaded pair is magic-validated
- * before the store is computed (balance and gen both carry a 16-bit
- * MAGIC in bits 63..48) — a corrupted read in the RMW path is named
- * immediately with account/op/thread/both raw words.
+ * PER-OP IN-RUN CHECK (coverage disclosed honestly): every ldxp-loaded
+ * pair is magic-validated before the store is computed (balance and
+ * gen both carry a 16-bit MAGIC in bits 63..48) — a corrupted read in
+ * the RMW path is named immediately WITH ACCOUNT/OP/THREAD/RAW WORDS
+ * when the corruption touches the magic bits. Read corruptions below
+ * bit 48 pass the per-op window (a disclosed 48-bit blind window) and
+ * surface at cleanup through the accounting books.
  *
  * MODULAR ARITHMETIC, NO LEGALITY CONSTRAINTS: balance fields wrap mod
  * 2^48 (no negative-balance checks — conservation is exact in modular
@@ -322,9 +325,11 @@ static int db_bank_transfer_cas_cleanup(struct test *test)
         attribution = bad_count > 0
             ? "gen broken + conservation broken: lost or duplicated RMW "
               "update (see account below)"
-            : "conservation broken + ALL gen accounting intact: pure "
-              "balance-word VALUE corruption off the RMW path (stray "
-              "store / bit flip in memory)";
+            : "conservation broken + ALL gen accounting intact: balance "
+              "VALUE corruption — either an off-RMW stray store/bit-flip, "
+              "OR an in-RMW read corruption below the magic bits that the "
+              "per-op window cannot see (disclosed 48-bit blind window); "
+              "the raw delta below allows manual triage";
     } else if (bad_count > 0) {
         failed = true;
         attribution = gen_global_ok

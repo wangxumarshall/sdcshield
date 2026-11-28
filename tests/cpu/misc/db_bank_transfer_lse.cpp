@@ -283,9 +283,11 @@ static int db_bank_transfer_lse_cleanup(struct test *test)
         attribution = bad_count > 0
             ? "gen broken + conservation broken: lost or duplicated LSE "
               "update (see account below)"
-            : "conservation broken + ALL gen accounting intact: pure "
-              "balance-word VALUE corruption (stray store / bit flip in "
-              "memory, off the atomic path)";
+            : "conservation broken + ALL gen accounting intact: balance "
+              "VALUE corruption — either an off-atomic-path stray "
+              "store/bit-flip, OR an in-atomic read/apply corruption (the "
+              "LSE arm has no per-op balance check by design, disclosed; "
+              "the cleanup books are the detector here)";
     } else if (bad_count > 0) {
         failed = true;
         attribution = gen_global_ok

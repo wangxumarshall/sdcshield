@@ -248,9 +248,9 @@ neon_rot_ldr_at_top_rowmajor_dstr4
 4. **差分协议**：故障板 vs 正常板同参数对比；单一用例不承诺复现。
 5. SVE 变体按目标机 spec 门控自动出现/跳过，先 `--quality=-1 --list-tests` 现场对表。
 6. **BETA 件验证陷阱（实测 2026-11-27）**：不带 `--quality=-1`（或 `--beta`）跑 BETA 级测试（本清单 §10.1/§10.2 全部 db_load_*）会**静默 SKIP 且控制台显示与真跑完全相同的 `exit: pass`**——唯一判别物是运行时长（空跑 ~0.1s / 真跑 ≥2s）。本机核对机 191 在线核（179 offline），三件 db_load_addr_* 门跑 `--quality=-1` 全核 wall 11.3s 实证真跑；部署 BETA 件一律同口径并核对时长。
-7. **0203 编排协议（激发件+检测件并跑，2026-11-28 立）**：背景激发件池 = `fmov_train_gdroop_{ldr_str,ldp_stp}` 对 + `fmov_train_gdroop_{ldr_str,ldp_stp}_intr` 对 + `fmov_train_droop`（core 轨）+ fp64 满载臂——**排除 `k2pureload`/`k7p_hiham`**（0102 两次整机复位史，§12.2）；前台检测件池 = rowmajor 族（含 L2 底盘族）+ db_load 六件 + `memcpy_l2_pointer_chase{,_ro,_calc}` + `mix_pressure_spectrum` + `neon_regcalc_chain` + `db_bank_transfer_{cas,lse}`（§10.3）。阶段：① 病核单核（31 号核跑前台检测件，背景全核激发——0102 locv_b2 满载激发 + rowmajor 300s 检出 179 的先例协议）→ ② 受控核组 → ③ 全核；db_bank 判别对与追逐件属最高电流密度类（跨核脏行乒乓），渐进加压强制。锚定负空间报告结论：火力 = 结构轴 × 近核域，不再扩 L2/L3 驻留轴。
+7. **0203 编排协议（激发件+检测件并跑，2026-11-28 立）**：背景激发件池 = `fmov_train_gdroop_{ldr_str,ldp_stp}` 对 + `fmov_train_gdroop_{ldr_str,ldp_stp}_intr` 对 + `fmov_train_droop`（core 轨）+ fp64 满载臂——**排除 `k2pureload`/`k7p_hiham`**（0102 两次整机复位史，§12.2）；前台检测件池 = rowmajor 族（含 L2 底盘族）+ db_load 六件 + `memcpy_l2_pointer_chase{,_ro,_calc}` + `mix_pressure_spectrum` + `neon_regcalc_chain` + `db_bank_transfer_{cas,lse}`（§10.3）。阶段：① 病核单核（31 号核跑前台检测件，背景全核激发——0102 locv_b2 满载激发 + rowmajor 300s 检出 179 的先例协议）→ ② 受控核组 → ③ 全核；db_bank 判别对与追逐件属最高电流密度类（跨核脏行乒乓），渐进加压强制。锚定负空间报告结论：火力 = 结构轴 × 近核域，不再扩 L2/L3 驻留轴。**0102 侧诚实更正（2026-11-28 评审实测）**：本批五件的全核门跑在 **179 在线**（nproc=192）下完成——会话台账沿用前日 §12.6 的"179 offline→191 线程"口径为过时前提，提交信息中"191 线程"实为 192 含病核；银行对 60s 全核零复位零误报如实记录，但此为对 k2pureload 教训的边界外推——后续在 0102 复跑 bank 对/追逐件全核**必先 offline 179**。
 
-## 附录 A：全部可跑 id 平铺（2026-11-28 增 §10.3 五件后逐行实测 168 行；原 159 为遗留口径未逐行审计，db_load 六件亦不在清单内——可直接 `--test-list-file`）
+## 附录 A：全部可跑 id 平铺（基线 159 + 2026-11-28 §10.3 五件 = 164，可直接 `--test-list-file`；db_load 六件不在清单内）
 
 ```
 db_bank_transfer_cas
@@ -419,4 +419,4 @@ ma_l2evict_2src
 ma_src_overl2
 ```
 
-（§9 的 3 件 x86-only SKIP 件与 §8 的框架平台件 mce_check 不在附录 A 内——前者 ARM64 部署无意义，后者自动伴跑无需选择。附录 A 全部 159 id 均在注册表实证在册。）
+（§9 的 3 件 x86-only SKIP 件与 §8 的框架平台件 mce_check 不在附录 A 内——前者 ARM64 部署无意义，后者自动伴跑无需选择。附录 A 全部 164 id 均在注册表实证在册 = 159 基线 + §10.3 五件。）

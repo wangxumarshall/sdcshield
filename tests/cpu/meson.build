@@ -353,6 +353,7 @@ if host_machine.cpu_family() == 'aarch64'
             'misc/fmov_train_gdroop_ldp_stp_intr.cpp',
             'misc/loop_check_m.cpp',
             'misc/mite.cpp',
+            'misc/mix_pressure_spectrum.cpp',
             'misc/movdq2q.cpp',
             'misc/neon_rot_ldr_at_top.cpp',
             'misc/neon_rot_ldr_at_top_rowmajor.cpp',

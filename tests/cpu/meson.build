@@ -1381,6 +1381,32 @@ sandstone_tests += [
 
 # ARM ACLE CRC tests (tests/cpu/crc/crc32*.cpp). The __crc32b/h/w intrinsics
 # from <arm_acle.h> require the +crc extension, which the baseline build's
+# db_bank_transfer_lse 需要 FEAT_LSE（armv8.1-a 基线原子指令）——tests 构建
+# 的默认 march（armv8-a）下汇编器直接拒绝 ldaddal（binutils 汇编器门，实测
+# 2026-11-28；tests_crc_a 同款情形同款解法）。本件的存在意义就是 LSE 硬件
+# 路径（ldaddal 1 行钉死，与 db_bank_transfer_cas 独占对臂成判别对），运行
+# 时另有 HWCAP_ATOMICS 诚实 SKIP 门。仅 aarch64 构建（x86 构建图零新增）。
+if host_machine.cpu_family() == 'aarch64'
+    tests_lse_a = static_library(
+        'tests_lse',
+        sources : files(
+            'misc/db_bank_transfer_lse.cpp',
+        ),
+        build_by_default: false,
+        include_directories : [
+            tests_common_incdirs,
+        ],
+        dependencies: [
+            boost_dep,
+        ],
+        cpp_args : [
+            tests_common_cpp_args,
+            '-march=armv8.1-a',
+        ],
+    )
+    sandstone_tests += [tests_lse_a]
+endif
+
 # empty -march on aarch64 does not enable (armv8.1-a implies +crc). The
 # reference tree gets this for free because its top-level meson.build sets
 # march_base='armv8.1-a' globally on aarch64; this fork does not, so the 3
